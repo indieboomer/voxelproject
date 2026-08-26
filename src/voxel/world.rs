@@ -43,7 +43,12 @@ impl World {
     }
 
     pub fn terrain_height(&self, wx: i32, wz: i32) -> i32 {
-        let base = fbm(wx as f32 * 0.01, wz as f32 * 0.01, self.seed, 4, 2.0, 0.5);
+        // `fbm` returns [0, 1], not [-1, 1] -- recenter both octaves around 0
+        // so terrain actually varies both above *and* below the mean instead
+        // of only ever adding height. Without this, height never dropped
+        // below 14 and the world generated no water at all despite the
+        // sea-level logic below.
+        let base = fbm(wx as f32 * 0.01, wz as f32 * 0.01, self.seed, 4, 2.0, 0.5) * 2.0 - 1.0;
         let hills = fbm(
             wx as f32 * 0.04,
             wz as f32 * 0.04,
@@ -51,8 +56,12 @@ impl World {
             3,
             2.0,
             0.5,
-        );
-        let h = base * 22.0 + hills * 6.0 + 14.0;
+        ) * 2.0
+            - 1.0;
+        // Mean height sits a bit above SEA_LEVEL (18) so most land stays
+        // dry, but low-lying dips (large-scale `base` swings) fall below it
+        // and fill with water, forming lakes/ponds/coastline.
+        let h = 24.0 + base * 14.0 + hills * 5.0;
         h.clamp(2.0, (CHUNK_Y - 6) as f32) as i32
     }
 
