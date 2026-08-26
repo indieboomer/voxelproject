@@ -1,0 +1,474 @@
+use bytemuck::{Pod, Zeroable};
+use glam::Vec3;
+
+use super::atlas;
+use super::block::BlockType;
+use super::chunk::{Chunk, CHUNK_X, CHUNK_Y, CHUNK_Z};
+use super::world::World;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct Vertex {
+    pub position: [f32; 3],
+    pub color: [f32; 3],
+    pub normal: [f32; 3],
+    pub uv: [f32; 2],
+    pub ao: f32,
+}
+
+impl Vertex {
+    pub fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+        use std::mem::size_of;
+        wgpu::VertexBufferLayout {
+            array_stride: size_of::<Vertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: size_of::<[f32; 6]>() as wgpu::BufferAddress,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: size_of::<[f32; 9]>() as wgpu::BufferAddress,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: size_of::<[f32; 11]>() as wgpu::BufferAddress,
+                    shader_location: 4,
+                    format: wgpu::VertexFormat::Float32,
+                },
+            ],
+        }
+    }
+}
+
+pub struct MeshData {
+    pub vertices: Vec<Vertex>,
+    pub indices: Vec<u32>,
+}
+
+impl MeshData {
+    pub fn extend(&mut self, other: MeshData) {
+        let offset = self.vertices.len() as u32;
+        self.vertices.extend(other.vertices);
+        self.indices
+            .extend(other.indices.into_iter().map(|i| i + offset));
+    }
+}
+
+// Face order: +X, -X, +Y, -Y, +Z, -Z
+pub(crate) const FACE_NORMALS: [[i32; 3]; 6] = [
+    [1, 0, 0],
+    [-1, 0, 0],
+    [0, 1, 0],
+    [0, -1, 0],
+    [0, 0, 1],
+    [0, 0, -1],
+];
+
+/// Vertex offsets (relative to block min corner) for each face, wound CCW
+/// when viewed from outside the block along the face normal.
+pub(crate) const FACE_VERTS: [[[f32; 3]; 4]; 6] = [
+    // +X
+    [
+        [1.0, 0.0, 0.0],
+        [1.0, 0.0, 1.0],
+        [1.0, 1.0, 1.0],
+        [1.0, 1.0, 0.0],
+    ],
+    // -X
+    [
+        [0.0, 0.0, 1.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 1.0, 1.0],
+    ],
+    // +Y
+    [
+        [0.0, 1.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [1.0, 1.0, 1.0],
+        [0.0, 1.0, 1.0],
+    ],
+    // -Y
+    [
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+    ],
+    // +Z
+    [
+        [1.0, 0.0, 1.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 1.0, 1.0],
+        [1.0, 1.0, 1.0],
+    ],
+    // -Z
+    [
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [0.0, 1.0, 0.0],
+    ],
+];
+
+/// UV corners matching `FACE_VERTS`' winding, mapped into whatever tile
+/// rect the caller picks.
+const FACE_UV_CORNERS: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+
+/// Per-face, per-corner ambient occlusion sample offsets: (side1, side2,
+/// corner), each a world-space offset from the block's own position.
+/// Derived by hand from `FACE_VERTS`: for each corner, the two tangent axes
+/// (the ones not equal to the face normal) each contribute a +/-1 offset
+/// depending on which side of the face that corner is on, and every sample
+/// also steps one block out along the face normal, since AO looks at
+/// what's beside the neighboring (exposed) voxel, not the block itself.
+/// See the classic "ambient occlusion for minecraft-like worlds" algorithm.
+type Offset = (i32, i32, i32);
+const AO_OFFSETS: [[(Offset, Offset, Offset); 4]; 6] = [
+    // +X
+    [
+        ((1, -1, 0), (1, 0, -1), (1, -1, -1)),
+        ((1, -1, 0), (1, 0, 1), (1, -1, 1)),
+        ((1, 1, 0), (1, 0, 1), (1, 1, 1)),
+        ((1, 1, 0), (1, 0, -1), (1, 1, -1)),
+    ],
+    // -X
+    [
+        ((-1, -1, 0), (-1, 0, 1), (-1, -1, 1)),
+        ((-1, -1, 0), (-1, 0, -1), (-1, -1, -1)),
+        ((-1, 1, 0), (-1, 0, -1), (-1, 1, -1)),
+        ((-1, 1, 0), (-1, 0, 1), (-1, 1, 1)),
+    ],
+    // +Y
+    [
+        ((-1, 1, 0), (0, 1, -1), (-1, 1, -1)),
+        ((1, 1, 0), (0, 1, -1), (1, 1, -1)),
+        ((1, 1, 0), (0, 1, 1), (1, 1, 1)),
+        ((-1, 1, 0), (0, 1, 1), (-1, 1, 1)),
+    ],
+    // -Y
+    [
+        ((-1, -1, 0), (0, -1, 1), (-1, -1, 1)),
+        ((1, -1, 0), (0, -1, 1), (1, -1, 1)),
+        ((1, -1, 0), (0, -1, -1), (1, -1, -1)),
+        ((-1, -1, 0), (0, -1, -1), (-1, -1, -1)),
+    ],
+    // +Z
+    [
+        ((1, 0, 1), (0, -1, 1), (1, -1, 1)),
+        ((-1, 0, 1), (0, -1, 1), (-1, -1, 1)),
+        ((-1, 0, 1), (0, 1, 1), (-1, 1, 1)),
+        ((1, 0, 1), (0, 1, 1), (1, 1, 1)),
+    ],
+    // -Z
+    [
+        ((-1, 0, -1), (0, -1, -1), (-1, -1, -1)),
+        ((1, 0, -1), (0, -1, -1), (1, -1, -1)),
+        ((1, 0, -1), (0, 1, -1), (1, 1, -1)),
+        ((-1, 0, -1), (0, 1, -1), (-1, 1, -1)),
+    ],
+];
+
+pub(crate) fn face_shade(face: usize) -> f32 {
+    match face {
+        2 => 1.0,  // +Y top
+        3 => 0.45, // -Y bottom
+        0 | 1 => 0.8,
+        _ => 0.7,
+    }
+}
+
+/// Classic voxel AO: 0 (fully occluded) to 3 (fully lit), mapped to a
+/// brightness multiplier. Two solid edge-neighbors always fully occlude a
+/// corner regardless of the diagonal, matching real-world light behavior.
+fn ao_brightness(side1: bool, side2: bool, corner: bool) -> f32 {
+    let occlusion = if side1 && side2 {
+        0
+    } else {
+        3 - (side1 as i32 + side2 as i32 + corner as i32)
+    };
+    match occlusion {
+        3 => 1.0,
+        2 => 0.8,
+        1 => 0.6,
+        _ => 0.45,
+    }
+}
+
+/// Builds a mesh for one chunk. Uses simple per-face culling against
+/// neighboring blocks (queried through `world`, so cross-chunk faces are
+/// culled correctly too), textured from the shared atlas, and shaded with
+/// both a fixed per-face factor and real per-vertex ambient occlusion from
+/// neighboring geometry.
+pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    let (ox, oz) = chunk.world_origin();
+
+    for lx in 0..CHUNK_X {
+        for ly in 0..CHUNK_Y {
+            for lz in 0..CHUNK_Z {
+                let block = chunk.get_local(lx, ly, lz);
+                if block == BlockType::Air {
+                    continue;
+                }
+                let wx = ox + lx;
+                let wz = oz + lz;
+
+                for (face_idx, normal) in FACE_NORMALS.iter().enumerate() {
+                    let nx = wx + normal[0];
+                    let ny = ly + normal[1];
+                    let nz = wz + normal[2];
+                    let neighbor = world.get_block(nx, ny, nz);
+
+                    let visible = if block == BlockType::Water {
+                        neighbor == BlockType::Air
+                    } else {
+                        !neighbor.is_opaque() && neighbor != block
+                    };
+                    if !visible {
+                        continue;
+                    }
+
+                    let shade = face_shade(face_idx);
+                    let color = [shade, shade, shade];
+                    let uv_rect = atlas::uv_rect(atlas::tile_for(block, face_idx));
+                    let base_index = vertices.len() as u32;
+
+                    for (corner_idx, corner) in FACE_VERTS[face_idx].iter().enumerate() {
+                        let (s1, s2, c) = AO_OFFSETS[face_idx][corner_idx];
+                        let ao = if atlas::is_cutout(block) {
+                            // Leaves shouldn't darken their own edges from
+                            // neighboring leaves -- looks muddy fast.
+                            1.0
+                        } else {
+                            ao_brightness(
+                                world.is_solid(wx + s1.0, ly + s1.1, wz + s1.2),
+                                world.is_solid(wx + s2.0, ly + s2.1, wz + s2.2),
+                                world.is_solid(wx + c.0, ly + c.1, wz + c.2),
+                            )
+                        };
+                        let [uc, vc] = FACE_UV_CORNERS[corner_idx];
+                        vertices.push(Vertex {
+                            position: [
+                                wx as f32 + corner[0],
+                                ly as f32 + corner[1],
+                                wz as f32 + corner[2],
+                            ],
+                            color,
+                            normal: [normal[0] as f32, normal[1] as f32, normal[2] as f32],
+                            uv: [
+                                uv_rect[0] + uc * (uv_rect[2] - uv_rect[0]),
+                                uv_rect[1] + vc * (uv_rect[3] - uv_rect[1]),
+                            ],
+                            ao,
+                        });
+                    }
+                    indices.extend_from_slice(&[
+                        base_index,
+                        base_index + 1,
+                        base_index + 2,
+                        base_index,
+                        base_index + 2,
+                        base_index + 3,
+                    ]);
+                }
+            }
+        }
+    }
+
+    MeshData { vertices, indices }
+}
+
+/// Appends an axis-aligned box (all 6 faces, no culling, no AO) to a mesh
+/// being built. Used for entities: small, standalone, not part of the
+/// voxel grid. `uv_rect` is normally the atlas's white swatch so the box
+/// reads as flat-colored via `color`, same as before texturing existed.
+pub fn push_cuboid(
+    vertices: &mut Vec<Vertex>,
+    indices: &mut Vec<u32>,
+    min: Vec3,
+    max: Vec3,
+    color: [f32; 3],
+    uv_rect: [f32; 4],
+) {
+    let size = max - min;
+    for (face_idx, normal) in FACE_NORMALS.iter().enumerate() {
+        let shade = face_shade(face_idx);
+        let c = [color[0] * shade, color[1] * shade, color[2] * shade];
+        let base_index = vertices.len() as u32;
+        for (corner_idx, corner) in FACE_VERTS[face_idx].iter().enumerate() {
+            let [uc, vc] = FACE_UV_CORNERS[corner_idx];
+            vertices.push(Vertex {
+                position: [
+                    min.x + corner[0] * size.x,
+                    min.y + corner[1] * size.y,
+                    min.z + corner[2] * size.z,
+                ],
+                color: c,
+                normal: [normal[0] as f32, normal[1] as f32, normal[2] as f32],
+                uv: [
+                    uv_rect[0] + uc * (uv_rect[2] - uv_rect[0]),
+                    uv_rect[1] + vc * (uv_rect[3] - uv_rect[1]),
+                ],
+                ao: 1.0,
+            });
+        }
+        indices.extend_from_slice(&[
+            base_index,
+            base_index + 1,
+            base_index + 2,
+            base_index,
+            base_index + 2,
+            base_index + 3,
+        ]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// The AO_OFFSETS table was derived by hand from FACE_VERTS -- exactly
+    /// the kind of thing that's easy to get subtly wrong (a flipped sign
+    /// looks fine at a glance but darkens the wrong corner). This pins down
+    /// one concrete, checkable case: a block with a taller neighbor on one
+    /// side should have its top face dimmed only at the two corners next to
+    /// that neighbor, not the two corners on the far side.
+    #[test]
+    fn top_face_ao_darkens_only_the_corner_next_to_a_taller_neighbor() {
+        let mut world = World::new(1);
+        let mut chunk = Chunk::new(0, 0);
+        chunk.set_local(5, 10, 5, BlockType::Stone); // the block under test
+        chunk.set_local(6, 11, 5, BlockType::Stone); // steps up beside its top face
+        world.chunks.insert((0, 0), chunk);
+
+        let chunk_ref = world.chunks.get(&(0, 0)).unwrap();
+        let mesh = build_chunk_mesh(&world, chunk_ref);
+
+        let mut top_face_ao: HashMap<(i32, i32, i32), f32> = HashMap::new();
+        for v in &mesh.vertices {
+            if v.normal != [0.0, 1.0, 0.0] {
+                continue;
+            }
+            let pos = (
+                v.position[0].round() as i32,
+                v.position[1].round() as i32,
+                v.position[2].round() as i32,
+            );
+            if pos.0 >= 5 && pos.0 <= 6 && pos.1 == 11 && pos.2 >= 5 && pos.2 <= 6 {
+                top_face_ao.insert(pos, v.ao);
+            }
+        }
+
+        assert_eq!(
+            top_face_ao.len(),
+            4,
+            "expected exactly the 4 corners of one top face, got {top_face_ao:?}"
+        );
+        assert_eq!(
+            top_face_ao[&(5, 11, 5)],
+            1.0,
+            "far corner should be fully lit"
+        );
+        assert_eq!(
+            top_face_ao[&(5, 11, 6)],
+            1.0,
+            "far corner should be fully lit"
+        );
+        assert_eq!(
+            top_face_ao[&(6, 11, 5)],
+            0.8,
+            "corner beside the taller neighbor should be dimmed"
+        );
+        assert_eq!(
+            top_face_ao[&(6, 11, 6)],
+            0.8,
+            "corner beside the taller neighbor should be dimmed"
+        );
+    }
+
+    #[test]
+    fn side_face_ao_darkens_only_the_corner_diagonally_behind_an_occluder() {
+        let mut world = World::new(1);
+        let mut chunk = Chunk::new(0, 0);
+        chunk.set_local(5, 10, 5, BlockType::Stone); // the block under test
+        chunk.set_local(6, 9, 6, BlockType::Stone); // occludes only one corner's diagonal
+        world.chunks.insert((0, 0), chunk);
+
+        let chunk_ref = world.chunks.get(&(0, 0)).unwrap();
+        let mesh = build_chunk_mesh(&world, chunk_ref);
+
+        let mut plus_x_ao: HashMap<(i32, i32, i32), f32> = HashMap::new();
+        for v in &mesh.vertices {
+            if v.normal != [1.0, 0.0, 0.0] {
+                continue;
+            }
+            let pos = (
+                v.position[0].round() as i32,
+                v.position[1].round() as i32,
+                v.position[2].round() as i32,
+            );
+            if pos.0 == 6 && (pos.1 == 10 || pos.1 == 11) && (pos.2 == 5 || pos.2 == 6) {
+                plus_x_ao.insert(pos, v.ao);
+            }
+        }
+
+        assert_eq!(
+            plus_x_ao.len(),
+            4,
+            "expected exactly the 4 corners of one +X face, got {plus_x_ao:?}"
+        );
+        assert_eq!(
+            plus_x_ao[&(6, 10, 6)],
+            0.8,
+            "corner diagonally behind the occluder should be dimmed"
+        );
+        assert_eq!(
+            plus_x_ao[&(6, 10, 5)],
+            1.0,
+            "other corners should be untouched"
+        );
+        assert_eq!(
+            plus_x_ao[&(6, 11, 5)],
+            1.0,
+            "other corners should be untouched"
+        );
+        assert_eq!(
+            plus_x_ao[&(6, 11, 6)],
+            1.0,
+            "other corners should be untouched"
+        );
+    }
+
+    #[test]
+    fn leaves_skip_ao_entirely() {
+        let mut world = World::new(1);
+        let mut chunk = Chunk::new(0, 0);
+        chunk.set_local(5, 10, 5, BlockType::Leaves);
+        chunk.set_local(6, 11, 5, BlockType::Leaves);
+        world.chunks.insert((0, 0), chunk);
+
+        let chunk_ref = world.chunks.get(&(0, 0)).unwrap();
+        let mesh = build_chunk_mesh(&world, chunk_ref);
+
+        assert!(
+            mesh.vertices.iter().all(|v| v.ao == 1.0),
+            "leaves should never be AO-darkened"
+        );
+    }
+}
