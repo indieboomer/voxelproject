@@ -14,6 +14,7 @@ pub struct Vertex {
     pub normal: [f32; 3],
     pub uv: [f32; 2],
     pub ao: f32,
+    pub reflectivity: f32,
 }
 
 impl Vertex {
@@ -46,6 +47,11 @@ impl Vertex {
                 wgpu::VertexAttribute {
                     offset: size_of::<[f32; 11]>() as wgpu::BufferAddress,
                     shader_location: 4,
+                    format: wgpu::VertexFormat::Float32,
+                },
+                wgpu::VertexAttribute {
+                    offset: size_of::<[f32; 12]>() as wgpu::BufferAddress,
+                    shader_location: 5,
                     format: wgpu::VertexFormat::Float32,
                 },
             ],
@@ -246,6 +252,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                     let shade = face_shade(face_idx);
                     let color = [shade, shade, shade];
                     let uv_rect = atlas::uv_rect(atlas::tile_for(block, face_idx));
+                    let reflectivity = block.reflectivity();
                     let base_index = vertices.len() as u32;
 
                     for (corner_idx, corner) in FACE_VERTS[face_idx].iter().enumerate() {
@@ -275,6 +282,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                                 uv_rect[1] + vc * (uv_rect[3] - uv_rect[1]),
                             ],
                             ao,
+                            reflectivity,
                         });
                     }
                     indices.extend_from_slice(&[
@@ -325,6 +333,7 @@ pub fn push_cuboid(
                     uv_rect[1] + vc * (uv_rect[3] - uv_rect[1]),
                 ],
                 ao: 1.0,
+                reflectivity: 0.0,
             });
         }
         indices.extend_from_slice(&[

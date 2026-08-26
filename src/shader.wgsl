@@ -27,6 +27,7 @@ struct VertexInput {
     @location(2) normal: vec3<f32>,
     @location(3) uv: vec2<f32>,
     @location(4) ao: f32,
+    @location(5) reflectivity: f32,
 };
 
 struct VertexOutput {
@@ -36,6 +37,7 @@ struct VertexOutput {
     @location(2) normal: vec3<f32>,
     @location(3) uv: vec2<f32>,
     @location(4) ao: f32,
+    @location(5) reflectivity: f32,
 };
 
 @vertex
@@ -47,6 +49,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.normal = in.normal;
     out.uv = in.uv;
     out.ao = in.ao;
+    out.reflectivity = in.reflectivity;
     return out;
 }
 
@@ -92,11 +95,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let base = tex.rgb * in.color * in.ao;
     let lit = base * clamp(ambient + sun_intensity * ndotl * shadow, 0.0, 1.0);
 
+    // Cheap reflection for shiny materials (water, crystal, stone): a
+    // fresnel-weighted tint of the sky color plus a Blinn-Phong sun glint,
+    // both scaled by the per-vertex `reflectivity` so matte blocks (grass,
+    // dirt, wood...) are completely unaffected.
+    let view_dir = normalize(camera.camera_pos.xyz - in.world_pos);
+    let fresnel = pow(clamp(1.0 - max(dot(in.normal, view_dir), 0.0), 0.0, 1.0), 5.0);
+    let sky_reflection = camera.fog_color.rgb * in.reflectivity * mix(0.15, 1.0, fresnel);
+    let half_dir = normalize(view_dir + camera.sun_dir.xyz);
+    let spec_angle = max(dot(in.normal, half_dir), 0.0);
+    let specular = pow(spec_angle, 64.0) * in.reflectivity * sun_intensity * shadow;
+    let reflected = lit + sky_reflection + vec3<f32>(specular);
+
     let dist = distance(in.world_pos, camera.camera_pos.xyz);
     let fog_start = 70.0;
     let fog_end = 160.0;
     let fog_amount = clamp((dist - fog_start) / (fog_end - fog_start), 0.0, 1.0);
 
-    let final_color = mix(lit, camera.fog_color.rgb, fog_amount);
+    let final_color = mix(reflected, camera.fog_color.rgb, fog_amount);
     return vec4<f32>(final_color, 1.0);
 }

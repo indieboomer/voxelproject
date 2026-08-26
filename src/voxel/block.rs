@@ -29,6 +29,19 @@ impl BlockType {
         !matches!(self, BlockType::Air | BlockType::Water)
     }
 
+    /// How strongly a surface picks up sky reflections and a sun specular
+    /// glint, from 0 (fully matte: grass, dirt, wood, leaves...) to 1
+    /// (mirror-like). Water is the standout case; stone/crystal/redstone get
+    /// a subtle sheen since they read as harder, smoother materials.
+    pub fn reflectivity(self) -> f32 {
+        match self {
+            BlockType::Water => 0.85,
+            BlockType::Crystal => 0.5,
+            BlockType::Stone | BlockType::RedStone => 0.15,
+            _ => 0.0,
+        }
+    }
+
     /// Whether a face against this block should be culled (i.e. this block
     /// fills its full cube and is not see-through).
     pub fn is_opaque(self) -> bool {
