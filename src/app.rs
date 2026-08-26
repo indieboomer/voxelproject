@@ -195,6 +195,9 @@ pub struct App {
     title_timer: f32,
     frame_count: u32,
     last_fps: f32,
+    /// Free-running clock, independent of `time_of_day`, purely to drive the
+    /// water surface animation in the shader.
+    water_time: f32,
 }
 
 impl App {
@@ -486,6 +489,7 @@ impl App {
             title_timer: 0.0,
             frame_count: 0,
             last_fps: 0.0,
+            water_time: 0.0,
         };
 
         app.grab_cursor(true);
@@ -592,6 +596,9 @@ impl App {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
+        // Wrap well before f32 precision would start eating into a sine's
+        // period -- the animation is periodic anyway so this is seamless.
+        self.water_time = (self.water_time + dt) % 10_000.0;
 
         if self.input.toggle_cursor {
             self.grab_cursor(!self.cursor_grabbed);
@@ -629,6 +636,9 @@ impl App {
                         self.player.carrying_crystal = true;
                     }
                     self.apply_block_edit(hit.target.0, hit.target.1, hit.target.2, BlockType::Air);
+                    for pos in self.world.flood_from(hit.target) {
+                        self.apply_block_edit(pos.0, pos.1, pos.2, BlockType::Water);
+                    }
                 } else if !self.would_hit_player(hit.place) {
                     self.apply_block_edit(
                         hit.place.0,
@@ -1251,7 +1261,8 @@ impl App {
                 lighting.sun_dir.z,
                 0.0,
             ],
-            light_params: [lighting.ambient, lighting.sun_intensity, 0.0, 0.0],
+            // z = free-running clock for the water wave animation.
+            light_params: [lighting.ambient, lighting.sun_intensity, self.water_time, 0.0],
         };
         self.queue
             .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));

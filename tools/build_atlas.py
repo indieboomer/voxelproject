@@ -3,11 +3,13 @@
 in textures/assets/minecraft/textures/block/.
 
 That pack is a curated subset (lots of wood species + ores, but no plain
-dirt/stone/sand/water, and both the grass edge and oak_leaves are grayscale
+dirt/stone/water, and both the grass edge and oak_leaves are grayscale
 "biome tint" templates with no colormap included). This script derives what's
-missing and bakes tints in directly, so the game can just sample one flat
-atlas with no runtime tinting logic. Re-run after changing anything under
-textures/ to regenerate assets/textures/atlas.png.
+missing (dirt/water are procedural; sand comes from textures/sand.png, a
+separate hand-picked tile not part of the resource pack) and bakes tints in
+directly, so the game can just sample one flat atlas with no runtime tinting
+logic. Re-run after changing anything under textures/ to regenerate
+assets/textures/atlas.png.
 
 Layout: 4 columns x 4 rows of 64x64 tiles (256x256 total), row-major:
   0 grass_top   1 grass_side   2 dirt        3 stone
@@ -26,6 +28,7 @@ import random
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "textures" / "assets" / "minecraft" / "textures" / "block"
+RAW = ROOT / "textures"
 OUT_DIR = ROOT / "assets" / "textures"
 OUT = OUT_DIR / "atlas.png"
 
@@ -113,7 +116,7 @@ def main():
     leaves = tint(load("oak_leaves.png"), LEAF_TINT)
     crystal = load("amethyst_block.png")
     redstone = load("redstone_ore.png")
-    sand = procedural((214, 195, 145), 10, seed=1)
+    sand = Image.open(RAW / "sand.png").convert("RGBA").resize((TILE, TILE), Image.LANCZOS)
     water = procedural((45, 95, 150), 10, seed=2)
     white = Image.new("RGBA", (TILE, TILE), (255, 255, 255, 255))
 

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
@@ -7,6 +7,22 @@ use super::chunk::{world_to_chunk, world_to_local, Chunk, CHUNK_X, CHUNK_Y, CHUN
 use super::noise::{column_rand, fbm};
 
 pub const SEA_LEVEL: i32 = 18;
+
+/// 6-connected neighbor offsets, used by `World::flood_from`.
+const NEIGHBOR_OFFSETS: [(i32, i32, i32); 6] = [
+    (1, 0, 0),
+    (-1, 0, 0),
+    (0, 1, 0),
+    (0, -1, 0),
+    (0, 0, 1),
+    (0, 0, -1),
+];
+
+/// Hard cap on how many blocks a single dig can flood in one go. Not real
+/// fluid dynamics -- just enough that tunneling into a lake fills the hole
+/// you made instead of leaving it as a dry pocket, without a single unlucky
+/// break being able to drain an entire lake or hang the game on a huge cave.
+const MAX_FLOOD_BLOCKS: usize = 48;
 
 pub struct World {
     pub seed: u32,
@@ -208,6 +224,54 @@ impl World {
     pub fn is_solid(&self, wx: i32, wy: i32, wz: i32) -> bool {
         self.get_block(wx, wy, wz).is_solid()
     }
+
+    /// Call after a block at `start` has just been broken to `Air`. Returns
+    /// every additional position (bounded by `MAX_FLOOD_BLOCKS`) that should
+    /// become `Water` because it's connected to an existing water source --
+    /// the caller is responsible for actually setting those blocks (so it
+    /// can replicate each one the same way as any other edit).
+    ///
+    /// This is a simple bounded flood fill, not real fluid simulation: it
+    /// only spreads sideways and downward (never climbing back up through an
+    /// open shaft) from a cell that directly touches water in any direction
+    /// -- water sitting right above `start` falls in; a newly-dug tunnel
+    /// that reaches sideways into a lake wall gets flooded from that point
+    /// on.
+    pub fn flood_from(&self, start: (i32, i32, i32)) -> Vec<(i32, i32, i32)> {
+        if self.get_block(start.0, start.1, start.2) != BlockType::Air {
+            return Vec::new();
+        }
+        let touches_water = NEIGHBOR_OFFSETS.iter().any(|&(dx, dy, dz)| {
+            self.get_block(start.0 + dx, start.1 + dy, start.2 + dz) == BlockType::Water
+        });
+        if !touches_water {
+            return Vec::new();
+        }
+
+        let mut visited: HashSet<(i32, i32, i32)> = HashSet::new();
+        let mut queue: VecDeque<(i32, i32, i32)> = VecDeque::new();
+        let mut result = Vec::new();
+        visited.insert(start);
+        queue.push_back(start);
+
+        while let Some(pos) = queue.pop_front() {
+            if result.len() >= MAX_FLOOD_BLOCKS {
+                break;
+            }
+            result.push(pos);
+            for &(dx, dy, dz) in NEIGHBOR_OFFSETS.iter() {
+                if dy > 0 {
+                    continue; // water doesn't climb back up an open shaft
+                }
+                let next = (pos.0 + dx, pos.1 + dy, pos.2 + dz);
+                if visited.insert(next) && self.get_block(next.0, next.1, next.2) == BlockType::Air
+                {
+                    queue.push_back(next);
+                }
+            }
+        }
+        result
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -219,4 +283,114 @@ pub struct WorldSave {
     pub time_of_day: f32,
     pub edits: Vec<((i32, i32, i32), BlockType)>,
     pub modules: Vec<crate::scripting::ModuleSaveEntry>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flood_from_fills_an_isolated_air_pocket_touching_water() {
+        let mut world = World::new(1);
+        let mut chunk = Chunk::new(0, 0);
+        // Wall off (6,10,5) on every side except toward the water, so the
+        // flood has nowhere else to spread to -- isolates exactly the case
+        // under test (one pocket, one water source, nothing beyond it).
+        for &(dx, dy, dz) in &[(1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)] {
+            chunk.set_local(6 + dx, 10 + dy, 5 + dz, BlockType::Stone);
+        }
+        chunk.set_local(5, 10, 5, BlockType::Water);
+        world.chunks.insert((0, 0), chunk);
+
+        let result = world.flood_from((6, 10, 5));
+        assert_eq!(result, vec![(6, 10, 5)]);
+    }
+
+    #[test]
+    fn flood_from_does_nothing_without_an_adjacent_water_source() {
+        let world = World::new(1);
+        // No chunk loaded at all -- get_block reads Air everywhere, so the
+        // start cell passes the "is Air" check but never finds water.
+        let result = world.flood_from((6, 10, 5));
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn flood_from_refuses_to_start_on_a_non_air_cell() {
+        let mut world = World::new(1);
+        let mut chunk = Chunk::new(0, 0);
+        chunk.set_local(5, 10, 5, BlockType::Water);
+        chunk.set_local(6, 10, 5, BlockType::Stone); // not actually broken
+        world.chunks.insert((0, 0), chunk);
+
+        assert!(world.flood_from((6, 10, 5)).is_empty());
+    }
+
+    #[test]
+    fn flood_from_lets_water_fall_from_directly_above() {
+        let mut world = World::new(1);
+        let mut chunk = Chunk::new(0, 0);
+        // Isolate the pocket again, this time leaving only "up" open --
+        // that's where the water sits.
+        for &(dx, dy, dz) in &[(1, 0, 0), (-1, 0, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)] {
+            chunk.set_local(5 + dx, 10 + dy, 5 + dz, BlockType::Stone);
+        }
+        chunk.set_local(5, 11, 5, BlockType::Water); // sits right above the dig
+        world.chunks.insert((0, 0), chunk);
+
+        let result = world.flood_from((5, 10, 5));
+        assert_eq!(result, vec![(5, 10, 5)]);
+    }
+
+    #[test]
+    fn flood_from_spreads_through_a_connected_air_tunnel() {
+        let mut world = World::new(1);
+        let mut chunk = Chunk::new(0, 0);
+        chunk.set_local(0, 10, 0, BlockType::Water);
+        world.chunks.insert((0, 0), chunk);
+
+        // (1,10,0) touches the water directly; (2,10,0) is only reachable
+        // by continuing sideways through the already-flooded cell.
+        let result = world.flood_from((1, 10, 0));
+        assert!(result.contains(&(1, 10, 0)));
+        assert!(
+            result.contains(&(2, 10, 0)),
+            "flood should spread sideways through connected air: {result:?}"
+        );
+    }
+
+    #[test]
+    fn flood_from_does_not_climb_upward_through_an_open_shaft() {
+        let mut world = World::new(1);
+        let mut chunk = Chunk::new(0, 0);
+        chunk.set_local(5, 10, 5, BlockType::Water);
+        world.chunks.insert((0, 0), chunk);
+
+        // (6,10,5) touches the water sideways; (6,11,5) is open air directly
+        // above it -- water shouldn't defy gravity to climb up into it.
+        let result = world.flood_from((6, 10, 5));
+        assert!(result.contains(&(6, 10, 5)));
+        assert!(
+            !result.contains(&(6, 11, 5)),
+            "flood shouldn't climb upward into an open shaft: {result:?}"
+        );
+    }
+
+    #[test]
+    fn flood_from_caps_at_max_flood_blocks() {
+        let mut world = World::new(1);
+        let mut chunk = Chunk::new(0, 0);
+        // The rest of the chunk is Air by default -- a huge connected
+        // pocket, far more than MAX_FLOOD_BLOCKS, all reachable from one
+        // water source.
+        chunk.set_local(0, 10, 0, BlockType::Water);
+        world.chunks.insert((0, 0), chunk);
+
+        let result = world.flood_from((1, 10, 0));
+        assert_eq!(
+            result.len(),
+            MAX_FLOOD_BLOCKS,
+            "flood should stop at the cap instead of filling the whole cavity"
+        );
+    }
 }

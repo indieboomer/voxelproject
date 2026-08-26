@@ -35,7 +35,7 @@ impl BlockType {
     /// a subtle sheen since they read as harder, smoother materials.
     pub fn reflectivity(self) -> f32 {
         match self {
-            BlockType::Water => 0.85,
+            BlockType::Water => 0.9,
             BlockType::Crystal => 0.5,
             BlockType::Stone | BlockType::RedStone => 0.15,
             _ => 0.0,
