@@ -167,6 +167,18 @@ impl Module {
     }
 }
 
+/// Maps a Lua-facing kind string to the internal `u8` kind code used by
+/// `find_creatures`/`nearest_creature`. `None` means "any kind" (both the
+/// filter argument itself, when it's "any", and an unrecognized string fall
+/// through to matching everything rather than erroring).
+fn creature_kind_filter(kind: &str) -> Option<u8> {
+    match kind.to_ascii_lowercase().as_str() {
+        "sheep" => Some(0),
+        "chicken" => Some(1),
+        _ => None,
+    }
+}
+
 /// Builds the `api` table's functions, shared between `on_tick` and
 /// `on_death` calls so both expose an identical World API.
 #[allow(clippy::too_many_arguments)]
@@ -178,7 +190,7 @@ fn populate_api<'lua, 'scope>(
     night: bool,
     weather_name: &'static str,
     players_data: &'scope [(u32, f32, f32, f32, bool)],
-    creature_list: &'scope [(u32, u8, [f32; 3])],
+    creature_list: &'scope [(u32, u8, [f32; 3], f32, f32)],
     creatures_cell: &'scope RefCell<&mut Creatures>,
     world: &'scope World,
     block_edits_cell: &'scope RefCell<&mut Vec<(i32, i32, i32, BlockType)>>,
@@ -213,17 +225,128 @@ fn populate_api<'lua, 'scope>(
         "creatures",
         scope.create_function(move |lua, ()| {
             let t = lua.create_table()?;
-            for (i, (id, kind, pos)) in creature_list.iter().enumerate() {
+            for (i, (id, kind, pos, health, max_health)) in creature_list.iter().enumerate() {
                 let c = lua.create_table()?;
                 c.set("id", *id)?;
                 c.set("kind", if *kind == 0 { "sheep" } else { "chicken" })?;
                 c.set("x", pos[0])?;
                 c.set("y", pos[1])?;
                 c.set("z", pos[2])?;
+                c.set("health", *health)?;
+                c.set("max_health", *max_health)?;
                 t.set(i + 1, c)?;
             }
             Ok(t)
         })?,
+    )?;
+
+    api.set(
+        "find_creatures",
+        scope.create_function(
+            move |lua, (kind, cx, cy, cz, radius): (String, f32, f32, f32, f32)| {
+                let t = lua.create_table()?;
+                let kind_filter = creature_kind_filter(&kind);
+                let radius = radius.clamp(0.0, MAX_FIND_RADIUS);
+                let radius_sq = radius * radius;
+                let center = Vec3::new(cx, cy, cz);
+                let mut count = 0usize;
+                for (id, k, pos, health, max_health) in creature_list.iter() {
+                    if count >= MAX_FIND_RESULTS {
+                        break;
+                    }
+                    if let Some(want) = kind_filter {
+                        if *k != want {
+                            continue;
+                        }
+                    }
+                    let p = Vec3::from_array(*pos);
+                    if p.distance_squared(center) > radius_sq {
+                        continue;
+                    }
+                    let e = lua.create_table()?;
+                    e.set("id", *id)?;
+                    e.set("kind", if *k == 0 { "sheep" } else { "chicken" })?;
+                    e.set("x", pos[0])?;
+                    e.set("y", pos[1])?;
+                    e.set("z", pos[2])?;
+                    e.set("health", *health)?;
+                    e.set("max_health", *max_health)?;
+                    count += 1;
+                    t.set(count, e)?;
+                }
+                Ok(t)
+            },
+        )?,
+    )?;
+
+    api.set(
+        "nearest_creature",
+        scope.create_function(
+            move |lua, (kind, x, y, z): (String, f32, f32, f32)| {
+                let kind_filter = creature_kind_filter(&kind);
+                let center = Vec3::new(x, y, z);
+                let nearest = creature_list
+                    .iter()
+                    .filter(|(_, k, ..)| kind_filter.map_or(true, |want| *k == want))
+                    .map(|(id, k, pos, health, max_health)| {
+                        let p = Vec3::from_array(*pos);
+                        (id, k, pos, health, max_health, p.distance(center))
+                    })
+                    .min_by(|a, b| a.5.total_cmp(&b.5));
+                let Some((id, k, pos, health, max_health, dist)) = nearest else {
+                    return Ok(None);
+                };
+                let e = lua.create_table()?;
+                e.set("id", *id)?;
+                e.set("kind", if *k == 0 { "sheep" } else { "chicken" })?;
+                e.set("x", pos[0])?;
+                e.set("y", pos[1])?;
+                e.set("z", pos[2])?;
+                e.set("health", *health)?;
+                e.set("max_health", *max_health)?;
+                e.set("distance", dist)?;
+                Ok(Some(e))
+            },
+        )?,
+    )?;
+
+    api.set(
+        "nearest_player",
+        scope.create_function(move |lua, (x, y, z): (f32, f32, f32)| {
+            let center = Vec3::new(x, y, z);
+            let nearest = players_data
+                .iter()
+                .map(|(id, px, py, pz, carrying)| {
+                    let dist = Vec3::new(*px, *py, *pz).distance(center);
+                    (id, px, py, pz, carrying, dist)
+                })
+                .min_by(|a, b| a.5.total_cmp(&b.5));
+            let Some((id, px, py, pz, carrying, dist)) = nearest else {
+                return Ok(None);
+            };
+            let p = lua.create_table()?;
+            p.set("id", *id)?;
+            p.set("x", *px)?;
+            p.set("y", *py)?;
+            p.set("z", *pz)?;
+            p.set("carrying_crystal", *carrying)?;
+            p.set("distance", dist)?;
+            Ok(Some(p))
+        })?,
+    )?;
+
+    api.set(
+        "terrain_height",
+        scope.create_function(move |_, (x, z): (i32, i32)| Ok(world.terrain_height(x, z)))?,
+    )?;
+
+    api.set(
+        "distance",
+        scope.create_function(
+            |_, (x1, y1, z1, x2, y2, z2): (f32, f32, f32, f32, f32, f32)| {
+                Ok(Vec3::new(x1, y1, z1).distance(Vec3::new(x2, y2, z2)))
+            },
+        )?,
     )?;
 
     api.set(
@@ -661,7 +784,7 @@ mod tests {
         let sheep = creatures
             .snapshot_with_ids()
             .into_iter()
-            .find(|(_, kind, _)| *kind == 0)
+            .find(|(_, kind, _, _, _)| *kind == 0)
             .expect("at least one sheep should have spawned");
         let players = vec![(0u32, Vec3::from_array(sheep.2), true)];
         let mut weather = WeatherState::new(1);
@@ -693,7 +816,7 @@ mod tests {
         let sheep = creatures
             .snapshot_with_ids()
             .into_iter()
-            .find(|(_, kind, _)| *kind == 0)
+            .find(|(_, kind, _, _, _)| *kind == 0)
             .expect("at least one sheep should have spawned");
         let players = vec![(0u32, Vec3::from_array(sheep.2), false)];
         let mut weather = WeatherState::new(1);
@@ -925,6 +1048,128 @@ mod tests {
             edits.len(),
             MAX_BLOCK_EDITS_PER_CALL as usize,
             "budget should cap edits at {MAX_BLOCK_EDITS_PER_CALL}"
+        );
+    }
+
+    #[test]
+    fn distance_and_terrain_height_report_correct_values() {
+        let world = World::new(9);
+        let mut creatures = Creatures::new();
+        let players: Vec<(PlayerId, Vec3, bool)> = Vec::new();
+        let mut weather = WeatherState::new(1);
+        let expected_height = world.terrain_height(5, 5);
+
+        let source = format!(
+            r#"
+            function on_tick(api)
+                local d = api.distance(0, 0, 0, 3, 4, 0)
+                local h = api.terrain_height(5, 5)
+                if math.abs(d - 5.0) < 0.001 and h == {expected_height} then
+                    api.replace_block(0, 0, 0, "redstone")
+                end
+            end
+        "#
+        );
+        let mut module = Module::load("geometry_check".into(), "test".into(), source).unwrap();
+        module.enabled = true;
+
+        let edits = run_one_tick(
+            &mut module,
+            &world,
+            &mut creatures,
+            &players,
+            0.5,
+            &mut weather,
+        );
+
+        assert!(module.error.is_none(), "module errored: {:?}", module.error);
+        assert!(
+            edits.iter().any(|(_, _, _, b)| *b == BlockType::RedStone),
+            "expected distance/terrain_height to both check out: {edits:?}"
+        );
+    }
+
+    #[test]
+    fn nearest_player_returns_the_closest_connected_player() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let players: Vec<(PlayerId, Vec3, bool)> = vec![
+            (1, Vec3::new(0.0, 0.0, 0.0), false),
+            (2, Vec3::new(5.0, 0.0, 0.0), false),
+        ];
+        let mut weather = WeatherState::new(1);
+
+        let source = r#"
+            function on_tick(api)
+                local p = api.nearest_player(10, 0, 0)
+                if p ~= nil and p.id == 2 then
+                    api.replace_block(0, 0, 0, "redstone")
+                end
+            end
+        "#
+        .to_string();
+        let mut module = Module::load("nearest_check".into(), "test".into(), source).unwrap();
+        module.enabled = true;
+
+        let edits = run_one_tick(
+            &mut module,
+            &world,
+            &mut creatures,
+            &players,
+            0.5,
+            &mut weather,
+        );
+
+        assert!(module.error.is_none(), "module errored: {:?}", module.error);
+        assert!(
+            edits.iter().any(|(_, _, _, b)| *b == BlockType::RedStone),
+            "expected the closer player (id 2) to be picked as nearest: {edits:?}"
+        );
+    }
+
+    #[test]
+    fn find_creatures_and_nearest_creature_filter_by_kind_and_expose_health() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let sheep_id = creatures.spawn_one(CreatureKind::Sheep, Vec3::new(0.0, 5.0, 0.0), 1);
+        let chicken_id = creatures.spawn_one(CreatureKind::Chicken, Vec3::new(1.0, 5.0, 1.0), 2);
+        creatures.damage(sheep_id, 4.0);
+        let players: Vec<(PlayerId, Vec3, bool)> = Vec::new();
+        let mut weather = WeatherState::new(1);
+
+        let source = format!(
+            r#"
+            function on_tick(api)
+                local sheep_nearby = api.find_creatures("sheep", 0, 5, 0, 5)
+                local nearest_chicken = api.nearest_creature("chicken", 0, 5, 0)
+                if #sheep_nearby == 1
+                    and sheep_nearby[1].id == {sheep_id}
+                    and math.abs(sheep_nearby[1].health - 8.0) < 0.001
+                    and sheep_nearby[1].max_health == 12.0
+                    and nearest_chicken ~= nil
+                    and nearest_chicken.id == {chicken_id}
+                then
+                    api.replace_block(0, 0, 0, "redstone")
+                end
+            end
+        "#
+        );
+        let mut module = Module::load("creature_query_check".into(), "test".into(), source).unwrap();
+        module.enabled = true;
+
+        let edits = run_one_tick(
+            &mut module,
+            &world,
+            &mut creatures,
+            &players,
+            0.5,
+            &mut weather,
+        );
+
+        assert!(module.error.is_none(), "module errored: {:?}", module.error);
+        assert!(
+            edits.iter().any(|(_, _, _, b)| *b == BlockType::RedStone),
+            "expected find_creatures/nearest_creature/health fields to all check out: {edits:?}"
         );
     }
 }

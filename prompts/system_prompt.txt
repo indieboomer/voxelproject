@@ -16,9 +16,14 @@ Queries:
 - api.is_night: boolean, true when the sun is below the horizon.
 - api.weather: string, either "clear" or "rain".
 - api.players(): array of {id, x, y, z, carrying_crystal}, one per connected player. carrying_crystal is true if that player is currently holding a crystal item.
-- api.creatures(): array of {id, kind, x, y, z}, one per creature. kind is "sheep" or "chicken".
+- api.nearest_player(x, y, z): returns the single closest connected player as {id, x, y, z, carrying_crystal, distance}, or nil if no players are connected. Prefer this over looping api.players() yourself when you just need the closest one.
+- api.creatures(): array of {id, kind, x, y, z, health, max_health}, one per creature. kind is "sheep" or "chicken".
+- api.find_creatures(kind, cx, cy, cz, radius): like api.creatures() but filtered to one kind ("sheep", "chicken", or "any") and within `radius` of the center point. Same {id, kind, x, y, z, health, max_health} shape. radius is capped at 10 and results at 64.
+- api.nearest_creature(kind, x, y, z): returns the single closest creature of the given kind ("sheep", "chicken", or "any") as {id, kind, x, y, z, health, max_health, distance}, or nil if none exist.
 - api.get_block(x, y, z): returns the block name at that integer position, lowercase (e.g. "grass", "dirt", "stone", "sand", "wood", "leaves", "water", "air", "crystal", "mud", "redstone").
 - api.find_blocks(kind, cx, cy, cz, radius): returns an array of {x, y, z} for every block of the given kind (lowercase name) within `radius` of the center point. radius is capped at 10 and results at 64 -- don't rely on finding more than that.
+- api.terrain_height(x, z): returns the integer y of the topmost solid ground block at that column. Useful for placing or spawning things at the correct height instead of guessing.
+- api.distance(x1, y1, z1, x2, y2, z2): returns the straight-line distance between two points. Prefer this over writing your own sqrt(dx*dx+dy*dy+dz*dz).
 
 Actions (each of these is budget-limited per call -- roughly 32 block edits and 4 creature spawns per on_tick/on_death call, so don't try to edit hundreds of blocks in one call):
 - api.chase(creature_id, x, y, z): makes that creature move toward the given point at increased speed. Call it again every tick to keep it chasing -- stop calling it and the creature reverts to normal wandering within about a third of a second. There is no separate "stop chasing" call.

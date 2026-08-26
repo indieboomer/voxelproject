@@ -42,7 +42,7 @@ impl CreatureKind {
         }
     }
 
-    fn max_health(self) -> f32 {
+    pub fn max_health(self) -> f32 {
         match self {
             CreatureKind::Sheep => 12.0,
             CreatureKind::Chicken => 6.0,
@@ -254,12 +254,20 @@ impl Creatures {
             .collect()
     }
 
-    /// Positions + kinds + stable ids, for exposing to Lua modules.
-    pub fn snapshot_with_ids(&self) -> Vec<(u32, u8, [f32; 3])> {
+    /// Positions + kinds + stable ids + health, for exposing to Lua modules.
+    pub fn snapshot_with_ids(&self) -> Vec<(u32, u8, [f32; 3], f32, f32)> {
         self.ecs
-            .query::<(&CreatureId, &Kind, &Pos)>()
+            .query::<(&CreatureId, &Kind, &Pos, &Health)>()
             .iter()
-            .map(|(_, (id, kind, pos))| (id.0, kind.0.to_u8(), pos.0.to_array()))
+            .map(|(_, (id, kind, pos, health))| {
+                (
+                    id.0,
+                    kind.0.to_u8(),
+                    pos.0.to_array(),
+                    health.0,
+                    kind.0.max_health(),
+                )
+            })
             .collect()
     }
 
