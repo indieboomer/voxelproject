@@ -56,6 +56,12 @@ pub fn save_world(
     }
 }
 
+/// Whether a save file exists, for the main menu to decide whether "Load
+/// World" should be selectable at all.
+pub fn save_exists() -> bool {
+    Path::new(SAVE_PATH).exists()
+}
+
 pub fn load_world() -> Option<LoadedWorld> {
     let bytes = fs::read(SAVE_PATH).ok()?;
     let save: WorldSave = bincode::deserialize(&bytes).ok()?;

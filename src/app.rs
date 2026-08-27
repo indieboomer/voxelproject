@@ -201,7 +201,7 @@ pub struct App {
 }
 
 impl App {
-    pub async fn new(window: Arc<Window>, launch: LaunchConfig) -> Self {
+    pub async fn new(window: Arc<Window>, launch: LaunchConfig) -> Result<Self, String> {
         let size = window.inner_size();
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -349,7 +349,8 @@ impl App {
             scripting,
         ) = match launch.connect {
             None => {
-                let (world, spawn_pos, yaw, pitch, time_of_day, scripting) = match load_world() {
+                let loaded = if launch.fresh { None } else { load_world() };
+                let (world, spawn_pos, yaw, pitch, time_of_day, scripting) = match loaded {
                     Some(loaded) => (
                         loaded.world,
                         loaded.player_pos,
@@ -373,13 +374,12 @@ impl App {
                     }
                 };
                 let socket = net::bind_nonblocking(&format!("0.0.0.0:{}", launch.port))
-                    .unwrap_or_else(|e| {
-                        eprintln!(
-                            "Failed to bind UDP port {}: {e}. Pick a different --port.",
+                    .map_err(|e| {
+                        format!(
+                            "Failed to bind UDP port {}: {e}. Pick a different port.",
                             launch.port
-                        );
-                        std::process::exit(1);
-                    });
+                        )
+                    })?;
                 log::info!("Hosting on port {}", launch.port);
                 let host_net = HostNet {
                     socket,
@@ -404,7 +404,7 @@ impl App {
             }
             Some(server_addr) => {
                 let (socket, player_id, world, spawn_pos, time_of_day, reliable) =
-                    join_handshake(server_addr);
+                    join_handshake(server_addr)?;
                 let client_net = ClientNet {
                     socket,
                     server_addr,
@@ -494,7 +494,7 @@ impl App {
 
         app.grab_cursor(true);
         app.update_chunks();
-        app
+        Ok(app)
     }
 
     fn grab_cursor(&mut self, grab: bool) {
@@ -1382,14 +1382,15 @@ impl App {
 }
 
 /// Blocks (with a resend-until-acked handshake) until the host answers with
-/// a `Welcome`, or gives up and exits the process after a timeout.
+/// a `Welcome`, or gives up with an error after a timeout. Never exits the
+/// process itself -- the caller decides how to handle a failed join (the
+/// main menu shows it and lets the user retry; a CLI `--connect` launch
+/// prints it and exits).
 fn join_handshake(
     server_addr: SocketAddr,
-) -> (UdpSocket, PlayerId, World, Vec3, f32, ReliableChannel) {
-    let socket = net::bind_nonblocking("0.0.0.0:0").unwrap_or_else(|e| {
-        eprintln!("Failed to open a local UDP socket: {e}");
-        std::process::exit(1);
-    });
+) -> Result<(UdpSocket, PlayerId, World, Vec3, f32, ReliableChannel), String> {
+    let socket = net::bind_nonblocking("0.0.0.0:0")
+        .map_err(|e| format!("Failed to open a local UDP socket: {e}"))?;
 
     let mut reliable = ReliableChannel::new();
     let hello_id = reliable.send(&socket, server_addr, ReliableMsg::Hello);
@@ -1399,11 +1400,10 @@ fn join_handshake(
     let mut buf = [0u8; 8192];
     loop {
         if Instant::now() > deadline {
-            eprintln!(
+            return Err(format!(
                 "Failed to connect to {server_addr}: no response from host. \
                  Is it running, and is the address/port correct?"
-            );
-            std::process::exit(1);
+            ));
         }
         reliable.resend_due(&socket);
         match socket.recv_from(&mut buf) {
@@ -1428,14 +1428,14 @@ fn join_handshake(
                     }
                     world.rebuild_redstone_positions();
                     log::info!("Connected to {server_addr} as player {player_id}");
-                    return (
+                    return Ok((
                         socket,
                         player_id,
                         world,
                         Vec3::from_array(spawn),
                         time_of_day,
                         reliable,
-                    );
+                    ));
                 }
             }
             Ok(_) => {}
@@ -1443,8 +1443,7 @@ fn join_handshake(
                 std::thread::sleep(Duration::from_millis(20));
             }
             Err(e) => {
-                eprintln!("Network error while connecting: {e}");
-                std::process::exit(1);
+                return Err(format!("Network error while connecting: {e}"));
             }
         }
     }

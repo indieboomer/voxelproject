@@ -150,6 +150,10 @@ pub struct LaunchConfig {
     /// Base URL of a locally running `llama-server` (llama.cpp), used to
     /// generate new rule modules from natural-language prompts.
     pub llm_url: String,
+    /// When hosting, generate a brand new world even if a save file exists
+    /// (the main menu's "New World" vs. "Load World" distinction; CLI-only
+    /// launches keep the old auto-load-else-fresh behavior).
+    pub fresh: bool,
 }
 
 /// Minimal `--connect <ip:port>` / `--port <n>` / `--llm-url <url>` parsing.
@@ -198,5 +202,6 @@ pub fn parse_args() -> LaunchConfig {
         connect,
         port,
         llm_url,
+        fresh: false,
     }
 }

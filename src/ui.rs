@@ -61,6 +61,14 @@ impl Ui {
         let _ = self.state.on_window_event(window, event);
     }
 
+    /// Runs a one-off egui frame with caller-provided content, for UI that
+    /// isn't the in-game HUD (currently just the main menu). Pass the
+    /// returned `FullOutput` to `render`.
+    pub fn run(&mut self, window: &Window, contents: impl FnOnce(&egui::Context)) -> egui::FullOutput {
+        let raw_input = self.state.take_egui_input(window);
+        self.ctx.run(raw_input, contents)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
