@@ -11,7 +11,6 @@ pub struct Input {
     pub right_clicked: bool,
     pub hotbar_select: Option<usize>,
     pub save_requested: bool,
-    pub toggle_cursor: bool,
 }
 
 impl Input {
@@ -31,7 +30,6 @@ impl Input {
                     KeyCode::Digit5 => self.hotbar_select = Some(4),
                     KeyCode::Digit6 => self.hotbar_select = Some(5),
                     KeyCode::F5 => self.save_requested = true,
-                    KeyCode::Escape => self.toggle_cursor = true,
                     _ => {}
                 }
             }
@@ -69,6 +67,5 @@ impl Input {
         self.right_clicked = false;
         self.hotbar_select = None;
         self.save_requested = false;
-        self.toggle_cursor = false;
     }
 }

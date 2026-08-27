@@ -35,6 +35,8 @@ pub struct UiRequests {
     pub toggle_index: Option<usize>,
     pub delete_index: Option<usize>,
     pub submit_prompt: Option<String>,
+    pub confirm_quit: bool,
+    pub cancel_quit: bool,
 }
 
 pub struct Ui {
@@ -81,6 +83,7 @@ impl Ui {
         generation_status: Option<&str>,
         toasts: &[Toast],
         fps: f32,
+        quit_dialog_open: bool,
     ) -> (egui::FullOutput, UiRequests) {
         let raw_input = self.state.take_egui_input(window);
         let mut requests = UiRequests::default();
@@ -102,7 +105,7 @@ impl Ui {
                 .collapsible(false)
                 .show(ctx, |ui| {
                     if scripting.modules.is_empty() {
-                        ui.label("No rules loaded. Press T to describe one.");
+                        ui.label("No rules loaded. Press ~ to describe one.");
                     }
                     for (i, m) in scripting.modules.iter().enumerate() {
                         ui.horizontal(|ui| {
@@ -168,6 +171,25 @@ impl Ui {
                             ui.label("Only the host can generate rules.");
                         }
                         ui.label("Esc to close");
+                    });
+            }
+
+            if quit_dialog_open {
+                egui::Window::new("Quit to Main Menu?")
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .resizable(false)
+                    .collapsible(false)
+                    .show(ctx, |ui| {
+                        ui.label("Quit to the main menu?");
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Quit to Menu").clicked() {
+                                requests.confirm_quit = true;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                requests.cancel_quit = true;
+                            }
+                        });
                     });
             }
         });

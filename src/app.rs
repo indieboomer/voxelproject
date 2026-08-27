@@ -185,6 +185,11 @@ pub struct App {
     prompt_input: String,
     toasts: Vec<Toast>,
     pending_egui_output: Option<egui::FullOutput>,
+    quit_dialog_open: bool,
+    /// Set once the player confirms the quit dialog; `main.rs` checks this
+    /// after every `update()` and swaps the game out for a fresh main menu
+    /// on the same window.
+    return_to_menu: bool,
 
     chunk_meshes: HashMap<(i32, i32), GpuMesh>,
     entity_mesh: Option<GpuMesh>,
@@ -481,6 +486,8 @@ impl App {
             prompt_input: String::new(),
             toasts: Vec::new(),
             pending_egui_output: None,
+            quit_dialog_open: false,
+            return_to_menu: false,
             chunk_meshes: HashMap::new(),
             entity_mesh: None,
             selected_block: BlockType::Grass,
@@ -545,20 +552,26 @@ impl App {
                 let PhysicalKey::Code(code) = key_event.physical_key else {
                     return;
                 };
-                if code == KeyCode::KeyT && !self.console_open {
-                    self.open_console();
+                if code == KeyCode::Backquote && !self.quit_dialog_open {
+                    self.toggle_console();
                     return;
                 }
-                if code == KeyCode::Escape && self.console_open {
-                    self.close_console();
+                if code == KeyCode::Escape {
+                    if self.console_open {
+                        self.close_console();
+                    } else if self.quit_dialog_open {
+                        self.cancel_quit_dialog();
+                    } else {
+                        self.open_quit_dialog();
+                    }
                     return;
                 }
-                if !self.console_open {
+                if !self.console_open && !self.quit_dialog_open {
                     self.input.key_event(code, key_event.state);
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                if !self.console_open {
+                if !self.console_open && !self.quit_dialog_open {
                     self.input.mouse_button_event(*button, *state);
                     if *state == ElementState::Pressed
                         && *button == MouseButton::Left
@@ -570,6 +583,25 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    fn toggle_console(&mut self) {
+        if self.console_open {
+            self.close_console();
+        } else {
+            self.open_console();
+        }
+    }
+
+    fn open_quit_dialog(&mut self) {
+        self.quit_dialog_open = true;
+        self.input.release_all();
+        self.grab_cursor(false);
+    }
+
+    fn cancel_quit_dialog(&mut self) {
+        self.quit_dialog_open = false;
+        self.grab_cursor(true);
     }
 
     fn open_console(&mut self) {
@@ -599,10 +631,6 @@ impl App {
         // Wrap well before f32 precision would start eating into a sine's
         // period -- the animation is periodic anyway so this is seamless.
         self.water_time = (self.water_time + dt) % 10_000.0;
-
-        if self.input.toggle_cursor {
-            self.grab_cursor(!self.cursor_grabbed);
-        }
 
         const SENSITIVITY: f32 = 0.0022;
         self.camera.yaw += self.input.mouse_delta.0 * SENSITIVITY;
@@ -731,8 +759,16 @@ impl App {
             generation_status,
             &self.toasts,
             self.last_fps,
+            self.quit_dialog_open,
         );
         self.pending_egui_output = Some(full_output);
+
+        if requests.confirm_quit {
+            self.return_to_menu = true;
+        }
+        if requests.cancel_quit {
+            self.cancel_quit_dialog();
+        }
 
         if let Some(idx) = requests.toggle_index {
             if let Some((name, enabled)) = self.scripting.toggle_at(idx) {
@@ -774,7 +810,7 @@ impl App {
                 ),
             };
             self.window.set_title(&format!(
-                "Voxel Project | {:02}:{:02} | {} | Block: {} | FPS: {:.0} | T rules/generate, F5 save, Esc mouse",
+                "Voxel Project | {:02}:{:02} | {} | Block: {} | FPS: {:.0} | ~ rules/generate, F5 save, Esc quit",
                 hour,
                 minute,
                 role_info,
@@ -1378,6 +1414,13 @@ impl App {
                 self.scripting.save_entries(),
             );
         }
+    }
+
+    /// Whether the player confirmed the Esc quit dialog -- `main.rs` checks
+    /// this after every frame and, if set, drops this game and returns to
+    /// the main menu on the same window.
+    pub fn wants_return_to_menu(&self) -> bool {
+        self.return_to_menu
     }
 }
 

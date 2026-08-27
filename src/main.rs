@@ -148,6 +148,28 @@ fn main() {
                                 }
                                 WindowEvent::RedrawRequested => {
                                     state.update();
+                                    if state.wants_return_to_menu() {
+                                        // Same save-then-drop-then-create
+                                        // dance as CloseRequested, except we
+                                        // land on a fresh menu instead of
+                                        // exiting -- the old device/surface
+                                        // must go before the menu creates
+                                        // its own for this window.
+                                        state.save();
+                                        stage = Stage::Transitioning;
+                                        let menu = pollster::block_on(MenuApp::new(
+                                            window.clone(),
+                                            LaunchConfig {
+                                                connect: None,
+                                                port: net::DEFAULT_PORT,
+                                                llm_url: net::DEFAULT_LLM_URL.to_string(),
+                                                fresh: false,
+                                            },
+                                        ));
+                                        stage = Stage::Menu(menu);
+                                        window.request_redraw();
+                                        return;
+                                    }
                                     match state.render() {
                                         Ok(_) => {}
                                         Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
