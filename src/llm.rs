@@ -150,6 +150,63 @@ fn extract_lua(text: &str) -> String {
     text.trim().to_string()
 }
 
+/// Low-content English words dropped when deriving a short rule name from a
+/// prompt -- articles, prepositions, pronouns, and filler verbs that don't
+/// describe *what* the rule actually does. "player"/"players" is included
+/// since nearly every rule mentions one, so it's rarely the distinguishing
+/// word.
+const NAME_STOPWORDS: &[&str] = &[
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "to", "of", "in", "on",
+    "at", "by", "for", "with", "and", "or", "but", "if", "then", "when", "while", "that", "this",
+    "these", "those", "it", "its", "their", "they", "he", "she", "him", "her", "has", "have",
+    "had", "will", "would", "should", "could", "can", "do", "does", "did", "not", "no", "so",
+    "than", "as", "from", "into", "onto", "out", "up", "down", "near", "within", "during", "gets",
+    "get", "got", "give", "gives", "given", "start", "starts", "started", "begin", "begins",
+    "cause", "causes", "caused", "make", "makes", "made", "one", "two", "three", "four", "five",
+    "six", "seven", "eight", "nine", "ten", "some", "any", "all", "each", "every", "also", "just",
+    "only", "very", "really", "much", "many", "more", "most", "less", "least", "around", "about",
+    "player", "players",
+];
+
+/// Shortest word considered meaningful enough to anchor a name -- drops
+/// short filler nouns ("day", "one", ...) without having to enumerate every
+/// one of them by hand.
+const NAME_MIN_WORD_LEN: usize = 4;
+/// Per-word cap, so one long word can't blow out an otherwise-short name.
+const NAME_MAX_WORD_LEN: usize = 12;
+const NAME_WORD_COUNT: usize = 2;
+
+/// Derives a short, snake_case name from a natural-language rule prompt for
+/// use as the module's default display name (e.g. "chickens flee from the
+/// nearest player" -> "chickens_flee"). This is a plain keyword heuristic,
+/// not real language understanding -- it picks the first couple of
+/// sufficiently long, non-filler words in the order they appear, which
+/// tends to track the subject/action of the sentence well enough to beat a
+/// generic "rule_3" without depending on the (unreliable, see
+/// `live_generation_produces_a_valid_module`) local model for yet another
+/// thing to get right. Returns `None` if no word survives filtering (e.g.
+/// an all-stopword or all-punctuation prompt), so the caller can fall back
+/// to a numbered name.
+pub fn derive_rule_name(prompt: &str) -> Option<String> {
+    let words: Vec<String> = prompt
+        .split(|c: char| !c.is_alphanumeric())
+        .map(|w| w.to_ascii_lowercase())
+        .filter(|w| {
+            w.len() >= NAME_MIN_WORD_LEN
+                && !NAME_STOPWORDS.contains(&w.as_str())
+                && w.chars().any(|c| c.is_alphabetic())
+        })
+        .map(|w| w.chars().take(NAME_MAX_WORD_LEN).collect::<String>())
+        .take(NAME_WORD_COUNT)
+        .collect();
+
+    if words.is_empty() {
+        None
+    } else {
+        Some(words.join("_"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,6 +221,55 @@ mod tests {
     fn extract_lua_passes_through_plain_code() {
         let text = "function on_tick(api) end";
         assert_eq!(extract_lua(text), "function on_tick(api) end");
+    }
+
+    #[test]
+    fn derive_rule_name_picks_the_first_meaningful_words_in_order() {
+        assert_eq!(
+            derive_rule_name(
+                "During the day, chickens flee from the nearest player if it gets within 6 blocks."
+            ),
+            Some("chickens_flee".to_string())
+        );
+        assert_eq!(
+            derive_rule_name("when a player jumps, it starts raining"),
+            Some("jumps_raining".to_string())
+        );
+        assert_eq!(
+            derive_rule_name("breaking a crystal block while sprinting summons a storm"),
+            Some("breaking_crystal".to_string())
+        );
+    }
+
+    #[test]
+    fn derive_rule_name_drops_stopwords_and_short_filler_words() {
+        // "three" is a spelled-out number (filtered) and "in"/"a" are
+        // stopwords -- the name should skip straight to the real content.
+        assert_eq!(
+            derive_rule_name("three creature deaths in one location spawn a red stone"),
+            Some("creature_deaths".to_string())
+        );
+    }
+
+    #[test]
+    fn derive_rule_name_falls_back_to_none_for_an_all_filler_prompt() {
+        assert_eq!(derive_rule_name("if it is on the a"), None);
+        assert_eq!(derive_rule_name("   "), None);
+    }
+
+    #[test]
+    fn derive_rule_name_uses_a_single_word_when_only_one_survives() {
+        assert_eq!(derive_rule_name("make it rain"), Some("rain".to_string()));
+    }
+
+    #[test]
+    fn derive_rule_name_caps_an_overly_long_word() {
+        let long_word = "a".repeat(30);
+        let name = derive_rule_name(&format!("the {long_word} block explodes")).unwrap();
+        assert!(
+            name.split('_').all(|w| w.len() <= NAME_MAX_WORD_LEN),
+            "expected every word capped at {NAME_MAX_WORD_LEN} chars: {name}"
+        );
     }
 
     /// Exercises the real end-to-end pipeline: a live llama-server generates

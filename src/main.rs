@@ -17,9 +17,10 @@ mod weather;
 
 use std::sync::Arc;
 
-use winit::event::{Event, WindowEvent};
+use winit::event::{ElementState, Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
-use winit::window::WindowBuilder;
+use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::window::{Fullscreen, WindowBuilder};
 
 use menu::{MenuAction, MenuApp};
 use net::LaunchConfig;
@@ -71,6 +72,22 @@ fn main() {
             elwt.set_control_flow(ControlFlow::Poll);
             match event {
                 Event::WindowEvent { window_id, event } if window_id == window.id() => {
+                    // Handled once here (not per-stage) so F11 works the
+                    // same whether you're at the menu or in-game.
+                    // `!repeat` avoids the OS auto-repeating a held key into
+                    // rapid fullscreen/windowed thrashing.
+                    if let WindowEvent::KeyboardInput { event: key_event, .. } = &event {
+                        if key_event.state == ElementState::Pressed
+                            && !key_event.repeat
+                            && key_event.physical_key == PhysicalKey::Code(KeyCode::F11)
+                        {
+                            window.set_fullscreen(if window.fullscreen().is_some() {
+                                None
+                            } else {
+                                Some(Fullscreen::Borderless(None))
+                            });
+                        }
+                    }
                     match &mut stage {
                         Stage::Menu(menu) => {
                             menu.window_event(&event);

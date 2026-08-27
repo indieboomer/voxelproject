@@ -53,7 +53,7 @@ pub enum UnreliableMsg {
         time_of_day: f32,
         weather: u8,
         players: Vec<(PlayerId, [f32; 3], f32, bool)>,
-        creatures: Vec<([f32; 3], u8)>,
+        creatures: Vec<([f32; 3], u8, f32)>,
     },
 }
 

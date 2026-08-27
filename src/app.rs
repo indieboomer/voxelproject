@@ -14,7 +14,7 @@ use crate::camera::Camera;
 use crate::creature::{mesh_for_snapshot, Creatures};
 use crate::daynight::{sky_lighting, DAY_LENGTH_SECS};
 use crate::input::Input;
-use crate::llm::{LlmClient, PendingGeneration};
+use crate::llm::{derive_rule_name, LlmClient, PendingGeneration};
 use crate::net::{
     self, decode, encode, LaunchConfig, Packet, PlayerId, ReliableChannel, ReliableMsg,
     UnreliableMsg, CONNECTION_TIMEOUT, HOST_PLAYER_ID, SNAPSHOT_INTERVAL,
@@ -153,7 +153,7 @@ struct ClientNet {
     player_id: PlayerId,
     reliable: ReliableChannel,
     remote_players: HashMap<PlayerId, RemotePlayer>,
-    creature_snapshot: Vec<([f32; 3], u8)>,
+    creature_snapshot: Vec<([f32; 3], u8, f32)>,
     send_timer: f32,
     last_server_packet: Instant,
     lost_connection_logged: bool,
@@ -1010,7 +1010,7 @@ impl App {
                 None => "none",
             };
             self.window.set_title(&format!(
-                "Voxel Project | {:02}:{:02} | {} | Block: {} | FPS: {:.0} | ~ rules/generate, F5 save, Esc quit",
+                "Voxel Project | {:02}:{:02} | {} | Block: {} | FPS: {:.0} | ~ rules/generate, F5 save, F11 fullscreen, Esc quit",
                 hour,
                 minute,
                 role_info,
@@ -1092,6 +1092,28 @@ impl App {
         };
     }
 
+    /// Picks a short, meaningful name for a newly generated rule (e.g.
+    /// "chickens_flee" instead of "rule_3") by pulling keywords out of the
+    /// user's own prompt -- see `llm::derive_rule_name`. Falls back to the
+    /// old numbered scheme if the prompt didn't yield anything usable, and
+    /// disambiguates against currently loaded rules either way so two
+    /// similar prompts don't collide.
+    fn make_rule_name(&self, prompt: &str) -> String {
+        let base =
+            derive_rule_name(prompt).unwrap_or_else(|| format!("rule_{}", self.next_rule_id));
+        if !self.scripting.modules.iter().any(|m| m.name == base) {
+            return base;
+        }
+        let mut n = 2;
+        loop {
+            let candidate = format!("{base}_{n}");
+            if !self.scripting.modules.iter().any(|m| m.name == candidate) {
+                return candidate;
+            }
+            n += 1;
+        }
+    }
+
     /// Runtime rule pipeline steps 3-4: receives the generated Lua source
     /// and validates it (syntax + `on_tick` contract, via `Module::load`).
     /// On failure, gives the model one chance to fix it before giving up --
@@ -1122,7 +1144,7 @@ impl App {
             }
         };
 
-        let name = format!("rule_{}", self.next_rule_id);
+        let name = self.make_rule_name(&user_request);
         match Module::load(name.clone(), user_request.clone(), code.clone()) {
             Ok(module) => {
                 self.next_rule_id += 1;
