@@ -4,6 +4,7 @@ use std::time::Duration;
 const SYSTEM_PROMPT_TEMPLATE: &str = include_str!("../prompts/system_prompt.txt");
 const NIGHT_HUNT_EXAMPLE: &str = include_str!("../modules/night_hunt.lua");
 const REDSTONE_EXAMPLE: &str = include_str!("../modules/redstone_healing.lua");
+const STORM_SUMMONER_EXAMPLE: &str = include_str!("../modules/storm_summoner.lua");
 
 struct ChatMessage {
     role: &'static str,
@@ -48,6 +49,7 @@ impl LlmClient {
         SYSTEM_PROMPT_TEMPLATE
             .replace("{NIGHT_HUNT_EXAMPLE}", NIGHT_HUNT_EXAMPLE)
             .replace("{REDSTONE_EXAMPLE}", REDSTONE_EXAMPLE)
+            .replace("{STORM_SUMMONER_EXAMPLE}", STORM_SUMMONER_EXAMPLE)
     }
 
     /// Kicks off a background request generating a brand-new rule module

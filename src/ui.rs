@@ -8,9 +8,15 @@ use winit::window::Window;
 use crate::scripting::ScriptHost;
 
 const TOAST_LIFETIME: Duration = Duration::from_secs(6);
+/// Longer-lived than a normal toast, since it flags something the player
+/// actually needs to notice and act on (e.g. "go click Enable") rather than
+/// an FYI that's fine to miss.
+const IMPORTANT_TOAST_LIFETIME: Duration = Duration::from_secs(14);
+const IMPORTANT_TOAST_COLOR: egui::Color32 = egui::Color32::from_rgb(230, 180, 60);
 
 pub struct Toast {
     pub text: String,
+    pub color: egui::Color32,
     expires: Instant,
 }
 
@@ -18,7 +24,18 @@ impl Toast {
     pub fn new(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
+            color: egui::Color32::WHITE,
             expires: Instant::now() + TOAST_LIFETIME,
+        }
+    }
+
+    /// A highlighted, longer-lived toast for things that need the player's
+    /// attention -- e.g. a freshly generated rule waiting to be enabled.
+    pub fn important(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            color: IMPORTANT_TOAST_COLOR,
+            expires: Instant::now() + IMPORTANT_TOAST_LIFETIME,
         }
     }
 
@@ -108,16 +125,17 @@ impl Ui {
                         ui.label("No rules loaded. Press ~ to describe one.");
                     }
                     for (i, m) in scripting.modules.iter().enumerate() {
+                        let (status, status_color) = if m.error.is_some() {
+                            ("ERR", egui::Color32::from_rgb(220, 90, 90))
+                        } else if m.enabled {
+                            ("ON", egui::Color32::from_rgb(100, 200, 100))
+                        } else {
+                            ("OFF", IMPORTANT_TOAST_COLOR)
+                        };
+                        let is_recent = Some(i) == recent_index;
+                        let marker = if is_recent { "-> " } else { "" };
                         ui.horizontal(|ui| {
-                            let status = if m.error.is_some() {
-                                "ERR"
-                            } else if m.enabled {
-                                "ON"
-                            } else {
-                                "OFF"
-                            };
-                            let marker = if Some(i) == recent_index { "* " } else { "" };
-                            ui.label(format!("{marker}{} [{status}]", m.name));
+                            ui.colored_label(status_color, format!("{marker}{} [{status}]", m.name));
                             if is_host {
                                 let label = if m.enabled { "Disable" } else { "Enable" };
                                 if ui.small_button(label).clicked() {
@@ -128,6 +146,16 @@ impl Ui {
                                 }
                             }
                         });
+                        // Spell it out for a rule that just came out of
+                        // generation and is still sitting disabled -- easy
+                        // to miss otherwise, since the toast announcing it
+                        // fades after a few seconds.
+                        if is_recent && !m.enabled && m.error.is_none() && is_host {
+                            ui.colored_label(
+                                IMPORTANT_TOAST_COLOR,
+                                "New -- click Enable above to activate it",
+                            );
+                        }
                         if let Some(err) = &m.error {
                             ui.colored_label(egui::Color32::from_rgb(220, 90, 90), err);
                         }
@@ -142,7 +170,7 @@ impl Ui {
                     .interactable(false)
                     .show(ctx, |ui| {
                         for t in toasts {
-                            ui.label(&t.text);
+                            ui.colored_label(t.color, &t.text);
                         }
                     });
             }

@@ -24,6 +24,11 @@ pub struct RemotePlayer {
     pub yaw: f32,
     pub carrying_crystal: bool,
     pub last_seen: Instant,
+    /// Approximated on the host from consecutive `PlayerState` updates
+    /// (position delta / time since the last one) since the network
+    /// protocol doesn't carry a client's real physics velocity -- good
+    /// enough for exposing `speed`/`running` to Lua rules via `api.players`.
+    pub velocity: Vec3,
 }
 
 /// Builds a mesh for every tracked remote player except `exclude` (the

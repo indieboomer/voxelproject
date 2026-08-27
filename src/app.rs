@@ -23,7 +23,9 @@ use crate::player::Player;
 use crate::raycast::raycast;
 use crate::remote_player::{self, RemotePlayer};
 use crate::save::{load_world, save_world};
-use crate::scripting::{Module, ScriptHost, TICK_INTERVAL as LUA_TICK_INTERVAL};
+use crate::scripting::{
+    BlockBreakEvent, Module, PlayerSnapshot, ScriptHost, TICK_INTERVAL as LUA_TICK_INTERVAL,
+};
 use crate::ui::{Toast, Ui};
 use crate::voxel::atlas::ATLAS_BYTES;
 use crate::voxel::chunk::world_to_chunk;
@@ -33,6 +35,29 @@ use crate::weather::{Weather, WeatherState};
 
 const REDSTONE_HEAL_RADIUS: f32 = 4.0;
 const REDSTONE_HEAL_AMOUNT: f32 = 0.5;
+/// Horizontal speed above which a remote player (no real sprint flag over
+/// the network) is approximated as "running" for `api.players()`. Above the
+/// 4.5 walk speed but comfortably below the 7.5 sprint speed in `player.rs`.
+const REMOTE_SPRINT_THRESHOLD: f32 = 6.0;
+
+fn horizontal_speed(v: Vec3) -> f32 {
+    Vec3::new(v.x, 0.0, v.z).length()
+}
+
+fn is_in_water(world: &World, pos: Vec3) -> bool {
+    world.get_block(pos.x.floor() as i32, pos.y.floor() as i32, pos.z.floor() as i32)
+        == BlockType::Water
+}
+
+/// Mirrors `Player::update`'s own `below` check, since remote players don't
+/// run local physics on the host.
+fn approximate_on_ground(world: &World, pos: Vec3) -> bool {
+    world.is_solid(
+        pos.x.floor() as i32,
+        (pos.y - 0.05).floor() as i32,
+        pos.z.floor() as i32,
+    )
+}
 
 const SHADOW_MAP_SIZE: u32 = 2048;
 /// Half-width of the sun's orthographic frustum, in blocks. Big enough to
@@ -41,6 +66,70 @@ const SHADOW_MAP_SIZE: u32 = 2048;
 const SHADOW_ORTHO_HALF_SIZE: f32 = 48.0;
 /// How far back along the sun direction the "virtual light" sits.
 const SHADOW_LIGHT_DISTANCE: f32 = 80.0;
+
+/// Number of falling streaks drawn around the camera while it's raining.
+const RAIN_PARTICLE_COUNT: usize = 1400;
+/// Half-width of the square column of streaks centered on the camera --
+/// kept fairly tight so the streaks read as dense rain up close rather than
+/// a handful of sparse lines scattered across the whole view.
+const RAIN_RADIUS: f32 = 16.0;
+/// Vertical extent of the streak volume -- a streak that falls past the
+/// bottom wraps back to the top, so this is also the wrap period.
+const RAIN_HEIGHT: f32 = 20.0;
+const RAIN_FALL_SPEED: f32 = 20.0;
+const RAIN_STREAK_LENGTH: f32 = 0.9;
+const RAIN_ALPHA: f32 = 0.55;
+
+fn next_rand(state: &mut u64) -> f32 {
+    *state ^= *state << 13;
+    *state ^= *state >> 7;
+    *state ^= *state << 17;
+    (*state >> 40) as f32 / (1u64 << 24) as f32
+}
+
+/// Fixed per-particle (x, z, phase) offsets, generated once and reused every
+/// frame -- only the fall phase advances (via `App::water_time`), so the
+/// particle set doesn't need regenerating or storing per-particle state.
+fn build_rain_particles(seed: u32) -> Vec<(f32, f32, f32)> {
+    let mut state = (seed as u64) | 1;
+    (0..RAIN_PARTICLE_COUNT)
+        .map(|_| {
+            let ox = (next_rand(&mut state) * 2.0 - 1.0) * RAIN_RADIUS;
+            let oz = (next_rand(&mut state) * 2.0 - 1.0) * RAIN_RADIUS;
+            let phase = next_rand(&mut state) * RAIN_HEIGHT;
+            (ox, oz, phase)
+        })
+        .collect()
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+struct RainVertex {
+    position: [f32; 3],
+    alpha: f32,
+}
+
+impl RainVertex {
+    fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+        use std::mem::size_of;
+        wgpu::VertexBufferLayout {
+            array_stride: size_of::<RainVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32,
+                },
+            ],
+        }
+    }
+}
 
 const RENDER_RADIUS: i32 = 5;
 const UNLOAD_RADIUS: i32 = RENDER_RADIUS + 2;
@@ -154,6 +243,12 @@ pub struct App {
     render_pipeline: wgpu::RenderPipeline,
     depth_view: wgpu::TextureView,
 
+    rain_pipeline: wgpu::RenderPipeline,
+    rain_vertex_buffer: wgpu::Buffer,
+    /// Fixed (x, z, phase) offsets for each rain streak, relative to the
+    /// camera -- see `build_rain_particles`.
+    rain_particles: Vec<(f32, f32, f32)>,
+
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     texture_bind_group: wgpu::BindGroup,
@@ -171,6 +266,9 @@ pub struct App {
     creatures: Creatures,
     time_of_day: f32,
     weather: WeatherState,
+    /// Block breaks (local or network-relayed from joined clients) collected
+    /// since the last Lua tick, fed into `on_block_break` and cleared after.
+    pending_block_breaks: Vec<BlockBreakEvent>,
     net: NetRole,
     local_player_id: PlayerId,
     scripting: ScriptHost,
@@ -342,6 +440,60 @@ impl App {
             multiview: None,
         });
 
+        let rain_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("rain shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("rain.wgsl").into()),
+        });
+        let rain_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("rain pipeline layout"),
+            bind_group_layouts: &[&camera_bgl],
+            push_constant_ranges: &[],
+        });
+        let rain_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("rain pipeline"),
+            layout: Some(&rain_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &rain_shader,
+                entry_point: "vs_main",
+                buffers: &[RainVertex::layout()],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &rain_shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Cw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                // Read-only: streaks should be hidden behind terrain, but
+                // shouldn't occlude each other or write depth themselves.
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+        let rain_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("rain vertex buffer"),
+            size: (RAIN_PARTICLE_COUNT * 2 * std::mem::size_of::<RainVertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         let (
             world,
             spawn_pos,
@@ -445,6 +597,7 @@ impl App {
             creatures.spawn_around(&world, spawn_pos, CREATURE_COUNT, world.seed);
         }
         let weather = WeatherState::new(world.seed);
+        let rain_particles = build_rain_particles(world.seed);
 
         let llm = LlmClient::new(launch.llm_url.clone());
         let ui = Ui::new(&device, config.format, &window);
@@ -458,6 +611,9 @@ impl App {
             size,
             render_pipeline,
             depth_view,
+            rain_pipeline,
+            rain_vertex_buffer,
+            rain_particles,
             camera_buffer,
             camera_bind_group,
             texture_bind_group,
@@ -473,6 +629,7 @@ impl App {
             creatures,
             time_of_day,
             weather,
+            pending_block_breaks: Vec::new(),
             net,
             local_player_id,
             scripting,
@@ -663,6 +820,19 @@ impl App {
                     if broken == BlockType::Crystal {
                         self.player.carrying_crystal = true;
                     }
+                    // Only the host records this for the Lua tick -- a
+                    // joined client's own break is picked up on the host via
+                    // the network-relayed `ReliableMsg::BlockEdit` path
+                    // instead, so recording it here too would double-fire.
+                    if broken != BlockType::Air && matches!(self.net, NetRole::Host(_)) {
+                        self.pending_block_breaks.push(BlockBreakEvent {
+                            x: hit.target.0,
+                            y: hit.target.1,
+                            z: hit.target.2,
+                            block: broken,
+                            player_id: self.local_player_id,
+                        });
+                    }
                     self.apply_block_edit(hit.target.0, hit.target.1, hit.target.2, BlockType::Air);
                     for pos in self.world.flood_from(hit.target) {
                         self.apply_block_edit(pos.0, pos.1, pos.2, BlockType::Water);
@@ -706,15 +876,24 @@ impl App {
             if self.lua_tick_timer >= LUA_TICK_INTERVAL {
                 self.lua_tick_timer = 0.0;
                 let players = self.host_player_positions();
-                let block_edits = self.scripting.run_tick(
+                let (block_edits, crashes) = self.scripting.run_tick(
                     &self.world,
                     &mut self.creatures,
                     &players,
-                    self.time_of_day,
+                    &mut self.time_of_day,
                     &mut self.weather,
+                    &self.pending_block_breaks,
                 );
+                self.pending_block_breaks.clear();
                 for (x, y, z, block) in block_edits {
                     self.apply_block_edit(x, y, z, block);
+                }
+                // A rule can pass load-time validation and still hit a
+                // runtime error the first time it actually executes (e.g.
+                // calling an undefined helper) -- surface that loudly
+                // rather than letting the rule go silently dark.
+                for message in crashes {
+                    self.notify_all_important(message);
                 }
                 for &(x, y, z) in self.world.redstone_positions.iter() {
                     let center = Vec3::new(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5);
@@ -833,20 +1012,47 @@ impl App {
         }
     }
 
-    /// All known player positions, host included. Used both for the Lua
-    /// World API and (indirectly) mirrors what the network snapshot sends,
-    /// so `api.players()` matches what other players actually see.
-    fn host_player_positions(&self) -> Vec<(PlayerId, Vec3, bool)> {
+    /// Like `notify_all`, but for things the player actually needs to
+    /// notice and act on (e.g. "a new rule is waiting to be enabled"), not
+    /// just an FYI that's fine to scroll past.
+    fn notify_all_important(&mut self, text: String) {
+        self.toasts.push(Toast::important(text.clone()));
+        if let NetRole::Host(host) = &mut self.net {
+            let addrs: Vec<SocketAddr> = host.clients.keys().copied().collect();
+            for addr in addrs {
+                host.reliable
+                    .send(&host.socket, addr, ReliableMsg::Notify(text.clone()));
+            }
+        }
+    }
+
+    /// All known player state, host included. Used for the Lua World API.
+    /// Remote players' `velocity`/`on_ground`/`sprinting` are approximated
+    /// on the host from position deltas and shared-world queries, since the
+    /// network protocol only carries a client's position/yaw per tick.
+    fn host_player_positions(&self) -> Vec<PlayerSnapshot> {
         let NetRole::Host(host) = &self.net else {
             return Vec::new();
         };
-        let mut players = vec![(
-            HOST_PLAYER_ID,
-            self.player.position,
-            self.player.carrying_crystal,
-        )];
+        let mut players = vec![PlayerSnapshot {
+            id: HOST_PLAYER_ID,
+            pos: self.player.position,
+            carrying_crystal: self.player.carrying_crystal,
+            velocity: self.player.velocity,
+            on_ground: self.player.on_ground,
+            sprinting: self.player.sprinting,
+            in_water: is_in_water(&self.world, self.player.position),
+        }];
         for (&id, rp) in host.remote_players.iter() {
-            players.push((id, rp.pos, rp.carrying_crystal));
+            players.push(PlayerSnapshot {
+                id,
+                pos: rp.pos,
+                carrying_crystal: rp.carrying_crystal,
+                velocity: rp.velocity,
+                on_ground: approximate_on_ground(&self.world, rp.pos),
+                sprinting: horizontal_speed(rp.velocity) > REMOTE_SPRINT_THRESHOLD,
+                in_water: is_in_water(&self.world, rp.pos),
+            });
         }
         players
     }
@@ -889,6 +1095,8 @@ impl App {
             Ok(code) => code,
             Err(e) => {
                 log::error!("Rule generation failed: {e}");
+                self.toasts
+                    .push(Toast::important(format!("Rule generation failed: {e}")));
                 return;
             }
         };
@@ -902,7 +1110,9 @@ impl App {
                 log::info!(
                     "Generated rule module '{name}' from prompt (open the Rules panel to activate)"
                 );
-                self.notify_all(format!("New rule generated: '{name}' (not yet active)"));
+                self.notify_all_important(format!(
+                    "New rule generated: '{name}' -- not active yet, open the Rules panel and click Enable"
+                ));
             }
             Err(err) if !is_retry => {
                 log::warn!("Generated rule failed validation, asking the model to fix it: {err}");
@@ -916,7 +1126,7 @@ impl App {
             Err(err) => {
                 log::error!("Generated rule failed validation twice, giving up: {err}");
                 self.toasts
-                    .push(Toast::new(format!("Rule generation failed: {err}")));
+                    .push(Toast::important(format!("Rule generation failed: {err}")));
             }
         }
     }
@@ -1030,8 +1240,18 @@ impl App {
                         }
                         let player_id = host.next_player_id;
                         host.next_player_id += 1;
-                        let spawn =
-                            self.player.position + Vec3::new((player_id as f32) * 2.0, 0.0, 2.0);
+                        // Terrain-height-snapped, not just offset from the
+                        // host's own Y -- otherwise a new player spawns
+                        // floating or buried whenever the ground isn't flat
+                        // between the two spawn columns.
+                        let spawn_x = self.player.position.x + (player_id as f32) * 2.0;
+                        let spawn_z = self.player.position.z + 2.0;
+                        let spawn_y = self
+                            .world
+                            .terrain_height(spawn_x.floor() as i32, spawn_z.floor() as i32)
+                            as f32
+                            + 2.0;
+                        let spawn = Vec3::new(spawn_x, spawn_y, spawn_z);
                         host.clients.insert(from, player_id);
                         host.remote_players.insert(
                             player_id,
@@ -1040,6 +1260,7 @@ impl App {
                                 yaw: 0.0,
                                 carrying_crystal: false,
                                 last_seen: Instant::now(),
+                                velocity: Vec3::ZERO,
                             },
                         );
                         host.reliable.send(
@@ -1058,7 +1279,20 @@ impl App {
                     }
                     ReliableMsg::BlockEdit { x, y, z, block } => {
                         let addrs: Vec<SocketAddr> = host.clients.keys().copied().collect();
+                        let breaker_id = host.clients.get(&from).copied();
+                        let old_block = self.world.get_block(x, y, z);
                         self.world.set_block(x, y, z, block);
+                        if block == BlockType::Air && old_block != BlockType::Air {
+                            if let Some(player_id) = breaker_id {
+                                self.pending_block_breaks.push(BlockBreakEvent {
+                                    x,
+                                    y,
+                                    z,
+                                    block: old_block,
+                                    player_id,
+                                });
+                            }
+                        }
                         let NetRole::Host(host) = &mut self.net else {
                             unreachable!()
                         };
@@ -1084,7 +1318,10 @@ impl App {
             }) => {
                 if let Some(&player_id) = host.clients.get(&from) {
                     if let Some(rp) = host.remote_players.get_mut(&player_id) {
-                        rp.pos = Vec3::from_array(pos);
+                        let new_pos = Vec3::from_array(pos);
+                        let dt = rp.last_seen.elapsed().as_secs_f32().max(0.001);
+                        rp.velocity = (new_pos - rp.pos) / dt;
+                        rp.pos = new_pos;
                         rp.yaw = yaw;
                         rp.carrying_crystal = carrying_crystal;
                         rp.last_seen = Instant::now();
@@ -1201,6 +1438,7 @@ impl App {
                             yaw,
                             carrying_crystal,
                             last_seen: now,
+                            velocity: Vec3::ZERO,
                         });
                 }
             }
@@ -1272,6 +1510,34 @@ impl App {
         }
     }
 
+    /// Rebuilds the rain streak vertex buffer for this frame. Each streak is
+    /// a short vertical line whose y wraps within `RAIN_HEIGHT`, driven by
+    /// the already free-running `water_time` clock -- so it never needs its
+    /// own per-particle state, just a fixed (x, z, phase) offset from the
+    /// camera picked once at load in `build_rain_particles`.
+    fn write_rain_vertices(&self, cam_pos: Vec3) {
+        let half_h = RAIN_HEIGHT * 0.5;
+        let mut verts: Vec<RainVertex> = Vec::with_capacity(self.rain_particles.len() * 2);
+        for &(ox, oz, phase) in &self.rain_particles {
+            let y = (phase - self.water_time * RAIN_FALL_SPEED).rem_euclid(RAIN_HEIGHT) - half_h;
+            // Fade out near the top/bottom of the volume so a streak
+            // doesn't visibly pop in/out of existence as it wraps.
+            let alpha = RAIN_ALPHA * (half_h - y.abs()).clamp(0.0, 1.0);
+            let x = cam_pos.x + ox;
+            let z = cam_pos.z + oz;
+            verts.push(RainVertex {
+                position: [x, cam_pos.y + y + RAIN_STREAK_LENGTH * 0.5, z],
+                alpha,
+            });
+            verts.push(RainVertex {
+                position: [x, cam_pos.y + y - RAIN_STREAK_LENGTH * 0.5, z],
+                alpha,
+            });
+        }
+        self.queue
+            .write_buffer(&self.rain_vertex_buffer, 0, bytemuck::cast_slice(&verts));
+    }
+
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output
@@ -1280,16 +1546,12 @@ impl App {
 
         let lighting = sky_lighting(self.time_of_day);
         let sky = lighting.sky_color;
+        let cam_pos = self.camera.eye_position();
         let light_view_proj = light_view_proj(lighting.sun_dir, self.player.position);
         let uniform = CameraUniform {
             view_proj: self.camera.view_proj().to_cols_array_2d(),
             light_view_proj: light_view_proj.to_cols_array_2d(),
-            camera_pos: [
-                self.camera.eye_position().x,
-                self.camera.eye_position().y,
-                self.camera.eye_position().z,
-                1.0,
-            ],
+            camera_pos: [cam_pos.x, cam_pos.y, cam_pos.z, 1.0],
             fog_color: [sky[0], sky[1], sky[2], 1.0],
             sun_dir: [
                 lighting.sun_dir.x,
@@ -1307,6 +1569,14 @@ impl App {
             0,
             bytemuck::bytes_of(&LightUniform { view_proj: light_view_proj.to_cols_array_2d() }),
         );
+
+        let raining = self.weather.current == Weather::Rain;
+        let rain_vertex_count = if raining {
+            self.write_rain_vertices(cam_pos);
+            (self.rain_particles.len() * 2) as u32
+        } else {
+            0
+        };
 
         let mut encoder = self
             .device
@@ -1384,6 +1654,12 @@ impl App {
                 rpass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                 rpass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 rpass.draw_indexed(0..mesh.index_count, 0, 0..1);
+            }
+            if rain_vertex_count > 0 {
+                rpass.set_pipeline(&self.rain_pipeline);
+                rpass.set_bind_group(0, &self.camera_bind_group, &[]);
+                rpass.set_vertex_buffer(0, self.rain_vertex_buffer.slice(..));
+                rpass.draw(0..rain_vertex_count, 0..1);
             }
         }
 

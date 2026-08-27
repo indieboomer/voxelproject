@@ -6,7 +6,8 @@ CONTRACT
 - Define exactly one global function: `function on_tick(api) ... end`
 - It is called about 10 times per second while the rule is enabled.
 - You may optionally also define `function on_death(api, event) ... end`, called once for every creature death (from anywhere -- any rule's `api.damage`/`api.destroy`, or future combat), with `event = {kind, x, y, z}` giving the dead creature's kind and last position.
-- You may also define local helper functions/values and plain global variables to remember state between calls (each rule module keeps its own persistent Lua environment), but do not define any other special/engine-recognized globals besides `on_tick` and `on_death`.
+- You may optionally also define `function on_block_break(api, event) ... end`, called once for every block a player breaks (whether by hand or another rule's `api.replace_block` turning it to air is NOT included -- only real player-caused breaks), with `event = {kind, x, y, z, player_id}` giving the broken block's kind, its position, and the id of the player who broke it.
+- You may also define local helper functions/values and plain global variables to remember state between calls (each rule module keeps its own persistent Lua environment), but do not define any other special/engine-recognized globals besides `on_tick`, `on_death`, and `on_block_break`.
 - The sandbox only provides the Lua `table`, `string`, and `math` standard libraries. `os`, `io`, `require`, `debug`, and `package` do not exist in this environment -- never reference them.
 - Output ONLY the Lua source code. No explanation, no markdown code fences, no commentary.
 
@@ -15,8 +16,8 @@ Queries:
 - api.time_of_day: number in [0,1). 0 = sunrise, 0.25 = noon, 0.5 = sunset, 0.75 = midnight.
 - api.is_night: boolean, true when the sun is below the horizon.
 - api.weather: string, either "clear" or "rain".
-- api.players(): array of {id, x, y, z, carrying_crystal}, one per connected player. carrying_crystal is true if that player is currently holding a crystal item.
-- api.nearest_player(x, y, z): returns the single closest connected player as {id, x, y, z, carrying_crystal, distance}, or nil if no players are connected. Prefer this over looping api.players() yourself when you just need the closest one.
+- api.players(): array of {id, x, y, z, carrying_crystal, speed, vertical_speed, on_ground, running, in_water}, one per connected player. carrying_crystal is true if that player is currently holding a crystal item. speed is horizontal movement speed (blocks/sec); vertical_speed is signed (positive = rising, e.g. jumping; negative = falling). on_ground is true when standing on solid ground. running is true when sprinting (as opposed to walking). in_water is true when standing in a water block.
+- api.nearest_player(x, y, z): returns the single closest connected player as {id, x, y, z, carrying_crystal, speed, vertical_speed, on_ground, running, in_water, distance}, or nil if no players are connected. Prefer this over looping api.players() yourself when you just need the closest one.
 - api.creatures(): array of {id, kind, x, y, z, health, max_health}, one per creature. kind is "sheep" or "chicken".
 - api.find_creatures(kind, cx, cy, cz, radius): like api.creatures() but filtered to one kind ("sheep", "chicken", or "any") and within `radius` of the center point. Same {id, kind, x, y, z, health, max_health} shape. radius is capped at 10 and results at 64.
 - api.nearest_creature(kind, x, y, z): returns the single closest creature of the given kind ("sheep", "chicken", or "any") as {id, kind, x, y, z, health, max_health, distance}, or nil if none exist.
@@ -30,8 +31,13 @@ Actions (each of these is budget-limited per call -- roughly 32 block edits and 
 - api.damage(creature_id, amount): reduces that creature's health; destroys it and fires on_death if this brings health to zero or below.
 - api.destroy(creature_id): removes a creature immediately regardless of health, and fires on_death.
 - api.spawn_creature(kind, x, y, z): spawns a new creature ("sheep" or "chicken") at the given position. Returns its id, or nil if the spawn budget for this call is used up.
+- api.spawn_creature_near_player(player_id, kind, radius): spawns a new creature ("sheep" or "chicken") at a random point within `radius` blocks of the given player (horizontally; height snaps to the terrain). Returns its id, or nil if the player isn't found or the spawn budget for this call is used up. Prefer this over api.spawn_creature plus your own random offset when the rule is about spawning near a specific player.
 - api.replace_block(x, y, z, kind): changes one block to the given kind (lowercase name, e.g. "mud", "redstone", "air", "stone"). Returns false if the block-edit budget for this call is used up.
 - api.set_weather(name): sets the weather to "clear" or "rain".
+- api.start_rain() / api.stop_rain(): shorthand for api.set_weather("rain") / api.set_weather("clear").
+- api.set_time_of_day(t): sets the time of day directly to `t` (wraps into [0,1)), same scale as api.time_of_day.
+- api.set_time_dawn(): sets the time of day to 0.0 (sunrise).
+- api.set_time_night(): sets the time of day to 0.5 (sunset, night begins).
 - api.broadcast(message): logs a string message to the host's console, and shows it as a notification to every connected player. Use sparingly, not every tick.
 
 Two passive block effects already exist in the engine (you don't need to implement them, just place the blocks): standing on a "mud" block slows a player down; a "redstone" block slowly heals every creature within a few blocks of it, every tick, for as long as it exists.
@@ -50,6 +56,12 @@ Rule: "three creature deaths in one location spawn a red stone that heals nearby
 
 ```lua
 {REDSTONE_EXAMPLE}
+```
+
+Rule: "breaking a crystal block while sprinting summons a storm" -- shows the on_block_break pattern, checking a player's `running` state via api.players(), api.start_rain, and api.spawn_creature_near_player.
+
+```lua
+{STORM_SUMMONER_EXAMPLE}
 ```
 
 Now write a NEW Lua module implementing the rule the user describes below. Reuse patterns from the examples where they apply. Keep it short and correct. Output ONLY the Lua source code for the new module.

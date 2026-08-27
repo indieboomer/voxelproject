@@ -28,14 +28,45 @@ const MAX_SPAWNS_PER_CALL: u32 = 4;
 const MAX_FIND_RADIUS: f32 = 10.0;
 const MAX_FIND_RESULTS: usize = 64;
 
+/// One player's state as exposed to the World API -- position plus enough
+/// movement/environment context for rules to tell walking from sprinting,
+/// grounded from airborne, dry from submerged. For remote players the host
+/// only ever sees network snapshots, so `velocity`/`on_ground`/`in_water`
+/// are approximated from those rather than read from real physics state;
+/// see `App::host_player_positions`.
+#[derive(Clone, Copy)]
+pub struct PlayerSnapshot {
+    pub id: PlayerId,
+    pub pos: Vec3,
+    pub carrying_crystal: bool,
+    pub velocity: Vec3,
+    pub on_ground: bool,
+    pub sprinting: bool,
+    pub in_water: bool,
+}
+
+/// A player-caused block break (mining, not a rule's own `replace_block`),
+/// collected by `App` so `ScriptHost::run_tick` can fire `on_block_break` to
+/// every module -- not just whichever one, if any, caused it.
+pub struct BlockBreakEvent {
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    pub block: BlockType,
+    pub player_id: PlayerId,
+}
+
 /// What a module needs from the live game each tick, plus the outputs it
 /// can produce. Only what concrete rules actually need is exposed to Lua --
 /// extend this as new rules require more of the World API.
 pub struct TickInput<'a> {
     pub creatures: &'a mut Creatures,
     pub world: &'a World,
-    pub players: &'a [(PlayerId, Vec3, bool)],
-    pub time_of_day: f32,
+    pub players: &'a [PlayerSnapshot],
+    /// Mutable so `api.set_time_of_day`/`set_time_dawn`/`set_time_night` can
+    /// steer the real clock directly, the same way `weather` already does
+    /// for `set_weather`/`start_rain`/`stop_rain`.
+    pub time_of_day: &'a mut f32,
     pub weather: &'a mut WeatherState,
     /// Block changes a module asked for; the caller (`App`) applies these
     /// through the normal replicated edit path after the tick, since a Lua
@@ -157,6 +188,20 @@ impl Module {
         }
     }
 
+    /// Fires `on_block_break` for one player-caused break, if the module
+    /// defines it -- same World API and optionality as `on_death`.
+    pub fn run_block_break(&mut self, input: &mut TickInput, event: &BlockBreakEvent) {
+        if !self.enabled {
+            return;
+        }
+        self.call_start.set(Some(Instant::now()));
+        let result = call_on_block_break(&self.lua, input, event, &self.spawn_seed);
+        self.call_start.set(None);
+        if let Err(e) = result {
+            self.disable(e);
+        }
+    }
+
     pub fn to_save_entry(&self) -> ModuleSaveEntry {
         ModuleSaveEntry {
             name: self.name.clone(),
@@ -165,6 +210,14 @@ impl Module {
             enabled: self.enabled,
         }
     }
+}
+
+fn crash_message(module: &Module) -> String {
+    format!(
+        "Rule '{}' crashed and was disabled: {}",
+        module.name,
+        module.error.as_deref().unwrap_or("unknown error")
+    )
 }
 
 /// Maps a Lua-facing kind string to the internal `u8` kind code used by
@@ -179,6 +232,35 @@ fn creature_kind_filter(kind: &str) -> Option<u8> {
     }
 }
 
+/// Horizontal-only speed (excludes fall/jump velocity), which is what
+/// "speed" intuitively means for a rule checking how fast a player is
+/// moving across the ground.
+fn horizontal_speed(v: Vec3) -> f32 {
+    Vec3::new(v.x, 0.0, v.z).length()
+}
+
+/// Deterministic pseudo-random point offset within `radius` of the origin,
+/// derived from a spawn-seed value the same way the rest of this file
+/// derives creature spawn ids -- a cheap xorshift mix, not cryptographic,
+/// just enough to scatter `spawn_creature_near_player` spawns believably.
+/// Uniform over the disk area (not radius-linear-biased toward the center).
+fn random_offset_in_disk(seed: u64, radius: f32) -> (f32, f32) {
+    let mut x = seed ^ 0x9E37_79B9_7F4A_7C15;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    let angle = (x >> 40) as f32 / (1u64 << 24) as f32 * std::f32::consts::TAU;
+
+    let mut y = x ^ 0xD1B5_4A32_D192_ED03;
+    y ^= y << 13;
+    y ^= y >> 7;
+    y ^= y << 17;
+    let frac = (y >> 40) as f32 / (1u64 << 24) as f32;
+    let r = radius * frac.sqrt();
+
+    (angle.cos() * r, angle.sin() * r)
+}
+
 /// Builds the `api` table's functions, shared between `on_tick` and
 /// `on_death` calls so both expose an identical World API.
 #[allow(clippy::too_many_arguments)]
@@ -189,13 +271,14 @@ fn populate_api<'lua, 'scope>(
     time_of_day: f32,
     night: bool,
     weather_name: &'static str,
-    players_data: &'scope [(u32, f32, f32, f32, bool)],
+    players_data: &'scope [PlayerSnapshot],
     creature_list: &'scope [(u32, u8, [f32; 3], f32, f32)],
     creatures_cell: &'scope RefCell<&mut Creatures>,
     world: &'scope World,
     block_edits_cell: &'scope RefCell<&mut Vec<(i32, i32, i32, BlockType)>>,
     death_events_cell: &'scope RefCell<&mut Vec<DeathEvent>>,
     weather_cell: &'scope RefCell<&mut WeatherState>,
+    time_cell: &'scope RefCell<&mut f32>,
     block_budget: &'scope Cell<u32>,
     spawn_budget: &'scope Cell<u32>,
     spawn_seed: &'scope Cell<u64>,
@@ -208,14 +291,19 @@ fn populate_api<'lua, 'scope>(
         "players",
         scope.create_function(move |lua, ()| {
             let t = lua.create_table()?;
-            for (i, (id, x, y, z, carrying)) in players_data.iter().enumerate() {
-                let p = lua.create_table()?;
-                p.set("id", *id)?;
-                p.set("x", *x)?;
-                p.set("y", *y)?;
-                p.set("z", *z)?;
-                p.set("carrying_crystal", *carrying)?;
-                t.set(i + 1, p)?;
+            for (i, p) in players_data.iter().enumerate() {
+                let e = lua.create_table()?;
+                e.set("id", p.id)?;
+                e.set("x", p.pos.x)?;
+                e.set("y", p.pos.y)?;
+                e.set("z", p.pos.z)?;
+                e.set("carrying_crystal", p.carrying_crystal)?;
+                e.set("speed", horizontal_speed(p.velocity))?;
+                e.set("vertical_speed", p.velocity.y)?;
+                e.set("on_ground", p.on_ground)?;
+                e.set("running", p.sprinting)?;
+                e.set("in_water", p.in_water)?;
+                t.set(i + 1, e)?;
             }
             Ok(t)
         })?,
@@ -316,22 +404,24 @@ fn populate_api<'lua, 'scope>(
             let center = Vec3::new(x, y, z);
             let nearest = players_data
                 .iter()
-                .map(|(id, px, py, pz, carrying)| {
-                    let dist = Vec3::new(*px, *py, *pz).distance(center);
-                    (id, px, py, pz, carrying, dist)
-                })
-                .min_by(|a, b| a.5.total_cmp(&b.5));
-            let Some((id, px, py, pz, carrying, dist)) = nearest else {
+                .map(|p| (p, p.pos.distance(center)))
+                .min_by(|a, b| a.1.total_cmp(&b.1));
+            let Some((p, dist)) = nearest else {
                 return Ok(None);
             };
-            let p = lua.create_table()?;
-            p.set("id", *id)?;
-            p.set("x", *px)?;
-            p.set("y", *py)?;
-            p.set("z", *pz)?;
-            p.set("carrying_crystal", *carrying)?;
-            p.set("distance", dist)?;
-            Ok(Some(p))
+            let e = lua.create_table()?;
+            e.set("id", p.id)?;
+            e.set("x", p.pos.x)?;
+            e.set("y", p.pos.y)?;
+            e.set("z", p.pos.z)?;
+            e.set("carrying_crystal", p.carrying_crystal)?;
+            e.set("speed", horizontal_speed(p.velocity))?;
+            e.set("vertical_speed", p.velocity.y)?;
+            e.set("on_ground", p.on_ground)?;
+            e.set("running", p.sprinting)?;
+            e.set("in_water", p.in_water)?;
+            e.set("distance", dist)?;
+            Ok(Some(e))
         })?,
     )?;
 
@@ -398,6 +488,37 @@ fn populate_api<'lua, 'scope>(
                 .spawn_one(kind, Vec3::new(x, y, z), seed);
             Ok(Some(id))
         })?,
+    )?;
+
+    api.set(
+        "spawn_creature_near_player",
+        scope.create_function(
+            move |_, (player_id, kind, radius): (u32, String, f32)| {
+                if spawn_budget.get() == 0 {
+                    return Ok(None);
+                }
+                let Some(target) = players_data.iter().find(|p| p.id == player_id) else {
+                    return Ok(None);
+                };
+                let radius = radius.clamp(1.0, MAX_FIND_RADIUS);
+                spawn_budget.set(spawn_budget.get() - 1);
+                let kind = if kind.eq_ignore_ascii_case("chicken") {
+                    CreatureKind::Chicken
+                } else {
+                    CreatureKind::Sheep
+                };
+                let seed = spawn_seed.get();
+                spawn_seed.set(seed.wrapping_add(0x9E37_79B9_7F4A_7C15));
+                let (dx, dz) = random_offset_in_disk(seed, radius);
+                let sx = target.pos.x + dx;
+                let sz = target.pos.z + dz;
+                let sy = world.terrain_height(sx.floor() as i32, sz.floor() as i32) as f32 + 1.0;
+                let id = creatures_cell
+                    .borrow_mut()
+                    .spawn_one(kind, Vec3::new(sx, sy, sz), seed);
+                Ok(Some(id))
+            },
+        )?,
     )?;
 
     api.set(
@@ -471,6 +592,46 @@ fn populate_api<'lua, 'scope>(
     )?;
 
     api.set(
+        "start_rain",
+        scope.create_function(move |_, ()| {
+            weather_cell.borrow_mut().set(Weather::Rain);
+            Ok(())
+        })?,
+    )?;
+
+    api.set(
+        "stop_rain",
+        scope.create_function(move |_, ()| {
+            weather_cell.borrow_mut().set(Weather::Clear);
+            Ok(())
+        })?,
+    )?;
+
+    api.set(
+        "set_time_of_day",
+        scope.create_function(move |_, t: f32| {
+            **time_cell.borrow_mut() = t.rem_euclid(1.0);
+            Ok(())
+        })?,
+    )?;
+
+    api.set(
+        "set_time_dawn",
+        scope.create_function(move |_, ()| {
+            **time_cell.borrow_mut() = 0.0;
+            Ok(())
+        })?,
+    )?;
+
+    api.set(
+        "set_time_night",
+        scope.create_function(move |_, ()| {
+            **time_cell.borrow_mut() = 0.5;
+            Ok(())
+        })?,
+    )?;
+
+    api.set(
         "broadcast",
         scope.create_function(|_, msg: String| {
             log::info!("[rule] {msg}");
@@ -487,19 +648,16 @@ fn call_on_tick(lua: &Lua, input: &mut TickInput, spawn_seed: &Cell<u64>) -> mlu
         return Ok(());
     };
 
-    let time_of_day = input.time_of_day;
+    let time_of_day = *input.time_of_day;
     let night = is_night(time_of_day);
     let weather_name = input.weather.current.name();
-    let players_data: Vec<(u32, f32, f32, f32, bool)> = input
-        .players
-        .iter()
-        .map(|(id, pos, c)| (*id, pos.x, pos.y, pos.z, *c))
-        .collect();
+    let players_data = input.players;
     let creature_list = input.creatures.snapshot_with_ids();
     let creatures_cell = RefCell::new(&mut *input.creatures);
     let block_edits_cell = RefCell::new(&mut *input.block_edits);
     let death_events_cell = RefCell::new(&mut *input.death_events);
     let weather_cell = RefCell::new(&mut *input.weather);
+    let time_cell = RefCell::new(&mut *input.time_of_day);
     let block_budget = Cell::new(MAX_BLOCK_EDITS_PER_CALL);
     let spawn_budget = Cell::new(MAX_SPAWNS_PER_CALL);
     let world = input.world;
@@ -513,13 +671,14 @@ fn call_on_tick(lua: &Lua, input: &mut TickInput, spawn_seed: &Cell<u64>) -> mlu
             time_of_day,
             night,
             weather_name,
-            &players_data,
+            players_data,
             &creature_list,
             &creatures_cell,
             world,
             &block_edits_cell,
             &death_events_cell,
             &weather_cell,
+            &time_cell,
             &block_budget,
             &spawn_budget,
             spawn_seed,
@@ -539,20 +698,17 @@ fn call_on_death(
         return Ok(());
     };
 
-    let time_of_day = input.time_of_day;
+    let time_of_day = *input.time_of_day;
     let night = is_night(time_of_day);
     let weather_name = input.weather.current.name();
-    let players_data: Vec<(u32, f32, f32, f32, bool)> = input
-        .players
-        .iter()
-        .map(|(id, pos, c)| (*id, pos.x, pos.y, pos.z, *c))
-        .collect();
+    let players_data = input.players;
     let creature_list = input.creatures.snapshot_with_ids();
     let creatures_cell = RefCell::new(&mut *input.creatures);
     let block_edits_cell = RefCell::new(&mut *input.block_edits);
     let mut scratch_deaths: Vec<DeathEvent> = Vec::new();
     let death_events_cell = RefCell::new(&mut scratch_deaths);
     let weather_cell = RefCell::new(&mut *input.weather);
+    let time_cell = RefCell::new(&mut *input.time_of_day);
     let block_budget = Cell::new(MAX_BLOCK_EDITS_PER_CALL);
     let spawn_budget = Cell::new(MAX_SPAWNS_PER_CALL);
     let world = input.world;
@@ -572,13 +728,14 @@ fn call_on_death(
             time_of_day,
             night,
             weather_name,
-            &players_data,
+            players_data,
             &creature_list,
             &creatures_cell,
             world,
             &block_edits_cell,
             &death_events_cell,
             &weather_cell,
+            &time_cell,
             &block_budget,
             &spawn_budget,
             spawn_seed,
@@ -589,6 +746,65 @@ fn call_on_death(
         event_table.set("y", pos.y)?;
         event_table.set("z", pos.z)?;
         on_death.call::<_, ()>((api, event_table))
+    })
+}
+
+fn call_on_block_break(
+    lua: &Lua,
+    input: &mut TickInput,
+    event: &BlockBreakEvent,
+    spawn_seed: &Cell<u64>,
+) -> mlua::Result<()> {
+    let on_block_break: Option<Function> = lua.globals().get("on_block_break").ok();
+    let Some(on_block_break) = on_block_break else {
+        return Ok(());
+    };
+
+    let time_of_day = *input.time_of_day;
+    let night = is_night(time_of_day);
+    let weather_name = input.weather.current.name();
+    let players_data = input.players;
+    let creature_list = input.creatures.snapshot_with_ids();
+    let creatures_cell = RefCell::new(&mut *input.creatures);
+    let block_edits_cell = RefCell::new(&mut *input.block_edits);
+    let death_events_cell = RefCell::new(&mut *input.death_events);
+    let weather_cell = RefCell::new(&mut *input.weather);
+    let time_cell = RefCell::new(&mut *input.time_of_day);
+    let block_budget = Cell::new(MAX_BLOCK_EDITS_PER_CALL);
+    let spawn_budget = Cell::new(MAX_SPAWNS_PER_CALL);
+    let world = input.world;
+    let kind_name = event.block.name().to_ascii_lowercase();
+    let (bx, by, bz) = (event.x, event.y, event.z);
+    let player_id = event.player_id;
+
+    lua.scope(|scope| {
+        let api = lua.create_table()?;
+        populate_api(
+            lua,
+            scope,
+            &api,
+            time_of_day,
+            night,
+            weather_name,
+            players_data,
+            &creature_list,
+            &creatures_cell,
+            world,
+            &block_edits_cell,
+            &death_events_cell,
+            &weather_cell,
+            &time_cell,
+            &block_budget,
+            &spawn_budget,
+            spawn_seed,
+        )?;
+        let event_table = lua.create_table()?;
+        event_table.set("kind", kind_name)?;
+        event_table.set("x", bx)?;
+        event_table.set("y", by)?;
+        event_table.set("z", bz)?;
+        event_table.set("player_id", player_id)?;
+        on_block_break.call::<_, ()>((api, event_table))
     })
 }
 
@@ -690,51 +906,88 @@ impl ScriptHost {
         Some(m.name)
     }
 
-    /// Ticks every enabled module, then fires `on_death` on every enabled
-    /// module for each death any of them caused. Returns the block edits
-    /// requested this tick, for the caller to apply through the normal
-    /// replicated path.
+    /// Ticks every enabled module, fires `on_block_break` for each pending
+    /// player-caused break, then fires `on_death` for every death any of the
+    /// above caused. Returns the block edits requested this tick, for the
+    /// caller to apply through the normal replicated path, plus one message
+    /// per module that crashed and got auto-disabled *this call* (a rule
+    /// can pass load-time validation -- valid syntax, defines `on_tick` --
+    /// and still hit a runtime error the first time it actually executes,
+    /// e.g. calling an undefined helper function; the caller surfaces these
+    /// so a rule going silently dark isn't mistaken for "nothing happened").
+    /// `time_of_day` is mutated in place if a rule calls
+    /// `set_time_of_day`/`set_time_dawn`/`set_time_night`, the same way
+    /// `weather` already is for the weather setters.
     pub fn run_tick(
         &mut self,
         world: &World,
         creatures: &mut Creatures,
-        players: &[(PlayerId, Vec3, bool)],
-        time_of_day: f32,
+        players: &[PlayerSnapshot],
+        time_of_day: &mut f32,
         weather: &mut WeatherState,
-    ) -> Vec<(i32, i32, i32, BlockType)> {
+        block_breaks: &[BlockBreakEvent],
+    ) -> (Vec<(i32, i32, i32, BlockType)>, Vec<String>) {
         let mut block_edits = Vec::new();
         let mut death_events = Vec::new();
+        let mut crashes = Vec::new();
 
         for module in &mut self.modules {
+            let was_enabled = module.enabled;
             let mut input = TickInput {
                 creatures: &mut *creatures,
                 world,
                 players,
-                time_of_day,
+                time_of_day: &mut *time_of_day,
                 weather: &mut *weather,
                 block_edits: &mut block_edits,
                 death_events: &mut death_events,
             };
             module.run_tick(&mut input);
+            if was_enabled && !module.enabled {
+                crashes.push(crash_message(module));
+            }
+        }
+
+        for event in block_breaks {
+            for module in &mut self.modules {
+                let was_enabled = module.enabled;
+                let mut input = TickInput {
+                    creatures: &mut *creatures,
+                    world,
+                    players,
+                    time_of_day: &mut *time_of_day,
+                    weather: &mut *weather,
+                    block_edits: &mut block_edits,
+                    death_events: &mut death_events,
+                };
+                module.run_block_break(&mut input, event);
+                if was_enabled && !module.enabled {
+                    crashes.push(crash_message(module));
+                }
+            }
         }
 
         for event in &death_events {
             for module in &mut self.modules {
+                let was_enabled = module.enabled;
                 let mut chained = Vec::new();
                 let mut input = TickInput {
                     creatures: &mut *creatures,
                     world,
                     players,
-                    time_of_day,
+                    time_of_day: &mut *time_of_day,
                     weather: &mut *weather,
                     block_edits: &mut block_edits,
                     death_events: &mut chained,
                 };
                 module.run_death(&mut input, event);
+                if was_enabled && !module.enabled {
+                    crashes.push(crash_message(module));
+                }
             }
         }
 
-        block_edits
+        (block_edits, crashes)
     }
 
     pub fn save_entries(&self) -> Vec<ModuleSaveEntry> {
@@ -754,27 +1007,70 @@ mod tests {
         creatures
     }
 
+    /// A player snapshot with the new movement/environment fields defaulted
+    /// to "standing still on dry ground" -- most tests only care about
+    /// id/pos/carrying_crystal, matching the old 3-tuple's shape.
+    fn snapshot(id: PlayerId, pos: Vec3, carrying_crystal: bool) -> PlayerSnapshot {
+        PlayerSnapshot {
+            id,
+            pos,
+            carrying_crystal,
+            velocity: Vec3::ZERO,
+            on_ground: true,
+            sprinting: false,
+            in_water: false,
+        }
+    }
+
     fn run_one_tick(
         module: &mut Module,
         world: &World,
         creatures: &mut Creatures,
-        players: &[(PlayerId, Vec3, bool)],
+        players: &[PlayerSnapshot],
         time_of_day: f32,
         weather: &mut WeatherState,
     ) -> Vec<(i32, i32, i32, BlockType)> {
         let mut block_edits = Vec::new();
         let mut death_events = Vec::new();
+        let mut tod = time_of_day;
         let mut input = TickInput {
             creatures,
             world,
             players,
-            time_of_day,
+            time_of_day: &mut tod,
             weather,
             block_edits: &mut block_edits,
             death_events: &mut death_events,
         };
         module.run_tick(&mut input);
         block_edits
+    }
+
+    /// Like `run_one_tick` but also returns the possibly-changed
+    /// `time_of_day`, for tests of `set_time_of_day`/`set_time_dawn`/
+    /// `set_time_night`.
+    fn run_one_tick_with_time(
+        module: &mut Module,
+        world: &World,
+        creatures: &mut Creatures,
+        players: &[PlayerSnapshot],
+        time_of_day: f32,
+        weather: &mut WeatherState,
+    ) -> (Vec<(i32, i32, i32, BlockType)>, f32) {
+        let mut block_edits = Vec::new();
+        let mut death_events = Vec::new();
+        let mut tod = time_of_day;
+        let mut input = TickInput {
+            creatures,
+            world,
+            players,
+            time_of_day: &mut tod,
+            weather,
+            block_edits: &mut block_edits,
+            death_events: &mut death_events,
+        };
+        module.run_tick(&mut input);
+        (block_edits, tod)
     }
 
     #[test]
@@ -786,7 +1082,7 @@ mod tests {
             .into_iter()
             .find(|(_, kind, _, _, _)| *kind == 0)
             .expect("at least one sheep should have spawned");
-        let players = vec![(0u32, Vec3::from_array(sheep.2), true)];
+        let players = vec![snapshot(0u32, Vec3::from_array(sheep.2), true)];
         let mut weather = WeatherState::new(1);
 
         let source = std::fs::read_to_string("modules/night_hunt.lua").unwrap();
@@ -818,7 +1114,7 @@ mod tests {
             .into_iter()
             .find(|(_, kind, _, _, _)| *kind == 0)
             .expect("at least one sheep should have spawned");
-        let players = vec![(0u32, Vec3::from_array(sheep.2), false)];
+        let players = vec![snapshot(0u32, Vec3::from_array(sheep.2), false)];
         let mut weather = WeatherState::new(1);
 
         let source = std::fs::read_to_string("modules/night_hunt.lua").unwrap();
@@ -867,7 +1163,7 @@ mod tests {
         let tree_pos = tree_pos.expect("test world should contain at least one tree");
 
         let mut creatures = Creatures::new();
-        let players: Vec<(PlayerId, Vec3, bool)> = vec![(0, tree_pos, false)];
+        let players = vec![snapshot(0, tree_pos, false)];
         let mut weather = WeatherState::new(1);
         weather.set(Weather::Rain);
 
@@ -908,7 +1204,7 @@ mod tests {
             creatures.spawn_one(CreatureKind::Sheep, Vec3::new(10.5, 5.0, 10.5), 2),
             creatures.spawn_one(CreatureKind::Sheep, Vec3::new(11.0, 5.0, 11.0), 3),
         ];
-        let players: Vec<(PlayerId, Vec3, bool)> = Vec::new();
+        let players: Vec<PlayerSnapshot> = Vec::new();
         let mut weather = WeatherState::new(1);
 
         let killer_source = r#"
@@ -934,8 +1230,16 @@ mod tests {
         host.modules.push(redstone_module);
 
         let mut all_edits = Vec::new();
+        let mut time_of_day = 0.5;
         for _ in 0..ids.len() {
-            let edits = host.run_tick(&world, &mut creatures, &players, 0.5, &mut weather);
+            let (edits, _crashes) = host.run_tick(
+                &world,
+                &mut creatures,
+                &players,
+                &mut time_of_day,
+                &mut weather,
+                &[],
+            );
             all_edits.extend(edits);
         }
 
@@ -948,10 +1252,51 @@ mod tests {
     }
 
     #[test]
+    fn run_tick_reports_a_message_for_a_module_that_crashes_at_runtime() {
+        // A rule can pass `Module::load`'s validation (valid syntax, has
+        // `on_tick`) and still blow up the first time it actually runs --
+        // e.g. an LLM-generated rule calling a helper function it forgot to
+        // define. `ScriptHost::run_tick` should report that, not just
+        // silently flip the module to disabled.
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let players: Vec<PlayerSnapshot> = Vec::new();
+        let mut weather = WeatherState::new(1);
+        let mut time_of_day = 0.5;
+
+        let source = "function on_tick(api) this_helper_was_never_defined() end".to_string();
+        let mut module = Module::load("broken_helper".into(), "test".into(), source).unwrap();
+        module.enabled = true;
+
+        let mut host = ScriptHost::new();
+        host.modules.push(module);
+
+        let (_edits, crashes) = host.run_tick(
+            &world,
+            &mut creatures,
+            &players,
+            &mut time_of_day,
+            &mut weather,
+            &[],
+        );
+
+        assert!(
+            !host.modules[0].enabled,
+            "a module that errors at runtime should be auto-disabled"
+        );
+        assert_eq!(crashes.len(), 1, "expected exactly one crash report: {crashes:?}");
+        assert!(
+            crashes[0].contains("broken_helper"),
+            "crash message should name the module: {}",
+            crashes[0]
+        );
+    }
+
+    #[test]
     fn runaway_script_is_auto_disabled_by_the_time_budget() {
         let world = World::new(1);
         let mut creatures = Creatures::new();
-        let players: Vec<(PlayerId, Vec3, bool)> = Vec::new();
+        let players: Vec<PlayerSnapshot> = Vec::new();
         let mut weather = WeatherState::new(1);
         let source = "function on_tick(api) while true do end end".to_string();
         let mut module = Module::load("runaway".into(), "test".into(), source).unwrap();
@@ -977,7 +1322,7 @@ mod tests {
     fn sandbox_blocks_os_io_and_require() {
         let world = World::new(1);
         let mut creatures = Creatures::new();
-        let players: Vec<(PlayerId, Vec3, bool)> = Vec::new();
+        let players: Vec<PlayerSnapshot> = Vec::new();
         let mut weather = WeatherState::new(1);
         let source = r#"
             function on_tick(api)
@@ -1021,7 +1366,7 @@ mod tests {
     fn block_edit_budget_caps_replace_block_calls_per_tick() {
         let world = World::new(1);
         let mut creatures = Creatures::new();
-        let players: Vec<(PlayerId, Vec3, bool)> = Vec::new();
+        let players: Vec<PlayerSnapshot> = Vec::new();
         let mut weather = WeatherState::new(1);
         let source = r#"
             function on_tick(api)
@@ -1055,7 +1400,7 @@ mod tests {
     fn distance_and_terrain_height_report_correct_values() {
         let world = World::new(9);
         let mut creatures = Creatures::new();
-        let players: Vec<(PlayerId, Vec3, bool)> = Vec::new();
+        let players: Vec<PlayerSnapshot> = Vec::new();
         let mut weather = WeatherState::new(1);
         let expected_height = world.terrain_height(5, 5);
 
@@ -1093,9 +1438,9 @@ mod tests {
     fn nearest_player_returns_the_closest_connected_player() {
         let world = World::new(1);
         let mut creatures = Creatures::new();
-        let players: Vec<(PlayerId, Vec3, bool)> = vec![
-            (1, Vec3::new(0.0, 0.0, 0.0), false),
-            (2, Vec3::new(5.0, 0.0, 0.0), false),
+        let players = vec![
+            snapshot(1, Vec3::new(0.0, 0.0, 0.0), false),
+            snapshot(2, Vec3::new(5.0, 0.0, 0.0), false),
         ];
         let mut weather = WeatherState::new(1);
 
@@ -1134,7 +1479,7 @@ mod tests {
         let sheep_id = creatures.spawn_one(CreatureKind::Sheep, Vec3::new(0.0, 5.0, 0.0), 1);
         let chicken_id = creatures.spawn_one(CreatureKind::Chicken, Vec3::new(1.0, 5.0, 1.0), 2);
         creatures.damage(sheep_id, 4.0);
-        let players: Vec<(PlayerId, Vec3, bool)> = Vec::new();
+        let players: Vec<PlayerSnapshot> = Vec::new();
         let mut weather = WeatherState::new(1);
 
         let source = format!(
@@ -1171,5 +1516,347 @@ mod tests {
             edits.iter().any(|(_, _, _, b)| *b == BlockType::RedStone),
             "expected find_creatures/nearest_creature/health fields to all check out: {edits:?}"
         );
+    }
+
+    #[test]
+    fn player_table_exposes_speed_running_on_ground_and_water_state() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let players = vec![PlayerSnapshot {
+            id: 3,
+            pos: Vec3::new(0.0, 0.0, 0.0),
+            carrying_crystal: false,
+            velocity: Vec3::new(3.0, -1.0, 4.0),
+            on_ground: false,
+            sprinting: true,
+            in_water: true,
+        }];
+        let mut weather = WeatherState::new(1);
+
+        let source = r#"
+            function on_tick(api)
+                local p = api.players()[1]
+                if math.abs(p.speed - 5.0) < 0.001
+                    and p.vertical_speed == -1.0
+                    and p.on_ground == false
+                    and p.running == true
+                    and p.in_water == true
+                then
+                    api.replace_block(0, 0, 0, "redstone")
+                end
+            end
+        "#
+        .to_string();
+        let mut module = Module::load("player_state_check".into(), "test".into(), source).unwrap();
+        module.enabled = true;
+
+        let edits = run_one_tick(
+            &mut module,
+            &world,
+            &mut creatures,
+            &players,
+            0.5,
+            &mut weather,
+        );
+
+        assert!(module.error.is_none(), "module errored: {:?}", module.error);
+        assert!(
+            edits.iter().any(|(_, _, _, b)| *b == BlockType::RedStone),
+            "expected speed/vertical_speed/on_ground/running/in_water to all check out: {edits:?}"
+        );
+    }
+
+    #[test]
+    fn on_block_break_fires_with_the_correct_event_fields() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let players: Vec<PlayerSnapshot> = Vec::new();
+        let mut weather = WeatherState::new(1);
+        let mut time_of_day = 0.5;
+
+        let source = r#"
+            function on_tick(api) end
+
+            function on_block_break(api, event)
+                if event.kind == "grass"
+                    and event.x == 1
+                    and event.y == 2
+                    and event.z == 3
+                    and event.player_id == 7
+                then
+                    api.replace_block(0, 0, 0, "redstone")
+                end
+            end
+        "#
+        .to_string();
+        let mut module = Module::load("break_check".into(), "test".into(), source).unwrap();
+        module.enabled = true;
+
+        let mut host = ScriptHost::new();
+        host.modules.push(module);
+
+        let event = BlockBreakEvent {
+            x: 1,
+            y: 2,
+            z: 3,
+            block: BlockType::Grass,
+            player_id: 7,
+        };
+        let (edits, _crashes) = host.run_tick(
+            &world,
+            &mut creatures,
+            &players,
+            &mut time_of_day,
+            &mut weather,
+            &[event],
+        );
+
+        assert!(host.modules[0].error.is_none(), "module errored: {:?}", host.modules[0].error);
+        assert!(
+            edits.iter().any(|(_, _, _, b)| *b == BlockType::RedStone),
+            "expected on_block_break to see kind/x/y/z/player_id: {edits:?}"
+        );
+    }
+
+    #[test]
+    fn storm_summoner_module_starts_rain_and_spawns_a_sheep_when_sprinting_player_breaks_crystal() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let target_pos = Vec3::new(4.0, 5.0, 4.0);
+        let players = vec![PlayerSnapshot {
+            id: 9,
+            pos: target_pos,
+            carrying_crystal: false,
+            velocity: Vec3::ZERO,
+            on_ground: true,
+            sprinting: true,
+            in_water: false,
+        }];
+        let mut weather = WeatherState::new(1);
+        assert_eq!(weather.current, Weather::Clear);
+        let mut time_of_day = 0.5;
+
+        let source = std::fs::read_to_string("modules/storm_summoner.lua").unwrap();
+        let mut module = Module::load("storm_summoner".into(), "test".into(), source).unwrap();
+        module.enabled = true;
+
+        let mut host = ScriptHost::new();
+        host.modules.push(module);
+
+        let event = BlockBreakEvent {
+            x: 4,
+            y: 5,
+            z: 4,
+            block: BlockType::Crystal,
+            player_id: 9,
+        };
+        host.run_tick(
+            &world,
+            &mut creatures,
+            &players,
+            &mut time_of_day,
+            &mut weather,
+            &[event],
+        );
+
+        assert!(
+            host.modules[0].error.is_none(),
+            "module errored: {:?}",
+            host.modules[0].error
+        );
+        assert_eq!(
+            weather.current,
+            Weather::Rain,
+            "expected the storm to start rain"
+        );
+        assert_eq!(
+            creatures.snapshot_with_ids().len(),
+            1,
+            "expected a sheep to spawn near the player"
+        );
+    }
+
+    #[test]
+    fn storm_summoner_module_ignores_a_crystal_break_while_walking() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let players = vec![PlayerSnapshot {
+            id: 9,
+            pos: Vec3::new(4.0, 5.0, 4.0),
+            carrying_crystal: false,
+            velocity: Vec3::ZERO,
+            on_ground: true,
+            sprinting: false,
+            in_water: false,
+        }];
+        let mut weather = WeatherState::new(1);
+        let mut time_of_day = 0.5;
+
+        let source = std::fs::read_to_string("modules/storm_summoner.lua").unwrap();
+        let mut module = Module::load("storm_summoner".into(), "test".into(), source).unwrap();
+        module.enabled = true;
+
+        let mut host = ScriptHost::new();
+        host.modules.push(module);
+
+        let event = BlockBreakEvent {
+            x: 4,
+            y: 5,
+            z: 4,
+            block: BlockType::Crystal,
+            player_id: 9,
+        };
+        host.run_tick(
+            &world,
+            &mut creatures,
+            &players,
+            &mut time_of_day,
+            &mut weather,
+            &[event],
+        );
+
+        assert!(
+            host.modules[0].error.is_none(),
+            "module errored: {:?}",
+            host.modules[0].error
+        );
+        assert_eq!(
+            weather.current,
+            Weather::Clear,
+            "a walking player's crystal break should not summon a storm"
+        );
+        assert_eq!(creatures.snapshot_with_ids().len(), 0);
+    }
+
+    #[test]
+    fn spawn_creature_near_player_spawns_within_radius_of_the_target_player() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let target_pos = Vec3::new(10.0, 5.0, 10.0);
+        let players = vec![snapshot(5, target_pos, false)];
+        let mut weather = WeatherState::new(1);
+
+        let source = r#"
+            function on_tick(api)
+                api.spawn_creature_near_player(5, "sheep", 3)
+            end
+        "#
+        .to_string();
+        let mut module = Module::load("spawn_near_check".into(), "test".into(), source).unwrap();
+        module.enabled = true;
+
+        run_one_tick(
+            &mut module,
+            &world,
+            &mut creatures,
+            &players,
+            0.5,
+            &mut weather,
+        );
+
+        assert!(module.error.is_none(), "module errored: {:?}", module.error);
+        let spawned = creatures.snapshot_with_ids();
+        assert_eq!(spawned.len(), 1, "expected exactly one spawned creature");
+        let (_, kind, pos, _, _) = spawned[0];
+        assert_eq!(kind, 0, "expected a sheep (kind 0)");
+        let dx = pos[0] - target_pos.x;
+        let dz = pos[2] - target_pos.z;
+        assert!(
+            (dx * dx + dz * dz).sqrt() <= 3.0 + 0.001,
+            "expected the spawn within radius 3 of the target player, got offset ({dx}, {dz})"
+        );
+    }
+
+    #[test]
+    fn start_rain_and_stop_rain_toggle_the_weather_state() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let players: Vec<PlayerSnapshot> = Vec::new();
+
+        let mut weather = WeatherState::new(1);
+        assert_eq!(weather.current, Weather::Clear);
+        let mut module = Module::load(
+            "rain_check".into(),
+            "test".into(),
+            "function on_tick(api) api.start_rain() end".to_string(),
+        )
+        .unwrap();
+        module.enabled = true;
+        run_one_tick(&mut module, &world, &mut creatures, &players, 0.5, &mut weather);
+        assert!(module.error.is_none(), "module errored: {:?}", module.error);
+        assert_eq!(weather.current, Weather::Rain);
+
+        let mut module = Module::load(
+            "stop_rain_check".into(),
+            "test".into(),
+            "function on_tick(api) api.stop_rain() end".to_string(),
+        )
+        .unwrap();
+        module.enabled = true;
+        run_one_tick(&mut module, &world, &mut creatures, &players, 0.5, &mut weather);
+        assert!(module.error.is_none(), "module errored: {:?}", module.error);
+        assert_eq!(weather.current, Weather::Clear);
+    }
+
+    #[test]
+    fn set_time_functions_move_the_real_clock() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let players: Vec<PlayerSnapshot> = Vec::new();
+        let mut weather = WeatherState::new(1);
+
+        let mut dawn_module = Module::load(
+            "dawn_check".into(),
+            "test".into(),
+            "function on_tick(api) api.set_time_dawn() end".to_string(),
+        )
+        .unwrap();
+        dawn_module.enabled = true;
+        let (_, tod) = run_one_tick_with_time(
+            &mut dawn_module,
+            &world,
+            &mut creatures,
+            &players,
+            0.5,
+            &mut weather,
+        );
+        assert!(dawn_module.error.is_none());
+        assert_eq!(tod, 0.0);
+
+        let mut night_module = Module::load(
+            "night_check".into(),
+            "test".into(),
+            "function on_tick(api) api.set_time_night() end".to_string(),
+        )
+        .unwrap();
+        night_module.enabled = true;
+        let (_, tod) = run_one_tick_with_time(
+            &mut night_module,
+            &world,
+            &mut creatures,
+            &players,
+            0.0,
+            &mut weather,
+        );
+        assert!(night_module.error.is_none());
+        assert_eq!(tod, 0.5);
+
+        let mut custom_module = Module::load(
+            "custom_time_check".into(),
+            "test".into(),
+            "function on_tick(api) api.set_time_of_day(0.25) end".to_string(),
+        )
+        .unwrap();
+        custom_module.enabled = true;
+        let (_, tod) = run_one_tick_with_time(
+            &mut custom_module,
+            &world,
+            &mut creatures,
+            &players,
+            0.9,
+            &mut weather,
+        );
+        assert!(custom_module.error.is_none());
+        assert_eq!(tod, 0.25);
     }
 }

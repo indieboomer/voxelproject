@@ -23,6 +23,9 @@ pub struct Player {
     /// Set by breaking a Crystal block; exposed to Lua rules via
     /// `api.players()` so a rule can react to "players carrying a crystal".
     pub carrying_crystal: bool,
+    /// Holding sprint (shift) while actually trying to move -- exposed to
+    /// Lua rules as `running` so a rule can tell walking from sprinting.
+    pub sprinting: bool,
 }
 
 impl Player {
@@ -32,6 +35,7 @@ impl Player {
             velocity: Vec3::ZERO,
             on_ground: false,
             carrying_crystal: false,
+            sprinting: false,
         }
     }
 
@@ -54,7 +58,8 @@ impl Player {
         }
         wish = wish.normalize_or_zero();
 
-        let mut speed = if input.is_down(KeyCode::ShiftLeft) {
+        self.sprinting = input.is_down(KeyCode::ShiftLeft) && wish != Vec3::ZERO;
+        let mut speed = if self.sprinting {
             SPRINT_SPEED
         } else {
             WALK_SPEED
