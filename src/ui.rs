@@ -60,6 +60,10 @@ pub struct Ui {
     ctx: egui::Context,
     state: State,
     renderer: Renderer,
+    /// Index into `scripting.modules` of the rule whose source is currently
+    /// shown in the "Rule Source" viewer window, if any. Purely local UI
+    /// state -- doesn't need to round-trip through `App`.
+    viewing_index: Option<usize>,
 }
 
 impl Ui {
@@ -71,6 +75,7 @@ impl Ui {
             ctx,
             state,
             renderer,
+            viewing_index: None,
         }
     }
 
@@ -104,6 +109,7 @@ impl Ui {
     ) -> (egui::FullOutput, UiRequests) {
         let raw_input = self.state.take_egui_input(window);
         let mut requests = UiRequests::default();
+        let mut viewing_index = self.viewing_index;
 
         let full_output = self.ctx.run(raw_input, |ctx| {
             egui::Window::new("fps")
@@ -136,6 +142,10 @@ impl Ui {
                         let marker = if is_recent { "-> " } else { "" };
                         ui.horizontal(|ui| {
                             ui.colored_label(status_color, format!("{marker}{} [{status}]", m.name));
+                            let view_label = if viewing_index == Some(i) { "Hide Code" } else { "View Code" };
+                            if ui.small_button(view_label).clicked() {
+                                viewing_index = if viewing_index == Some(i) { None } else { Some(i) };
+                            }
                             if is_host {
                                 let label = if m.enabled { "Disable" } else { "Enable" };
                                 if ui.small_button(label).clicked() {
@@ -161,6 +171,44 @@ impl Ui {
                         }
                     }
                 });
+
+            // Read-only viewer for one rule's generated Lua -- so you can
+            // actually see what the LLM wrote (or what a hand-written
+            // module contains) instead of just trusting the ON/OFF/ERR
+            // status. Stays open (tracking by index) until closed or the
+            // module list shrinks out from under it.
+            if let Some(vi) = viewing_index {
+                match scripting.modules.get(vi) {
+                    Some(m) => {
+                        let mut open = true;
+                        egui::Window::new(format!("Rule Source: {}", m.name))
+                            .resizable(true)
+                            .collapsible(false)
+                            .default_width(560.0)
+                            .default_height(420.0)
+                            .open(&mut open)
+                            .show(ctx, |ui| {
+                                ui.label(format!("Prompt: {}", m.prompt));
+                                if let Some(err) = &m.error {
+                                    ui.colored_label(egui::Color32::from_rgb(220, 90, 90), err);
+                                }
+                                ui.separator();
+                                egui::ScrollArea::vertical().show(ui, |ui| {
+                                    let mut code = m.source.clone();
+                                    ui.add(
+                                        egui::TextEdit::multiline(&mut code)
+                                            .code_editor()
+                                            .desired_width(f32::INFINITY),
+                                    );
+                                });
+                            });
+                        if !open {
+                            viewing_index = None;
+                        }
+                    }
+                    None => viewing_index = None,
+                }
+            }
 
             if !toasts.is_empty() {
                 egui::Window::new("notifications")
@@ -222,6 +270,7 @@ impl Ui {
             }
         });
 
+        self.viewing_index = viewing_index;
         (full_output, requests)
     }
 
