@@ -18,6 +18,7 @@ Queries:
 - api.weather: string, either "clear" or "rain".
 - api.players(): array of {id, x, y, z, carrying_crystal, speed, vertical_speed, on_ground, running, in_water}, one per connected player. carrying_crystal is true if that player is currently holding a crystal item. speed is horizontal movement speed (blocks/sec); vertical_speed is signed (positive = rising, e.g. jumping; negative = falling). on_ground is true when standing on solid ground. running is true when sprinting (as opposed to walking). in_water is true when standing in a water block.
 - api.nearest_player(x, y, z): returns the single closest connected player as {id, x, y, z, carrying_crystal, speed, vertical_speed, on_ground, running, in_water, distance}, or nil if no players are connected. Prefer this over looping api.players() yourself when you just need the closest one.
+- IMPORTANT: on_ground is never true in the same tick vertical_speed is positive -- a jump sets both at once, so checking "on_ground and vertical_speed > 0" can NEVER be true. There is no separate on_jump/on_land callback. To detect a one-shot moment like "a player just jumped" or "a player just entered water", remember each player's previous-tick state in a persistent table (keyed by player id) and compare it to the current tick -- see the jump-rain example below.
 - api.creatures(): array of {id, kind, x, y, z, health, max_health}, one per creature. kind is "sheep" or "chicken".
 - api.find_creatures(kind, cx, cy, cz, radius): like api.creatures() but filtered to one kind ("sheep", "chicken", or "any") and within `radius` of the center point. Same {id, kind, x, y, z, health, max_health} shape. radius is capped at 10 and results at 64.
 - api.nearest_creature(kind, x, y, z): returns the single closest creature of the given kind ("sheep", "chicken", or "any") as {id, kind, x, y, z, health, max_health, distance}, or nil if none exist.
@@ -62,6 +63,12 @@ Rule: "breaking a crystal block while sprinting summons a storm" -- shows the on
 
 ```lua
 {STORM_SUMMONER_EXAMPLE}
+```
+
+Rule: "when a player jumps, it starts raining" -- shows detecting a one-shot transition (there is no on_jump callback) by remembering each player's on_ground state from the previous tick in a persistent table.
+
+```lua
+{JUMP_RAIN_EXAMPLE}
 ```
 
 Now write a NEW Lua module implementing the rule the user describes below. Reuse patterns from the examples where they apply. Keep it short and correct. Output ONLY the Lua source code for the new module.

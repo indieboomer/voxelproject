@@ -24,6 +24,22 @@ pub enum BlockType {
     RedStone = 10,
 }
 
+/// Block types the player can gather (by breaking) and place again, in the
+/// order shown in the Resources HUD panel and selected by hotbar keys 1-8.
+/// Crystal is deliberately excluded -- it's a special one-shot pickup
+/// tracked via `Player::carrying_crystal`, not a stackable building
+/// material.
+pub const COLLECTIBLE_BLOCKS: [BlockType; 8] = [
+    BlockType::Grass,
+    BlockType::Dirt,
+    BlockType::Stone,
+    BlockType::Sand,
+    BlockType::Wood,
+    BlockType::Leaves,
+    BlockType::Mud,
+    BlockType::RedStone,
+];
+
 impl BlockType {
     pub fn is_solid(self) -> bool {
         !matches!(self, BlockType::Air | BlockType::Water)
@@ -49,16 +65,7 @@ impl BlockType {
     }
 
     pub fn from_hotbar_index(i: usize) -> Option<BlockType> {
-        match i {
-            0 => Some(BlockType::Grass),
-            1 => Some(BlockType::Dirt),
-            2 => Some(BlockType::Stone),
-            3 => Some(BlockType::Sand),
-            4 => Some(BlockType::Wood),
-            5 => Some(BlockType::Leaves),
-            6 => Some(BlockType::Crystal),
-            _ => None,
-        }
+        COLLECTIBLE_BLOCKS.get(i).copied()
     }
 
     pub fn name(self) -> &'static str {

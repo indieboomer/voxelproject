@@ -1729,6 +1729,98 @@ mod tests {
     }
 
     #[test]
+    fn jump_rain_module_starts_rain_only_on_the_tick_a_player_leaves_the_ground_while_rising() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let mut weather = WeatherState::new(1);
+
+        let source = std::fs::read_to_string("modules/jump_rain.lua").unwrap();
+        let mut module = Module::load("jump_rain".into(), "test".into(), source).unwrap();
+        module.enabled = true;
+
+        let grounded = PlayerSnapshot {
+            id: 0,
+            pos: Vec3::new(0.0, 0.0, 0.0),
+            carrying_crystal: false,
+            velocity: Vec3::ZERO,
+            on_ground: true,
+            sprinting: false,
+            in_water: false,
+        };
+        run_one_tick(&mut module, &world, &mut creatures, &[grounded], 0.5, &mut weather);
+        assert!(
+            module.error.is_none(),
+            "module errored on grounded tick: {:?}",
+            module.error
+        );
+        assert_eq!(
+            weather.current,
+            Weather::Clear,
+            "standing still shouldn't start rain"
+        );
+
+        let jumping = PlayerSnapshot {
+            id: 0,
+            pos: Vec3::new(0.0, 1.0, 0.0),
+            carrying_crystal: false,
+            velocity: Vec3::new(0.0, 5.0, 0.0),
+            on_ground: false,
+            sprinting: false,
+            in_water: false,
+        };
+        run_one_tick(&mut module, &world, &mut creatures, &[jumping], 0.5, &mut weather);
+        assert!(
+            module.error.is_none(),
+            "module errored on jump tick: {:?}",
+            module.error
+        );
+        assert_eq!(
+            weather.current,
+            Weather::Rain,
+            "expected rain to start the tick the player leaves the ground while rising"
+        );
+    }
+
+    #[test]
+    fn jump_rain_module_does_not_fire_for_a_player_first_seen_already_airborne() {
+        // A player seen mid-jump on the very first tick (e.g. one who just
+        // connected) has no recorded previous on_ground state yet, so this
+        // must not be mistaken for "just jumped".
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let mut weather = WeatherState::new(1);
+
+        let source = std::fs::read_to_string("modules/jump_rain.lua").unwrap();
+        let mut module = Module::load("jump_rain".into(), "test".into(), source).unwrap();
+        module.enabled = true;
+
+        let already_airborne = PlayerSnapshot {
+            id: 0,
+            pos: Vec3::new(0.0, 3.0, 0.0),
+            carrying_crystal: false,
+            velocity: Vec3::new(0.0, 5.0, 0.0),
+            on_ground: false,
+            sprinting: false,
+            in_water: false,
+        };
+        run_one_tick(
+            &mut module,
+            &world,
+            &mut creatures,
+            &[already_airborne],
+            0.5,
+            &mut weather,
+        );
+
+        assert!(module.error.is_none(), "module errored: {:?}", module.error);
+        assert_eq!(
+            weather.current,
+            Weather::Clear,
+            "a player first observed already airborne shouldn't falsely trigger rain"
+        );
+    }
+
+    #[test]
     fn spawn_creature_near_player_spawns_within_radius_of_the_target_player() {
         let world = World::new(1);
         let mut creatures = Creatures::new();

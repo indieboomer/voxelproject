@@ -5,7 +5,9 @@ use egui_winit::State;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
+use crate::player::Player;
 use crate::scripting::ScriptHost;
+use crate::voxel::{BlockType, COLLECTIBLE_BLOCKS};
 
 const TOAST_LIFETIME: Duration = Duration::from_secs(6);
 /// Longer-lived than a normal toast, since it flags something the player
@@ -54,6 +56,9 @@ pub struct UiRequests {
     pub submit_prompt: Option<String>,
     pub confirm_quit: bool,
     pub cancel_quit: bool,
+    /// Set when the player clicks "Select" on a resource in the Resources
+    /// panel -- becomes the new block placed by a right click.
+    pub select_block: Option<BlockType>,
 }
 
 pub struct Ui {
@@ -106,6 +111,8 @@ impl Ui {
         toasts: &[Toast],
         fps: f32,
         quit_dialog_open: bool,
+        player: &Player,
+        selected_block: Option<BlockType>,
     ) -> (egui::FullOutput, UiRequests) {
         let raw_input = self.state.take_egui_input(window);
         let mut requests = UiRequests::default();
@@ -170,6 +177,36 @@ impl Ui {
                             ui.colored_label(egui::Color32::from_rgb(220, 90, 90), err);
                         }
                     }
+                });
+
+            egui::Window::new("Resources")
+                .anchor(egui::Align2::RIGHT_BOTTOM, [-8.0, -8.0])
+                .resizable(false)
+                .collapsible(false)
+                .show(ctx, |ui| {
+                    for &block in COLLECTIBLE_BLOCKS.iter() {
+                        let count = player.resource_count(block);
+                        let is_selected = selected_block == Some(block);
+                        ui.horizontal(|ui| {
+                            let marker = if is_selected { "-> " } else { "" };
+                            let color = if is_selected {
+                                egui::Color32::from_rgb(120, 200, 255)
+                            } else if count > 0 {
+                                egui::Color32::WHITE
+                            } else {
+                                egui::Color32::GRAY
+                            };
+                            ui.colored_label(color, format!("{marker}{} x{count}", block.name()));
+                            if ui
+                                .add_enabled(count > 0, egui::Button::new("Select").small())
+                                .clicked()
+                            {
+                                requests.select_block = Some(block);
+                            }
+                        });
+                    }
+                    ui.separator();
+                    ui.label("Break blocks to gather them, right-click to place the selected one.");
                 });
 
             // Read-only viewer for one rule's generated Lua -- so you can

@@ -29,6 +29,8 @@ impl Input {
                     KeyCode::Digit4 => self.hotbar_select = Some(3),
                     KeyCode::Digit5 => self.hotbar_select = Some(4),
                     KeyCode::Digit6 => self.hotbar_select = Some(5),
+                    KeyCode::Digit7 => self.hotbar_select = Some(6),
+                    KeyCode::Digit8 => self.hotbar_select = Some(7),
                     KeyCode::F5 => self.save_requested = true,
                     _ => {}
                 }

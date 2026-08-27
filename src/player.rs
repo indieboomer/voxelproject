@@ -1,7 +1,7 @@
 use glam::Vec3;
 
 use crate::input::Input;
-use crate::voxel::{BlockType, World};
+use crate::voxel::{BlockType, World, COLLECTIBLE_BLOCKS};
 use winit::keyboard::KeyCode;
 
 const HALF_WIDTH: f32 = 0.3;
@@ -26,6 +26,10 @@ pub struct Player {
     /// Holding sprint (shift) while actually trying to move -- exposed to
     /// Lua rules as `running` so a rule can tell walking from sprinting.
     pub sprinting: bool,
+    /// Count of each `COLLECTIBLE_BLOCKS` type gathered so far, indexed the
+    /// same way -- incremented on breaking, decremented on placing. Shown
+    /// in the Resources HUD panel.
+    resources: [u32; COLLECTIBLE_BLOCKS.len()],
 }
 
 impl Player {
@@ -36,6 +40,34 @@ impl Player {
             on_ground: false,
             carrying_crystal: false,
             sprinting: false,
+            resources: [0; COLLECTIBLE_BLOCKS.len()],
+        }
+    }
+
+    /// Adds one to the gathered count for `block`, if it's collectible.
+    /// A no-op for anything not in `COLLECTIBLE_BLOCKS` (e.g. Crystal).
+    pub fn add_resource(&mut self, block: BlockType) {
+        if let Some(i) = COLLECTIBLE_BLOCKS.iter().position(|&b| b == block) {
+            self.resources[i] += 1;
+        }
+    }
+
+    pub fn resource_count(&self, block: BlockType) -> u32 {
+        COLLECTIBLE_BLOCKS
+            .iter()
+            .position(|&b| b == block)
+            .map_or(0, |i| self.resources[i])
+    }
+
+    /// Consumes one gathered `block`, if any remain. Returns whether it
+    /// succeeded -- the caller should only place the block on success.
+    pub fn take_resource(&mut self, block: BlockType) -> bool {
+        match COLLECTIBLE_BLOCKS.iter().position(|&b| b == block) {
+            Some(i) if self.resources[i] > 0 => {
+                self.resources[i] -= 1;
+                true
+            }
+            _ => false,
         }
     }
 
@@ -145,5 +177,52 @@ impl Player {
             }
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_and_take_resource_round_trip_through_the_gathered_count() {
+        let mut player = Player::new(Vec3::ZERO);
+        assert_eq!(player.resource_count(BlockType::Stone), 0);
+
+        player.add_resource(BlockType::Stone);
+        player.add_resource(BlockType::Stone);
+        assert_eq!(player.resource_count(BlockType::Stone), 2);
+
+        assert!(player.take_resource(BlockType::Stone));
+        assert_eq!(player.resource_count(BlockType::Stone), 1);
+        assert!(player.take_resource(BlockType::Stone));
+        assert_eq!(player.resource_count(BlockType::Stone), 0);
+
+        assert!(
+            !player.take_resource(BlockType::Stone),
+            "taking from an empty count should fail, not underflow"
+        );
+    }
+
+    #[test]
+    fn crystal_is_not_a_stackable_resource() {
+        // Crystal is deliberately excluded from COLLECTIBLE_BLOCKS -- it's
+        // tracked separately via `carrying_crystal`.
+        let mut player = Player::new(Vec3::ZERO);
+        player.add_resource(BlockType::Crystal);
+        assert_eq!(player.resource_count(BlockType::Crystal), 0);
+        assert!(!player.take_resource(BlockType::Crystal));
+    }
+
+    #[test]
+    fn different_block_types_are_tracked_independently() {
+        let mut player = Player::new(Vec3::ZERO);
+        player.add_resource(BlockType::Wood);
+        player.add_resource(BlockType::Wood);
+        player.add_resource(BlockType::Sand);
+
+        assert_eq!(player.resource_count(BlockType::Wood), 2);
+        assert_eq!(player.resource_count(BlockType::Sand), 1);
+        assert_eq!(player.resource_count(BlockType::Dirt), 0);
     }
 }

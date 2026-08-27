@@ -291,7 +291,10 @@ pub struct App {
 
     chunk_meshes: HashMap<(i32, i32), GpuMesh>,
     entity_mesh: Option<GpuMesh>,
-    selected_block: BlockType,
+    /// The block a right click places, chosen from gathered resources via
+    /// the hotbar keys or the Resources panel. `None` until the player has
+    /// picked something (or gathered anything) to place.
+    selected_block: Option<BlockType>,
     cursor_grabbed: bool,
 
     last_frame: Instant,
@@ -647,7 +650,7 @@ impl App {
             return_to_menu: false,
             chunk_meshes: HashMap::new(),
             entity_mesh: None,
-            selected_block: BlockType::Grass,
+            selected_block: None,
             cursor_grabbed: false,
             last_frame: Instant::now(),
             title_timer: 0.0,
@@ -805,7 +808,7 @@ impl App {
 
         if let Some(i) = self.input.hotbar_select {
             if let Some(b) = BlockType::from_hotbar_index(i) {
-                self.selected_block = b;
+                self.selected_block = Some(b);
             }
         }
 
@@ -820,6 +823,7 @@ impl App {
                     if broken == BlockType::Crystal {
                         self.player.carrying_crystal = true;
                     }
+                    self.player.add_resource(broken);
                     // Only the host records this for the Lua tick -- a
                     // joined client's own break is picked up on the host via
                     // the network-relayed `ReliableMsg::BlockEdit` path
@@ -838,12 +842,19 @@ impl App {
                         self.apply_block_edit(pos.0, pos.1, pos.2, BlockType::Water);
                     }
                 } else if !self.would_hit_player(hit.place) {
-                    self.apply_block_edit(
-                        hit.place.0,
-                        hit.place.1,
-                        hit.place.2,
-                        self.selected_block,
-                    );
+                    match self.selected_block {
+                        Some(block) if self.player.take_resource(block) => {
+                            self.apply_block_edit(hit.place.0, hit.place.1, hit.place.2, block);
+                        }
+                        Some(block) => {
+                            self.toasts.push(Toast::new(format!("Out of {}", block.name())));
+                        }
+                        None => {
+                            self.toasts.push(Toast::new(
+                                "No block selected -- gather resources first",
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -939,8 +950,14 @@ impl App {
             &self.toasts,
             self.last_fps,
             self.quit_dialog_open,
+            &self.player,
+            self.selected_block,
         );
         self.pending_egui_output = Some(full_output);
+
+        if let Some(block) = requests.select_block {
+            self.selected_block = Some(block);
+        }
 
         if requests.confirm_quit {
             self.return_to_menu = true;
@@ -988,12 +1005,16 @@ impl App {
                     client.server_addr, client.player_id
                 ),
             };
+            let block_info = match self.selected_block {
+                Some(b) => b.name(),
+                None => "none",
+            };
             self.window.set_title(&format!(
                 "Voxel Project | {:02}:{:02} | {} | Block: {} | FPS: {:.0} | ~ rules/generate, F5 save, Esc quit",
                 hour,
                 minute,
                 role_info,
-                self.selected_block.name(),
+                block_info,
                 fps
             ));
             self.title_timer = 0.0;
