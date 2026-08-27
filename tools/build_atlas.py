@@ -86,25 +86,32 @@ def darken(im: Image.Image, factor: float, warm_shift=(0, 0, 0)) -> Image.Image:
 
 
 def procedural(base, variance, seed) -> Image.Image:
+    """Random per-pixel jitter, generated at 2x resolution (128px, matching
+    the other hand-picked textures' native size) and downsampled back to the
+    tile size -- plain per-pixel noise at the final 64px reads as harsh
+    static, but generating it fine and smoothing it down softens it into the
+    same gentle grain the rest of the atlas has.
+    """
+    hi_res = TILE * 2
     rng = random.Random(seed)
-    im = Image.new("RGBA", (TILE, TILE))
+    im = Image.new("RGBA", (hi_res, hi_res))
     px = im.load()
-    for y in range(TILE):
-        for x in range(TILE):
+    for y in range(hi_res):
+        for x in range(hi_res):
             jitter = rng.randint(-variance, variance)
             px[x, y] = tuple(max(0, min(255, c + jitter)) for c in base) + (255,)
-    return im
+    return im.resize((TILE, TILE), Image.LANCZOS)
 
 
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     grass_side_src = load("grass_block_side.png")
-    grass_top_crop = grass_side_src.crop((0, 0, TILE, GRASS_SPLIT_ROW))
-    # A hard vertical tile of this 16px strip reads as an obvious repeating
-    # stripe once it covers a whole ground plane; a blocky (nearest-filter)
-    # stretch instead gives a much calmer, still-crisp result.
-    grass_top = grass_top_crop.resize((TILE, TILE), Image.NEAREST)
+    # A real grass-top tile (textures/assets/.../grass.png), not derived by
+    # stretching a thin strip cropped from the side texture -- that stretch
+    # read as an obvious repeating stripe once it covered a whole ground
+    # plane.
+    grass_top = load("grass.png")
 
     dirt_crop = grass_side_src.crop((0, GRASS_SPLIT_ROW, TILE, TILE))
     dirt = tile_vertically(dirt_crop, TILE)

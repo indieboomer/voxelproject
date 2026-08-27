@@ -92,23 +92,23 @@ const WATER_REFLECTIVITY_THRESHOLD: f32 = 0.7;
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let is_water = in.reflectivity > WATER_REFLECTIVITY_THRESHOLD;
 
-    // Slightly wavy *still* water: a gentle animated distortion of both the
-    // sampled texture coordinate and the shading normal, so the surface
-    // shimmers and its sun glint dances in place -- no vertex displacement,
-    // this is a purely a static flat quad underneath.
-    var sample_uv = in.uv;
+    // Slightly wavy *still* water: only the shading normal is animated (the
+    // sun glint and sky reflection dance across the surface), never the
+    // sampled texture coordinate -- perturbing UVs pushed sampling past the
+    // water tile's own edge in the atlas and bled in whatever tile happens
+    // to sit next to it there, showing up as flickering white margins. This
+    // keeps water reading as one smooth, undistorted surface.
     var shading_normal = in.normal;
     if is_water {
         let t = camera.light_params.z;
         let wx = in.world_pos.x * 0.6 + t * 1.3;
         let wz = in.world_pos.z * 0.5 + t * 1.7;
-        sample_uv = in.uv + vec2<f32>(sin(wx * 1.3), cos(wz * 1.3)) * 0.01;
         shading_normal = normalize(
             in.normal + vec3<f32>(cos(wx) * 0.6, 0.0, -sin(wz) * 0.6) * 0.15
         );
     }
 
-    let tex = textureSample(atlas_texture, atlas_sampler, sample_uv);
+    let tex = textureSample(atlas_texture, atlas_sampler, in.uv);
     if tex.a < 0.5 {
         discard;
     }
