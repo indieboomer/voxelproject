@@ -12,34 +12,8 @@ CONTRACT
 - Output ONLY the Lua source code. No explanation, no markdown code fences, no commentary.
 
 WORLD API (the `api` table passed into on_tick and on_death)
-Queries:
-- api.time_of_day: number in [0,1). 0 = sunrise, 0.25 = noon, 0.5 = sunset, 0.75 = midnight.
-- api.is_night: boolean, true when the sun is below the horizon.
-- api.weather: string, either "clear" or "rain".
-- api.players(): array of {id, x, y, z, carrying_crystal, speed, vertical_speed, on_ground, running, in_water}, one per connected player. carrying_crystal is true if that player is currently holding a crystal item. speed is horizontal movement speed (blocks/sec); vertical_speed is signed (positive = rising, e.g. jumping; negative = falling). on_ground is true when standing on solid ground. running is true when sprinting (as opposed to walking). in_water is true when standing in a water block.
-- api.nearest_player(x, y, z): returns the single closest connected player as {id, x, y, z, carrying_crystal, speed, vertical_speed, on_ground, running, in_water, distance}, or nil if no players are connected. Prefer this over looping api.players() yourself when you just need the closest one.
-- IMPORTANT: on_ground is never true in the same tick vertical_speed is positive -- a jump sets both at once, so checking "on_ground and vertical_speed > 0" can NEVER be true. There is no separate on_jump/on_land callback. To detect a one-shot moment like "a player just jumped" or "a player just entered water", remember each player's previous-tick state in a persistent table (keyed by player id) and compare it to the current tick -- see the jump-rain example below.
-- api.creatures(): array of {id, kind, x, y, z, health, max_health}, one per creature. kind is "sheep" or "chicken".
-- api.find_creatures(kind, cx, cy, cz, radius): like api.creatures() but filtered to one kind ("sheep", "chicken", or "any") and within `radius` of the center point. Same {id, kind, x, y, z, health, max_health} shape. radius is capped at 10 and results at 64.
-- api.nearest_creature(kind, x, y, z): returns the single closest creature of the given kind ("sheep", "chicken", or "any") as {id, kind, x, y, z, health, max_health, distance}, or nil if none exist.
-- api.get_block(x, y, z): returns the block name at that integer position, lowercase (e.g. "grass", "dirt", "stone", "sand", "wood", "leaves", "water", "air", "crystal", "mud", "redstone").
-- api.find_blocks(kind, cx, cy, cz, radius): returns an array of {x, y, z} for every block of the given kind (lowercase name) within `radius` of the center point. radius is capped at 10 and results at 64 -- don't rely on finding more than that.
-- api.terrain_height(x, z): returns the integer y of the topmost solid ground block at that column. Useful for placing or spawning things at the correct height instead of guessing.
-- api.distance(x1, y1, z1, x2, y2, z2): returns the straight-line distance between two points. Prefer this over writing your own sqrt(dx*dx+dy*dy+dz*dz).
 
-Actions (each of these is budget-limited per call -- roughly 32 block edits and 4 creature spawns per on_tick/on_death call, so don't try to edit hundreds of blocks in one call):
-- api.chase(creature_id, x, y, z): makes that creature move toward the given point at increased speed. Call it again every tick to keep it chasing -- stop calling it and the creature reverts to normal wandering within about a third of a second. There is no separate "stop chasing" call.
-- api.damage(creature_id, amount): reduces that creature's health; destroys it and fires on_death if this brings health to zero or below.
-- api.destroy(creature_id): removes a creature immediately regardless of health, and fires on_death.
-- api.spawn_creature(kind, x, y, z): spawns a new creature ("sheep" or "chicken") at the given position. Returns its id, or nil if the spawn budget for this call is used up.
-- api.spawn_creature_near_player(player_id, kind, radius): spawns a new creature ("sheep" or "chicken") at a random point within `radius` blocks of the given player (horizontally; height snaps to the terrain). Returns its id, or nil if the player isn't found or the spawn budget for this call is used up. Prefer this over api.spawn_creature plus your own random offset when the rule is about spawning near a specific player.
-- api.replace_block(x, y, z, kind): changes one block to the given kind (lowercase name, e.g. "mud", "redstone", "air", "stone"). Returns false if the block-edit budget for this call is used up.
-- api.set_weather(name): sets the weather to "clear" or "rain".
-- api.start_rain() / api.stop_rain(): shorthand for api.set_weather("rain") / api.set_weather("clear").
-- api.set_time_of_day(t): sets the time of day directly to `t` (wraps into [0,1)), same scale as api.time_of_day.
-- api.set_time_dawn(): sets the time of day to 0.0 (sunrise).
-- api.set_time_night(): sets the time of day to 0.5 (sunset, night begins).
-- api.broadcast(message): logs a string message to the host's console, and shows it as a notification to every connected player. Use sparingly, not every tick.
+{WORLD_API_COMPACT}
 
 Two passive block effects already exist in the engine (you don't need to implement them, just place the blocks): standing on a "mud" block slows a player down; a "redstone" block slowly heals every creature within a few blocks of it, every tick, for as long as it exists.
 

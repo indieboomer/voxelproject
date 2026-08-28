@@ -1,3 +1,4 @@
+-- api_version: 1.0.0
 -- Manually written example rule.
 --
 -- Rule: when a player jumps, it starts raining.

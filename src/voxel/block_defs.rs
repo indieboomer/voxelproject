@@ -390,3 +390,35 @@ pub(crate) fn csv_from_name(lower_name: &str) -> Option<BlockType> {
         _ => return None,
     })
 }
+
+/// The canonical snake_case id for a CSV-roster block -- the inverse of
+/// `csv_from_name`, and what `BlockType::id` (used by the Lua World API's
+/// `get_block`/`find_blocks`) returns for these blocks.
+pub(crate) fn csv_id(block: BlockType) -> Option<&'static str> {
+    Some(match block {
+        BlockType::Grass => "grass",
+        BlockType::Sand => "sand",
+        BlockType::SpruceWood => "spruce_wood",
+        BlockType::Stone => "stone",
+        BlockType::Water => "water",
+        BlockType::OakLeaves => "oak_leaves",
+        BlockType::Soil => "soil",
+        BlockType::Bedrock => "bedrock",
+        BlockType::Cobblestone => "cobblestone",
+        BlockType::Basalt => "basalt",
+        BlockType::CherryWood => "cherry_wood",
+        BlockType::CherryLeaves => "cherry_leaves",
+        BlockType::BirchWood => "birch_wood",
+        BlockType::BirchLeaves => "birch_leaves",
+        BlockType::GoldOre => "gold_ore",
+        BlockType::DiamondOre => "diamond_ore",
+        BlockType::EmeraldOre => "emerald_ore",
+        BlockType::CopperOre => "copper_ore",
+        BlockType::OakWood => "oak_wood",
+        BlockType::SpruceLeaves => "spruce_leaves",
+        BlockType::Pumpkin => "pumpkin",
+        BlockType::Bricks => "bricks",
+        BlockType::ShortGrass => "short_grass",
+        _ => return None,
+    })
+}

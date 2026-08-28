@@ -260,6 +260,24 @@ impl BlockType {
         self.def().display_name
     }
 
+    /// Canonical snake_case id -- the inverse of `from_name`, and what the
+    /// Lua World API's `get_block`/`find_blocks` expose. Distinct from
+    /// `name()`: several blocks have multi-word *display* names (e.g. "Oak
+    /// Wood", "Gold ore") that don't match the single-token id `from_name`
+    /// accepts, so id() must not be derived by lowercasing `name()`.
+    pub fn id(self) -> &'static str {
+        if let Some(id) = block_defs::csv_id(self) {
+            return id;
+        }
+        match self {
+            BlockType::Air => "air",
+            BlockType::Crystal => "crystal",
+            BlockType::Mud => "mud",
+            BlockType::RedStone => "redstone",
+            _ => unreachable!("block_defs::csv_id should have handled every CSV block"),
+        }
+    }
+
     /// Case-insensitive lookup by snake_case id, for the Lua `replace_block`
     /// / `find_blocks` / `get_block` API. Matches `textures/blocks.csv`'s
     /// `id` column (normalized to snake_case, via the generated

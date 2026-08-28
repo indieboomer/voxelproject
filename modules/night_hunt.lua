@@ -1,3 +1,4 @@
+-- api_version: 1.0.0
 -- Manually written example rule (the LLM pipeline that will eventually
 -- generate scripts like this doesn't exist yet -- this is what a rule
 -- looks like once it's written).

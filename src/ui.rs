@@ -170,6 +170,11 @@ impl Ui {
                         let marker = if is_recent { "-> " } else { "" };
                         ui.horizontal(|ui| {
                             ui.colored_label(status_color, format!("{marker}{} [{status}]", m.name));
+                            let version_label = match m.api_version() {
+                                Some(v) => format!("api v{v}"),
+                                None => "api version unknown".to_string(),
+                            };
+                            ui.weak(version_label);
                             let view_label = if viewing_index == Some(i) { "Hide Code" } else { "View Code" };
                             if ui.small_button(view_label).clicked() {
                                 viewing_index = if viewing_index == Some(i) { None } else { Some(i) };

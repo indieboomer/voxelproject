@@ -2,10 +2,30 @@ use std::sync::mpsc::{channel, Receiver};
 use std::time::Duration;
 
 const SYSTEM_PROMPT_TEMPLATE: &str = include_str!("../prompts/system_prompt.txt");
+/// Generated from world_api/schema.yaml by tools/gen_world_api.py -- see
+/// that file for the single authoritative World API description this is
+/// derived from. Regenerating it and rebuilding is enough to update what
+/// the model is told; nothing here needs hand-editing when the API changes.
+const WORLD_API_COMPACT: &str = include_str!("../world_api/world_api_compact.md");
 const NIGHT_HUNT_EXAMPLE: &str = include_str!("../modules/night_hunt.lua");
 const REDSTONE_EXAMPLE: &str = include_str!("../modules/redstone_healing.lua");
 const STORM_SUMMONER_EXAMPLE: &str = include_str!("../modules/storm_summoner.lua");
 const JUMP_RAIN_EXAMPLE: &str = include_str!("../modules/jump_rain.lua");
+
+/// These example files also load as real starter rules (`ScriptHost::scan_dir`),
+/// so they carry the same `-- api_version: X.Y.Z` leading comment every
+/// other rule does. Strip it before showing the model a few-shot example --
+/// versioning a rule's source is an engine-side bookkeeping concern (see
+/// `world_api_validate::tag_with_api_version`), not something the model
+/// should ever need to write itself or copy from an example.
+fn strip_api_version_tag(source: &str) -> &str {
+    let trimmed = source.trim_start();
+    if trimmed.starts_with(crate::world_api_validate::API_VERSION_COMMENT_PREFIX) {
+        trimmed.split_once('\n').map_or("", |(_, rest)| rest)
+    } else {
+        source
+    }
+}
 
 struct ChatMessage {
     role: &'static str,
@@ -48,10 +68,14 @@ impl LlmClient {
 
     fn system_prompt() -> String {
         SYSTEM_PROMPT_TEMPLATE
-            .replace("{NIGHT_HUNT_EXAMPLE}", NIGHT_HUNT_EXAMPLE)
-            .replace("{REDSTONE_EXAMPLE}", REDSTONE_EXAMPLE)
-            .replace("{STORM_SUMMONER_EXAMPLE}", STORM_SUMMONER_EXAMPLE)
-            .replace("{JUMP_RAIN_EXAMPLE}", JUMP_RAIN_EXAMPLE)
+            .replace("{WORLD_API_COMPACT}", WORLD_API_COMPACT)
+            .replace("{NIGHT_HUNT_EXAMPLE}", strip_api_version_tag(NIGHT_HUNT_EXAMPLE))
+            .replace("{REDSTONE_EXAMPLE}", strip_api_version_tag(REDSTONE_EXAMPLE))
+            .replace(
+                "{STORM_SUMMONER_EXAMPLE}",
+                strip_api_version_tag(STORM_SUMMONER_EXAMPLE),
+            )
+            .replace("{JUMP_RAIN_EXAMPLE}", strip_api_version_tag(JUMP_RAIN_EXAMPLE))
     }
 
     /// Kicks off a background request generating a brand-new rule module
@@ -210,6 +234,25 @@ pub fn derive_rule_name(prompt: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_prompt_embeds_the_world_api_doc_and_strips_example_version_tags() {
+        let prompt = LlmClient::system_prompt();
+        assert!(
+            prompt.contains("api.replace_block"),
+            "expected the generated World API doc to be spliced into the system prompt"
+        );
+        assert!(
+            !prompt.contains("api_version:"),
+            "the model should never see the engine-internal api_version tag \
+             in a few-shot example -- it's added automatically after generation, \
+             not something the model should write or copy"
+        );
+        assert!(
+            prompt.contains("function on_tick(api)"),
+            "expected the example modules' actual content to still be present after stripping the tag"
+        );
+    }
 
     #[test]
     fn extract_lua_strips_fenced_code_blocks() {

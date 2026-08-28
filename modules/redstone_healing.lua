@@ -1,3 +1,4 @@
+-- api_version: 1.0.0
 -- Manually written example rule.
 --
 -- Rule: three creature deaths in one location spawn a red stone that heals

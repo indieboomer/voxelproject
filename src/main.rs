@@ -14,6 +14,8 @@ mod scripting;
 mod ui;
 mod voxel;
 mod weather;
+mod world_api_gen;
+mod world_api_validate;
 
 use std::sync::Arc;
 

@@ -76,6 +76,11 @@ pub struct TickInput<'a> {
     /// so the caller can fire `on_death` to every module afterward -- not
     /// just the one that caused it.
     pub death_events: &'a mut Vec<DeathEvent>,
+    /// Messages a module asked to broadcast via `api.broadcast`; the caller
+    /// (`App`) relays each through the same host-to-all notification path
+    /// (toast + chat log + network `Notify`) every other rule-triggered
+    /// message already uses.
+    pub broadcasts: &'a mut Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -202,6 +207,15 @@ impl Module {
         }
     }
 
+    /// The World API version this module's source is tagged with (see
+    /// `world_api_validate::extract_api_version`), if any -- shown in the
+    /// Rules panel. `None` for a rule saved before the tagging convention
+    /// existed, or an ad-hoc one that never went through the generation
+    /// pipeline; that's a normal, fully-supported state, not an error.
+    pub fn api_version(&self) -> Option<&str> {
+        crate::world_api_validate::extract_api_version(&self.source)
+    }
+
     pub fn to_save_entry(&self) -> ModuleSaveEntry {
         ModuleSaveEntry {
             name: self.name.clone(),
@@ -277,6 +291,7 @@ fn populate_api<'lua, 'scope>(
     world: &'scope World,
     block_edits_cell: &'scope RefCell<&mut Vec<(i32, i32, i32, BlockType)>>,
     death_events_cell: &'scope RefCell<&mut Vec<DeathEvent>>,
+    broadcasts_cell: &'scope RefCell<&mut Vec<String>>,
     weather_cell: &'scope RefCell<&mut WeatherState>,
     time_cell: &'scope RefCell<&mut f32>,
     block_budget: &'scope Cell<u32>,
@@ -524,7 +539,7 @@ fn populate_api<'lua, 'scope>(
     api.set(
         "get_block",
         scope.create_function(move |_, (x, y, z): (i32, i32, i32)| {
-            Ok(world.get_block(x, y, z).name().to_ascii_lowercase())
+            Ok(world.get_block(x, y, z).id().to_string())
         })?,
     )?;
 
@@ -642,8 +657,9 @@ fn populate_api<'lua, 'scope>(
 
     api.set(
         "broadcast",
-        scope.create_function(|_, msg: String| {
+        scope.create_function(move |_, msg: String| {
             log::info!("[rule] {msg}");
+            broadcasts_cell.borrow_mut().push(msg);
             Ok(())
         })?,
     )?;
@@ -665,6 +681,7 @@ fn call_on_tick(lua: &Lua, input: &mut TickInput, spawn_seed: &Cell<u64>) -> mlu
     let creatures_cell = RefCell::new(&mut *input.creatures);
     let block_edits_cell = RefCell::new(&mut *input.block_edits);
     let death_events_cell = RefCell::new(&mut *input.death_events);
+    let broadcasts_cell = RefCell::new(&mut *input.broadcasts);
     let weather_cell = RefCell::new(&mut *input.weather);
     let time_cell = RefCell::new(&mut *input.time_of_day);
     let block_budget = Cell::new(MAX_BLOCK_EDITS_PER_CALL);
@@ -686,6 +703,7 @@ fn call_on_tick(lua: &Lua, input: &mut TickInput, spawn_seed: &Cell<u64>) -> mlu
             world,
             &block_edits_cell,
             &death_events_cell,
+            &broadcasts_cell,
             &weather_cell,
             &time_cell,
             &block_budget,
@@ -716,6 +734,7 @@ fn call_on_death(
     let block_edits_cell = RefCell::new(&mut *input.block_edits);
     let mut scratch_deaths: Vec<DeathEvent> = Vec::new();
     let death_events_cell = RefCell::new(&mut scratch_deaths);
+    let broadcasts_cell = RefCell::new(&mut *input.broadcasts);
     let weather_cell = RefCell::new(&mut *input.weather);
     let time_cell = RefCell::new(&mut *input.time_of_day);
     let block_budget = Cell::new(MAX_BLOCK_EDITS_PER_CALL);
@@ -743,6 +762,7 @@ fn call_on_death(
             world,
             &block_edits_cell,
             &death_events_cell,
+            &broadcasts_cell,
             &weather_cell,
             &time_cell,
             &block_budget,
@@ -777,12 +797,13 @@ fn call_on_block_break(
     let creatures_cell = RefCell::new(&mut *input.creatures);
     let block_edits_cell = RefCell::new(&mut *input.block_edits);
     let death_events_cell = RefCell::new(&mut *input.death_events);
+    let broadcasts_cell = RefCell::new(&mut *input.broadcasts);
     let weather_cell = RefCell::new(&mut *input.weather);
     let time_cell = RefCell::new(&mut *input.time_of_day);
     let block_budget = Cell::new(MAX_BLOCK_EDITS_PER_CALL);
     let spawn_budget = Cell::new(MAX_SPAWNS_PER_CALL);
     let world = input.world;
-    let kind_name = event.block.name().to_ascii_lowercase();
+    let kind_name = event.block.id();
     let (bx, by, bz) = (event.x, event.y, event.z);
     let player_id = event.player_id;
 
@@ -801,6 +822,7 @@ fn call_on_block_break(
             world,
             &block_edits_cell,
             &death_events_cell,
+            &broadcasts_cell,
             &weather_cell,
             &time_cell,
             &block_budget,
@@ -918,13 +940,14 @@ impl ScriptHost {
     /// Ticks every enabled module, fires `on_block_break` for each pending
     /// player-caused break, then fires `on_death` for every death any of the
     /// above caused. Returns the block edits requested this tick, for the
-    /// caller to apply through the normal replicated path, plus one message
-    /// per module that crashed and got auto-disabled *this call* (a rule
-    /// can pass load-time validation -- valid syntax, defines `on_tick` --
-    /// and still hit a runtime error the first time it actually executes,
-    /// e.g. calling an undefined helper function; the caller surfaces these
-    /// so a rule going silently dark isn't mistaken for "nothing happened").
-    /// `time_of_day` is mutated in place if a rule calls
+    /// caller to apply through the normal replicated path; one message per
+    /// module that crashed and got auto-disabled *this call* (a rule can
+    /// pass load-time validation -- valid syntax, defines `on_tick` -- and
+    /// still hit a runtime error the first time it actually executes, e.g.
+    /// calling an undefined helper function; the caller surfaces these so a
+    /// rule going silently dark isn't mistaken for "nothing happened"); and
+    /// every message passed to `api.broadcast`, for the caller to relay to
+    /// all players. `time_of_day` is mutated in place if a rule calls
     /// `set_time_of_day`/`set_time_dawn`/`set_time_night`, the same way
     /// `weather` already is for the weather setters.
     pub fn run_tick(
@@ -935,10 +958,11 @@ impl ScriptHost {
         time_of_day: &mut f32,
         weather: &mut WeatherState,
         block_breaks: &[BlockBreakEvent],
-    ) -> (Vec<(i32, i32, i32, BlockType)>, Vec<String>) {
+    ) -> (Vec<(i32, i32, i32, BlockType)>, Vec<String>, Vec<String>) {
         let mut block_edits = Vec::new();
         let mut death_events = Vec::new();
         let mut crashes = Vec::new();
+        let mut broadcasts = Vec::new();
 
         for module in &mut self.modules {
             let was_enabled = module.enabled;
@@ -950,6 +974,7 @@ impl ScriptHost {
                 weather: &mut *weather,
                 block_edits: &mut block_edits,
                 death_events: &mut death_events,
+                broadcasts: &mut broadcasts,
             };
             module.run_tick(&mut input);
             if was_enabled && !module.enabled {
@@ -968,6 +993,7 @@ impl ScriptHost {
                     weather: &mut *weather,
                     block_edits: &mut block_edits,
                     death_events: &mut death_events,
+                    broadcasts: &mut broadcasts,
                 };
                 module.run_block_break(&mut input, event);
                 if was_enabled && !module.enabled {
@@ -988,6 +1014,7 @@ impl ScriptHost {
                     weather: &mut *weather,
                     block_edits: &mut block_edits,
                     death_events: &mut chained,
+                    broadcasts: &mut broadcasts,
                 };
                 module.run_death(&mut input, event);
                 if was_enabled && !module.enabled {
@@ -996,7 +1023,7 @@ impl ScriptHost {
             }
         }
 
-        (block_edits, crashes)
+        (block_edits, crashes, broadcasts)
     }
 
     pub fn save_entries(&self) -> Vec<ModuleSaveEntry> {
@@ -1041,6 +1068,7 @@ mod tests {
     ) -> Vec<(i32, i32, i32, BlockType)> {
         let mut block_edits = Vec::new();
         let mut death_events = Vec::new();
+        let mut broadcasts = Vec::new();
         let mut tod = time_of_day;
         let mut input = TickInput {
             creatures,
@@ -1050,6 +1078,7 @@ mod tests {
             weather,
             block_edits: &mut block_edits,
             death_events: &mut death_events,
+            broadcasts: &mut broadcasts,
         };
         module.run_tick(&mut input);
         block_edits
@@ -1068,6 +1097,7 @@ mod tests {
     ) -> (Vec<(i32, i32, i32, BlockType)>, f32) {
         let mut block_edits = Vec::new();
         let mut death_events = Vec::new();
+        let mut broadcasts = Vec::new();
         let mut tod = time_of_day;
         let mut input = TickInput {
             creatures,
@@ -1077,6 +1107,7 @@ mod tests {
             weather,
             block_edits: &mut block_edits,
             death_events: &mut death_events,
+            broadcasts: &mut broadcasts,
         };
         module.run_tick(&mut input);
         (block_edits, tod)
@@ -1241,7 +1272,7 @@ mod tests {
         let mut all_edits = Vec::new();
         let mut time_of_day = 0.5;
         for _ in 0..ids.len() {
-            let (edits, _crashes) = host.run_tick(
+            let (edits, _crashes, _broadcasts) = host.run_tick(
                 &world,
                 &mut creatures,
                 &players,
@@ -1280,7 +1311,7 @@ mod tests {
         let mut host = ScriptHost::new();
         host.modules.push(module);
 
-        let (_edits, crashes) = host.run_tick(
+        let (_edits, crashes, _broadcasts) = host.run_tick(
             &world,
             &mut creatures,
             &players,
@@ -1611,7 +1642,7 @@ mod tests {
             block: BlockType::Grass,
             player_id: 7,
         };
-        let (edits, _crashes) = host.run_tick(
+        let (edits, _crashes, _broadcasts) = host.run_tick(
             &world,
             &mut creatures,
             &players,
@@ -1959,5 +1990,192 @@ mod tests {
         );
         assert!(custom_module.error.is_none());
         assert_eq!(tod, 0.25);
+    }
+
+    #[test]
+    fn module_save_entry_round_trips_through_bincode() {
+        // ModuleSaveEntry's field set is part of WorldSave's binary layout
+        // (see world_api/schema.yaml's persistence.save_format) -- this
+        // pins down that name/prompt/source/enabled all survive a real
+        // bincode serialize/deserialize cycle, the same path save.rs uses.
+        let entry = ModuleSaveEntry {
+            name: "my_rule".to_string(),
+            prompt: "do a thing".to_string(),
+            source: "function on_tick(api) end".to_string(),
+            enabled: true,
+        };
+        let bytes = bincode::serialize(&entry).unwrap();
+        let restored: ModuleSaveEntry = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(restored.name, entry.name);
+        assert_eq!(restored.prompt, entry.prompt);
+        assert_eq!(restored.source, entry.source);
+        assert_eq!(restored.enabled, entry.enabled);
+    }
+
+    #[test]
+    fn reloading_a_module_from_its_save_entry_resets_runtime_lua_state_but_keeps_enabled_and_source() {
+        // Pins down the persistence boundary documented in
+        // world_api/schema.yaml (persistence.not_saved): a module's
+        // persistent Lua globals do NOT survive save/reload, only its
+        // enabled flag and source code do. This module counts ticks in a
+        // persistent global and only acts once the count reaches 3.
+        let source = r#"
+            count = count or 0
+            function on_tick(api)
+                count = count + 1
+                if count >= 3 then
+                    api.replace_block(0, 0, 0, "redstone")
+                end
+            end
+        "#
+        .to_string();
+        let mut module = Module::load("counter".into(), "test".into(), source).unwrap();
+        module.enabled = true;
+
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let players: Vec<PlayerSnapshot> = Vec::new();
+        let mut weather = WeatherState::new(1);
+
+        // Two ticks on the live module -- one short of the threshold, so
+        // nothing has fired yet, but its persistent `count` global is now 2.
+        for _ in 0..2 {
+            run_one_tick(&mut module, &world, &mut creatures, &players, 0.5, &mut weather);
+        }
+
+        // Simulate a save/reload: round-trip through ModuleSaveEntry and
+        // load a brand new Module from the saved source, exactly like
+        // ScriptHost::load_from_save does.
+        let entry = module.to_save_entry();
+        assert!(entry.enabled, "enabled flag should have been saved as true");
+        let mut reloaded = Module::load(entry.name, entry.prompt, entry.source).unwrap();
+        reloaded.enabled = entry.enabled;
+
+        // If `count` had survived, one more tick would bring it to 3 and
+        // fire replace_block. It must not -- a fresh Lua VM means `count`
+        // starts over at 0 (so this tick brings it to 1, not 3).
+        let edits = run_one_tick(
+            &mut reloaded,
+            &world,
+            &mut creatures,
+            &players,
+            0.5,
+            &mut weather,
+        );
+        assert!(reloaded.error.is_none(), "module errored: {:?}", reloaded.error);
+        assert!(
+            edits.is_empty(),
+            "runtime Lua state (the `count` global) must NOT survive a save/reload: {edits:?}"
+        );
+    }
+
+    #[test]
+    fn every_shipped_starter_module_still_loads_and_carries_an_api_version_tag() {
+        // Regression guard for "preserve existing Lua rules": every .lua
+        // file under modules/ (the starter rule library ScriptHost::scan_dir
+        // loads for a brand new world) must still pass Module::load's
+        // validation after any World API change, and -- since these were
+        // retroactively tagged alongside the versioning work -- must carry
+        // a recognizable api_version comment.
+        let mut checked = 0;
+        for entry in std::fs::read_dir("modules").unwrap().flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("lua") {
+                continue;
+            }
+            let name = path.file_stem().unwrap().to_str().unwrap().to_string();
+            let source = std::fs::read_to_string(&path).unwrap();
+            let module = Module::load(name.clone(), "test".into(), source)
+                .unwrap_or_else(|e| panic!("modules/{name}.lua failed to load: {e}"));
+            assert!(
+                module.api_version().is_some(),
+                "modules/{name}.lua should carry a -- api_version: tag"
+            );
+            checked += 1;
+        }
+        assert!(checked >= 5, "expected to find the known starter modules, found {checked}");
+    }
+
+    #[test]
+    fn get_block_returns_the_same_snake_case_id_replace_block_accepts() {
+        // Regression test: get_block used to return `name().to_lowercase()`
+        // (the display name, e.g. "Oak Wood" -> "oak wood" with a space),
+        // which didn't round-trip through replace_block/find_blocks (which
+        // expect the snake_case id "oak_wood"). Any block whose display
+        // name has more than one word would have exposed the bug -- oak
+        // wood is the one this test pins down.
+        let mut world = World::new(1);
+        world.ensure_chunk_loaded(0, 0);
+        world.set_block(5, 10, 5, BlockType::OakWood);
+        let mut creatures = Creatures::new();
+        let players: Vec<PlayerSnapshot> = Vec::new();
+        let mut weather = WeatherState::new(1);
+
+        let source = r#"
+            function on_tick(api)
+                local kind = api.get_block(5, 10, 5)
+                if kind == "oak_wood" and api.replace_block(5, 10, 5, kind) then
+                    api.replace_block(0, 0, 0, "redstone")
+                end
+            end
+        "#
+        .to_string();
+        let mut module = Module::load("get_block_id_check".into(), "test".into(), source).unwrap();
+        module.enabled = true;
+
+        let edits = run_one_tick(
+            &mut module,
+            &world,
+            &mut creatures,
+            &players,
+            0.5,
+            &mut weather,
+        );
+
+        assert!(module.error.is_none(), "module errored: {:?}", module.error);
+        assert!(
+            edits.iter().any(|(_, _, _, b)| *b == BlockType::RedStone),
+            "expected get_block(5,10,5) == \"oak_wood\" and replace_block to round-trip it: {edits:?}"
+        );
+    }
+
+    #[test]
+    fn broadcast_messages_are_returned_from_run_tick_for_the_caller_to_relay() {
+        // Regression test: api.broadcast used to only log server-side and
+        // never actually reach players despite being documented (and named)
+        // as a player-facing notification.
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let players: Vec<PlayerSnapshot> = Vec::new();
+        let mut weather = WeatherState::new(1);
+        let mut time_of_day = 0.5;
+
+        let source = r#"
+            function on_tick(api)
+                api.broadcast("hello from a rule")
+            end
+        "#
+        .to_string();
+        let mut module = Module::load("broadcast_check".into(), "test".into(), source).unwrap();
+        module.enabled = true;
+
+        let mut host = ScriptHost::new();
+        host.modules.push(module);
+
+        let (_edits, _crashes, broadcasts) = host.run_tick(
+            &world,
+            &mut creatures,
+            &players,
+            &mut time_of_day,
+            &mut weather,
+            &[],
+        );
+
+        assert!(host.modules[0].error.is_none(), "module errored: {:?}", host.modules[0].error);
+        assert_eq!(
+            broadcasts,
+            vec!["hello from a rule".to_string()],
+            "expected the broadcast message to come back out of run_tick"
+        );
     }
 }

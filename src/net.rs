@@ -164,6 +164,110 @@ pub fn bind_nonblocking(addr: &str) -> std::io::Result<UdpSocket> {
     Ok(socket)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::creature::CreatureKind;
+    use crate::weather::Weather;
+
+    /// A World API rule's `replace_block` reaches clients exclusively as a
+    /// `ReliableMsg::BlockEdit` (see world_api/schema.yaml's
+    /// `replication.block_edits`) -- this pins down that the wire format
+    /// actually round-trips every field, including the block kind itself.
+    #[test]
+    fn block_edit_round_trips_through_encode_decode() {
+        let packet = Packet::Reliable {
+            id: 42,
+            msg: ReliableMsg::BlockEdit {
+                x: -3,
+                y: 12,
+                z: 100,
+                block: BlockType::RedStone,
+            },
+        };
+        let bytes = encode(&packet);
+        let decoded = decode(&bytes).expect("a just-encoded packet must decode");
+        match decoded {
+            Packet::Reliable {
+                id,
+                msg: ReliableMsg::BlockEdit { x, y, z, block },
+            } => {
+                assert_eq!(id, 42);
+                assert_eq!((x, y, z), (-3, 12, 100));
+                assert_eq!(block, BlockType::RedStone);
+            }
+            other => panic!("expected a Reliable BlockEdit packet, got {other:?}"),
+        }
+    }
+
+    /// Weather, time of day, and creature state all reach clients through
+    /// this one best-effort snapshot (see world_api/schema.yaml's
+    /// `replication.creature_state`/`weather_and_time_of_day`) -- a rule
+    /// calling api.set_weather/api.set_time_of_day/api.spawn_creature is
+    /// only actually visible to clients if this shape round-trips.
+    #[test]
+    fn snapshot_round_trips_through_encode_decode() {
+        let packet = Packet::Unreliable(UnreliableMsg::Snapshot {
+            time_of_day: 0.42,
+            weather: Weather::Rain.to_u8(),
+            players: vec![(7, [1.0, 2.0, 3.0], 1.57, true)],
+            creatures: vec![([4.0, 5.0, 6.0], CreatureKind::Chicken.to_u8(), 0.5)],
+        });
+        let bytes = encode(&packet);
+        let decoded = decode(&bytes).expect("a just-encoded packet must decode");
+        match decoded {
+            Packet::Unreliable(UnreliableMsg::Snapshot {
+                time_of_day,
+                weather,
+                players,
+                creatures,
+            }) => {
+                assert_eq!(time_of_day, 0.42);
+                assert_eq!(weather, Weather::Rain.to_u8());
+                assert_eq!(players, vec![(7, [1.0, 2.0, 3.0], 1.57, true)]);
+                assert_eq!(
+                    creatures,
+                    vec![([4.0, 5.0, 6.0], CreatureKind::Chicken.to_u8(), 0.5)]
+                );
+            }
+            other => panic!("expected an Unreliable Snapshot packet, got {other:?}"),
+        }
+    }
+
+    /// api.broadcast reaches clients as a `Notify` (see world_api/schema.yaml's
+    /// `replication.broadcast_messages`) -- confirms the message text and
+    /// its styling both survive the wire.
+    #[test]
+    fn notify_round_trips_through_encode_decode() {
+        let packet = Packet::Reliable {
+            id: 1,
+            msg: ReliableMsg::Notify {
+                kind: NotifyKind::Important,
+                text: "a rule broadcast this".to_string(),
+            },
+        };
+        let bytes = encode(&packet);
+        let decoded = decode(&bytes).expect("a just-encoded packet must decode");
+        match decoded {
+            Packet::Reliable {
+                msg: ReliableMsg::Notify { kind, text },
+                ..
+            } => {
+                assert!(matches!(kind, NotifyKind::Important));
+                assert_eq!(text, "a rule broadcast this");
+            }
+            other => panic!("expected a Reliable Notify packet, got {other:?}"),
+        }
+    }
+
+    /// Garbage bytes (e.g. a truncated or corrupted UDP datagram) must fail
+    /// to decode rather than panicking or fabricating a packet.
+    #[test]
+    fn decode_rejects_garbage_bytes() {
+        assert!(decode(&[1, 2, 3, 4, 5]).is_none());
+    }
+}
+
 pub const DEFAULT_LLM_URL: &str = "http://127.0.0.1:8090";
 
 pub struct LaunchConfig {

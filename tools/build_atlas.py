@@ -178,6 +178,22 @@ def build_block_defs(rows):
         "        _ => return None,",
         "    })",
         "}",
+        "",
+        "/// The canonical snake_case id for a CSV-roster block -- the inverse of",
+        "/// `csv_from_name`, and what `BlockType::id` (used by the Lua World API's",
+        "/// `get_block`/`find_blocks`) returns for these blocks.",
+        "pub(crate) fn csv_id(block: BlockType) -> Option<&'static str> {",
+        "    Some(match block {",
+    ]
+    for row in rows:
+        id_ = row["id"].strip()
+        variant = pascal_case(id_)
+        norm_id = id_.replace(" ", "_")
+        lines.append(f'        BlockType::{variant} => "{norm_id}",')
+    lines += [
+        "        _ => return None,",
+        "    })",
+        "}",
     ]
     BLOCK_DEFS_RS_OUT.write_text("\n".join(lines) + "\n")
     print(f"wrote {BLOCK_DEFS_RS_OUT} ({len(rows)} block defs)")

@@ -35,6 +35,7 @@ use crate::voxel::chunk::world_to_chunk;
 use crate::voxel::mesher::{build_chunk_mesh, MeshData, Vertex};
 use crate::voxel::{BlockType, World, CHUNK_X, CHUNK_Z};
 use crate::weather::{Weather, WeatherState};
+use crate::world_api_validate;
 
 const REDSTONE_HEAL_RADIUS: f32 = 4.0;
 const REDSTONE_HEAL_AMOUNT: f32 = 0.5;
@@ -1003,7 +1004,7 @@ impl App {
             if self.lua_tick_timer >= LUA_TICK_INTERVAL {
                 self.lua_tick_timer = 0.0;
                 let players = self.host_player_positions();
-                let (block_edits, crashes) = self.scripting.run_tick(
+                let (block_edits, crashes, broadcasts) = self.scripting.run_tick(
                     &self.world,
                     &mut self.creatures,
                     &players,
@@ -1021,6 +1022,11 @@ impl App {
                 // rather than letting the rule go silently dark.
                 for message in crashes {
                     self.notify_all_important(message);
+                }
+                // api.broadcast: relay through the same host-to-all path
+                // every other rule-triggered notification already uses.
+                for message in broadcasts {
+                    self.notify_all(message);
                 }
                 for &(x, y, z) in self.world.redstone_positions.iter() {
                     let center = Vec3::new(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5);
@@ -1302,7 +1308,24 @@ impl App {
         };
 
         let name = self.make_rule_name(&user_request);
-        match Module::load(name.clone(), user_request.clone(), code.clone()) {
+        // Pre-flight lint (see world_api_validate) before ever handing the
+        // source to a real Lua VM -- catches hallucinated/misspelled World
+        // API calls and stale block-kind literals with a specific,
+        // actionable message, rather than letting them surface as an
+        // opaque Module::load or first-tick runtime error.
+        let validation_issues = world_api_validate::validate_source(&code);
+        let load_result = if validation_issues.is_empty() {
+            let tagged_code = world_api_validate::tag_with_api_version(&code);
+            Module::load(name.clone(), user_request.clone(), tagged_code)
+        } else {
+            let joined = validation_issues
+                .iter()
+                .map(|i| i.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            Err(joined)
+        };
+        match load_result {
             Ok(module) => {
                 self.next_rule_id += 1;
                 let idx = self.scripting.add_generated(module);
