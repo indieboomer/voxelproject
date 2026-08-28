@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::block::BlockType;
 use super::chunk::{world_to_chunk, world_to_local, Chunk, CHUNK_X, CHUNK_Y, CHUNK_Z};
-use super::noise::{column_rand, fbm};
+use super::noise::{block_rand, block_rand_range, column_rand, fbm};
 
 pub const SEA_LEVEL: i32 = 18;
 
@@ -23,6 +23,99 @@ const NEIGHBOR_OFFSETS: [(i32, i32, i32); 6] = [
 /// you made instead of leaving it as a dry pocket, without a single unlucky
 /// break being able to drain an entire lake or hang the game on a huge cave.
 const MAX_FLOOD_BLOCKS: usize = 48;
+
+/// Bottom-most layers of every chunk are unbreakable bedrock (hardness 0),
+/// regardless of terrain height, so the world always has a floor.
+const BEDROCK_DEPTH: i32 = 2;
+
+/// Wood/leaves pairs for the four tree species in `textures/blocks.csv`;
+/// `place_tree` picks one per tree via `column_rand`.
+const TREE_SPECIES: [(BlockType, BlockType); 4] = [
+    (BlockType::OakWood, BlockType::OakLeaves),
+    (BlockType::SpruceWood, BlockType::SpruceLeaves),
+    (BlockType::BirchWood, BlockType::BirchLeaves),
+    (BlockType::CherryWood, BlockType::CherryLeaves),
+];
+
+/// One kind of underground deposit grown by `World::scatter_veins`: a small
+/// cluster of `block` replacing `Stone`, seeded by a per-chunk-attempt roll.
+struct VeinConfig {
+    block: BlockType,
+    salt: u32,
+    attempts_per_chunk: u32,
+    spawn_chance: f32,
+    min_y: i32,
+    max_y: i32,
+    min_size: i32,
+    max_size: i32,
+}
+
+/// Ore/stone-variant veins, roughly ordered shallow-and-common to
+/// deep-and-rare like the CSV's hardness column suggests. Basalt and
+/// cobblestone aren't ores but generate the same way -- small underground
+/// pockets replacing plain stone.
+const VEINS: [VeinConfig; 6] = [
+    VeinConfig {
+        block: BlockType::CopperOre,
+        salt: 0xC099_7E01,
+        attempts_per_chunk: 6,
+        spawn_chance: 0.55,
+        min_y: 4,
+        max_y: 34,
+        min_size: 3,
+        max_size: 6,
+    },
+    VeinConfig {
+        block: BlockType::Cobblestone,
+        salt: 0xC0BB_1E02,
+        attempts_per_chunk: 5,
+        spawn_chance: 0.4,
+        min_y: 2,
+        max_y: 30,
+        min_size: 3,
+        max_size: 6,
+    },
+    VeinConfig {
+        block: BlockType::GoldOre,
+        salt: 0x6014_D003,
+        attempts_per_chunk: 3,
+        spawn_chance: 0.4,
+        min_y: 3,
+        max_y: 22,
+        min_size: 2,
+        max_size: 4,
+    },
+    VeinConfig {
+        block: BlockType::Basalt,
+        salt: 0xBA5A_1704,
+        attempts_per_chunk: 4,
+        spawn_chance: 0.35,
+        min_y: 2,
+        max_y: 20,
+        min_size: 4,
+        max_size: 7,
+    },
+    VeinConfig {
+        block: BlockType::EmeraldOre,
+        salt: 0xE3E7_A105,
+        attempts_per_chunk: 2,
+        spawn_chance: 0.18,
+        min_y: 3,
+        max_y: 16,
+        min_size: 2,
+        max_size: 3,
+    },
+    VeinConfig {
+        block: BlockType::DiamondOre,
+        salt: 0xD1A5_0906,
+        attempts_per_chunk: 2,
+        spawn_chance: 0.22,
+        min_y: 2,
+        max_y: 10,
+        min_size: 2,
+        max_size: 3,
+    },
+];
 
 pub struct World {
     pub seed: u32,
@@ -92,7 +185,9 @@ impl World {
                 let height = self.terrain_height(wx, wz);
 
                 for ly in 0..CHUNK_Y {
-                    let block = if ly > height {
+                    let block = if ly < BEDROCK_DEPTH {
+                        BlockType::Bedrock
+                    } else if ly > height {
                         if ly <= SEA_LEVEL {
                             BlockType::Water
                         } else {
@@ -105,34 +200,75 @@ impl World {
                             BlockType::Grass
                         }
                     } else if ly > height - 4 {
-                        BlockType::Dirt
+                        BlockType::Soil
                     } else {
                         BlockType::Stone
                     };
                     chunk.set_local(lx, ly, lz, block);
                 }
 
-                // Simple tree scattering, away from the shoreline.
-                if height > SEA_LEVEL + 2 && column_rand(wx, wz, self.seed, 0xA11CE) < 0.006 {
-                    self.place_tree(&mut chunk, lx, height, lz, wx, wz);
+                // Simple tree scattering, away from the shoreline. Species
+                // is picked per-tree so all four wood types show up.
+                let on_dry_land = height > SEA_LEVEL + 2;
+                let mut placed_topper = false;
+                if on_dry_land && column_rand(wx, wz, self.seed, 0xA11CE) < 0.006 {
+                    let species_roll = column_rand(wx, wz, self.seed, 0x5FEC1E5);
+                    let idx = ((species_roll * TREE_SPECIES.len() as f32) as usize)
+                        .min(TREE_SPECIES.len() - 1);
+                    let (wood, leaves) = TREE_SPECIES[idx];
+                    self.place_tree(&mut chunk, lx, height, lz, wx, wz, wood, leaves);
+                    placed_topper = true;
+                }
+
+                // Rare pumpkin patches on open grass, never on a tree's own
+                // trunk cell.
+                if on_dry_land
+                    && !placed_topper
+                    && column_rand(wx, wz, self.seed, 0x9A9E27) < 0.0025
+                {
+                    chunk.set_local(lx, height + 1, lz, BlockType::Pumpkin);
+                    placed_topper = true;
+                }
+
+                // Short grass tufts -- a common, purely decorative "only on
+                // top" cover, so it should never overwrite a tree/pumpkin.
+                if on_dry_land
+                    && !placed_topper
+                    && column_rand(wx, wz, self.seed, 0x5407A55) < 0.06
+                {
+                    chunk.set_local(lx, height + 1, lz, BlockType::ShortGrass);
                 }
 
                 // Rare crystal outcrops on dry land, for the "carrying a
                 // crystal" rule condition. Sits on top of the surface block.
-                if height > SEA_LEVEL + 2 && column_rand(wx, wz, self.seed, 0xC4157A1) < 0.0015 {
+                if on_dry_land && column_rand(wx, wz, self.seed, 0xC4157A1) < 0.0015 {
                     chunk.set_local(lx, height + 1, lz, BlockType::Crystal);
                 }
             }
         }
 
+        self.scatter_veins(&mut chunk, cx, cz);
+        self.scatter_brick_ruins(&mut chunk, cx, cz);
+
         chunk.dirty = true;
         chunk
     }
 
-    fn place_tree(&self, chunk: &mut Chunk, lx: i32, ground_y: i32, lz: i32, wx: i32, wz: i32) {
+    #[allow(clippy::too_many_arguments)]
+    fn place_tree(
+        &self,
+        chunk: &mut Chunk,
+        lx: i32,
+        ground_y: i32,
+        lz: i32,
+        wx: i32,
+        wz: i32,
+        wood: BlockType,
+        leaves: BlockType,
+    ) {
         let trunk_height = 4 + (column_rand(wx, wz, self.seed, 0xBEEF) * 3.0) as i32;
         for i in 1..=trunk_height {
-            chunk.set_local(lx, ground_y + i, lz, BlockType::Wood);
+            chunk.set_local(lx, ground_y + i, lz, wood);
         }
         let top = ground_y + trunk_height;
         for dx in -2i32..=2 {
@@ -146,9 +282,72 @@ impl World {
                     let bz = lz + dz;
                     if Chunk::in_bounds(bx, by, bz) && chunk.get_local(bx, by, bz) == BlockType::Air
                     {
-                        chunk.set_local(bx, by, bz, BlockType::Leaves);
+                        chunk.set_local(bx, by, bz, leaves);
                     }
                 }
+            }
+        }
+    }
+
+    /// Grows small underground deposits (ores, basalt, cobblestone) by
+    /// replacing `Stone` cells with `VEINS` entries. Each vein starts from a
+    /// deterministic per-chunk-attempt roll and grows via a short random
+    /// walk, so results are reproducible from `(seed, cx, cz)` alone like
+    /// the rest of chunk generation.
+    fn scatter_veins(&self, chunk: &mut Chunk, cx: i32, cz: i32) {
+        for vein in VEINS.iter() {
+            for attempt in 0..vein.attempts_per_chunk as i32 {
+                if block_rand(cx, attempt, cz, self.seed, vein.salt) >= vein.spawn_chance {
+                    continue;
+                }
+                let lx = block_rand_range(cx, attempt, cz, self.seed, vein.salt ^ 0xA1, 0, CHUNK_X - 1);
+                let ly = block_rand_range(
+                    cx,
+                    attempt,
+                    cz,
+                    self.seed,
+                    vein.salt ^ 0xB2,
+                    vein.min_y,
+                    vein.max_y,
+                );
+                let lz = block_rand_range(cx, attempt, cz, self.seed, vein.salt ^ 0xC3, 0, CHUNK_Z - 1);
+                let size =
+                    block_rand_range(cx, attempt, cz, self.seed, vein.salt ^ 0xD4, vein.min_size, vein.max_size);
+
+                let (mut x, mut y, mut z) = (lx, ly, lz);
+                for step in 0..size {
+                    if Chunk::in_bounds(x, y, z) && chunk.get_local(x, y, z) == BlockType::Stone {
+                        chunk.set_local(x, y, z, vein.block);
+                    }
+                    let dir = block_rand_range(x, y, z, self.seed, vein.salt ^ (step as u32), 0, 5) as usize;
+                    let (dx, dy, dz) = NEIGHBOR_OFFSETS[dir];
+                    x += dx;
+                    y += dy;
+                    z += dz;
+                }
+            }
+        }
+    }
+
+    /// Extremely rare single brick blocks buried in stone, as if leftover
+    /// ruins -- "single items" per the CSV, so unlike `scatter_veins` this
+    /// never clusters: exactly one `Stone` cell becomes `Bricks` per roll.
+    fn scatter_brick_ruins(&self, chunk: &mut Chunk, cx: i32, cz: i32) {
+        const ATTEMPTS: i32 = 2;
+        const SPAWN_CHANCE: f32 = 0.05;
+        const SALT: u32 = 0xB61C_5301;
+        const MIN_Y: i32 = 3;
+        const MAX_Y: i32 = 25;
+
+        for attempt in 0..ATTEMPTS {
+            if block_rand(cx, attempt, cz, self.seed, SALT) >= SPAWN_CHANCE {
+                continue;
+            }
+            let lx = block_rand_range(cx, attempt, cz, self.seed, SALT ^ 0xA1, 0, CHUNK_X - 1);
+            let ly = block_rand_range(cx, attempt, cz, self.seed, SALT ^ 0xB2, MIN_Y, MAX_Y);
+            let lz = block_rand_range(cx, attempt, cz, self.seed, SALT ^ 0xC3, 0, CHUNK_Z - 1);
+            if chunk.get_local(lx, ly, lz) == BlockType::Stone {
+                chunk.set_local(lx, ly, lz, BlockType::Bricks);
             }
         }
     }

@@ -14,7 +14,7 @@ const TOAST_LIFETIME: Duration = Duration::from_secs(6);
 /// actually needs to notice and act on (e.g. "go click Enable") rather than
 /// an FYI that's fine to miss.
 const IMPORTANT_TOAST_LIFETIME: Duration = Duration::from_secs(14);
-const IMPORTANT_TOAST_COLOR: egui::Color32 = egui::Color32::from_rgb(230, 180, 60);
+pub const IMPORTANT_TOAST_COLOR: egui::Color32 = egui::Color32::from_rgb(230, 180, 60);
 
 pub struct Toast {
     pub text: String,
@@ -46,6 +46,22 @@ impl Toast {
     }
 }
 
+/// Color a player-authored chat line is shown in, distinguishing "someone
+/// said X" from a system notification (white/`IMPORTANT_TOAST_COLOR`) at a
+/// glance in the shared scrollback.
+pub const CHAT_MESSAGE_COLOR: egui::Color32 = egui::Color32::from_rgb(140, 210, 255);
+/// Oldest entries are dropped past this so the log can't grow unbounded
+/// over a long session.
+pub const CHAT_LOG_CAPACITY: usize = 200;
+
+/// One line in the persistent chat/notification scrollback -- unlike
+/// `Toast`, these never expire on their own; `App` caps the backing `Vec`
+/// at `CHAT_LOG_CAPACITY` instead.
+pub struct ChatEntry {
+    pub text: String,
+    pub color: egui::Color32,
+}
+
 /// What the player asked the UI to do this frame; `App` acts on these after
 /// the egui pass since the widget closures can't safely call back into game
 /// state directly.
@@ -59,6 +75,8 @@ pub struct UiRequests {
     /// Set when the player clicks "Select" on a resource in the Resources
     /// panel -- becomes the new block placed by a right click.
     pub select_block: Option<BlockType>,
+    /// Set when the player submits a line from the chat box.
+    pub send_chat: Option<String>,
 }
 
 pub struct Ui {
@@ -113,6 +131,9 @@ impl Ui {
         quit_dialog_open: bool,
         player: &Player,
         selected_block: Option<BlockType>,
+        chat_open: bool,
+        chat_input: &mut String,
+        chat_log: &[ChatEntry],
     ) -> (egui::FullOutput, UiRequests) {
         let raw_input = self.state.take_egui_input(window);
         let mut requests = UiRequests::default();
@@ -256,6 +277,43 @@ impl Ui {
                     .show(ctx, |ui| {
                         for t in toasts {
                             ui.colored_label(t.color, &t.text);
+                        }
+                    });
+            }
+
+            // Persistent scrollback: every toast-worthy system message
+            // (rule generated/enabled/crashed, players joining, ...) plus
+            // real player chat, so nothing is lost once its toast fades.
+            // Sits above the toast strip; only takes screen space once
+            // there's something to show or the player is actively typing.
+            if chat_open || !chat_log.is_empty() {
+                egui::Window::new("Chat")
+                    .anchor(egui::Align2::LEFT_BOTTOM, [8.0, -170.0])
+                    .resizable(false)
+                    .collapsible(false)
+                    .show(ctx, |ui| {
+                        ui.set_max_width(380.0);
+                        egui::ScrollArea::vertical()
+                            .max_height(if chat_open { 220.0 } else { 100.0 })
+                            .stick_to_bottom(true)
+                            .show(ui, |ui| {
+                                for entry in chat_log {
+                                    ui.colored_label(entry.color, &entry.text);
+                                }
+                            });
+                        if chat_open {
+                            ui.separator();
+                            let response = ui.text_edit_singleline(chat_input);
+                            if !response.has_focus() && !response.lost_focus() {
+                                response.request_focus();
+                            }
+                            let submitted = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            if submitted && !chat_input.trim().is_empty() {
+                                requests.send_chat = Some(chat_input.trim().to_string());
+                            }
+                            ui.label("Enter to send, Esc to close");
+                        } else {
+                            ui.label("T to chat");
                         }
                     });
             }

@@ -1,4 +1,5 @@
 pub mod atlas;
+pub mod atlas_tiles;
 pub mod block;
 pub mod chunk;
 pub mod mesher;

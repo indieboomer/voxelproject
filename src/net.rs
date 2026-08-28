@@ -12,12 +12,30 @@ pub const DEFAULT_PORT: u16 = 7878;
 pub const RELIABLE_RESEND_INTERVAL: Duration = Duration::from_millis(200);
 pub const SNAPSHOT_INTERVAL: f32 = 1.0 / 20.0;
 pub const CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
+/// Longest nickname kept, in characters -- applied both by the menu's text
+/// field and (since a nickname arrives over the network) defensively again
+/// wherever a host stores one it received from a client.
+pub const MAX_NICKNAME_LEN: usize = 24;
+
+/// How a `Notify` should be styled, so a joined client renders the same
+/// toast color / chat-log color the host did instead of a single generic
+/// look for every kind of message.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum NotifyKind {
+    /// A routine FYI -- rule enabled/disabled/deleted, a player joined, ...
+    Info,
+    /// Something the player actually needs to notice and act on, e.g. a
+    /// rule crashing or a new rule waiting to be enabled.
+    Important,
+    /// A player-authored chat line, already formatted with its sender.
+    Chat,
+}
 
 /// Messages that must arrive, delivered by resending until the receiver
 /// acknowledges them. Safe to apply more than once (idempotent).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ReliableMsg {
-    Hello,
+    Hello { nickname: String },
     Welcome {
         player_id: PlayerId,
         seed: u32,
@@ -34,10 +52,16 @@ pub enum ReliableMsg {
     PlayerLeft {
         player_id: PlayerId,
     },
-    /// A short host-originated status message shown as a toast on every
-    /// client -- rule activated/deactivated/deleted/generated, players
-    /// joining, etc.
-    Notify(String),
+    /// A short host-originated status message shown as a toast (and logged
+    /// to the persistent chat scrollback) on every client -- rule
+    /// activated/deactivated/deleted/generated, players joining, chat
+    /// messages, etc.
+    Notify { kind: NotifyKind, text: String },
+    /// A client's typed chat message, not yet attributed to a sender -- the
+    /// host fills that in from the connection it arrived on (so a client
+    /// can't spoof another player's identity) and relays the formatted
+    /// result to everyone as `Notify`.
+    ChatMessage(String),
 }
 
 /// Best-effort messages sent every tick; a dropped one is superseded by the
@@ -154,15 +178,22 @@ pub struct LaunchConfig {
     /// (the main menu's "New World" vs. "Load World" distinction; CLI-only
     /// launches keep the old auto-load-else-fresh behavior).
     pub fresh: bool,
+    /// Shown to other players in chat and join notifications instead of a
+    /// bare "P{id}". The menu always asks for this before launching; a
+    /// direct `--connect` CLI launch (no menu) falls back to `--nickname`
+    /// or else a generic default.
+    pub nickname: String,
 }
 
-/// Minimal `--connect <ip:port>` / `--port <n>` / `--llm-url <url>` parsing.
-/// Any other args are ignored so this stays forgiving for an MVP.
+/// Minimal `--connect <ip:port>` / `--port <n>` / `--llm-url <url>` /
+/// `--nickname <name>` parsing. Any other args are ignored so this stays
+/// forgiving for an MVP.
 pub fn parse_args() -> LaunchConfig {
     let args: Vec<String> = std::env::args().collect();
     let mut connect = None;
     let mut port = DEFAULT_PORT;
     let mut llm_url = DEFAULT_LLM_URL.to_string();
+    let mut nickname = "Player".to_string();
 
     let mut i = 1;
     while i < args.len() {
@@ -193,6 +224,12 @@ pub fn parse_args() -> LaunchConfig {
                     i += 1;
                 }
             }
+            "--nickname" => {
+                if let Some(value) = args.get(i + 1) {
+                    nickname = value.clone();
+                    i += 1;
+                }
+            }
             _ => {}
         }
         i += 1;
@@ -203,5 +240,6 @@ pub fn parse_args() -> LaunchConfig {
         port,
         llm_url,
         fresh: false,
+        nickname,
     }
 }

@@ -103,23 +103,26 @@ fn main() {
                                             let port = menu.port;
                                             let llm_url = menu.llm_url.clone();
                                             let cfg = match action {
-                                                MenuAction::NewWorld => LaunchConfig {
+                                                MenuAction::NewWorld { nickname } => LaunchConfig {
                                                     connect: None,
                                                     port,
                                                     llm_url: llm_url.clone(),
                                                     fresh: true,
+                                                    nickname,
                                                 },
-                                                MenuAction::LoadWorld => LaunchConfig {
+                                                MenuAction::LoadWorld { nickname } => LaunchConfig {
                                                     connect: None,
                                                     port,
                                                     llm_url: llm_url.clone(),
                                                     fresh: false,
+                                                    nickname,
                                                 },
-                                                MenuAction::Join(addr) => LaunchConfig {
+                                                MenuAction::Join { addr, nickname } => LaunchConfig {
                                                     connect: Some(addr),
                                                     port,
                                                     llm_url: llm_url.clone(),
                                                     fresh: false,
+                                                    nickname,
                                                 },
                                                 MenuAction::Quit => unreachable!(),
                                             };
@@ -138,6 +141,10 @@ fn main() {
                                                         port,
                                                         llm_url,
                                                         fresh: false,
+                                                        // MenuApp doesn't read this --
+                                                        // it re-prompts for a nickname
+                                                        // before any launch.
+                                                        nickname: String::new(),
                                                     };
                                                     let mut menu = pollster::block_on(
                                                         MenuApp::new(window.clone(), fallback),
@@ -181,6 +188,10 @@ fn main() {
                                                 port: net::DEFAULT_PORT,
                                                 llm_url: net::DEFAULT_LLM_URL.to_string(),
                                                 fresh: false,
+                                                // MenuApp doesn't read this --
+                                                // it re-prompts for a nickname
+                                                // before any launch.
+                                                nickname: String::new(),
                                             },
                                         ));
                                         stage = Stage::Menu(menu);

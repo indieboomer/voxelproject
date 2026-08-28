@@ -29,6 +29,11 @@ pub struct RemotePlayer {
     /// protocol doesn't carry a client's real physics velocity -- good
     /// enough for exposing `speed`/`running` to Lua rules via `api.players`.
     pub velocity: Vec3,
+    /// Only meaningful on the host, which learns it from the client's
+    /// `Hello` and uses it to format chat/join messages -- a joined
+    /// client's own `remote_players` entries leave this empty since they
+    /// never need it (no in-world name tags yet).
+    pub nickname: String,
 }
 
 /// Builds a mesh for every tracked remote player except `exclude` (the

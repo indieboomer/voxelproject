@@ -16,8 +16,9 @@ use crate::daynight::{sky_lighting, DAY_LENGTH_SECS};
 use crate::input::Input;
 use crate::llm::{derive_rule_name, LlmClient, PendingGeneration};
 use crate::net::{
-    self, decode, encode, LaunchConfig, Packet, PlayerId, ReliableChannel, ReliableMsg,
-    UnreliableMsg, CONNECTION_TIMEOUT, HOST_PLAYER_ID, SNAPSHOT_INTERVAL,
+    self, decode, encode, LaunchConfig, NotifyKind, Packet, PlayerId, ReliableChannel,
+    ReliableMsg, UnreliableMsg, CONNECTION_TIMEOUT, HOST_PLAYER_ID, MAX_NICKNAME_LEN,
+    SNAPSHOT_INTERVAL,
 };
 use crate::player::Player;
 use crate::raycast::raycast;
@@ -26,7 +27,9 @@ use crate::save::{load_world, save_world};
 use crate::scripting::{
     BlockBreakEvent, Module, PlayerSnapshot, ScriptHost, TICK_INTERVAL as LUA_TICK_INTERVAL,
 };
-use crate::ui::{Toast, Ui};
+use crate::ui::{
+    ChatEntry, Toast, Ui, CHAT_LOG_CAPACITY, CHAT_MESSAGE_COLOR, IMPORTANT_TOAST_COLOR,
+};
 use crate::voxel::atlas::ATLAS_BYTES;
 use crate::voxel::chunk::world_to_chunk;
 use crate::voxel::mesher::{build_chunk_mesh, MeshData, Vertex};
@@ -57,6 +60,19 @@ fn approximate_on_ground(world: &World, pos: Vec3) -> bool {
         (pos.y - 0.05).floor() as i32,
         pos.z.floor() as i32,
     )
+}
+
+/// Trims, caps the length, and falls back to a generic name for an empty
+/// or all-whitespace nickname. Applied to our own local nickname at launch
+/// and, since it arrives over the network, defensively again wherever the
+/// host stores one it received from a client.
+fn sanitize_nickname(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        "Player".to_string()
+    } else {
+        trimmed.chars().take(MAX_NICKNAME_LEN).collect()
+    }
 }
 
 const SHADOW_MAP_SIZE: u32 = 2048;
@@ -271,6 +287,10 @@ pub struct App {
     pending_block_breaks: Vec<BlockBreakEvent>,
     net: NetRole,
     local_player_id: PlayerId,
+    /// Shown instead of "P{id}" in chat and join notifications. Set once
+    /// at launch from the menu's nickname prompt (or `--nickname`/default
+    /// for a direct `--connect` launch); never changes mid-session.
+    local_nickname: String,
     scripting: ScriptHost,
     lua_tick_timer: f32,
     llm: LlmClient,
@@ -282,6 +302,12 @@ pub struct App {
     console_open: bool,
     prompt_input: String,
     toasts: Vec<Toast>,
+    /// Persistent chat/notification scrollback -- every toast (rule
+    /// generated/crashed/etc.) plus real player chat, capped at
+    /// `CHAT_LOG_CAPACITY`. See `log_message`.
+    chat_log: Vec<ChatEntry>,
+    chat_open: bool,
+    chat_input: String,
     pending_egui_output: Option<egui::FullOutput>,
     quit_dialog_open: bool,
     /// Set once the player confirms the quit dialog; `main.rs` checks this
@@ -295,6 +321,12 @@ pub struct App {
     /// the hotbar keys or the Resources panel. `None` until the player has
     /// picked something (or gathered anything) to place.
     selected_block: Option<BlockType>,
+    /// Position of the block the player is currently chipping away at with
+    /// left-click, and hits landed on it so far -- reset whenever a click
+    /// targets a different position. A block breaks once hits reach its
+    /// `BlockType::hardness()`; hardness-0 blocks (bedrock) never do.
+    mining_target: Option<(i32, i32, i32)>,
+    mining_hits: u32,
     cursor_grabbed: bool,
 
     last_frame: Instant,
@@ -564,7 +596,7 @@ impl App {
             }
             Some(server_addr) => {
                 let (socket, player_id, world, spawn_pos, time_of_day, reliable) =
-                    join_handshake(server_addr)?;
+                    join_handshake(server_addr, &launch.nickname)?;
                 let client_net = ClientNet {
                     socket,
                     server_addr,
@@ -635,6 +667,7 @@ impl App {
             pending_block_breaks: Vec::new(),
             net,
             local_player_id,
+            local_nickname: sanitize_nickname(&launch.nickname),
             scripting,
             lua_tick_timer: 0.0,
             llm,
@@ -645,12 +678,17 @@ impl App {
             console_open: false,
             prompt_input: String::new(),
             toasts: Vec::new(),
+            chat_log: Vec::new(),
+            chat_open: false,
+            chat_input: String::new(),
             pending_egui_output: None,
             quit_dialog_open: false,
             return_to_menu: false,
             chunk_meshes: HashMap::new(),
             entity_mesh: None,
             selected_block: None,
+            mining_target: None,
+            mining_hits: 0,
             cursor_grabbed: false,
             last_frame: Instant::now(),
             title_timer: 0.0,
@@ -712,13 +750,23 @@ impl App {
                 let PhysicalKey::Code(code) = key_event.physical_key else {
                     return;
                 };
-                if code == KeyCode::Backquote && !self.quit_dialog_open {
+                if code == KeyCode::Backquote && !self.quit_dialog_open && !self.chat_open {
                     self.toggle_console();
+                    return;
+                }
+                if code == KeyCode::KeyT
+                    && !self.console_open
+                    && !self.quit_dialog_open
+                    && !self.chat_open
+                {
+                    self.open_chat();
                     return;
                 }
                 if code == KeyCode::Escape {
                     if self.console_open {
                         self.close_console();
+                    } else if self.chat_open {
+                        self.close_chat();
                     } else if self.quit_dialog_open {
                         self.cancel_quit_dialog();
                     } else {
@@ -726,12 +774,12 @@ impl App {
                     }
                     return;
                 }
-                if !self.console_open && !self.quit_dialog_open {
+                if !self.console_open && !self.quit_dialog_open && !self.chat_open {
                     self.input.key_event(code, key_event.state);
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                if !self.console_open && !self.quit_dialog_open {
+                if !self.console_open && !self.quit_dialog_open && !self.chat_open {
                     self.input.mouse_button_event(*button, *state);
                     if *state == ElementState::Pressed
                         && *button == MouseButton::Left
@@ -775,6 +823,47 @@ impl App {
         self.grab_cursor(true);
     }
 
+    fn open_chat(&mut self) {
+        self.chat_open = true;
+        self.input.release_all();
+        self.grab_cursor(false);
+    }
+
+    fn close_chat(&mut self) {
+        self.chat_open = false;
+        self.grab_cursor(true);
+    }
+
+    /// Appends one line to the persistent chat/notification scrollback,
+    /// dropping the oldest entry once `CHAT_LOG_CAPACITY` is exceeded.
+    fn log_message(&mut self, text: String, color: egui::Color32) {
+        if self.chat_log.len() >= CHAT_LOG_CAPACITY {
+            self.chat_log.remove(0);
+        }
+        self.chat_log.push(ChatEntry { text, color });
+    }
+
+    /// Sends a chat message from the local player. The host logs and
+    /// broadcasts it directly; a joined client hands it to the host, which
+    /// attributes it to the sender and relays it back to everyone
+    /// (including the sender) as a `Notify` -- so there's no separate local
+    /// echo path to keep in sync with the relayed one.
+    fn send_chat(&mut self, text: String) {
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        if matches!(self.net, NetRole::Host(_)) {
+            self.broadcast_chat(format!("{}: {text}", self.local_nickname));
+        } else if let NetRole::Joined(client) = &mut self.net {
+            client.reliable.send(
+                &client.socket,
+                client.server_addr,
+                ReliableMsg::ChatMessage(text),
+            );
+        }
+    }
+
     pub fn device_event(&mut self, event: &DeviceEvent) {
         if let DeviceEvent::MouseMotion { delta } = event {
             if self.cursor_grabbed {
@@ -812,34 +901,61 @@ impl App {
             }
         }
 
-        if !self.console_open && (self.input.left_clicked || self.input.right_clicked) {
+        if !self.console_open
+            && !self.chat_open
+            && (self.input.left_clicked || self.input.right_clicked)
+        {
             let origin = self.camera.eye_position();
             let dir = self.camera.forward();
             if let Some(hit) = raycast(&self.world, origin, dir, REACH) {
                 if self.input.left_clicked {
-                    let broken = self
+                    let target_block = self
                         .world
                         .get_block(hit.target.0, hit.target.1, hit.target.2);
-                    if broken == BlockType::Crystal {
-                        self.player.carrying_crystal = true;
-                    }
-                    self.player.add_resource(broken);
-                    // Only the host records this for the Lua tick -- a
-                    // joined client's own break is picked up on the host via
-                    // the network-relayed `ReliableMsg::BlockEdit` path
-                    // instead, so recording it here too would double-fire.
-                    if broken != BlockType::Air && matches!(self.net, NetRole::Host(_)) {
-                        self.pending_block_breaks.push(BlockBreakEvent {
-                            x: hit.target.0,
-                            y: hit.target.1,
-                            z: hit.target.2,
-                            block: broken,
-                            player_id: self.local_player_id,
-                        });
-                    }
-                    self.apply_block_edit(hit.target.0, hit.target.1, hit.target.2, BlockType::Air);
-                    for pos in self.world.flood_from(hit.target) {
-                        self.apply_block_edit(pos.0, pos.1, pos.2, BlockType::Water);
+                    if target_block.is_unbreakable() {
+                        self.toasts.push(Toast::new(format!(
+                            "{} is unbreakable",
+                            target_block.name()
+                        )));
+                    } else {
+                        if self.mining_target != Some(hit.target) {
+                            self.mining_target = Some(hit.target);
+                            self.mining_hits = 0;
+                        }
+                        self.mining_hits += 1;
+
+                        if self.mining_hits >= target_block.hardness() {
+                            self.mining_target = None;
+                            self.mining_hits = 0;
+                            let broken = target_block;
+                            if broken == BlockType::Crystal {
+                                self.player.carrying_crystal = true;
+                            }
+                            self.player.add_resource(broken);
+                            // Only the host records this for the Lua tick --
+                            // a joined client's own break is picked up on
+                            // the host via the network-relayed
+                            // `ReliableMsg::BlockEdit` path instead, so
+                            // recording it here too would double-fire.
+                            if broken != BlockType::Air && matches!(self.net, NetRole::Host(_)) {
+                                self.pending_block_breaks.push(BlockBreakEvent {
+                                    x: hit.target.0,
+                                    y: hit.target.1,
+                                    z: hit.target.2,
+                                    block: broken,
+                                    player_id: self.local_player_id,
+                                });
+                            }
+                            self.apply_block_edit(
+                                hit.target.0,
+                                hit.target.1,
+                                hit.target.2,
+                                BlockType::Air,
+                            );
+                            for pos in self.world.flood_from(hit.target) {
+                                self.apply_block_edit(pos.0, pos.1, pos.2, BlockType::Water);
+                            }
+                        }
                     }
                 } else if !self.would_hit_player(hit.place) {
                     match self.selected_block {
@@ -952,11 +1068,19 @@ impl App {
             self.quit_dialog_open,
             &self.player,
             self.selected_block,
+            self.chat_open,
+            &mut self.chat_input,
+            &self.chat_log,
         );
         self.pending_egui_output = Some(full_output);
 
         if let Some(block) = requests.select_block {
             self.selected_block = Some(block);
+        }
+
+        if let Some(text) = requests.send_chat {
+            self.chat_input.clear();
+            self.send_chat(text);
         }
 
         if requests.confirm_quit {
@@ -1009,28 +1133,50 @@ impl App {
                 Some(b) => b.name(),
                 None => "none",
             };
+            let mining_info = match self.mining_target {
+                Some(pos) => {
+                    let target = self.world.get_block(pos.0, pos.1, pos.2);
+                    format!(" | Mining {}: {}/{}", target.name(), self.mining_hits, target.hardness())
+                }
+                None => String::new(),
+            };
             self.window.set_title(&format!(
-                "Voxel Project | {:02}:{:02} | {} | Block: {} | FPS: {:.0} | ~ rules/generate, F5 save, F11 fullscreen, Esc quit",
+                "Voxel Project | {:02}:{:02} | {} | Block: {} | FPS: {:.0}{} | ~ rules/generate, T chat, F5 save, F11 fullscreen, Esc quit",
                 hour,
                 minute,
                 role_info,
                 block_info,
-                fps
+                fps,
+                mining_info
             ));
             self.title_timer = 0.0;
             self.frame_count = 0;
         }
     }
 
-    fn notify_all(&mut self, text: String) {
-        self.toasts.push(Toast::new(text.clone()));
+    /// Sends a raw `Notify` to every connected client; no-op if not
+    /// hosting. Callers add their own local toast/log entry with whatever
+    /// styling fits the message.
+    fn broadcast_notify(&mut self, kind: NotifyKind, text: &str) {
         if let NetRole::Host(host) = &mut self.net {
             let addrs: Vec<SocketAddr> = host.clients.keys().copied().collect();
             for addr in addrs {
-                host.reliable
-                    .send(&host.socket, addr, ReliableMsg::Notify(text.clone()));
+                host.reliable.send(
+                    &host.socket,
+                    addr,
+                    ReliableMsg::Notify {
+                        kind,
+                        text: text.to_string(),
+                    },
+                );
             }
         }
+    }
+
+    fn notify_all(&mut self, text: String) {
+        self.toasts.push(Toast::new(text.clone()));
+        self.log_message(text.clone(), egui::Color32::WHITE);
+        self.broadcast_notify(NotifyKind::Info, &text);
     }
 
     /// Like `notify_all`, but for things the player actually needs to
@@ -1038,13 +1184,25 @@ impl App {
     /// just an FYI that's fine to scroll past.
     fn notify_all_important(&mut self, text: String) {
         self.toasts.push(Toast::important(text.clone()));
-        if let NetRole::Host(host) = &mut self.net {
-            let addrs: Vec<SocketAddr> = host.clients.keys().copied().collect();
-            for addr in addrs {
-                host.reliable
-                    .send(&host.socket, addr, ReliableMsg::Notify(text.clone()));
-            }
-        }
+        self.log_message(text.clone(), IMPORTANT_TOAST_COLOR);
+        self.broadcast_notify(NotifyKind::Important, &text);
+    }
+
+    /// Local-only version of `notify_all_important` -- toast + chat log,
+    /// no network broadcast. For host-side status only the host can act
+    /// on, e.g. rule generation failing (only the host generates rules).
+    fn notify_important(&mut self, text: String) {
+        self.toasts.push(Toast::important(text.clone()));
+        self.log_message(text, IMPORTANT_TOAST_COLOR);
+    }
+
+    /// Broadcasts one already-formatted chat line (e.g. "P2: hello") to the
+    /// chat log/toasts and every connected client. Used for both the
+    /// host's own chat messages and ones relayed from a joined client.
+    fn broadcast_chat(&mut self, formatted: String) {
+        self.toasts.push(Toast::new(formatted.clone()));
+        self.log_message(formatted.clone(), CHAT_MESSAGE_COLOR);
+        self.broadcast_notify(NotifyKind::Chat, &formatted);
     }
 
     /// All known player state, host included. Used for the Lua World API.
@@ -1138,8 +1296,7 @@ impl App {
             Ok(code) => code,
             Err(e) => {
                 log::error!("Rule generation failed: {e}");
-                self.toasts
-                    .push(Toast::important(format!("Rule generation failed: {e}")));
+                self.notify_important(format!("Rule generation failed: {e}"));
                 return;
             }
         };
@@ -1168,8 +1325,7 @@ impl App {
             }
             Err(err) => {
                 log::error!("Generated rule failed validation twice, giving up: {err}");
-                self.toasts
-                    .push(Toast::important(format!("Rule generation failed: {err}")));
+                self.notify_important(format!("Rule generation failed: {err}"));
             }
         }
     }
@@ -1277,10 +1433,11 @@ impl App {
                     return;
                 }
                 match msg {
-                    ReliableMsg::Hello => {
+                    ReliableMsg::Hello { nickname } => {
                         if host.clients.contains_key(&from) {
                             return;
                         }
+                        let nickname = sanitize_nickname(&nickname);
                         let player_id = host.next_player_id;
                         host.next_player_id += 1;
                         // Terrain-height-snapped, not just offset from the
@@ -1304,6 +1461,7 @@ impl App {
                                 carrying_crystal: false,
                                 last_seen: Instant::now(),
                                 velocity: Vec3::ZERO,
+                                nickname: nickname.clone(),
                             },
                         );
                         host.reliable.send(
@@ -1317,8 +1475,8 @@ impl App {
                                 edits: self.world.edits.iter().map(|(k, v)| (*k, *v)).collect(),
                             },
                         );
-                        log::info!("Player {player_id} joined from {from}");
-                        self.notify_all(format!("Player {player_id} joined"));
+                        log::info!("Player {player_id} ('{nickname}') joined from {from}");
+                        self.notify_all(format!("{nickname} joined"));
                     }
                     ReliableMsg::BlockEdit { x, y, z, block } => {
                         let addrs: Vec<SocketAddr> = host.clients.keys().copied().collect();
@@ -1348,6 +1506,16 @@ impl App {
                                 addr,
                                 ReliableMsg::BlockEdit { x, y, z, block },
                             );
+                        }
+                    }
+                    ReliableMsg::ChatMessage(text) => {
+                        let sender = host
+                            .clients
+                            .get(&from)
+                            .and_then(|player_id| host.remote_players.get(player_id))
+                            .map(|rp| rp.nickname.clone());
+                        if let Some(nickname) = sender {
+                            self.broadcast_chat(format!("{nickname}: {text}"));
                         }
                     }
                     _ => {}
@@ -1446,8 +1614,18 @@ impl App {
                         };
                         client.remote_players.remove(&player_id);
                     }
-                    ReliableMsg::Notify(text) => {
-                        self.toasts.push(Toast::new(text));
+                    ReliableMsg::Notify { kind, text } => {
+                        let color = match kind {
+                            NotifyKind::Info => egui::Color32::WHITE,
+                            NotifyKind::Important => IMPORTANT_TOAST_COLOR,
+                            NotifyKind::Chat => CHAT_MESSAGE_COLOR,
+                        };
+                        self.toasts.push(if matches!(kind, NotifyKind::Important) {
+                            Toast::important(text.clone())
+                        } else {
+                            Toast::new(text.clone())
+                        });
+                        self.log_message(text, color);
                     }
                     _ => {}
                 }
@@ -1482,6 +1660,10 @@ impl App {
                             carrying_crystal,
                             last_seen: now,
                             velocity: Vec3::ZERO,
+                            // Unused on the client -- only the host formats
+                            // chat/join text, so it never asks a client for
+                            // another player's nickname.
+                            nickname: String::new(),
                         });
                 }
             }
@@ -1750,12 +1932,19 @@ impl App {
 /// prints it and exits).
 fn join_handshake(
     server_addr: SocketAddr,
+    nickname: &str,
 ) -> Result<(UdpSocket, PlayerId, World, Vec3, f32, ReliableChannel), String> {
     let socket = net::bind_nonblocking("0.0.0.0:0")
         .map_err(|e| format!("Failed to open a local UDP socket: {e}"))?;
 
     let mut reliable = ReliableChannel::new();
-    let hello_id = reliable.send(&socket, server_addr, ReliableMsg::Hello);
+    let hello_id = reliable.send(
+        &socket,
+        server_addr,
+        ReliableMsg::Hello {
+            nickname: nickname.to_string(),
+        },
+    );
     log::info!("Connecting to {server_addr}...");
 
     let deadline = Instant::now() + Duration::from_secs(8);
@@ -2071,4 +2260,33 @@ fn create_depth_view(
 #[allow(dead_code)]
 fn chunk_of(pos: Vec3) -> (i32, i32) {
     world_to_chunk(pos.x.floor() as i32, pos.z.floor() as i32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_nickname_trims_surrounding_whitespace() {
+        assert_eq!(sanitize_nickname("  Steve  "), "Steve");
+    }
+
+    #[test]
+    fn sanitize_nickname_falls_back_to_a_default_when_empty_or_blank() {
+        assert_eq!(sanitize_nickname(""), "Player");
+        assert_eq!(sanitize_nickname("   "), "Player");
+    }
+
+    #[test]
+    fn sanitize_nickname_caps_overly_long_input() {
+        let long_name = "a".repeat(50);
+        let result = sanitize_nickname(&long_name);
+        assert_eq!(result.chars().count(), MAX_NICKNAME_LEN);
+        assert_eq!(result, "a".repeat(MAX_NICKNAME_LEN));
+    }
+
+    #[test]
+    fn sanitize_nickname_passes_through_a_normal_name_unchanged() {
+        assert_eq!(sanitize_nickname("Alex"), "Alex");
+    }
 }

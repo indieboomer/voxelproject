@@ -29,6 +29,8 @@ struct VertexInput {
     @location(3) uv: vec2<f32>,
     @location(4) ao: f32,
     @location(5) reflectivity: f32,
+    @location(6) emission: f32,
+    @location(7) wind: f32,
 };
 
 struct VertexOutput {
@@ -39,18 +41,31 @@ struct VertexOutput {
     @location(3) uv: vec2<f32>,
     @location(4) ao: f32,
     @location(5) reflectivity: f32,
+    @location(6) emission: f32,
 };
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
-    out.clip_position = camera.view_proj * vec4<f32>(in.position, 1.0);
+    var pos = in.position;
+    if (in.wind > 0.0) {
+        // Gentle per-tuft sway: only the top of a cross-billboard card
+        // (short grass) moves -- the base stays planted -- and each tuft's
+        // world x/z feed the phase so a whole field doesn't sway in lockstep.
+        let t = camera.light_params.z;
+        let sway = sin(t * 1.6 + pos.x * 0.9 + pos.z * 0.7) * 0.09
+            + sin(t * 2.3 + pos.x * 0.3 - pos.z * 0.5) * 0.05;
+        pos.x += sway * in.wind;
+        pos.z += sway * 0.6 * in.wind;
+    }
+    out.clip_position = camera.view_proj * vec4<f32>(pos, 1.0);
     out.color = in.color;
-    out.world_pos = in.position;
+    out.world_pos = pos;
     out.normal = in.normal;
     out.uv = in.uv;
     out.ao = in.ao;
     out.reflectivity = in.reflectivity;
+    out.emission = in.emission;
     return out;
 }
 
@@ -131,7 +146,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let half_dir = normalize(view_dir + camera.sun_dir.xyz);
     let spec_angle = max(dot(shading_normal, half_dir), 0.0);
     let specular = pow(spec_angle, 64.0) * in.reflectivity * sun_intensity * shadow;
-    let reflected = lit + sky_reflection + vec3<f32>(specular);
+    // Emission is a purely visual glow on the block's own surface (ores),
+    // added on top of the lit/reflected result rather than folded into the
+    // lighting math -- it never affects neighboring geometry.
+    let glow = tex.rgb * in.emission;
+    let reflected = lit + sky_reflection + vec3<f32>(specular) + glow;
 
     let dist = distance(in.world_pos, camera.camera_pos.xyz);
     let fog_start = 70.0;

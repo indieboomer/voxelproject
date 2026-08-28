@@ -26,7 +26,7 @@ function on_tick(api)
                     if math.sqrt(dx * dx + dz * dz) <= MUD_RADIUS then
                         local bx, by, bz = tree.x + dx, tree.y - 1, tree.z + dz
                         local block = api.get_block(bx, by, bz)
-                        if block == "dirt" or block == "grass" then
+                        if block == "soil" or block == "grass" then
                             api.replace_block(bx, by, bz, "mud")
                         end
                     end

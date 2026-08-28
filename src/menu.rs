@@ -4,17 +4,41 @@ use std::sync::Arc;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
-use crate::net::LaunchConfig;
+use crate::net::{LaunchConfig, MAX_NICKNAME_LEN};
 use crate::save;
 use crate::ui::Ui;
 
 /// What the player picked from the main menu, for `main.rs` to act on --
-/// either constructing the real game (`App::new`) or exiting.
+/// either constructing the real game (`App::new`) or exiting. Every path
+/// that actually launches a game carries the nickname entered on the
+/// nickname screen.
 pub enum MenuAction {
+    NewWorld { nickname: String },
+    LoadWorld { nickname: String },
+    Join { addr: SocketAddr, nickname: String },
+    Quit,
+}
+
+/// Which top-level action the nickname screen is gathering a name for,
+/// so submitting it can build the right `MenuAction`. `Copy` so the screen
+/// UI can pull an owned value out of `Screen::Nickname` up front and stop
+/// borrowing `screen`, instead of holding that borrow across widget calls
+/// that also need to reassign `screen` (e.g. the Back button).
+#[derive(Clone, Copy)]
+enum PendingAction {
     NewWorld,
     LoadWorld,
     Join(SocketAddr),
-    Quit,
+}
+
+/// Which screen of the menu is showing. Both `Join` and `Nickname` are
+/// reached from `Main` and return to it via "Back" -- there's no deeper
+/// nesting than that.
+enum Screen {
+    Main,
+    /// Entering a host address, on the way to `Nickname(Join(addr))`.
+    Join,
+    Nickname(PendingAction),
 }
 
 /// The main menu shown before the game itself starts. Owns just enough of
@@ -30,8 +54,9 @@ pub struct MenuApp {
 
     ui: Ui,
     has_save: bool,
-    show_join: bool,
+    screen: Screen,
     join_input: String,
+    nickname_input: String,
     error: Option<String>,
 
     /// Carried through to whatever `LaunchConfig` a menu selection builds,
@@ -101,8 +126,9 @@ impl MenuApp {
             config,
             ui,
             has_save: save::save_exists(),
-            show_join: false,
+            screen: Screen::Main,
             join_input: String::new(),
+            nickname_input: String::new(),
             error: None,
             port: launch.port,
             llm_url: launch.llm_url,
@@ -128,7 +154,7 @@ impl MenuApp {
     /// address and retry.
     pub fn report_join_error(&mut self, message: String) {
         self.error = Some(message);
-        self.show_join = true;
+        self.screen = Screen::Join;
     }
 
     pub fn render(&mut self) -> Option<MenuAction> {
@@ -168,8 +194,9 @@ impl MenuApp {
 
         let mut action = None;
         let mut error = self.error.clone();
-        let mut show_join = self.show_join;
+        let mut screen = std::mem::replace(&mut self.screen, Screen::Main);
         let mut join_input = std::mem::take(&mut self.join_input);
+        let mut nickname_input = std::mem::take(&mut self.nickname_input);
         let has_save = self.has_save;
 
         let full_output = self.ui.run(&self.window, |ctx| {
@@ -184,70 +211,135 @@ impl MenuApp {
                         ui.add_space(10.0);
                     }
 
-                    if show_join {
-                        ui.label("Host address (ip:port):");
-                        let resp = ui.text_edit_singleline(&mut join_input);
-                        if !resp.has_focus() && !resp.lost_focus() {
-                            resp.request_focus();
-                        }
-                        let submitted = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        ui.add_space(10.0);
-                        if ui
-                            .add_sized([220.0, 36.0], egui::Button::new("Connect"))
-                            .clicked()
-                            || submitted
-                        {
-                            match join_input.trim().parse::<SocketAddr>() {
-                                Ok(addr) => action = Some(MenuAction::Join(addr)),
-                                Err(_) => {
-                                    error = Some(
-                                        "Invalid address -- expected ip:port, e.g. 192.168.1.5:7878"
-                                            .to_string(),
-                                    )
-                                }
-                            }
-                        }
-                        ui.add_space(8.0);
-                        if ui
-                            .add_sized([220.0, 36.0], egui::Button::new("Back"))
-                            .clicked()
-                        {
-                            show_join = false;
-                            error = None;
-                        }
-                    } else {
-                        if ui
-                            .add_sized([220.0, 36.0], egui::Button::new("New World"))
-                            .clicked()
-                        {
-                            action = Some(MenuAction::NewWorld);
-                        }
-                        ui.add_space(8.0);
-                        ui.add_enabled_ui(has_save, |ui| {
+                    match &screen {
+                        Screen::Main => {
                             if ui
-                                .add_sized([220.0, 36.0], egui::Button::new("Load World"))
+                                .add_sized([220.0, 36.0], egui::Button::new("New World"))
                                 .clicked()
                             {
-                                action = Some(MenuAction::LoadWorld);
+                                screen = Screen::Nickname(PendingAction::NewWorld);
+                                error = None;
                             }
-                        });
-                        ui.add_space(8.0);
-                        if ui
-                            .add_sized(
-                                [220.0, 36.0],
-                                egui::Button::new("Join Multiplayer Game"),
-                            )
-                            .clicked()
-                        {
-                            show_join = true;
-                            error = None;
+                            ui.add_space(8.0);
+                            ui.add_enabled_ui(has_save, |ui| {
+                                if ui
+                                    .add_sized([220.0, 36.0], egui::Button::new("Load World"))
+                                    .clicked()
+                                {
+                                    screen = Screen::Nickname(PendingAction::LoadWorld);
+                                    error = None;
+                                }
+                            });
+                            ui.add_space(8.0);
+                            if ui
+                                .add_sized(
+                                    [220.0, 36.0],
+                                    egui::Button::new("Join Multiplayer Game"),
+                                )
+                                .clicked()
+                            {
+                                screen = Screen::Join;
+                                error = None;
+                            }
+                            ui.add_space(8.0);
+                            if ui
+                                .add_sized([220.0, 36.0], egui::Button::new("Quit"))
+                                .clicked()
+                            {
+                                action = Some(MenuAction::Quit);
+                            }
                         }
-                        ui.add_space(8.0);
-                        if ui
-                            .add_sized([220.0, 36.0], egui::Button::new("Quit"))
-                            .clicked()
-                        {
-                            action = Some(MenuAction::Quit);
+                        Screen::Join => {
+                            ui.label("Host address (ip:port):");
+                            let resp = ui.text_edit_singleline(&mut join_input);
+                            if !resp.has_focus() && !resp.lost_focus() {
+                                resp.request_focus();
+                            }
+                            let submitted = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            ui.add_space(10.0);
+                            if ui
+                                .add_sized([220.0, 36.0], egui::Button::new("Continue"))
+                                .clicked()
+                                || submitted
+                            {
+                                match join_input.trim().parse::<SocketAddr>() {
+                                    Ok(addr) => {
+                                        screen = Screen::Nickname(PendingAction::Join(addr));
+                                        error = None;
+                                    }
+                                    Err(_) => {
+                                        error = Some(
+                                            "Invalid address -- expected ip:port, e.g. 192.168.1.5:7878"
+                                                .to_string(),
+                                        )
+                                    }
+                                }
+                            }
+                            ui.add_space(8.0);
+                            if ui
+                                .add_sized([220.0, 36.0], egui::Button::new("Back"))
+                                .clicked()
+                            {
+                                screen = Screen::Main;
+                                error = None;
+                            }
+                        }
+                        Screen::Nickname(pending) => {
+                            // Owned copy, detached from `screen`'s borrow,
+                            // so the Back button below can freely reassign
+                            // `screen` without fighting this match.
+                            let pending = *pending;
+                            let prompt = match pending {
+                                PendingAction::NewWorld => {
+                                    "Starting a new world -- enter a nickname:".to_string()
+                                }
+                                PendingAction::LoadWorld => {
+                                    "Loading your world -- enter a nickname:".to_string()
+                                }
+                                PendingAction::Join(addr) => {
+                                    format!("Joining {addr} -- enter a nickname:")
+                                }
+                            };
+                            ui.label(prompt);
+                            let resp = ui.add(
+                                egui::TextEdit::singleline(&mut nickname_input)
+                                    .char_limit(MAX_NICKNAME_LEN),
+                            );
+                            if !resp.has_focus() && !resp.lost_focus() {
+                                resp.request_focus();
+                            }
+                            let submitted = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            ui.add_space(10.0);
+                            if ui
+                                .add_sized([220.0, 36.0], egui::Button::new("Continue"))
+                                .clicked()
+                                || submitted
+                            {
+                                let nickname = nickname_input.trim().to_string();
+                                if nickname.is_empty() {
+                                    error = Some("Enter a nickname".to_string());
+                                } else {
+                                    action = Some(match pending {
+                                        PendingAction::NewWorld => {
+                                            MenuAction::NewWorld { nickname }
+                                        }
+                                        PendingAction::LoadWorld => {
+                                            MenuAction::LoadWorld { nickname }
+                                        }
+                                        PendingAction::Join(addr) => {
+                                            MenuAction::Join { addr, nickname }
+                                        }
+                                    });
+                                }
+                            }
+                            ui.add_space(8.0);
+                            if ui
+                                .add_sized([220.0, 36.0], egui::Button::new("Back"))
+                                .clicked()
+                            {
+                                screen = Screen::Main;
+                                error = None;
+                            }
                         }
                     }
                 });
@@ -255,8 +347,9 @@ impl MenuApp {
         });
 
         self.error = error;
-        self.show_join = show_join;
+        self.screen = screen;
         self.join_input = join_input;
+        self.nickname_input = nickname_input;
 
         self.ui.render(
             &self.device,

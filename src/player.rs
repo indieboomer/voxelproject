@@ -217,12 +217,12 @@ mod tests {
     #[test]
     fn different_block_types_are_tracked_independently() {
         let mut player = Player::new(Vec3::ZERO);
-        player.add_resource(BlockType::Wood);
-        player.add_resource(BlockType::Wood);
+        player.add_resource(BlockType::OakWood);
+        player.add_resource(BlockType::OakWood);
         player.add_resource(BlockType::Sand);
 
-        assert_eq!(player.resource_count(BlockType::Wood), 2);
+        assert_eq!(player.resource_count(BlockType::OakWood), 2);
         assert_eq!(player.resource_count(BlockType::Sand), 1);
-        assert_eq!(player.resource_count(BlockType::Dirt), 0);
+        assert_eq!(player.resource_count(BlockType::Soil), 0);
     }
 }

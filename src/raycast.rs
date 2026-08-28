@@ -24,7 +24,10 @@ pub fn raycast(world: &World, origin: Vec3, dir: Vec3, max_dist: f32) -> Option<
     while t < max_dist {
         let p = origin + dir * t;
         let voxel = (p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
-        if world.is_solid(voxel.0, voxel.1, voxel.2) {
+        // Targetable, not just solid: non-solid decorations like short
+        // grass are still breakable even though the player walks through
+        // them (see `BlockType::is_targetable`).
+        if world.get_block(voxel.0, voxel.1, voxel.2).is_targetable() {
             return Some(RaycastHit {
                 target: voxel,
                 place: last_voxel.unwrap_or(voxel),

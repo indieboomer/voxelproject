@@ -15,6 +15,14 @@ pub struct Vertex {
     pub uv: [f32; 2],
     pub ao: f32,
     pub reflectivity: f32,
+    /// Self-illumination strength, 0..1 -- see `BlockType::emission`. A
+    /// purely visual glow on the block's own surface, not a light source
+    /// that affects neighboring geometry.
+    pub emission: f32,
+    /// Wind sway strength, 0..1 -- only nonzero for cross-billboard
+    /// decorations (see `push_cross`), where the top corners get 1.0 and
+    /// the bottom corners 0.0 so the vertex shader bends just the top.
+    pub wind: f32,
 }
 
 impl Vertex {
@@ -52,6 +60,16 @@ impl Vertex {
                 wgpu::VertexAttribute {
                     offset: size_of::<[f32; 12]>() as wgpu::BufferAddress,
                     shader_location: 5,
+                    format: wgpu::VertexFormat::Float32,
+                },
+                wgpu::VertexAttribute {
+                    offset: size_of::<[f32; 13]>() as wgpu::BufferAddress,
+                    shader_location: 6,
+                    format: wgpu::VertexFormat::Float32,
+                },
+                wgpu::VertexAttribute {
+                    offset: size_of::<[f32; 14]>() as wgpu::BufferAddress,
+                    shader_location: 7,
                     format: wgpu::VertexFormat::Float32,
                 },
             ],
@@ -188,6 +206,109 @@ const AO_OFFSETS: [[(Offset, Offset, Offset); 4]; 6] = [
     ],
 ];
 
+/// Two diagonal planes (corner-to-corner across the block) used for
+/// `only_on_top`+`cross` decorations like short grass -- the classic
+/// "billboard cross" shape, each spanning the full block from one bottom
+/// edge to the opposite top edge so the two planes cross through the
+/// block's center.
+const CROSS_PLANES: [[[f32; 3]; 4]; 2] = [
+    [
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 1.0],
+        [1.0, 1.0, 1.0],
+        [0.0, 1.0, 0.0],
+    ],
+    [
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 1.0, 1.0],
+        [1.0, 1.0, 0.0],
+    ],
+];
+
+fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn normalize3(v: [f32; 3]) -> [f32; 3] {
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if len < 1e-6 {
+        [0.0, 1.0, 0.0]
+    } else {
+        [v[0] / len, v[1] / len, v[2] / len]
+    }
+}
+
+/// Appends a double-sided billboard cross for `only_on_top`+`cross` blocks
+/// (short grass) at world position `(wx, ly, wz)`. Never culled, never
+/// AO-darkened -- it's a thin decoration, not part of the solid cube grid.
+/// Both this quad's triangle windings are emitted (rather than relying on
+/// getting a single winding's handedness right against the pipeline's
+/// front-face convention), so each plane renders from both sides off one
+/// shared normal -- an intentional simplification for a paper-thin card.
+/// Top corners get `wind = 1.0` (bottom corners `0.0`), which the vertex
+/// shader uses to sway just the top of the card in the wind.
+#[allow(clippy::too_many_arguments)]
+fn push_cross(
+    vertices: &mut Vec<Vertex>,
+    indices: &mut Vec<u32>,
+    wx: i32,
+    ly: i32,
+    wz: i32,
+    uv_rect: [f32; 4],
+    emission: f32,
+) {
+    for plane in CROSS_PLANES.iter() {
+        let normal = normalize3(cross3(sub3(plane[1], plane[0]), sub3(plane[3], plane[0])));
+        let base_index = vertices.len() as u32;
+        for (corner_idx, corner) in plane.iter().enumerate() {
+            let [uc, vc] = FACE_UV_CORNERS[corner_idx];
+            vertices.push(Vertex {
+                position: [
+                    wx as f32 + corner[0],
+                    ly as f32 + corner[1],
+                    wz as f32 + corner[2],
+                ],
+                color: [1.0, 1.0, 1.0],
+                normal,
+                uv: [
+                    uv_rect[0] + uc * (uv_rect[2] - uv_rect[0]),
+                    uv_rect[1] + vc * (uv_rect[3] - uv_rect[1]),
+                ],
+                ao: 1.0,
+                reflectivity: 0.0,
+                emission,
+                wind: corner[1],
+            });
+        }
+        indices.extend_from_slice(&[
+            base_index,
+            base_index + 1,
+            base_index + 2,
+            base_index,
+            base_index + 2,
+            base_index + 3,
+            // Reversed winding of the same quad, so it's visible (and lit)
+            // from both sides regardless of which winding this pipeline
+            // treats as front-facing.
+            base_index,
+            base_index + 2,
+            base_index + 1,
+            base_index,
+            base_index + 3,
+            base_index + 2,
+        ]);
+    }
+}
+
 pub(crate) fn face_shade(face: usize) -> f32 {
     match face {
         2 => 1.0,  // +Y top
@@ -233,6 +354,15 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                 }
                 let wx = ox + lx;
                 let wz = oz + lz;
+                let def = block.def();
+
+                if def.cross {
+                    // Billboard decoration (short grass): not part of the
+                    // cube grid, never culled against neighbors.
+                    let uv_rect = atlas::uv_rect(atlas::tile_for(block, 2));
+                    push_cross(&mut vertices, &mut indices, wx, ly, wz, uv_rect, def.emission);
+                    continue;
+                }
 
                 for (face_idx, normal) in FACE_NORMALS.iter().enumerate() {
                     let nx = wx + normal[0];
@@ -240,7 +370,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                     let nz = wz + normal[2];
                     let neighbor = world.get_block(nx, ny, nz);
 
-                    let visible = if block == BlockType::Water {
+                    let visible = if def.opacity < 1.0 {
                         neighbor == BlockType::Air
                     } else {
                         !neighbor.is_opaque() && neighbor != block
@@ -253,6 +383,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                     let color = [shade, shade, shade];
                     let uv_rect = atlas::uv_rect(atlas::tile_for(block, face_idx));
                     let reflectivity = block.reflectivity();
+                    let emission = def.emission;
                     let base_index = vertices.len() as u32;
 
                     for (corner_idx, corner) in FACE_VERTS[face_idx].iter().enumerate() {
@@ -283,6 +414,8 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                             ],
                             ao,
                             reflectivity,
+                            emission,
+                            wind: 0.0,
                         });
                     }
                     indices.extend_from_slice(&[
@@ -334,6 +467,8 @@ pub fn push_cuboid(
                 ],
                 ao: 1.0,
                 reflectivity: 0.0,
+                emission: 0.0,
+                wind: 0.0,
             });
         }
         indices.extend_from_slice(&[
@@ -391,6 +526,8 @@ pub fn push_cuboid_facing(
                 ],
                 ao: 1.0,
                 reflectivity: 0.0,
+                emission: 0.0,
+                wind: 0.0,
             });
         }
         indices.extend_from_slice(&[
@@ -525,8 +662,8 @@ mod tests {
     fn leaves_skip_ao_entirely() {
         let mut world = World::new(1);
         let mut chunk = Chunk::new(0, 0);
-        chunk.set_local(5, 10, 5, BlockType::Leaves);
-        chunk.set_local(6, 11, 5, BlockType::Leaves);
+        chunk.set_local(5, 10, 5, BlockType::OakLeaves);
+        chunk.set_local(6, 11, 5, BlockType::OakLeaves);
         world.chunks.insert((0, 0), chunk);
 
         let chunk_ref = world.chunks.get(&(0, 0)).unwrap();

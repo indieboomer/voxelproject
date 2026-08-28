@@ -533,9 +533,18 @@ fn populate_api<'lua, 'scope>(
         scope.create_function(
             move |lua, (kind, cx, cy, cz, radius): (String, i32, i32, i32, f32)| {
                 let t = lua.create_table()?;
-                let Some(block) = BlockType::from_name(&kind) else {
-                    return Ok(t);
-                };
+                // "wood" is a category alias matching any tree species
+                // (oak/spruce/birch/cherry), since rules like rain_mud.lua
+                // search for "a tree" generically rather than one species.
+                let is_match: Box<dyn Fn(BlockType) -> bool> =
+                    if kind.eq_ignore_ascii_case("wood") {
+                        Box::new(BlockType::is_wood)
+                    } else {
+                        let Some(block) = BlockType::from_name(&kind) else {
+                            return Ok(t);
+                        };
+                        Box::new(move |b| b == block)
+                    };
                 let radius = radius.clamp(0.0, MAX_FIND_RADIUS);
                 let r = radius.ceil() as i32;
                 let radius_sq = radius * radius;
@@ -550,7 +559,7 @@ fn populate_api<'lua, 'scope>(
                                 continue;
                             }
                             let (x, y, z) = (cx + dx, cy + dy, cz + dz);
-                            if world.get_block(x, y, z) == block {
+                            if is_match(world.get_block(x, y, z)) {
                                 let e = lua.create_table()?;
                                 e.set("x", x)?;
                                 e.set("y", y)?;
@@ -1153,7 +1162,7 @@ mod tests {
         'search: for cx in -48..48 {
             for cz in -48..48 {
                 for cy in 0..48 {
-                    if world.get_block(cx, cy, cz) == BlockType::Wood {
+                    if world.get_block(cx, cy, cz).is_wood() {
                         tree_pos = Some(Vec3::new(cx as f32, cy as f32, cz as f32));
                         break 'search;
                     }
