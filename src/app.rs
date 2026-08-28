@@ -198,8 +198,14 @@ enum GenerationState {
 struct CameraUniform {
     view_proj: [[f32; 4]; 4],
     light_view_proj: [[f32; 4]; 4],
+    /// Inverse of `view_proj`, used only by sky.wgsl to unproject a screen
+    /// pixel back into a world-space view ray (the sky has no real geometry
+    /// to derive one from otherwise). Computed CPU-side once per frame --
+    /// cheap, and far simpler than reconstructing it in the shader.
+    inv_view_proj: [[f32; 4]; 4],
     camera_pos: [f32; 4],
     fog_color: [f32; 4],
+    zenith_color: [f32; 4],
     sun_dir: [f32; 4],
     light_params: [f32; 4],
 }
@@ -259,6 +265,11 @@ pub struct App {
 
     render_pipeline: wgpu::RenderPipeline,
     depth_view: wgpu::TextureView,
+
+    /// Draws the gradient sky/sun/moon/stars background -- see sky.wgsl.
+    /// Issued first in the main pass, no depth test, so every other draw
+    /// call simply paints over it.
+    sky_pipeline: wgpu::RenderPipeline,
 
     rain_pipeline: wgpu::RenderPipeline,
     rain_vertex_buffer: wgpu::Buffer,
@@ -476,6 +487,57 @@ impl App {
             multiview: None,
         });
 
+        let sky_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("sky shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("sky.wgsl").into()),
+        });
+        let sky_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("sky pipeline layout"),
+            bind_group_layouts: &[&camera_bgl],
+            push_constant_ranges: &[],
+        });
+        let sky_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("sky pipeline"),
+            layout: Some(&sky_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &sky_shader,
+                entry_point: "vs_main",
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &sky_shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Cw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            // Depth-compatible with the main pass's attachment (required to
+            // share it) but always-pass/no-write: this draw runs first and
+            // fills every pixel unconditionally, and every subsequent
+            // depth-tested draw call naturally paints over it wherever real
+            // geometry exists.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+
         let rain_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("rain shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("rain.wgsl").into()),
@@ -647,6 +709,7 @@ impl App {
             size,
             render_pipeline,
             depth_view,
+            sky_pipeline,
             rain_pipeline,
             rain_vertex_buffer,
             rain_particles,
@@ -1794,13 +1857,17 @@ impl App {
 
         let lighting = sky_lighting(self.time_of_day);
         let sky = lighting.sky_color;
+        let zenith = lighting.zenith_color;
         let cam_pos = self.camera.eye_position();
         let light_view_proj = light_view_proj(lighting.sun_dir, self.player.position);
+        let view_proj = self.camera.view_proj();
         let uniform = CameraUniform {
-            view_proj: self.camera.view_proj().to_cols_array_2d(),
+            view_proj: view_proj.to_cols_array_2d(),
             light_view_proj: light_view_proj.to_cols_array_2d(),
+            inv_view_proj: view_proj.inverse().to_cols_array_2d(),
             camera_pos: [cam_pos.x, cam_pos.y, cam_pos.z, 1.0],
             fog_color: [sky[0], sky[1], sky[2], 1.0],
+            zenith_color: [zenith[0], zenith[1], zenith[2], 1.0],
             sun_dir: [
                 lighting.sun_dir.x,
                 lighting.sun_dir.y,
@@ -1888,6 +1955,13 @@ impl App {
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
+
+            // Sky background first -- a single fullscreen triangle with no
+            // depth test, so every draw after this one simply paints over
+            // it wherever real geometry exists. See sky.wgsl.
+            rpass.set_pipeline(&self.sky_pipeline);
+            rpass.set_bind_group(0, &self.camera_bind_group, &[]);
+            rpass.draw(0..3, 0..1);
 
             rpass.set_pipeline(&self.render_pipeline);
             rpass.set_bind_group(0, &self.camera_bind_group, &[]);

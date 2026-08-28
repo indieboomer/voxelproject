@@ -1,8 +1,12 @@
 struct CameraUniform {
     view_proj: mat4x4<f32>,
     light_view_proj: mat4x4<f32>,
+    inv_view_proj: mat4x4<f32>,
     camera_pos: vec4<f32>,
     fog_color: vec4<f32>,
+    // Sky color straight overhead, paired with fog_color (the horizon) for
+    // a real gradient -- see daynight.rs's zenith_color and sky.wgsl.
+    zenith_color: vec4<f32>,
     sun_dir: vec4<f32>,
     // x = ambient, y = sun_intensity, z = free-running clock (seconds) for
     // the water wave animation
@@ -103,6 +107,40 @@ fn shadow_factor(world_pos: vec3<f32>, ndotl: f32) -> f32 {
 // flag through the mesher just for this.
 const WATER_REFLECTIVITY_THRESHOLD: f32 = 0.7;
 
+// Krzysztof Narkowicz's fitted ACES approximation -- cheap (no LUT/matrices)
+// filmic tonemap that compresses highlights with a soft shoulder instead of
+// hard-clipping them to white, and deepens shadows slightly for more
+// contrast. Also used by sky.wgsl, kept as a small self-contained copy in
+// each shader file rather than a shared include (this project has no WGSL
+// include mechanism, and duplicating five lines is simpler than adding one).
+fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
+    let a = 2.51;
+    let b = 0.03;
+    let c = 2.43;
+    let d = 0.59;
+    let e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+// A full tonemap curve reshapes the *entire* range, not just the highlights
+// past 1.0 -- there's no way to stay strictly identity below 1.0 and only
+// affect values above it, since the display can't show anything past 1.0
+// either way. So rather than applying the curve at full strength (which
+// visibly oversaturated ordinary diffuse surfaces like grass in testing),
+// blend a modest amount of it over the original hard-clamped linear
+// result: normal-brightness surfaces stay close to how they always looked,
+// while pixels pushed well past 1.0 by additive highlights (specular, sky
+// reflection, emissive glow) -- which the blend is dominated by, since the
+// linear side is already pinned at 1.0 there -- still pick up a
+// noticeably softer, richer rolloff than a flat clip to white.
+const TONEMAP_BLEND: f32 = 0.35;
+
+fn grade(color: vec3<f32>) -> vec3<f32> {
+    let linear = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+    let toned = aces_tonemap(color);
+    return mix(linear, toned, TONEMAP_BLEND);
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let is_water = in.reflectivity > WATER_REFLECTIVITY_THRESHOLD;
@@ -133,6 +171,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let sun_intensity = camera.light_params.y;
     let shadow = select(1.0, shadow_factor(in.world_pos, ndotl), sun_intensity > 0.0);
     let base = tex.rgb * in.color * in.ao;
+    // Deliberately kept exactly as before (a flat scalar, hard-clamped):
+    // tinting this per-channel by the sky color was tried and reverted --
+    // multiplied straight onto an already-saturated texture like grass, it
+    // recolored ordinary matte terrain far more than intended, well before
+    // `grade`'s tonemap even entered the picture. The "epic" lighting
+    // upgrades (sky gradient/sun/moon/stars, filmic highlight rolloff,
+    // emissive glow/pulse) all live elsewhere and don't need this term
+    // touched.
     let lit = base * clamp(ambient + sun_intensity * ndotl * shadow, 0.0, 1.0);
 
     // Cheap reflection for shiny materials (water, crystal, stone): a
@@ -148,8 +194,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let specular = pow(spec_angle, 64.0) * in.reflectivity * sun_intensity * shadow;
     // Emission is a purely visual glow on the block's own surface (ores),
     // added on top of the lit/reflected result rather than folded into the
-    // lighting math -- it never affects neighboring geometry.
-    let glow = tex.rgb * in.emission;
+    // lighting math -- it never affects neighboring geometry. A gentle
+    // pulse (phased by world position so a whole ore vein doesn't pulse in
+    // lockstep) and a brightness boost give emissive blocks a "hot",
+    // faintly alive look even without a real bloom pass -- `grade` below
+    // gives the boosted highlight a soft rolloff instead of just clipping.
+    let pulse = 0.85 + 0.15 * sin(camera.light_params.z * 2.2 + in.world_pos.x * 0.3 + in.world_pos.z * 0.3);
+    let glow = tex.rgb * in.emission * 1.6 * pulse;
     let reflected = lit + sky_reflection + vec3<f32>(specular) + glow;
 
     let dist = distance(in.world_pos, camera.camera_pos.xyz);
@@ -158,5 +209,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let fog_amount = clamp((dist - fog_start) / (fog_end - fog_start), 0.0, 1.0);
 
     let final_color = mix(reflected, camera.fog_color.rgb, fog_amount);
-    return vec4<f32>(final_color, 1.0);
+    return vec4<f32>(grade(final_color), 1.0);
 }
