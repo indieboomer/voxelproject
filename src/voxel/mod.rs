@@ -1,6 +1,7 @@
 pub mod atlas;
 pub mod atlas_tiles;
 pub mod block;
+mod block_defs;
 pub mod chunk;
 pub mod mesher;
 pub mod noise;

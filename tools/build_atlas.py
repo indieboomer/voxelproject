@@ -1,19 +1,32 @@
 #!/usr/bin/env python3
-"""Builds assets/textures/atlas.png and src/voxel/atlas_tiles.rs from
-textures/blocks.csv and the flat texture images under textures/.
+"""Builds assets/textures/atlas.png, src/voxel/atlas_tiles.rs, and
+src/voxel/block_defs.rs from textures/blocks.csv and the flat texture
+images under textures/.
 
-blocks.csv is the single source of truth for the block roster: each row's
-`texture`/`top`/`side`/`bottom` columns name a .png file (without extension)
-directly under textures/; a blank top/side/bottom falls back to the row's
-`texture` column. This script collects every distinct texture name the CSV
-references, packs one 64x64 tile per name into a grid atlas, and emits a
-generated Rust file with a `TILE_<NAME>` constant per texture plus a
-`TILE_PLACEHOLDER` (textures/placeholder.png, used by block types that exist
-outside the CSV roster) and `TILE_WHITE` (synthetic flat swatch, sampled by
-entities that are tinted purely via per-vertex color).
+blocks.csv is the single source of truth for the block roster and every
+per-block property (opacity/roughness/emission/hardness/only-on-top/
+single-item) except the three gameplay-mechanic extras (Mud, RedStone,
+Crystal) that live outside the CSV roster -- those stay hand-written in
+block.rs. Each row's `texture`/`top`/`side`/`bottom` columns name a .png
+file (without extension) directly under textures/; a blank top/side/bottom
+falls back to the row's `texture` column.
+
+This script collects every distinct texture name the CSV references, packs
+one 64x64 tile per name into a grid atlas, and emits:
+  - atlas.png: the packed texture grid.
+  - atlas_tiles.rs: a `TILE_<NAME>` constant per texture, plus
+    `TILE_PLACEHOLDER` (textures/placeholder.png, used by the non-CSV
+    extras) and `TILE_WHITE` (synthetic flat swatch, sampled by entities
+    that are tinted purely via per-vertex color).
+  - block_defs.rs: a `BlockDef` literal per CSV row (`csv_def`) plus a
+    snake_case id lookup (`csv_from_name`), both consumed by
+    `BlockType::def`/`BlockType::from_name` in block.rs.
 
 Re-run after changing blocks.csv or any texture under textures/, then
-`cargo build` to pick up the regenerated atlas_tiles.rs.
+`cargo build` to pick up the regenerated files. The enum variant for a CSV
+row is its `id` column PascalCased (spaces/underscores both become word
+breaks, e.g. "short grass" / "short_wood" -> ShortGrass) -- block.rs's
+`BlockType` enum must have a matching variant for every row.
 """
 
 import csv
@@ -25,7 +38,8 @@ RAW = ROOT / "textures"
 CSV_PATH = RAW / "blocks.csv"
 OUT_DIR = ROOT / "assets" / "textures"
 ATLAS_OUT = OUT_DIR / "atlas.png"
-RS_OUT = ROOT / "src" / "voxel" / "atlas_tiles.rs"
+ATLAS_RS_OUT = ROOT / "src" / "voxel" / "atlas_tiles.rs"
+BLOCK_DEFS_RS_OUT = ROOT / "src" / "voxel" / "block_defs.rs"
 
 TILE = 64
 COLS = 8
@@ -38,31 +52,46 @@ def load_tile(name: str) -> Image.Image:
     return im
 
 
-def main():
+def pascal_case(id_str: str) -> str:
+    parts = id_str.replace(" ", "_").split("_")
+    return "".join(p[:1].upper() + p[1:] for p in parts if p)
+
+
+def rust_str(s: str) -> str:
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def fmt_f32(v: str) -> str:
+    return repr(float(v))
+
+
+def rust_bool(b: bool) -> str:
+    return "true" if b else "false"
+
+
+def build_atlas(rows):
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     names = set()
-    with open(CSV_PATH, newline="") as f:
-        for row in csv.DictReader(f):
-            for col in ("texture", "top", "side", "bottom"):
-                val = row[col].strip()
-                if val:
-                    names.add(val)
+    for row in rows:
+        for col in ("texture", "top", "side", "bottom"):
+            val = row[col].strip()
+            if val:
+                names.add(val)
     names = sorted(names)
 
     tiles = [load_tile(n) for n in names]
     tile_names = list(names)
 
-    placeholder = load_tile("placeholder")
-    tiles.append(placeholder)
+    tiles.append(load_tile("placeholder"))
     tile_names.append("placeholder")
 
     white = Image.new("RGBA", (TILE, TILE), (255, 255, 255, 255))
     tiles.append(white)
     tile_names.append("white")
 
-    rows = (len(tiles) + COLS - 1) // COLS
-    atlas = Image.new("RGBA", (TILE * COLS, TILE * rows))
+    rows_count = (len(tiles) + COLS - 1) // COLS
+    atlas = Image.new("RGBA", (TILE * COLS, TILE * rows_count))
     for i, t in enumerate(tiles):
         col, row = i % COLS, i // COLS
         atlas.paste(t, (col * TILE, row * TILE))
@@ -74,14 +103,92 @@ def main():
         "// edit by hand. Re-run the script after changing the CSV or textures.",
         "",
         f"pub const ATLAS_COLS: u32 = {COLS};",
-        f"pub const ATLAS_ROWS: u32 = {rows};",
+        f"pub const ATLAS_ROWS: u32 = {rows_count};",
         "",
     ]
     for i, name in enumerate(tile_names):
-        const_name = "TILE_" + name.upper()
-        lines.append(f"pub const {const_name}: u8 = {i};")
-    RS_OUT.write_text("\n".join(lines) + "\n")
-    print(f"wrote {RS_OUT} ({len(tile_names)} tile constants)")
+        lines.append(f"pub const TILE_{name.upper()}: u8 = {i};")
+    ATLAS_RS_OUT.write_text("\n".join(lines) + "\n")
+    print(f"wrote {ATLAS_RS_OUT} ({len(tile_names)} tile constants)")
+
+
+def tile_const(row, col: str) -> str:
+    val = row[col].strip() or row["texture"].strip()
+    return f"TILE_{val.upper()}"
+
+
+def build_block_defs(rows):
+    lines = [
+        "// Generated by tools/build_atlas.py from textures/blocks.csv -- do not",
+        "// edit by hand. Re-run the script after changing the CSV.",
+        "//",
+        "// Covers every block in the CSV roster. `BlockType::def`/`from_name` fall",
+        "// back to a few hand-written entries in block.rs for the non-CSV extras",
+        "// (Air, Mud, RedStone, Crystal) -- see the comments there.",
+        "",
+        "use super::atlas_tiles::*;",
+        "use super::block::{BlockDef, BlockType};",
+        "",
+        "pub(crate) fn csv_def(block: BlockType) -> Option<BlockDef> {",
+        "    Some(match block {",
+    ]
+    for row in rows:
+        id_ = row["id"].strip()
+        variant = pascal_case(id_)
+        only_on_top = row["only on top"].strip() == "1"
+        single_item = row["single items"].strip() == "1"
+        # Alpha-tested cutout rendering isn't its own CSV column -- every
+        # leaves block wants it, so it's derived from the id instead of
+        # needing a column that would be "true" for exactly one group.
+        cutout = "leaves" in id_
+        lines.append(f"        BlockType::{variant} => BlockDef {{")
+        lines.append(f"            display_name: {rust_str(row['display name'].strip())},")
+        lines.append(f"            resource_type: {rust_str(row['resource type'].strip())},")
+        lines.append(f"            opacity: {fmt_f32(row['opacity'])},")
+        lines.append(f"            roughness: {fmt_f32(row['roughness'])},")
+        lines.append(f"            emission: {fmt_f32(row['emission'])},")
+        lines.append(f"            hardness: {int(row['hardness'])},")
+        lines.append(f"            tile_top: {tile_const(row, 'top')},")
+        lines.append(f"            tile_side: {tile_const(row, 'side')},")
+        lines.append(f"            tile_bottom: {tile_const(row, 'bottom')},")
+        lines.append(f"            only_on_top: {rust_bool(only_on_top)},")
+        lines.append(f"            single_item: {rust_bool(single_item)},")
+        lines.append(f"            cutout: {rust_bool(cutout)},")
+        # "only on top" decorations (currently just short grass) are the
+        # ones rendered as a cross billboard instead of a full cube.
+        lines.append(f"            cross: {rust_bool(only_on_top)},")
+        lines.append("        },")
+    lines += [
+        "        _ => return None,",
+        "    })",
+        "}",
+        "",
+        "/// Case-insensitive (already-lowercased) id lookup for the CSV roster's",
+        '/// blocks; `BlockType::from_name` adds "mud"/"redstone"/"crystal" on top',
+        "/// for the non-CSV extras.",
+        "pub(crate) fn csv_from_name(lower_name: &str) -> Option<BlockType> {",
+        "    Some(match lower_name {",
+    ]
+    for row in rows:
+        id_ = row["id"].strip()
+        variant = pascal_case(id_)
+        norm_id = id_.replace(" ", "_")
+        lines.append(f'        "{norm_id}" => BlockType::{variant},')
+    lines += [
+        "        _ => return None,",
+        "    })",
+        "}",
+    ]
+    BLOCK_DEFS_RS_OUT.write_text("\n".join(lines) + "\n")
+    print(f"wrote {BLOCK_DEFS_RS_OUT} ({len(rows)} block defs)")
+
+
+def main():
+    with open(CSV_PATH, newline="") as f:
+        rows = list(csv.DictReader(f))
+
+    build_atlas(rows)
+    build_block_defs(rows)
 
 
 if __name__ == "__main__":
