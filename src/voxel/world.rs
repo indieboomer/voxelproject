@@ -271,11 +271,38 @@ impl World {
             chunk.set_local(lx, ground_y + i, lz, wood);
         }
         let top = ground_y + trunk_height;
-        for dx in -2i32..=2 {
-            for dz in -2i32..=2 {
-                for dy in -1..=2 {
-                    if dx.abs() == 2 && dz.abs() == 2 {
+
+        // Canopy layers relative to the treetop, bottom to top, each with
+        // its own radius -- tapered so the crown reads as round-ish rather
+        // than a flat box, with a narrow fringe above and below the full
+        // middle spread.
+        const CANOPY_LAYERS: [(i32, i32); 4] = [(-1, 1), (0, 2), (1, 2), (2, 1)];
+        // Per-tree roll for how full the outer ring of each layer is, so
+        // canopies vary a little instead of all being an identical cutout.
+        let fullness = column_rand(wx, wz, self.seed, 0x7EAF01);
+
+        for &(dy, radius) in CANOPY_LAYERS.iter() {
+            for dx in -radius..=radius {
+                for dz in -radius..=radius {
+                    let dist = dx.abs().max(dz.abs());
+                    if dist > radius {
                         continue;
+                    }
+                    // Corners of every layer's square are cut, including
+                    // the radius-1 top/bottom fringes -- a diamond/octagon
+                    // cross-section reads far less like a rectangular box
+                    // than a full square.
+                    if dx.abs() == radius && dz.abs() == radius {
+                        continue;
+                    }
+                    // Per-cell jitter on the outer ring, so the edge isn't
+                    // a perfectly even circle either.
+                    if dist == radius {
+                        let jitter =
+                            column_rand(wx + dx, wz + dz, self.seed, 0x1EAF ^ (dy as u32));
+                        if jitter > 0.55 + fullness * 0.3 {
+                            continue;
+                        }
                     }
                     let bx = lx + dx;
                     let by = top + dy;

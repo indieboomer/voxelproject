@@ -384,6 +384,11 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                     let uv_rect = atlas::uv_rect(atlas::tile_for(block, face_idx));
                     let reflectivity = block.reflectivity();
                     let emission = def.emission;
+                    // Leaves aren't anchored to anything solid, so (unlike
+                    // short grass) the whole block sways rather than just
+                    // its top -- toned down from the grass card's 1.0 since
+                    // it's a full cube, not a thin billboard.
+                    let wind = if def.cutout { 0.5 } else { 0.0 };
                     let base_index = vertices.len() as u32;
 
                     for (corner_idx, corner) in FACE_VERTS[face_idx].iter().enumerate() {
@@ -415,7 +420,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                             ao,
                             reflectivity,
                             emission,
-                            wind: 0.0,
+                            wind,
                         });
                     }
                     indices.extend_from_slice(&[
