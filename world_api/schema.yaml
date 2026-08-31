@@ -18,7 +18,7 @@
 # (air, mud, redstone, crystal), so it can't drift out of sync with the
 # actual block system the way a third hand-copied list would.
 
-version: "1.2.0"
+version: "1.3.0"
 title: World API
 description: >
   The Lua API exposed to sandboxed rule modules as the `api` table passed
@@ -160,7 +160,7 @@ budgets:
     applies_to: [set_poisoned]
     note: "1 health lost per tick, for as long as PlayerSnapshot.poisoned stays true. No Lua callback fires for this -- it's pure engine state, only observable by polling api.players()/nearest_player().health from on_tick."
 
-creature_kinds: [sheep, chicken]
+creature_kinds: [sheep, chicken, stone_golem]
 
 # ---------------------------------------------------------------------------
 # Shared table shapes returned by queries / passed to event handlers.
@@ -197,7 +197,7 @@ types:
       - {name: y, type: number}
       - {name: z, type: number}
       - {name: health, type: number}
-      - {name: max_health, type: number, desc: "Fixed per kind (sheep 12, chicken 6); never changes at runtime."}
+      - {name: max_health, type: number, desc: "Fixed per kind (sheep 12, chicken 6, stone_golem 40); never changes at runtime."}
   CreatureSnapshotWithDistance:
     desc: "CreatureSnapshot plus distance from the query point, as returned by nearest_creature()."
     extends: CreatureSnapshot
@@ -291,7 +291,7 @@ methods:
     category: query
     summary: "Creatures of one kind within a radius of a point."
     params:
-      - {name: kind, type: string, enum_ref: creature_kinds, desc: "\"sheep\", \"chicken\", or \"any\". An unrecognized string is treated the same as \"any\" -- it is NOT an error, so a typo silently matches every creature instead of failing loudly."}
+      - {name: kind, type: string, enum_ref: creature_kinds, desc: "\"sheep\", \"chicken\", \"stone_golem\", or \"any\". An unrecognized string is treated the same as \"any\" -- it is NOT an error, so a typo silently matches every creature instead of failing loudly."}
       - {name: cx, type: number}
       - {name: cy, type: number}
       - {name: cz, type: number}
@@ -306,7 +306,7 @@ methods:
     category: query
     summary: "The single closest creature of one kind to a point. No radius argument -- it searches every creature in the world unconditionally."
     params:
-      - {name: kind, type: string, enum_ref: creature_kinds, desc: "\"sheep\", \"chicken\", or \"any\" -- same unrecognized-string-means-any behavior as find_creatures."}
+      - {name: kind, type: string, enum_ref: creature_kinds, desc: "\"sheep\", \"chicken\", \"stone_golem\", or \"any\" -- same unrecognized-string-means-any behavior as find_creatures."}
       - {name: x, type: number}
       - {name: y, type: number}
       - {name: z, type: number}
@@ -405,9 +405,9 @@ methods:
   - name: spawn_creature
     namespace: world
     category: action
-    summary: "Spawns a new creature at a position."
+    summary: "Spawns a new creature at a position. sheep/chicken are passive (only ever move under a rule's chase, never attack). stone_golem is different: large, slow, and hostile -- entirely on its own, with no Lua involved, it closes on and periodically damages the nearest player within its aggro radius. Only spawn one when a hostile/dangerous creature is actually what the request wants."
     params:
-      - {name: kind, type: string, enum_ref: creature_kinds, desc: "\"sheep\" or \"chicken\"; anything else (including a typo) silently becomes \"sheep\" -- not an error."}
+      - {name: kind, type: string, enum_ref: creature_kinds, desc: "\"sheep\", \"chicken\", or \"stone_golem\"; anything else (including a typo) silently becomes \"sheep\" -- not an error."}
       - {name: x, type: number}
       - {name: y, type: number}
       - {name: z, type: number}

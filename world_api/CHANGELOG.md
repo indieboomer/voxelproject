@@ -12,6 +12,51 @@ Then update this file by hand with what actually changed and why -- the docs
 regenerate automatically, but "what changed and why" is not mechanically
 derivable from a diff of the schema alone.
 
+## 1.3.0 -- 2026-08-31 (stone golem)
+
+Adds a third creature kind: `stone_golem` -- large, slow, and the first
+hostile creature in the game. Unlike sheep/chicken (which only ever move
+under a rule's `chase()`), a golem autonomously closes on and periodically
+damages the nearest player within its aggro radius entirely on its own, no
+Lua involved at all.
+
+- **Added `CreatureKind::StoneGolem`** (`src/creature.rs`): speed 0.9
+  (slower than both sheep 1.4 and chicken 2.0 -- deliberately escapable, not
+  a fast ambush), 40 max health (vs. sheep 12 / chicken 6), and a body
+  roughly 2x a player's footprint, taller and wider than either existing
+  creature.
+- **Added engine-driven combat**: `Creatures::update` now takes the
+  connected players' positions and, for every golem with a player within
+  `STONE_GOLEM_AGGRO_RADIUS` (12 blocks), overrides its wander/Lua-chase
+  target to beeline for the nearest one (at its own slow speed, never the
+  Lua-chase speed boost) and, once within `STONE_GOLEM_ATTACK_RANGE` (2.2
+  blocks) and off cooldown (`STONE_GOLEM_ATTACK_COOLDOWN`, 1.5s), deals
+  `STONE_GOLEM_ATTACK_DAMAGE` (4) via the same `PlayerEffect::Health` path
+  `api.damage_player` uses -- so it replicates to a remote player and
+  clamps at 0 identically. No new World API surface for the damage itself;
+  a rule only ever *causes* a golem to exist (`api.spawn_creature`/
+  `spawn_creature_near_player`, kind `"stone_golem"`) or reacts to one via
+  the existing generic creature/health queries.
+- **NOT added to the starter-world creature scatter**
+  (`Creatures::spawn_around` stays sheep/chicken only, by design -- see its
+  doc comment): a hostile creature ambushing a brand-new player with no way
+  to have anticipated it would break the "same first-minutes experience
+  every world" guarantee. A golem only ever appears because a rule/spell
+  explicitly summoned one.
+- Added automated test coverage: golem aggro closing the distance within
+  radius, ignoring a player outside it, attack cooldown pacing (spaced
+  correctly over a multi-hit window, not firing every tick), sheep/chicken
+  provably never attacking regardless of proximity, kind round-tripping
+  through `spawn_creature`/`spawn_creature_near_player`/`find_creatures`/
+  `nearest_creature`.
+
+### Compatibility
+
+No breaking changes. `CreatureKind::to_u8`/`from_u8` gained a third variant
+(`2`) with `from_u8` still defaulting anything unrecognized to `Sheep` --
+existing saved worlds and rules that only ever produced/consumed 0
+(sheep)/1 (chicken) are unaffected. No save-format changes.
+
 ## 1.2.0 -- 2026-08-31 (player health, poison, attributes, inventory)
 
 Adds a health attribute (0-100, starting at 100), a poison status effect,

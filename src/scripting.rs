@@ -378,7 +378,34 @@ fn creature_kind_filter(kind: &str) -> Option<u8> {
     match kind.to_ascii_lowercase().as_str() {
         "sheep" => Some(0),
         "chicken" => Some(1),
+        "stone_golem" => Some(2),
         _ => None,
+    }
+}
+
+/// The Lua-facing kind string for the internal `u8` kind code -- the
+/// inverse of `creature_kind_filter`, used everywhere a creature's kind is
+/// reported back into a Lua table (`creatures()`/`find_creatures()`/
+/// `nearest_creature()`/`on_death`'s event).
+fn creature_kind_name(kind_u8: u8) -> &'static str {
+    match kind_u8 {
+        1 => "chicken",
+        2 => "stone_golem",
+        _ => "sheep",
+    }
+}
+
+/// Parses a Lua-facing kind string for `spawn_creature`/
+/// `spawn_creature_near_player` -- anything unrecognized (including a
+/// typo) silently becomes `Sheep`, matching those methods' documented
+/// "not an error" behavior in world_api/schema.yaml.
+fn parse_creature_kind(kind: &str) -> CreatureKind {
+    if kind.eq_ignore_ascii_case("chicken") {
+        CreatureKind::Chicken
+    } else if kind.eq_ignore_ascii_case("stone_golem") {
+        CreatureKind::StoneGolem
+    } else {
+        CreatureKind::Sheep
     }
 }
 
@@ -481,7 +508,7 @@ fn populate_api<'lua, 'scope>(
             for (i, (id, kind, pos, health, max_health)) in creature_list.iter().enumerate() {
                 let c = lua.create_table()?;
                 c.set("id", *id)?;
-                c.set("kind", if *kind == 0 { "sheep" } else { "chicken" })?;
+                c.set("kind", creature_kind_name(*kind))?;
                 c.set("x", pos[0])?;
                 c.set("y", pos[1])?;
                 c.set("z", pos[2])?;
@@ -518,7 +545,7 @@ fn populate_api<'lua, 'scope>(
                     }
                     let e = lua.create_table()?;
                     e.set("id", *id)?;
-                    e.set("kind", if *k == 0 { "sheep" } else { "chicken" })?;
+                    e.set("kind", creature_kind_name(*k))?;
                     e.set("x", pos[0])?;
                     e.set("y", pos[1])?;
                     e.set("z", pos[2])?;
@@ -551,7 +578,7 @@ fn populate_api<'lua, 'scope>(
                 };
                 let e = lua.create_table()?;
                 e.set("id", *id)?;
-                e.set("kind", if *k == 0 { "sheep" } else { "chicken" })?;
+                e.set("kind", creature_kind_name(*k))?;
                 e.set("x", pos[0])?;
                 e.set("y", pos[1])?;
                 e.set("z", pos[2])?;
@@ -632,11 +659,7 @@ fn populate_api<'lua, 'scope>(
                 return Ok(None);
             }
             spawn_budget.set(spawn_budget.get() - 1);
-            let kind = if kind.eq_ignore_ascii_case("chicken") {
-                CreatureKind::Chicken
-            } else {
-                CreatureKind::Sheep
-            };
+            let kind = parse_creature_kind(&kind);
             let seed = spawn_seed.get();
             spawn_seed.set(seed.wrapping_add(0x9E37_79B9_7F4A_7C15));
             let id = creatures_cell
@@ -658,11 +681,7 @@ fn populate_api<'lua, 'scope>(
                 };
                 let radius = radius.clamp(1.0, MAX_FIND_RADIUS);
                 spawn_budget.set(spawn_budget.get() - 1);
-                let kind = if kind.eq_ignore_ascii_case("chicken") {
-                    CreatureKind::Chicken
-                } else {
-                    CreatureKind::Sheep
-                };
+                let kind = parse_creature_kind(&kind);
                 let seed = spawn_seed.get();
                 spawn_seed.set(seed.wrapping_add(0x9E37_79B9_7F4A_7C15));
                 let (dx, dz) = random_offset_in_disk(seed, radius);
@@ -1024,11 +1043,7 @@ fn call_on_death(
     let block_budget = Cell::new(MAX_BLOCK_EDITS_PER_CALL);
     let spawn_budget = Cell::new(MAX_SPAWNS_PER_CALL);
     let world = input.world;
-    let kind_name = if event.kind.to_u8() == 0 {
-        "sheep"
-    } else {
-        "chicken"
-    };
+    let kind_name = creature_kind_name(event.kind.to_u8());
     let pos = event.pos;
 
     lua.scope(|scope| {
@@ -3088,6 +3103,83 @@ mod tests {
             outcome.player_effects.is_empty(),
             "a failed take must not queue a TakeItem effect: {:?}",
             outcome.player_effects
+        );
+    }
+
+    #[test]
+    fn spawn_creature_and_spawn_creature_near_player_accept_the_stone_golem_kind() {
+        // api.*() queries read a snapshot taken before the Lua call starts
+        // (see call_on_tick), so a creature spawned this same tick can't be
+        // found by find_creatures/nearest_creature until the *next* tick --
+        // this only checks that spawning itself accepts "stone_golem"
+        // (a non-nil id back) rather than silently defaulting to sheep.
+        // Kind round-tripping through queries is covered separately below
+        // using a creature that already existed before the tick started.
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let players = vec![snapshot(0, Vec3::new(0.0, 5.0, 0.0), false)];
+        let mut weather = WeatherState::new(1);
+
+        let source = r#"
+            function on_tick(api)
+                local a = api.spawn_creature("stone_golem", 5, 5, 5)
+                local b = api.spawn_creature_near_player(0, "stone_golem", 3)
+                if a ~= nil and b ~= nil then
+                    api.replace_block(0, 0, 0, "redstone")
+                end
+            end
+        "#
+        .to_string();
+        let mut module = Module::load("golem_spawn_check".into(), "test".into(), source).unwrap();
+        module.enabled = true;
+
+        let edits = run_one_tick(&mut module, &world, &mut creatures, &players, 0.5, &mut weather);
+        assert!(module.error.is_none(), "module errored: {:?}", module.error);
+        assert!(
+            edits.iter().any(|(_, _, _, b)| *b == BlockType::RedStone),
+            "expected both spawn calls to accept \"stone_golem\" and return an id: {edits:?}"
+        );
+        assert_eq!(
+            creatures
+                .snapshot_with_ids()
+                .iter()
+                .filter(|(_, kind, ..)| *kind == CreatureKind::StoneGolem.to_u8())
+                .count(),
+            2,
+            "expected both spawned creatures to actually be stone golems, not silently sheep"
+        );
+    }
+
+    #[test]
+    fn find_creatures_and_nearest_creature_report_the_stone_golem_kind() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let golem_id = creatures.spawn_one(CreatureKind::StoneGolem, Vec3::new(5.0, 5.0, 5.0), 1);
+        let players: Vec<PlayerSnapshot> = Vec::new();
+        let mut weather = WeatherState::new(1);
+
+        let source = format!(
+            r#"
+            function on_tick(api)
+                local found = api.find_creatures("stone_golem", 5, 5, 5, 1)
+                local nearest = api.nearest_creature("stone_golem", 5, 5, 5)
+                if #found == 1 and found[1].id == {golem_id} and found[1].kind == "stone_golem"
+                    and found[1].max_health == 40.0
+                    and nearest ~= nil and nearest.id == {golem_id}
+                then
+                    api.replace_block(0, 0, 0, "redstone")
+                end
+            end
+        "#
+        );
+        let mut module = Module::load("golem_query_check".into(), "test".into(), source).unwrap();
+        module.enabled = true;
+
+        let edits = run_one_tick(&mut module, &world, &mut creatures, &players, 0.5, &mut weather);
+        assert!(module.error.is_none(), "module errored: {:?}", module.error);
+        assert!(
+            edits.iter().any(|(_, _, _, b)| *b == BlockType::RedStone),
+            "expected find_creatures/nearest_creature to report kind \"stone_golem\" and the right max_health: {edits:?}"
         );
     }
 }

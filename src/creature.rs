@@ -1,5 +1,6 @@
 use glam::Vec3;
 
+use crate::net::PlayerId;
 use crate::voxel::atlas::white_uv;
 use crate::voxel::mesher::{push_cuboid_facing, MeshData, Vertex};
 use crate::voxel::world::SEA_LEVEL;
@@ -32,6 +33,12 @@ impl SimpleRng {
 pub enum CreatureKind {
     Sheep,
     Chicken,
+    /// Large, slow, hostile -- the only creature kind with built-in combat
+    /// behavior (see `Creatures::update`'s golem aggro/attack pass). Every
+    /// other kind only ever moves under Lua's `chase()`; a golem also
+    /// autonomously closes on and damages the nearest player within
+    /// `STONE_GOLEM_AGGRO_RADIUS`, entirely independent of any rule.
+    StoneGolem,
 }
 
 impl CreatureKind {
@@ -39,6 +46,9 @@ impl CreatureKind {
         match self {
             CreatureKind::Sheep => 1.4,
             CreatureKind::Chicken => 2.0,
+            // Deliberately slower than either -- "moves slowly" is meant to
+            // be an escapable, avoidable threat, not a fast ambush.
+            CreatureKind::StoneGolem => 0.9,
         }
     }
 
@@ -46,6 +56,7 @@ impl CreatureKind {
         match self {
             CreatureKind::Sheep => 12.0,
             CreatureKind::Chicken => 6.0,
+            CreatureKind::StoneGolem => 40.0,
         }
     }
 
@@ -53,6 +64,9 @@ impl CreatureKind {
         match self {
             CreatureKind::Sheep => Vec3::new(0.35, 0.45, 0.5),
             CreatureKind::Chicken => Vec3::new(0.2, 0.22, 0.28),
+            // Full size ~(1.3, 2.3, 1.3) -- taller and wider than the player
+            // (0.6 x 1.8 x 0.6), reads as "large" next to everything else.
+            CreatureKind::StoneGolem => Vec3::new(0.65, 1.15, 0.65),
         }
     }
 
@@ -60,6 +74,7 @@ impl CreatureKind {
         match self {
             CreatureKind::Sheep => [0.92, 0.92, 0.88],
             CreatureKind::Chicken => [0.92, 0.82, 0.25],
+            CreatureKind::StoneGolem => [0.52, 0.52, 0.55],
         }
     }
 
@@ -67,6 +82,7 @@ impl CreatureKind {
         match self {
             CreatureKind::Sheep => [0.72, 0.68, 0.62],
             CreatureKind::Chicken => [0.85, 0.25, 0.2],
+            CreatureKind::StoneGolem => [0.4, 0.4, 0.43],
         }
     }
 
@@ -74,12 +90,14 @@ impl CreatureKind {
         match self {
             CreatureKind::Sheep => 0,
             CreatureKind::Chicken => 1,
+            CreatureKind::StoneGolem => 2,
         }
     }
 
     pub fn from_u8(v: u8) -> CreatureKind {
         match v {
             1 => CreatureKind::Chicken,
+            2 => CreatureKind::StoneGolem,
             _ => CreatureKind::Sheep,
         }
     }
@@ -160,6 +178,11 @@ struct Wander {
 }
 struct Kind(CreatureKind);
 struct Health(f32);
+/// Seconds until this creature may attack again -- only ever decremented/
+/// read for a `StoneGolem`, but attached to every creature uniformly
+/// (unused, harmless) rather than giving hecs entities two different
+/// component shapes depending on kind.
+struct AttackCooldown(f32);
 /// Stable id exposed to Lua scripts, since a `hecs::Entity` isn't a
 /// convenient thing to hand across the API boundary.
 struct CreatureId(u32);
@@ -177,6 +200,18 @@ const TURN_RATE: f32 = 3.84;
 /// How long a Lua-set chase target stays valid before the creature reverts
 /// to normal wandering if it isn't refreshed again.
 const HUNT_TARGET_TTL: f32 = 0.3;
+
+/// How close a player has to be before a stone golem notices and starts
+/// closing in, overriding whatever it was doing (wandering, or even a
+/// Lua-set chase target -- see `Creatures::update`).
+const STONE_GOLEM_AGGRO_RADIUS: f32 = 12.0;
+/// Melee reach -- generous relative to the player/golem hitboxes so "large"
+/// actually reads as dangerous up close rather than needing to overlap.
+const STONE_GOLEM_ATTACK_RANGE: f32 = 2.2;
+const STONE_GOLEM_ATTACK_DAMAGE: f32 = 4.0;
+/// Seconds between hits once in range -- slow like its movement, so a
+/// player has a real window to retreat or fight back between hits.
+const STONE_GOLEM_ATTACK_COOLDOWN: f32 = 1.5;
 
 /// Reported when `damage`/`destroy` kills a creature, so the caller can
 /// fire the `on_death` event to every rule module (not just the one that
@@ -200,6 +235,13 @@ impl Creatures {
         }
     }
 
+    /// Populates a brand-new world's starter creatures -- sheep and chicken
+    /// only, deliberately never a golem. A hostile creature ambushing a
+    /// player in their first minutes with no way to have anticipated it
+    /// would undercut the "same experience in the first minutes" a fresh
+    /// world is supposed to guarantee; a golem only ever appears because a
+    /// rule/spell explicitly summons one (`api.spawn_creature`/
+    /// `spawn_creature_near_player`), which the player asked for.
     pub fn spawn_around(&mut self, world: &World, center: Vec3, count: usize, seed: u32) {
         let mut rng = SimpleRng::new(seed as u64 ^ 0xC0FFEE);
         for i in 0..count {
@@ -231,6 +273,7 @@ impl Creatures {
             },
             Kind(kind),
             Health(kind.max_health()),
+            AttackCooldown(0.0),
             CreatureId(id),
             Facing(0.0),
             SimpleRng::new(rng_seed),
@@ -244,40 +287,100 @@ impl Creatures {
     }
 
     /// Only the host runs creature AI; joined clients just render whatever
-    /// positions the host's snapshot reports.
-    pub fn update(&mut self, world: &World, dt: f32) {
-        for (_, (pos, wander, kind, rng, facing)) in self
-            .ecs
-            .query_mut::<(&mut Pos, &mut Wander, &Kind, &mut SimpleRng, &mut Facing)>()
-        {
-            wander.timer -= dt;
-            if wander.timer <= 0.0 {
-                if let Some((x, z)) = find_land_spot(world, rng, pos.0.x, pos.0.z, 6.0) {
-                    wander.target = (x, z);
-                }
-                wander.timer = 2.5 + rng.next_f32() * 3.5;
-                wander.hunting = false;
-            }
+    /// positions the host's snapshot reports. `player_targets` (id +
+    /// position) drives stone golem aggro -- the only creature-vs-player
+    /// interaction that isn't Lua-driven; everything else about this
+    /// method's per-tick wander/chase movement is unchanged for sheep and
+    /// chicken. Returns `(player_id, damage)` for every golem attack that
+    /// landed this tick, for the caller to apply via the same
+    /// `PlayerEffect::Health` path `api.damage_player` uses.
+    pub fn update(
+        &mut self,
+        world: &World,
+        dt: f32,
+        player_targets: &[(PlayerId, Vec3)],
+    ) -> Vec<(PlayerId, f32)> {
+        let mut attacks = Vec::new();
 
-            let to_target = Vec3::new(wander.target.0 - pos.0.x, 0.0, wander.target.1 - pos.0.z);
-            let dist = to_target.length();
-            if dist > 0.15 {
-                let dir = to_target / dist;
-                let speed = kind.0.speed()
-                    * if wander.hunting {
-                        HUNT_SPEED_MULTIPLIER
-                    } else {
-                        1.0
-                    };
-                let step = (speed * dt).min(dist);
-                pos.0.x += dir.x * step;
-                pos.0.z += dir.z * step;
-                facing.0 = turn_toward(facing.0, dir.z.atan2(dir.x), TURN_RATE * dt);
+        for (_, (pos, wander, kind, rng, facing, cooldown)) in self.ecs.query_mut::<(
+            &mut Pos,
+            &mut Wander,
+            &Kind,
+            &mut SimpleRng,
+            &mut Facing,
+            &mut AttackCooldown,
+        )>() {
+            cooldown.0 = (cooldown.0 - dt).max(0.0);
+
+            let aggro = if kind.0 == CreatureKind::StoneGolem {
+                player_targets
+                    .iter()
+                    .map(|&(id, p)| (id, p, pos.0.distance(p)))
+                    .filter(|&(_, _, dist)| dist <= STONE_GOLEM_AGGRO_RADIUS)
+                    .min_by(|a, b| a.2.total_cmp(&b.2))
+            } else {
+                None
+            };
+
+            if let Some((player_id, player_pos, dist)) = aggro {
+                // Beeline for the player every tick this close, overriding
+                // whatever wander/Lua-chase target it had -- deliberately
+                // at the golem's own (slow) speed, never
+                // HUNT_SPEED_MULTIPLIER, so "moves slowly" stays true even
+                // while it's actively attacking.
+                let to_target = Vec3::new(player_pos.x - pos.0.x, 0.0, player_pos.z - pos.0.z);
+                let horiz_dist = to_target.length();
+                if horiz_dist > 0.05 {
+                    let dir = to_target / horiz_dist;
+                    let step = (kind.0.speed() * dt).min(horiz_dist);
+                    pos.0.x += dir.x * step;
+                    pos.0.z += dir.z * step;
+                    facing.0 = turn_toward(facing.0, dir.z.atan2(dir.x), TURN_RATE * dt);
+                }
+                if dist <= STONE_GOLEM_ATTACK_RANGE && cooldown.0 <= 0.0 {
+                    attacks.push((player_id, STONE_GOLEM_ATTACK_DAMAGE));
+                    cooldown.0 = STONE_GOLEM_ATTACK_COOLDOWN;
+                }
+                // Force an immediate retarget (see the `timer <= 0.0` check
+                // below) the moment aggro lapses, instead of resuming a
+                // stale wander target from wherever it was before -- keeps
+                // the transition back to wandering from looking like a
+                // sudden beeline to some far-off point.
+                wander.target = (pos.0.x, pos.0.z);
+                wander.timer = 0.0;
+            } else {
+                wander.timer -= dt;
+                if wander.timer <= 0.0 {
+                    if let Some((x, z)) = find_land_spot(world, rng, pos.0.x, pos.0.z, 6.0) {
+                        wander.target = (x, z);
+                    }
+                    wander.timer = 2.5 + rng.next_f32() * 3.5;
+                    wander.hunting = false;
+                }
+
+                let to_target =
+                    Vec3::new(wander.target.0 - pos.0.x, 0.0, wander.target.1 - pos.0.z);
+                let dist = to_target.length();
+                if dist > 0.15 {
+                    let dir = to_target / dist;
+                    let speed = kind.0.speed()
+                        * if wander.hunting {
+                            HUNT_SPEED_MULTIPLIER
+                        } else {
+                            1.0
+                        };
+                    let step = (speed * dt).min(dist);
+                    pos.0.x += dir.x * step;
+                    pos.0.z += dir.z * step;
+                    facing.0 = turn_toward(facing.0, dir.z.atan2(dir.x), TURN_RATE * dt);
+                }
             }
 
             let ground = world.terrain_height(pos.0.x.floor() as i32, pos.0.z.floor() as i32);
             pos.0.y = ground as f32 + 1.0;
         }
+
+        attacks
     }
 
     pub fn build_mesh(&self) -> MeshData {
@@ -514,7 +617,7 @@ mod tests {
         let target = spawn + Vec3::new(0.0, 0.0, 10.0);
         for _ in 0..40 {
             creatures.set_chase_target(id, target);
-            creatures.update(&world, 1.0 / 60.0);
+            creatures.update(&world, 1.0 / 60.0, &[]);
         }
 
         let facing = creatures.facing_of(id).expect("creature should still exist");
@@ -536,7 +639,7 @@ mod tests {
         let target = spawn + Vec3::new(0.0, 0.0, 10.0);
         for _ in 0..40 {
             creatures.set_chase_target(id, target);
-            creatures.update(&world, 1.0 / 60.0);
+            creatures.update(&world, 1.0 / 60.0, &[]);
         }
         let facing_after_turn = creatures.facing_of(id).unwrap();
 
@@ -546,7 +649,7 @@ mod tests {
         let pos = creatures.snapshot_with_ids()[0].2;
         creatures.set_chase_target(id, Vec3::from_array(pos));
         for _ in 0..10 {
-            creatures.update(&world, 1.0 / 60.0);
+            creatures.update(&world, 1.0 / 60.0, &[]);
         }
 
         let facing_after_idle = creatures.facing_of(id).unwrap();
@@ -554,5 +657,122 @@ mod tests {
             (facing_after_idle - facing_after_turn).abs() < 1e-4,
             "facing shouldn't change while not moving: {facing_after_turn} -> {facing_after_idle}"
         );
+    }
+
+    #[test]
+    fn creature_kind_u8_round_trips_including_stone_golem() {
+        assert_eq!(CreatureKind::from_u8(0).to_u8(), 0);
+        assert_eq!(CreatureKind::from_u8(1).to_u8(), 1);
+        assert_eq!(CreatureKind::from_u8(2).to_u8(), 2);
+        assert_eq!(CreatureKind::StoneGolem.to_u8(), 2);
+    }
+
+    #[test]
+    fn a_stone_golem_closes_in_on_a_player_within_its_aggro_radius() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let golem_pos = Vec3::new(0.0, spawn_y, 0.0);
+        creatures.spawn_one(CreatureKind::StoneGolem, golem_pos, 1);
+        let player_id: PlayerId = 5;
+        // Within aggro range but well outside melee range, so this window
+        // only exercises the "close the distance" part of the behavior.
+        let player_pos = golem_pos + Vec3::new(6.0, 0.0, 0.0);
+        let initial_dist = golem_pos.distance(player_pos);
+
+        for _ in 0..60 {
+            creatures.update(&world, 1.0 / 60.0, &[(player_id, player_pos)]);
+        }
+
+        let golem_pos_after = Vec3::from_array(creatures.snapshot_with_ids()[0].2);
+        let dist_after = golem_pos_after.distance(player_pos);
+        assert!(
+            dist_after < initial_dist,
+            "expected the golem to have moved closer to the player: {initial_dist} -> {dist_after}"
+        );
+    }
+
+    #[test]
+    fn a_stone_golem_ignores_a_player_outside_its_aggro_radius() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let golem_pos = Vec3::new(0.0, spawn_y, 0.0);
+        creatures.spawn_one(CreatureKind::StoneGolem, golem_pos, 1);
+        let player_id: PlayerId = 5;
+        let player_pos = golem_pos + Vec3::new(STONE_GOLEM_AGGRO_RADIUS + 5.0, 0.0, 0.0);
+
+        for _ in 0..120 {
+            let attacks = creatures.update(&world, 1.0 / 60.0, &[(player_id, player_pos)]);
+            assert!(
+                attacks.is_empty(),
+                "a golem should never attack a player outside its aggro radius"
+            );
+        }
+    }
+
+    #[test]
+    fn only_stone_golems_ever_attack_a_nearby_player() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let spawn = Vec3::new(0.0, spawn_y, 0.0);
+        creatures.spawn_one(CreatureKind::Sheep, spawn, 1);
+        creatures.spawn_one(CreatureKind::Chicken, spawn, 2);
+        let player_id: PlayerId = 7;
+        // Standing right on top of both -- if either could attack, this is
+        // as favorable a setup for it as possible.
+        let player_pos = spawn;
+
+        for _ in 0..300 {
+            let attacks = creatures.update(&world, 1.0 / 60.0, &[(player_id, player_pos)]);
+            assert!(
+                attacks.is_empty(),
+                "sheep and chicken must never attack a player, regardless of proximity"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stone_golem_already_in_melee_range_attacks_on_a_cooldown_not_every_tick() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let golem_pos = Vec3::new(0.0, spawn_y, 0.0);
+        creatures.spawn_one(CreatureKind::StoneGolem, golem_pos, 1);
+        let player_id: PlayerId = 5;
+        let player_pos = golem_pos + Vec3::new(1.0, 0.0, 0.0);
+        assert!(golem_pos.distance(player_pos) <= STONE_GOLEM_ATTACK_RANGE);
+
+        let dt = 1.0 / 60.0;
+        let duration = STONE_GOLEM_ATTACK_COOLDOWN * 3.0 + 0.5;
+        let ticks = (duration / dt) as usize;
+        let mut hit_times = Vec::new();
+        let mut t = 0.0f32;
+        for _ in 0..ticks {
+            let attacks = creatures.update(&world, dt, &[(player_id, player_pos)]);
+            if !attacks.is_empty() {
+                assert_eq!(
+                    attacks,
+                    vec![(player_id, STONE_GOLEM_ATTACK_DAMAGE)],
+                    "at most one hit per tick, for the right amount"
+                );
+                hit_times.push(t);
+            }
+            t += dt;
+        }
+
+        assert!(
+            hit_times.len() >= 3,
+            "expected several hits over {duration}s at a {STONE_GOLEM_ATTACK_COOLDOWN}s cooldown, got {}: {hit_times:?}",
+            hit_times.len()
+        );
+        for pair in hit_times.windows(2) {
+            let gap = pair[1] - pair[0];
+            assert!(
+                gap >= STONE_GOLEM_ATTACK_COOLDOWN - dt * 2.0,
+                "hits should be spaced at least the cooldown apart, got a {gap}s gap: {hit_times:?}"
+            );
+        }
     }
 }

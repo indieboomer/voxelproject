@@ -583,4 +583,38 @@ mod tests {
         );
         assert!(!module.name.is_empty());
     }
+
+    /// Same pipeline once more, for the 1.3.0 stone_golem creature kind.
+    #[test]
+    #[ignore = "requires a running llama-server on 127.0.0.1:8090"]
+    fn live_generation_uses_the_stone_golem_kind_for_a_summon_prompt() {
+        use crate::scripting::Module;
+        use std::time::{Duration, Instant};
+
+        let client = LlmClient::new("http://127.0.0.1:8090".to_string());
+        let prompt = "summon a stone golem near me";
+        let kind = classify_prompt(prompt);
+        let pending = client.generate(prompt, kind);
+
+        let deadline = Instant::now() + Duration::from_secs(90);
+        let result = loop {
+            if let Some(r) = pending.poll() {
+                break r;
+            }
+            if Instant::now() > deadline {
+                panic!("timed out waiting for llama-server");
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+
+        let code = result.expect("generation request should succeed");
+        println!("--- generated Lua ---\n{code}\n----------------------");
+        let module = Module::load("test_golem".to_string(), "test".to_string(), code.clone())
+            .expect("generated module should pass validation");
+        assert!(
+            code.contains("stone_golem"),
+            "expected \"summon a stone golem near me\" to reference the stone_golem kind: {code}"
+        );
+        assert!(!module.name.is_empty());
+    }
 }

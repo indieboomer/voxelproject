@@ -1111,7 +1111,18 @@ impl App {
         if matches!(self.net, NetRole::Host(_)) {
             self.time_of_day = (self.time_of_day + dt / DAY_LENGTH_SECS).rem_euclid(1.0);
             self.weather.update(dt);
-            self.creatures.update(&self.world, dt);
+            let player_targets: Vec<(PlayerId, Vec3)> = self
+                .host_player_positions()
+                .iter()
+                .map(|p| (p.id, p.pos))
+                .collect();
+            let golem_attacks = self.creatures.update(&self.world, dt, &player_targets);
+            for (player_id, damage) in golem_attacks {
+                self.apply_player_effect(PlayerEffect::Health {
+                    player_id,
+                    delta: -damage,
+                });
+            }
 
             self.lua_tick_timer += dt;
             if self.lua_tick_timer >= LUA_TICK_INTERVAL {

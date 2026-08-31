@@ -4,7 +4,7 @@
 // Consumed by src/world_api_validate.rs's pre-flight lint, which runs on
 // LLM-generated Lua before it's ever loaded into a real Lua VM.
 
-pub const VERSION: &str = "1.2.0";
+pub const VERSION: &str = "1.3.0";
 
 /// Every `api.<name>` callable method this World API version defines.
 pub const METHOD_NAMES: &[&str] = &["players", "nearest_player", "creatures", "find_creatures", "nearest_creature", "get_block", "find_blocks", "terrain_height", "distance", "chase", "damage", "destroy", "spawn_creature", "spawn_creature_near_player", "replace_block", "set_weather", "start_rain", "stop_rain", "set_time_of_day", "set_time_dawn", "set_time_night", "broadcast", "give_item", "take_item", "get_resource_count", "damage_player", "heal_player", "set_poisoned", "set_player_speed", "set_player_jump"];
@@ -21,5 +21,5 @@ pub const BLOCK_KINDS: &[&str] = &["basalt", "bedrock", "birch_leaves", "birch_w
 /// schema.yaml) rather than crash, so they're lower-value to flag than a bad
 /// block kind -- but kept here for a future validator check or Lua stub use.
 #[allow(dead_code)]
-pub const CREATURE_KINDS: &[&str] = &["sheep", "chicken"];
+pub const CREATURE_KINDS: &[&str] = &["sheep", "chicken", "stone_golem"];
 
