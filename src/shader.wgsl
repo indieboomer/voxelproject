@@ -9,8 +9,13 @@ struct CameraUniform {
     zenith_color: vec4<f32>,
     sun_dir: vec4<f32>,
     // x = ambient, y = sun_intensity, z = free-running clock (seconds) for
-    // the water wave animation
+    // the water wave animation, w = wind_strength (multiplies grass/leaf
+    // sway amplitude below -- see weather.rs's Weather::wind_strength)
     light_params: vec4<f32>,
+    // x = lightning_flash, 0..1 (see App::update_lightning) -- blended
+    // toward white in fs_main below during a storm's lightning strike.
+    // y/z/w reserved, currently always 0.
+    weather_fx: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -57,8 +62,9 @@ fn vs_main(in: VertexInput) -> VertexOutput {
         // (short grass) moves -- the base stays planted -- and each tuft's
         // world x/z feed the phase so a whole field doesn't sway in lockstep.
         let t = camera.light_params.z;
-        let sway = sin(t * 1.6 + pos.x * 0.9 + pos.z * 0.7) * 0.09
-            + sin(t * 2.3 + pos.x * 0.3 - pos.z * 0.5) * 0.05;
+        let wind_strength = camera.light_params.w;
+        let sway = (sin(t * 1.6 + pos.x * 0.9 + pos.z * 0.7) * 0.09
+            + sin(t * 2.3 + pos.x * 0.3 - pos.z * 0.5) * 0.05) * wind_strength;
         pos.x += sway * in.wind;
         pos.z += sway * 0.6 * in.wind;
     }
@@ -209,5 +215,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let fog_amount = clamp((dist - fog_start) / (fog_end - fog_start), 0.0, 1.0);
 
     let final_color = mix(reflected, camera.fog_color.rgb, fog_amount);
-    return vec4<f32>(grade(final_color), 1.0);
+    // Lightning flash: a straight blend to white over the final graded
+    // color, so a strike reads as a clean, even whiteout regardless of
+    // what was underneath -- applied identically in sky.wgsl so the whole
+    // screen (terrain and sky both) flashes together, not just one or the
+    // other.
+    let flashed = mix(grade(final_color), vec3<f32>(1.0), camera.weather_fx.x);
+    return vec4<f32>(flashed, 1.0);
 }

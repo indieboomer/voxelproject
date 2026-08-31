@@ -18,7 +18,7 @@
 # (air, mud, redstone, crystal), so it can't drift out of sync with the
 # actual block system the way a third hand-copied list would.
 
-version: "1.3.0"
+version: "1.5.0"
 title: World API
 description: >
   The Lua API exposed to sandboxed rule modules as the `api` table passed
@@ -64,7 +64,7 @@ replication:
   weather_and_time_of_day: "Carried in the same best-effort Snapshot as creature state -- see creature_state."
   broadcast_messages: "One reliable Notify message per api.broadcast call, the same path used for host system notifications (rule enabled/disabled, player joined, etc.)."
   item_grants: "One reliable, targeted ReliableMsg::GrantItem per give_item call, sent only to the named player_id (not broadcast to everyone like Notify) -- the host applies its own grant locally instead of round-tripping through the network."
-  player_attributes: "health, poisoned, speed_multiplier, and jump_multiplier all ride the same best-effort Snapshot creature_state already uses (~20Hz, self-healing) -- broadcast to every connected player, not just the one they belong to, the same way carrying_crystal already is. A player's own client also applies its own speed_multiplier/jump_multiplier from this to its local movement physics, since movement itself is simulated client-side."
+  player_attributes: "health, poisoned, speed_multiplier, jump_multiplier, and oxygen all ride the same best-effort Snapshot creature_state already uses (~20Hz, self-healing) -- broadcast to every connected player, not just the one they belong to, the same way carrying_crystal already is. A player's own client also applies its own speed_multiplier/jump_multiplier from this to its local movement physics, since movement itself is simulated client-side."
 
 persistence:
   saved_fields: [name, prompt, source, enabled]
@@ -85,15 +85,15 @@ persistence:
     it keeps the two kinds fully interchangeable in the save format and
     means this feature needed zero changes to WorldSave's bincode layout.
   player_state_not_saved: >
-    health, poisoned, speed_multiplier, jump_multiplier, and Resources
-    inventory counts are NOT saved with the world, the same way a module's
-    Lua runtime state isn't (see not_saved above) -- every player starts
-    every session at full health (100), unpoisoned, with 1.0 multipliers,
-    and an empty inventory, regardless of how the previous session ended.
-    This was already true for the inventory before this API version; health/
-    poisoned/multipliers are new state introduced alongside it and follow
-    the same precedent rather than becoming the first per-player state that
-    does persist.
+    health, poisoned, speed_multiplier, jump_multiplier, oxygen, and
+    Resources inventory counts are NOT saved with the world, the same way a
+    module's Lua runtime state isn't (see not_saved above) -- every player
+    starts every session at full health (100), unpoisoned, with 1.0
+    multipliers, full oxygen (100), and an empty inventory, regardless of
+    how the previous session ended. This was already true for the inventory
+    before this API version; health/poisoned/multipliers/oxygen are newer
+    state introduced alongside it and follow the same precedent rather than
+    becoming the first per-player state that does persist.
   api_version_tagging: >
     Every module's `source` may begin with a `-- api_version: X.Y.Z` comment
     line recording which World API version it was written/generated
@@ -159,6 +159,21 @@ budgets:
     scope: "global -- how often every currently-poisoned player loses health, engine-driven, not a Lua call"
     applies_to: [set_poisoned]
     note: "1 health lost per tick, for as long as PlayerSnapshot.poisoned stays true. No Lua callback fires for this -- it's pure engine state, only observable by polling api.players()/nearest_player().health from on_tick."
+  oxygen_drain_per_sec:
+    value: 2.0
+    scope: "global -- how fast PlayerSnapshot.oxygen falls while a player stands in a water block, engine-driven, not a Lua call"
+    applies_to: []
+    note: "Full drain (100 -> 0) takes 50 seconds. No Lua callback fires for this either -- same purely-observable-by-polling story as poison_tick_secs."
+  oxygen_regen_per_sec:
+    value: 12.5
+    scope: "global -- how fast PlayerSnapshot.oxygen recovers while a player is NOT submerged"
+    applies_to: []
+    note: "Full recovery (0 -> 100) takes 8 seconds -- deliberately much faster than the drain, so surfacing reads as a real relief rather than a slow trickle back."
+  drowning_damage_per_sec:
+    value: 0.1
+    scope: "global -- health lost per second once a player's oxygen has hit 0 and stayed there, for as long as they remain submerged"
+    applies_to: []
+    note: "1 health every 10 seconds -- slow enough to give a player time to notice and surface rather than punishing a moment of carelessness, but a real, escalating cost for staying under with no air. Stacks with poison_tick_secs if a player is unlucky enough to be both."
 
 creature_kinds: [sheep, chicken, stone_golem]
 
@@ -183,6 +198,7 @@ types:
       - {name: poisoned, type: boolean, desc: "While true, this player loses 1 health every poison_tick_secs, until something sets it back to false (e.g. a future medication item -- see set_poisoned). Sourced from and reported through this flag only; there is no separate 'poison timer' exposed."}
       - {name: speed_multiplier, type: number, desc: "Multiplies this player's base walk/sprint speed. 1.0 = normal; see set_player_speed."}
       - {name: jump_multiplier, type: number, desc: "Multiplies this player's base jump speed (so roughly jump *height* scales with its square, not linearly). 1.0 = normal; see set_player_jump."}
+      - {name: oxygen, type: number, desc: "0-100. Drains by oxygen_drain_per_sec while this player is standing in a water block, regenerates by oxygen_regen_per_sec otherwise, capping at 100 when not submerged. Once it reaches 0 and stays there, health starts draining too (drowning_damage_per_sec) -- pure engine state, purely a function of being in water; there is no api.set_player_oxygen, nothing else moves this value."}
   PlayerSnapshotWithDistance:
     desc: "PlayerSnapshot plus the straight-line distance from the query point, as returned by nearest_player()."
     extends: PlayerSnapshot
@@ -247,8 +263,8 @@ properties:
   - name: weather
     namespace: world
     type: string
-    enum: [clear, rain]
-    desc: "Current weather."
+    enum: [sunny, rain, mist, storm, windy]
+    desc: "Current weather. sunny is the baseline (weighted heaviest when the engine picks the next weather on its own timer -- see set_weather). storm and windy both increase grass/leaf wind-sway noticeably (storm the most); mist reduces it and hazes the fog color. Only rain and storm render falling rain. \"clear\" is still accepted by set_weather as an alias for \"sunny\" (see set_weather), but this property itself only ever reports the current name, \"sunny\"."
     since: "1.0.0"
 
 # ---------------------------------------------------------------------------
@@ -446,9 +462,9 @@ methods:
   - name: set_weather
     namespace: world
     category: action
-    summary: "Sets the weather directly."
+    summary: "Sets the weather directly, and resets the engine's own random weather timer (so it won't immediately pick something else out from under you)."
     params:
-      - {name: name, type: string, enum: [clear, rain]}
+      - {name: name, type: string, enum: [sunny, rain, mist, storm, windy], desc: "\"clear\" is also accepted, as an alias for \"sunny\" (its name before the 5-weather system existed)."}
     returns: {type: nil, desc: "An unrecognized name is silently ignored -- not an error."}
     errors: []
     since: "1.0.0"
@@ -465,7 +481,7 @@ methods:
   - name: stop_rain
     namespace: world
     category: action
-    summary: "Shorthand for set_weather(\"clear\")."
+    summary: "Shorthand for set_weather(\"sunny\")."
     params: []
     returns: {type: nil}
     errors: []

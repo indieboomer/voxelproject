@@ -12,6 +12,108 @@ Then update this file by hand with what actually changed and why -- the docs
 regenerate automatically, but "what changed and why" is not mechanically
 derivable from a diff of the schema alone.
 
+## 1.5.0 -- 2026-08-31 (five-weather system)
+
+Expands weather from a strict clear/rain alternation to five kinds --
+sunny, rain, mist, storm, windy -- picked by weighted random timer instead
+of forced alternation, with storm/windy visibly increasing grass/leaf wind
+sway and mist hazing the fog.
+
+- **Renamed `Weather::Clear` to `Weather::Sunny`** (`src/weather.rs`) and
+  added `Mist`, `Storm`, `Windy`. `api.weather`/`api.set_weather` report/
+  accept the new name `"sunny"`; `"clear"` is still accepted by
+  `set_weather` as a backward-compatible alias so an old rule/save that
+  says `api.set_weather("clear")` keeps working. `to_u8`/`from_u8` keep
+  Sunny=0/Rain=1 stable and add Mist=2/Storm=3/Windy=4.
+- **Weighted random selection, not alternation**: `WeatherState` used to
+  strictly flip Clear<->Rain every stretch. It now picks the next weather
+  by weight (sunny 45, rain 20, mist 15, windy 12, storm 8) and can land
+  back on the current one -- deliberate, since that's what actually makes
+  "sunny is most common" show up as multiple consecutive sunny stretches
+  rather than a forced near-even rotation through all five.
+- **Per-weather stretch duration**: storms are brief (30-90s), sunny
+  stretches run long (120-300s) since it's the baseline, everything else
+  in between (60-150s) -- previously every weather used the same flat
+  90-240s range regardless of kind.
+- **Storm/windy increase grass/leaf wind sway** (the request's main ask):
+  added `Weather::wind_strength` (sunny/rain 1.0 baseline, mist 0.5, windy
+  2.0, storm 2.5), threaded through as a new `w` component on
+  `CameraUniform.light_params` (previously unused, hardcoded to `0.0`) and
+  multiplied into the existing sway formula in `shader.wgsl`'s `vs_main` --
+  the same per-vertex `wind` attribute both short grass (top-only sway) and
+  leaves (whole-block sway, see `mesher.rs`) already used, so both move
+  together with zero mesh-generation changes needed.
+- **Storm renders rain too** (`Weather::has_rain_particles`, true for
+  Rain and Storm) -- a storm with no rain falling would just be windy with
+  a different name. **Mist hazes the fog color** toward a soft gray-white,
+  blended with the existing sky-color fog rather than a separate
+  fog-distance system, so it reads as visibly different from sunny without
+  a new uniform field.
+- Added automated test coverage in the previously-untested `weather.rs`:
+  name/from_name round-trips (including the "clear" alias) for every kind,
+  to_u8/from_u8 round-trips and unrecognized-value fallback, wind_strength
+  ordering (storm > windy > baseline > mist), has_rain_particles,
+  stretch-duration ordering, and a statistical check that sunny is picked
+  meaningfully more often than storm over many rolls.
+
+### Compatibility
+
+No save-format changes -- weather was never saved with the world (resets
+to Sunny every session, like health/oxygen/inventory). `Weather::Clear`'s
+Rust name changed, but `to_u8()==0` is unchanged, so a decoded `Snapshot`
+byte from an old build still reads correctly as the (renamed) Sunny.
+`api.weather`'s reported string changed from `"clear"` to `"sunny"` -- a
+rule checking `api.weather == "clear"` will no longer match (checking
+`== "rain"` etc. is unaffected); `api.set_weather("clear")` still works via
+the alias. No modules under `modules/` referenced `"clear"` (audited), so
+none needed updating.
+
+## 1.4.0 -- 2026-08-31 (oxygen)
+
+Adds an oxygen attribute (0-100, starting full) that drains while a player
+is submerged in water and drowns them (via the existing health/damage path)
+if it stays empty too long -- the first engine-driven player hazard tied to
+the world itself, rather than a rule or a hostile creature.
+
+- **Added `oxygen`** to `Player`/`RemotePlayer`/`PlayerSnapshot`
+  (`src/player.rs`), read-only from Lua via `api.players()`/
+  `api.nearest_player()`. No `api.set_player_oxygen` -- submersion alone
+  drives it, so there's nothing for a rule to meaningfully set.
+- **Tuned rates, not the literal request**: asked for "1 oxygen every 10
+  seconds" while submerged, but at that rate a full tank takes 1000 seconds
+  (~16 minutes) to empty -- long enough that the mechanic would never
+  actually matter in play. Went with `oxygen_drain_per_sec` = 2.0 instead
+  (50s full drain, a common "how long can I hold my breath" ballpark in
+  other games), and added `oxygen_regen_per_sec` = 12.5 (8s full recovery)
+  so surfacing reads as a real relief rather than a slow trickle back --
+  neither rate was in the original request. Keep the literal "1 health
+  every 10 seconds" for `drowning_damage_per_sec` once oxygen hits 0: slow
+  enough to give a player time to notice and swim up, which is exactly the
+  fairness a drowning mechanic should have.
+- **Continuous, not tick-based**: unlike poison's 10-second timer
+  (`POISON_TICK_INTERVAL`), oxygen drain/regen/drowning-damage are applied
+  every frame scaled by `dt` (`App::update_oxygen`) so the HUD bar (new:
+  an Oxygen readout, shown only while it's below 100) moves smoothly
+  instead of visibly stepping.
+- **Replication**: `oxygen` rides the same best-effort Snapshot broadcast
+  health/poisoned/the multipliers already use (`net::SnapshotPlayer`
+  gained a field) -- host-authoritative, since only the host computes
+  submersion for every connected player and applies the engine pass.
+- Added automated test coverage: `Player::drain_oxygen`/
+  `regenerate_oxygen` clamping at 0/`MAX_OXYGEN`; the tuned rates actually
+  producing full drain/regen within their documented time budgets;
+  `oxygen` round-tripping through `api.players()`/`api.nearest_player()`;
+  `SnapshotPlayer` encode/decode (extended in the same test as 1.2.0's).
+
+### Compatibility
+
+No breaking changes to the save format -- `oxygen` follows the
+`player_state_not_saved` precedent (health, poison, multipliers, inventory)
+rather than becoming the first per-player state that persists.
+`UnreliableMsg::Snapshot`'s wire shape changed again (one more field on
+`SnapshotPlayer`), same caveat as 1.2.0's entry: host and client are always
+expected to be the same build, no protocol version negotiation exists yet.
+
 ## 1.3.0 -- 2026-08-31 (stone golem)
 
 Adds a third creature kind: `stone_golem` -- large, slow, and the first

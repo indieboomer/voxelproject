@@ -87,6 +87,7 @@ pub struct SnapshotPlayer {
     pub poisoned: bool,
     pub speed_multiplier: f32,
     pub jump_multiplier: f32,
+    pub oxygen: f32,
 }
 
 /// Best-effort messages sent every tick; a dropped one is superseded by the
@@ -241,6 +242,7 @@ mod tests {
             poisoned: true,
             speed_multiplier: 1.5,
             jump_multiplier: 0.8,
+            oxygen: 42.0,
         };
         let packet = Packet::Unreliable(UnreliableMsg::Snapshot {
             time_of_day: 0.42,

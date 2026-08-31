@@ -62,6 +62,10 @@ pub struct PlayerSnapshot {
     pub poisoned: bool,
     pub speed_multiplier: f32,
     pub jump_multiplier: f32,
+    /// 0-100, drains while `in_water`, regenerates otherwise -- see
+    /// `player::OXYGEN_DRAIN_PER_SEC`/`_REGEN_PER_SEC`. Read-only from Lua;
+    /// there's no `api.set_player_oxygen`, since submersion alone drives it.
+    pub oxygen: f32,
 }
 
 /// A player-caused block break (mining, not a rule's own `replace_block`),
@@ -434,6 +438,7 @@ fn set_player_fields<'lua>(e: &Table<'lua>, p: &PlayerSnapshot) -> mlua::Result<
     e.set("poisoned", p.poisoned)?;
     e.set("speed_multiplier", p.speed_multiplier)?;
     e.set("jump_multiplier", p.jump_multiplier)?;
+    e.set("oxygen", p.oxygen)?;
     Ok(())
 }
 
@@ -786,7 +791,7 @@ fn populate_api<'lua, 'scope>(
     api.set(
         "stop_rain",
         scope.create_function(move |_, ()| {
-            weather_cell.borrow_mut().set(Weather::Clear);
+            weather_cell.borrow_mut().set(Weather::Sunny);
             Ok(())
         })?,
     )?;
@@ -1488,7 +1493,7 @@ impl ScriptHost {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::player::MAX_HEALTH;
+    use crate::player::{MAX_HEALTH, MAX_OXYGEN};
     use crate::voxel::World;
 
     fn make_creatures(seed: u32) -> Creatures {
@@ -1520,6 +1525,7 @@ mod tests {
             poisoned: false,
             speed_multiplier: 1.0,
             jump_multiplier: 1.0,
+            oxygen: MAX_OXYGEN,
         }
     }
 
@@ -2048,6 +2054,7 @@ mod tests {
             poisoned: false,
             speed_multiplier: 1.0,
             jump_multiplier: 1.0,
+            oxygen: MAX_OXYGEN,
         }];
         let mut weather = WeatherState::new(1);
 
@@ -2155,9 +2162,10 @@ mod tests {
             poisoned: false,
             speed_multiplier: 1.0,
             jump_multiplier: 1.0,
+            oxygen: MAX_OXYGEN,
         }];
         let mut weather = WeatherState::new(1);
-        assert_eq!(weather.current, Weather::Clear);
+        assert_eq!(weather.current, Weather::Sunny);
         let mut time_of_day = 0.5;
 
         let source = std::fs::read_to_string("modules/storm_summoner.lua").unwrap();
@@ -2217,6 +2225,7 @@ mod tests {
             poisoned: false,
             speed_multiplier: 1.0,
             jump_multiplier: 1.0,
+            oxygen: MAX_OXYGEN,
         }];
         let mut weather = WeatherState::new(1);
         let mut time_of_day = 0.5;
@@ -2252,7 +2261,7 @@ mod tests {
         );
         assert_eq!(
             weather.current,
-            Weather::Clear,
+            Weather::Sunny,
             "a walking player's crystal break should not summon a storm"
         );
         assert_eq!(creatures.snapshot_with_ids().len(), 0);
@@ -2280,6 +2289,7 @@ mod tests {
             poisoned: false,
             speed_multiplier: 1.0,
             jump_multiplier: 1.0,
+            oxygen: MAX_OXYGEN,
         };
         run_one_tick(&mut module, &world, &mut creatures, &[grounded], 0.5, &mut weather);
         assert!(
@@ -2289,7 +2299,7 @@ mod tests {
         );
         assert_eq!(
             weather.current,
-            Weather::Clear,
+            Weather::Sunny,
             "standing still shouldn't start rain"
         );
 
@@ -2305,6 +2315,7 @@ mod tests {
             poisoned: false,
             speed_multiplier: 1.0,
             jump_multiplier: 1.0,
+            oxygen: MAX_OXYGEN,
         };
         run_one_tick(&mut module, &world, &mut creatures, &[jumping], 0.5, &mut weather);
         assert!(
@@ -2344,6 +2355,7 @@ mod tests {
             poisoned: false,
             speed_multiplier: 1.0,
             jump_multiplier: 1.0,
+            oxygen: MAX_OXYGEN,
         };
         run_one_tick(
             &mut module,
@@ -2357,7 +2369,7 @@ mod tests {
         assert!(module.error.is_none(), "module errored: {:?}", module.error);
         assert_eq!(
             weather.current,
-            Weather::Clear,
+            Weather::Sunny,
             "a player first observed already airborne shouldn't falsely trigger rain"
         );
     }
@@ -2408,7 +2420,7 @@ mod tests {
         let players: Vec<PlayerSnapshot> = Vec::new();
 
         let mut weather = WeatherState::new(1);
-        assert_eq!(weather.current, Weather::Clear);
+        assert_eq!(weather.current, Weather::Sunny);
         let mut module = Module::load(
             "rain_check".into(),
             "test".into(),
@@ -2429,7 +2441,7 @@ mod tests {
         module.enabled = true;
         run_one_tick(&mut module, &world, &mut creatures, &players, 0.5, &mut weather);
         assert!(module.error.is_none(), "module errored: {:?}", module.error);
-        assert_eq!(weather.current, Weather::Clear);
+        assert_eq!(weather.current, Weather::Sunny);
     }
 
     #[test]
@@ -2914,6 +2926,7 @@ mod tests {
         player.poisoned = true;
         player.speed_multiplier = 2.0;
         player.jump_multiplier = 0.5;
+        player.oxygen = 17.0;
         let players = vec![player];
         let mut weather = WeatherState::new(1);
 
@@ -2923,7 +2936,9 @@ mod tests {
                 local nearest = api.nearest_player(0, 0, 0)
                 if p.health == 42.0 and p.poisoned == true
                     and p.speed_multiplier == 2.0 and p.jump_multiplier == 0.5
+                    and p.oxygen == 17.0
                     and nearest.health == 42.0 and nearest.poisoned == true
+                    and nearest.oxygen == 17.0
                 then
                     api.replace_block(0, 0, 0, "redstone")
                 end
@@ -2937,7 +2952,7 @@ mod tests {
         assert!(module.error.is_none(), "module errored: {:?}", module.error);
         assert!(
             edits.iter().any(|(_, _, _, b)| *b == BlockType::RedStone),
-            "expected health/poisoned/speed_multiplier/jump_multiplier to all round-trip: {edits:?}"
+            "expected health/poisoned/speed_multiplier/jump_multiplier/oxygen to all round-trip: {edits:?}"
         );
     }
 

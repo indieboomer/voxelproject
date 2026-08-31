@@ -20,7 +20,10 @@ use crate::net::{
     ReliableMsg, SnapshotPlayer, UnreliableMsg, CONNECTION_TIMEOUT, HOST_PLAYER_ID,
     MAX_NICKNAME_LEN, SNAPSHOT_INTERVAL,
 };
-use crate::player::{Player, MAX_ATTRIBUTE_MULTIPLIER, MAX_HEALTH, MIN_ATTRIBUTE_MULTIPLIER};
+use crate::player::{
+    Player, DROWNING_DAMAGE_PER_SEC, MAX_ATTRIBUTE_MULTIPLIER, MAX_HEALTH, MAX_OXYGEN,
+    MIN_ATTRIBUTE_MULTIPLIER, OXYGEN_DRAIN_PER_SEC, OXYGEN_REGEN_PER_SEC,
+};
 use crate::raycast::raycast;
 use crate::remote_player::{self, RemotePlayer};
 use crate::save::{load_world, save_world};
@@ -46,6 +49,26 @@ const REDSTONE_HEAL_AMOUNT: f32 = 0.5;
 /// `poisoned` on or off via `api.set_poisoned`.
 const POISON_TICK_INTERVAL: f32 = 10.0;
 const POISON_DAMAGE_PER_TICK: f32 = 1.0;
+/// Soft grayish-white haze the sky/horizon fog color blends toward during
+/// `Weather::Mist`, by `MIST_FOG_BLEND` -- see `render`. Not a full
+/// fog-distance system (that would need a new uniform field just for one
+/// weather), just a cheap, visible tint so mist reads as genuinely hazier
+/// rather than being identical to sunny except in name.
+const MIST_FOG_TINT: [f32; 3] = [0.75, 0.76, 0.78];
+const MIST_FOG_BLEND: f32 = 0.55;
+/// Lightning strike timing/intensity -- see `App::update_lightning`. Purely
+/// a local visual flourish (no sound yet, no gameplay effect), so each
+/// client picks its own strike times independently rather than this being
+/// host-authoritative/networked state, the same way `water_time`'s wave/
+/// sway animation already is.
+const LIGHTNING_MIN_INTERVAL_SECS: f32 = 4.0;
+const LIGHTNING_MAX_INTERVAL_SECS: f32 = 14.0;
+const LIGHTNING_MIN_PEAK: f32 = 0.7;
+const LIGHTNING_MAX_PEAK: f32 = 1.0;
+/// How fast the flash fades back out once triggered -- higher decays
+/// faster. Applied as `flash *= (1.0 - rate * dt)` each frame, so it takes
+/// roughly 0.3-0.4s to become visually negligible regardless of peak.
+const LIGHTNING_DECAY_RATE: f32 = 8.0;
 /// Horizontal speed above which a remote player (no real sprint flag over
 /// the network) is approximated as "running" for `api.players()`. Above the
 /// 4.5 walk speed but comfortably below the 7.5 sprint speed in `player.rs`.
@@ -253,8 +276,24 @@ struct CameraUniform {
     camera_pos: [f32; 4],
     fog_color: [f32; 4],
     zenith_color: [f32; 4],
+    /// xyz = normalized sun direction, w = raw `sky_lighting::sun_height`
+    /// (see its doc comment for why the raw value travels separately from
+    /// the normalized xyz) -- consumed by sky.wgsl to fade the sun disc/
+    /// moon/stars in sync with the sky color's own day/night phase.
     sun_dir: [f32; 4],
+    /// x = ambient, y = sun_intensity, z = free-running clock (seconds) for
+    /// the water wave animation, w = wind_strength (see
+    /// `Weather::wind_strength` -- multiplies the grass/leaf sway amplitude
+    /// in shader.wgsl's `vs_main`, so storm/windy visibly whip vegetation
+    /// harder without needing a whole extra uniform just for that).
     light_params: [f32; 4],
+    /// x = lightning_flash (0..1, see `App::update_lightning` -- blended
+    /// toward white in both shader.wgsl's and sky.wgsl's final color so a
+    /// storm's lightning strike whites out the whole scene, not just the
+    /// sky or just the terrain). y = cloud_coverage (see
+    /// `Weather::cloud_coverage` -- how much of sky.wgsl's procedural cloud
+    /// layer covers the sky dome). z/w reserved, currently always 0.
+    weather_fx: [f32; 4],
 }
 
 #[repr(C)]
@@ -341,6 +380,18 @@ pub struct App {
     creatures: Creatures,
     time_of_day: f32,
     weather: WeatherState,
+    /// State for `update_lightning`'s local-only strike timer -- see
+    /// `LIGHTNING_MIN_INTERVAL_SECS`.
+    lightning_rng: u64,
+    /// Seconds until the next strike; only counts down while the current
+    /// weather has lightning (`Weather::has_lightning`), and is reset to a
+    /// fresh random interval otherwise so a storm doesn't strike the
+    /// instant it begins.
+    lightning_timer: f32,
+    /// Current flash brightness, 0..1 -- jumps to a random peak on a
+    /// strike, decays exponentially each frame afterward. Written into
+    /// `CameraUniform.weather_fx.x` every frame in `render`.
+    lightning_flash: f32,
     /// Block breaks (local or network-relayed from joined clients) collected
     /// since the last Lua tick, fed into `on_block_break` and cleared after.
     pending_block_breaks: Vec<BlockBreakEvent>,
@@ -745,6 +796,7 @@ impl App {
         }
         let weather = WeatherState::new(world.seed);
         let rain_particles = build_rain_particles(world.seed);
+        let lightning_seed = world.seed;
 
         let llm = LlmClient::new(launch.llm_url.clone());
         let ui = Ui::new(&device, config.format, &window);
@@ -777,6 +829,9 @@ impl App {
             creatures,
             time_of_day,
             weather,
+            lightning_rng: (lightning_seed as u64) ^ 0xB0C7_11C4_71E5,
+            lightning_timer: LIGHTNING_MIN_INTERVAL_SECS,
+            lightning_flash: 0.0,
             pending_block_breaks: Vec::new(),
             net,
             local_player_id,
@@ -957,6 +1012,47 @@ impl App {
         self.chat_log.push(ChatEntry { text, color });
     }
 
+    fn next_lightning_u64(&mut self) -> u64 {
+        let mut x = self.lightning_rng;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.lightning_rng = x;
+        x
+    }
+
+    fn next_lightning_f32(&mut self) -> f32 {
+        (self.next_lightning_u64() >> 40) as f32 / (1u64 << 24) as f32
+    }
+
+    fn next_lightning_interval(&mut self) -> f32 {
+        LIGHTNING_MIN_INTERVAL_SECS
+            + self.next_lightning_f32() * (LIGHTNING_MAX_INTERVAL_SECS - LIGHTNING_MIN_INTERVAL_SECS)
+    }
+
+    /// Runs every frame, for host and joined client alike (see
+    /// `lightning_timer`'s doc comment on why this is local-only rather
+    /// than host-authoritative/networked). While the current weather has
+    /// lightning, counts down to a strike; a strike jumps `lightning_flash`
+    /// to a random peak, which then decays back toward 0 every frame
+    /// regardless of weather so an in-progress flash always finishes
+    /// naturally instead of being cut off if the storm ends mid-flash.
+    fn update_lightning(&mut self, dt: f32) {
+        if self.weather.current.has_lightning() {
+            self.lightning_timer -= dt;
+            if self.lightning_timer <= 0.0 {
+                self.lightning_flash =
+                    LIGHTNING_MIN_PEAK + self.next_lightning_f32() * (LIGHTNING_MAX_PEAK - LIGHTNING_MIN_PEAK);
+                self.lightning_timer = self.next_lightning_interval();
+            }
+        } else {
+            // Don't let a stale near-zero timer cause an instant strike
+            // the moment a storm begins -- always wait a fresh interval.
+            self.lightning_timer = self.next_lightning_interval();
+        }
+        self.lightning_flash = (self.lightning_flash * (1.0 - LIGHTNING_DECAY_RATE * dt)).max(0.0);
+    }
+
     /// Sends a chat message from the local player. The host logs and
     /// broadcasts it directly; a joined client hands it to the host, which
     /// attributes it to the sender and relays it back to everyone
@@ -994,6 +1090,7 @@ impl App {
         // Wrap well before f32 precision would start eating into a sine's
         // period -- the animation is periodic anyway so this is seamless.
         self.water_time = (self.water_time + dt) % 10_000.0;
+        self.update_lightning(dt);
 
         const SENSITIVITY: f32 = 0.0022;
         self.camera.yaw += self.input.mouse_delta.0 * SENSITIVITY;
@@ -1151,6 +1248,8 @@ impl App {
                 self.poison_tick_timer = 0.0;
                 self.apply_poison_ticks();
             }
+
+            self.update_oxygen(dt);
         }
 
         let mut mesh = match &self.net {
@@ -1356,6 +1455,7 @@ impl App {
             poisoned: self.player.poisoned,
             speed_multiplier: self.player.speed_multiplier,
             jump_multiplier: self.player.jump_multiplier,
+            oxygen: self.player.oxygen,
         }];
         for (&id, rp) in host.remote_players.iter() {
             players.push(PlayerSnapshot {
@@ -1370,6 +1470,7 @@ impl App {
                 poisoned: rp.poisoned,
                 speed_multiplier: rp.speed_multiplier,
                 jump_multiplier: rp.jump_multiplier,
+                oxygen: rp.oxygen,
             });
         }
         players
@@ -1701,6 +1802,40 @@ impl App {
         }
     }
 
+    /// Every frame, host-only: drains oxygen for a submerged player,
+    /// regenerates it otherwise, and applies drowning damage once a
+    /// player's oxygen has hit 0 -- see `player::OXYGEN_DRAIN_PER_SEC`/
+    /// `_REGEN_PER_SEC`/`DROWNING_DAMAGE_PER_SEC`. Continuous rather than a
+    /// discrete multi-second timer (unlike `apply_poison_ticks`) so the HUD
+    /// bar moves smoothly instead of in visible steps. Pure engine state,
+    /// like poison -- no Lua callback fires for any of this.
+    fn update_oxygen(&mut self, dt: f32) {
+        let host_submerged = is_in_water(&self.world, self.player.position);
+        if host_submerged {
+            self.player.drain_oxygen(OXYGEN_DRAIN_PER_SEC * dt);
+            if self.player.oxygen <= 0.0 {
+                self.player.damage(DROWNING_DAMAGE_PER_SEC * dt);
+            }
+        } else {
+            self.player.regenerate_oxygen(OXYGEN_REGEN_PER_SEC * dt);
+        }
+
+        let NetRole::Host(host) = &mut self.net else {
+            return;
+        };
+        for rp in host.remote_players.values_mut() {
+            let submerged = is_in_water(&self.world, rp.pos);
+            if submerged {
+                rp.oxygen = (rp.oxygen - OXYGEN_DRAIN_PER_SEC * dt).max(0.0);
+                if rp.oxygen <= 0.0 {
+                    rp.health = (rp.health - DROWNING_DAMAGE_PER_SEC * dt).max(0.0);
+                }
+            } else {
+                rp.oxygen = (rp.oxygen + OXYGEN_REGEN_PER_SEC * dt).min(MAX_OXYGEN);
+            }
+        }
+    }
+
     /// Runs one instant spell exactly once -- the Rules panel Run button's
     /// entry point. Host-only, like generating/activating a rule; a no-op
     /// otherwise (mirrors the same restriction `is_host` already gates in
@@ -1791,6 +1926,7 @@ impl App {
                 poisoned: self.player.poisoned,
                 speed_multiplier: self.player.speed_multiplier,
                 jump_multiplier: self.player.jump_multiplier,
+                oxygen: self.player.oxygen,
             }];
             for (&id, rp) in host.remote_players.iter() {
                 players.push(SnapshotPlayer {
@@ -1802,6 +1938,7 @@ impl App {
                     poisoned: rp.poisoned,
                     speed_multiplier: rp.speed_multiplier,
                     jump_multiplier: rp.jump_multiplier,
+                    oxygen: rp.oxygen,
                 });
             }
             let snapshot = UnreliableMsg::Snapshot {
@@ -2046,6 +2183,7 @@ impl App {
                         self.player.poisoned = sp.poisoned;
                         self.player.speed_multiplier = sp.speed_multiplier;
                         self.player.jump_multiplier = sp.jump_multiplier;
+                        self.player.oxygen = sp.oxygen;
                         continue;
                     }
                     let NetRole::Joined(client) = &mut self.net else {
@@ -2062,6 +2200,7 @@ impl App {
                             rp.poisoned = sp.poisoned;
                             rp.speed_multiplier = sp.speed_multiplier;
                             rp.jump_multiplier = sp.jump_multiplier;
+                            rp.oxygen = sp.oxygen;
                             rp.last_seen = now;
                         })
                         .or_insert_with(|| {
@@ -2078,6 +2217,7 @@ impl App {
                             rp.poisoned = sp.poisoned;
                             rp.speed_multiplier = sp.speed_multiplier;
                             rp.jump_multiplier = sp.jump_multiplier;
+                            rp.oxygen = sp.oxygen;
                             rp
                         });
                 }
@@ -2190,21 +2330,40 @@ impl App {
         let cam_pos = self.camera.eye_position();
         let light_view_proj = light_view_proj(lighting.sun_dir, self.player.position);
         let view_proj = self.camera.view_proj();
+        let fog_color = if self.weather.current == Weather::Mist {
+            [
+                sky[0] * (1.0 - MIST_FOG_BLEND) + MIST_FOG_TINT[0] * MIST_FOG_BLEND,
+                sky[1] * (1.0 - MIST_FOG_BLEND) + MIST_FOG_TINT[1] * MIST_FOG_BLEND,
+                sky[2] * (1.0 - MIST_FOG_BLEND) + MIST_FOG_TINT[2] * MIST_FOG_BLEND,
+            ]
+        } else {
+            [sky[0], sky[1], sky[2]]
+        };
         let uniform = CameraUniform {
             view_proj: view_proj.to_cols_array_2d(),
             light_view_proj: light_view_proj.to_cols_array_2d(),
             inv_view_proj: view_proj.inverse().to_cols_array_2d(),
             camera_pos: [cam_pos.x, cam_pos.y, cam_pos.z, 1.0],
-            fog_color: [sky[0], sky[1], sky[2], 1.0],
+            fog_color: [fog_color[0], fog_color[1], fog_color[2], 1.0],
             zenith_color: [zenith[0], zenith[1], zenith[2], 1.0],
             sun_dir: [
                 lighting.sun_dir.x,
                 lighting.sun_dir.y,
                 lighting.sun_dir.z,
+                lighting.sun_height,
+            ],
+            light_params: [
+                lighting.ambient,
+                lighting.sun_intensity,
+                self.water_time,
+                self.weather.current.wind_strength(),
+            ],
+            weather_fx: [
+                self.lightning_flash,
+                self.weather.current.cloud_coverage(),
+                0.0,
                 0.0,
             ],
-            // z = free-running clock for the water wave animation.
-            light_params: [lighting.ambient, lighting.sun_intensity, self.water_time, 0.0],
         };
         self.queue
             .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
@@ -2214,7 +2373,7 @@ impl App {
             bytemuck::bytes_of(&LightUniform { view_proj: light_view_proj.to_cols_array_2d() }),
         );
 
-        let raining = self.weather.current == Weather::Rain;
+        let raining = self.weather.current.has_rain_particles();
         let rain_vertex_count = if raining {
             self.write_rain_vertices(cam_pos);
             (self.rain_particles.len() * 2) as u32

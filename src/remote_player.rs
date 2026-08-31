@@ -45,13 +45,17 @@ pub struct RemotePlayer {
     pub poisoned: bool,
     pub speed_multiplier: f32,
     pub jump_multiplier: f32,
+    /// Same host-authoritative story as `health` above, updated every
+    /// frame by `App`'s oxygen pass (drains while submerged, regenerates
+    /// otherwise -- see `player::OXYGEN_DRAIN_PER_SEC`/`_REGEN_PER_SEC`).
+    pub oxygen: f32,
 }
 
 impl RemotePlayer {
     /// Constructs a fresh entry with the same defaults `Player::new` uses --
-    /// full health, unpoisoned, 1.0 multipliers -- so a newly joined player
-    /// starts identically whether the host is looking at its own `Player`
-    /// or this `RemotePlayer` record of someone else's.
+    /// full health, unpoisoned, 1.0 multipliers, full oxygen -- so a newly
+    /// joined player starts identically whether the host is looking at its
+    /// own `Player` or this `RemotePlayer` record of someone else's.
     pub fn new(pos: Vec3, yaw: f32, carrying_crystal: bool, nickname: String) -> Self {
         Self {
             pos,
@@ -64,6 +68,7 @@ impl RemotePlayer {
             poisoned: false,
             speed_multiplier: 1.0,
             jump_multiplier: 1.0,
+            oxygen: crate::player::MAX_OXYGEN,
         }
     }
 }

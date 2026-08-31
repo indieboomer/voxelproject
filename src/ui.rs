@@ -170,6 +170,17 @@ impl Ui {
                     if player.poisoned {
                         ui.colored_label(egui::Color32::from_rgb(140, 210, 100), "POISONED");
                     }
+                    // Only shown while it's actually relevant (currently
+                    // draining, or still catching back up) rather than
+                    // permanently cluttering the HUD on dry land.
+                    if player.oxygen < 100.0 {
+                        let oxygen_color = if player.oxygen <= 0.0 {
+                            egui::Color32::from_rgb(220, 90, 90)
+                        } else {
+                            egui::Color32::from_rgb(120, 190, 230)
+                        };
+                        ui.colored_label(oxygen_color, format!("Oxygen: {:.0}/100", player.oxygen));
+                    }
                 });
 
             egui::Window::new("Rules")

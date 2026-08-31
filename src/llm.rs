@@ -617,4 +617,38 @@ mod tests {
         );
         assert!(!module.name.is_empty());
     }
+
+    /// Same pipeline once more, for the 1.5.0 five-weather system.
+    #[test]
+    #[ignore = "requires a running llama-server on 127.0.0.1:8090"]
+    fn live_generation_uses_the_new_weather_names() {
+        use crate::scripting::Module;
+        use std::time::{Duration, Instant};
+
+        let client = LlmClient::new("http://127.0.0.1:8090".to_string());
+        let prompt = "when it's stormy, spawn a sheep near every player";
+        let kind = classify_prompt(prompt);
+        let pending = client.generate(prompt, kind);
+
+        let deadline = Instant::now() + Duration::from_secs(90);
+        let result = loop {
+            if let Some(r) = pending.poll() {
+                break r;
+            }
+            if Instant::now() > deadline {
+                panic!("timed out waiting for llama-server");
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+
+        let code = result.expect("generation request should succeed");
+        println!("--- generated Lua ---\n{code}\n----------------------");
+        let module = Module::load("test_weather".to_string(), "test".to_string(), code.clone())
+            .expect("generated module should pass validation");
+        assert!(
+            code.contains("\"storm\""),
+            "expected a storm-conditioned rule to check api.weather == \"storm\": {code}"
+        );
+        assert!(!module.is_instant, "a \"when X\" rule should be on_tick, not on_cast");
+    }
 }

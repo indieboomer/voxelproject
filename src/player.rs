@@ -24,6 +24,27 @@ pub const MAX_HEALTH: f32 = 100.0;
 /// world_api/schema.yaml's `attribute_multiplier_min`/`_max`.
 pub const MIN_ATTRIBUTE_MULTIPLIER: f32 = 0.1;
 pub const MAX_ATTRIBUTE_MULTIPLIER: f32 = 5.0;
+/// Every player starts here every session too, same as health.
+pub const MAX_OXYGEN: f32 = 100.0;
+/// Oxygen lost per second while submerged in water -- full depletion in 50s.
+/// Chosen instead of a literal "1 per 10 seconds" (1000s / ~16 minutes to
+/// fully drain) because that's slow enough to never actually matter: a
+/// player could cross an ocean floor without ever feeling time pressure,
+/// which defeats the point of having an oxygen mechanic at all. 50 seconds
+/// is roughly the "how long can I comfortably hold my breath" ballpark
+/// games commonly use, long enough for real underwater exploration/
+/// building but still a real limit.
+pub const OXYGEN_DRAIN_PER_SEC: f32 = MAX_OXYGEN / 50.0;
+/// Oxygen regained per second while not submerged -- faster than the drain
+/// (full recovery in ~8s from empty) so surfacing feels like a real relief
+/// rather than a slow trickle back; "stays at 100 when not submerged" then
+/// holds as the steady state once caught up, not just a floor.
+pub const OXYGEN_REGEN_PER_SEC: f32 = MAX_OXYGEN / 8.0;
+/// Health lost per second once oxygen has hit 0 and stayed there -- kept at
+/// the literally-requested "1 every 10 seconds": slow enough to give a
+/// player time to notice and swim up rather than punishing a moment of
+/// carelessness, but a real, escalating cost for staying under with no air.
+pub const DROWNING_DAMAGE_PER_SEC: f32 = 1.0 / 10.0;
 
 pub struct Player {
     /// Feet position (bottom-center of the collision box).
@@ -51,6 +72,13 @@ pub struct Player {
     pub speed_multiplier: f32,
     /// Multiplies `JUMP_SPEED` in `update` -- see `api.set_player_jump`.
     pub jump_multiplier: f32,
+    /// 0..=MAX_OXYGEN. Drains while submerged in water, regenerates
+    /// otherwise (see `OXYGEN_DRAIN_PER_SEC`/`OXYGEN_REGEN_PER_SEC`,
+    /// applied each frame by `App`, not here -- `Player` has no notion of
+    /// "am I in water", that's a world lookup `App` already does for
+    /// `is_in_water`). Read-only from Lua (`api.players()[i].oxygen`);
+    /// nothing sets it directly except submersion itself.
+    pub oxygen: f32,
 }
 
 impl Player {
@@ -66,6 +94,7 @@ impl Player {
             poisoned: false,
             speed_multiplier: 1.0,
             jump_multiplier: 1.0,
+            oxygen: MAX_OXYGEN,
         }
     }
 
@@ -84,6 +113,16 @@ impl Player {
 
     pub fn set_speed_multiplier(&mut self, multiplier: f32) {
         self.speed_multiplier = multiplier.clamp(MIN_ATTRIBUTE_MULTIPLIER, MAX_ATTRIBUTE_MULTIPLIER);
+    }
+
+    /// Clamped at 0 -- called by `App`'s oxygen pass while submerged.
+    pub fn drain_oxygen(&mut self, amount: f32) {
+        self.oxygen = (self.oxygen - amount).max(0.0);
+    }
+
+    /// Clamped at `MAX_OXYGEN` -- called by `App`'s oxygen pass otherwise.
+    pub fn regenerate_oxygen(&mut self, amount: f32) {
+        self.oxygen = (self.oxygen + amount).min(MAX_OXYGEN);
     }
 
     pub fn set_jump_multiplier(&mut self, multiplier: f32) {
@@ -260,6 +299,7 @@ mod tests {
         assert!(!player.poisoned);
         assert_eq!(player.speed_multiplier, 1.0);
         assert_eq!(player.jump_multiplier, 1.0);
+        assert_eq!(player.oxygen, MAX_OXYGEN);
     }
 
     #[test]
@@ -289,6 +329,37 @@ mod tests {
         assert_eq!(player.jump_multiplier, MIN_ATTRIBUTE_MULTIPLIER);
         player.set_jump_multiplier(2.5);
         assert_eq!(player.jump_multiplier, 2.5);
+    }
+
+    #[test]
+    fn drain_and_regenerate_oxygen_clamp_into_0_to_max() {
+        let mut player = Player::new(Vec3::ZERO);
+        player.drain_oxygen(30.0);
+        assert_eq!(player.oxygen, 70.0);
+        player.regenerate_oxygen(10.0);
+        assert_eq!(player.oxygen, 80.0);
+
+        player.drain_oxygen(1000.0);
+        assert_eq!(player.oxygen, 0.0, "drain should clamp at 0, not go negative");
+
+        player.regenerate_oxygen(1000.0);
+        assert_eq!(player.oxygen, MAX_OXYGEN, "regenerate should clamp at MAX_OXYGEN");
+    }
+
+    #[test]
+    fn oxygen_fully_drains_and_regenerates_within_their_documented_time_budgets() {
+        // Loose end-to-end sanity check on the tuned rates themselves (see
+        // their doc comments): full drain in ~50s, full regen in ~8s.
+        let mut player = Player::new(Vec3::ZERO);
+        for _ in 0..50 {
+            player.drain_oxygen(OXYGEN_DRAIN_PER_SEC * 1.0);
+        }
+        assert_eq!(player.oxygen, 0.0, "expected 50s of draining to fully empty oxygen");
+
+        for _ in 0..8 {
+            player.regenerate_oxygen(OXYGEN_REGEN_PER_SEC * 1.0);
+        }
+        assert_eq!(player.oxygen, MAX_OXYGEN, "expected 8s of regenerating to fully refill oxygen");
     }
 
     #[test]
