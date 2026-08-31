@@ -1,10 +1,20 @@
 // Same layout as the main shader's CameraUniform -- this pipeline reuses
 // that buffer/bind group verbatim, it just doesn't need most of the fields.
+// IMPORTANT: every field up to the last one actually read below (fog_color)
+// must still be declared, in order, even though most go unused here --
+// WGSL has no notion of "skip this field", so a missing one silently shifts
+// every later field's computed byte offset and reads the wrong bytes out of
+// the real buffer. (This file used to omit inv_view_proj/zenith_color,
+// which meant fog_color below was actually reading out of inv_view_proj's
+// matrix data -- found while adding bird.wgsl, which is why that one
+// declares only view_proj instead of copying this list.)
 struct CameraUniform {
     view_proj: mat4x4<f32>,
     light_view_proj: mat4x4<f32>,
+    inv_view_proj: mat4x4<f32>,
     camera_pos: vec4<f32>,
     fog_color: vec4<f32>,
+    zenith_color: vec4<f32>,
     sun_dir: vec4<f32>,
     light_params: vec4<f32>,
 };

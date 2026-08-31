@@ -217,6 +217,83 @@ impl RainVertex {
     }
 }
 
+/// A flock of birds crossing the sky -- purely decorative (see
+/// `App::update_birds`'s doc comment): no collision, no gameplay effect,
+/// not host-authoritative/networked, same "each client renders its own
+/// copy" story as `water_time`'s wave/sway animation and the lightning/
+/// cloud weather effects. At most one flock exists at a time.
+struct BirdFlock {
+    /// World-space position of the flock's center; `y` is fixed for the
+    /// whole flock's lifetime (picked once at spawn, relative to the
+    /// player's height then -- birds don't chase the player's elevation
+    /// afterward).
+    center: Vec3,
+    /// Horizontal-only (y = 0), constant for the flock's lifetime.
+    velocity: Vec3,
+    age: f32,
+    lifetime: f32,
+    /// One entry per bird: offset from `center`, wingspan, flap phase
+    /// (radians), flap rate (radians/sec) -- randomized per-bird so a
+    /// flock doesn't fly in a perfectly rigid, unison-flapping block.
+    birds: Vec<(Vec3, f32, f32, f32)>,
+}
+
+/// How often a flock appears, how big/fast/high it is, and how it's
+/// shaped -- see `App::spawn_bird_flock`/`update_birds`.
+const BIRD_MIN_INTERVAL_SECS: f32 = 30.0;
+const BIRD_MAX_INTERVAL_SECS: f32 = 90.0;
+const BIRD_MIN_COUNT: usize = 5;
+const BIRD_MAX_COUNT: usize = 11;
+const BIRD_MIN_LIFETIME_SECS: f32 = 30.0;
+const BIRD_MAX_LIFETIME_SECS: f32 = 55.0;
+/// Blocks/sec -- a gliding cruise speed, not a panicked dash.
+const BIRD_SPEED: f32 = 7.0;
+/// How far from the player a flock spawns/how far out it can fly --
+/// comfortably inside the world's fog_end (160.0, see shader.wgsl) so a
+/// flock is never rendered only to immediately vanish into fog.
+const BIRD_SPAWN_DISTANCE: f32 = 110.0;
+/// Height above the player's *current* Y at spawn time -- well above
+/// normal terrain/builds so a flock reads as "high in the sky" rather than
+/// weaving between trees, but still well inside view distance.
+const BIRD_HEIGHT_MIN: f32 = 40.0;
+const BIRD_HEIGHT_MAX: f32 = 70.0;
+/// How loosely birds are scattered around the flock's own center.
+const BIRD_SPREAD_RADIUS: f32 = 6.0;
+/// Back to the original two-line "V" silhouette (see write_bird_vertices),
+/// at exactly 2x the original wingspan/flap amplitude -- 1.2-2.2 and 0.35
+/// respectively -- rather than the square-billboard version tried in
+/// between.
+const BIRD_WINGSPAN_MIN: f32 = 2.4;
+const BIRD_WINGSPAN_MAX: f32 = 4.4;
+const BIRD_FLAP_RATE_MIN: f32 = 2.5;
+const BIRD_FLAP_RATE_MAX: f32 = 4.0;
+/// Vertical wingtip bob amplitude at the peak of a flap -- also doubled,
+/// so the flap motion still looks proportionate on the wider wingspan.
+const BIRD_FLAP_AMPLITUDE: f32 = 0.7;
+/// 2 line segments (4 vertices) per bird -- see write_bird_vertices.
+const BIRD_VERTICES_PER_BIRD: usize = 4;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+struct BirdVertex {
+    position: [f32; 3],
+}
+
+impl BirdVertex {
+    fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+        use std::mem::size_of;
+        wgpu::VertexBufferLayout {
+            array_stride: size_of::<BirdVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 0,
+                format: wgpu::VertexFormat::Float32x3,
+            }],
+        }
+    }
+}
+
 const RENDER_RADIUS: i32 = 5;
 const UNLOAD_RADIUS: i32 = RENDER_RADIUS + 2;
 const MESH_BUDGET_PER_FRAME: usize = 8;
@@ -362,6 +439,15 @@ pub struct App {
     /// Fixed (x, z, phase) offsets for each rain streak, relative to the
     /// camera -- see `build_rain_particles`.
     rain_particles: Vec<(f32, f32, f32)>,
+
+    bird_pipeline: wgpu::RenderPipeline,
+    bird_vertex_buffer: wgpu::Buffer,
+    /// The currently-flying flock, if any -- see `update_birds`.
+    bird_flock: Option<BirdFlock>,
+    bird_rng: u64,
+    /// Seconds until the next flock spawns; only counts down while no
+    /// flock is currently active.
+    bird_spawn_timer: f32,
 
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
@@ -692,6 +778,63 @@ impl App {
             mapped_at_creation: false,
         });
 
+        let bird_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("bird shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("bird.wgsl").into()),
+        });
+        let bird_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("bird pipeline layout"),
+            bind_group_layouts: &[&camera_bgl],
+            push_constant_ranges: &[],
+        });
+        let bird_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("bird pipeline"),
+            layout: Some(&bird_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &bird_shader,
+                entry_point: "vs_main",
+                buffers: &[BirdVertex::layout()],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &bird_shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Cw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                // Read-only, same as rain: birds should be hidden behind
+                // terrain/mountains in the distance, but shouldn't occlude
+                // each other or write depth themselves.
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+        let bird_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bird vertex buffer"),
+            // 2 lines (4 vertices) per bird, sized for the largest possible
+            // flock -- see BIRD_MAX_COUNT.
+            size: (BIRD_MAX_COUNT * BIRD_VERTICES_PER_BIRD * std::mem::size_of::<BirdVertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         let (
             world,
             spawn_pos,
@@ -814,6 +957,11 @@ impl App {
             rain_pipeline,
             rain_vertex_buffer,
             rain_particles,
+            bird_pipeline,
+            bird_vertex_buffer,
+            bird_flock: None,
+            bird_rng: (lightning_seed as u64) ^ 0x8117_D0AF_610B,
+            bird_spawn_timer: BIRD_MIN_INTERVAL_SECS,
             camera_buffer,
             camera_bind_group,
             texture_bind_group,
@@ -1053,6 +1201,127 @@ impl App {
         self.lightning_flash = (self.lightning_flash * (1.0 - LIGHTNING_DECAY_RATE * dt)).max(0.0);
     }
 
+    fn next_bird_u64(&mut self) -> u64 {
+        let mut x = self.bird_rng;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.bird_rng = x;
+        x
+    }
+
+    fn next_bird_f32(&mut self) -> f32 {
+        (self.next_bird_u64() >> 40) as f32 / (1u64 << 24) as f32
+    }
+
+    fn next_bird_range(&mut self, min: f32, max: f32) -> f32 {
+        min + self.next_bird_f32() * (max - min)
+    }
+
+    /// Purely decorative: no collision, no gameplay effect of any kind, and
+    /// (like `update_lightning`) local-only rather than host-authoritative/
+    /// networked, so runs every frame regardless of `NetRole`. While no
+    /// flock is active, counts down to spawning one; while one is active,
+    /// advances its flight and clears it once its lifetime runs out.
+    fn update_birds(&mut self, dt: f32) {
+        if let Some(flock) = &mut self.bird_flock {
+            flock.age += dt;
+            flock.center += flock.velocity * dt;
+            if flock.age >= flock.lifetime {
+                self.bird_flock = None;
+                self.bird_spawn_timer = self.next_bird_range(BIRD_MIN_INTERVAL_SECS, BIRD_MAX_INTERVAL_SECS);
+            }
+            return;
+        }
+        self.bird_spawn_timer -= dt;
+        if self.bird_spawn_timer <= 0.0 {
+            self.bird_flock = Some(self.spawn_bird_flock());
+        }
+    }
+
+    /// Builds a new flock starting `BIRD_SPAWN_DISTANCE` away from the
+    /// player in a random direction, flying roughly (with some random
+    /// deviation, so it's not perfectly predictable) toward the opposite
+    /// side -- guaranteeing it visibly crosses a good stretch of sky during
+    /// its lifetime instead of a short random walk that might immediately
+    /// drift out of view.
+    fn spawn_bird_flock(&mut self) -> BirdFlock {
+        let spawn_angle = self.next_bird_f32() * std::f32::consts::TAU;
+        let deviation = self.next_bird_range(-40f32.to_radians(), 40f32.to_radians());
+        let flight_angle = spawn_angle + std::f32::consts::PI + deviation;
+
+        let spawn_dir = Vec3::new(spawn_angle.cos(), 0.0, spawn_angle.sin());
+        let flight_dir = Vec3::new(flight_angle.cos(), 0.0, flight_angle.sin());
+
+        let height = self.player.position.y + self.next_bird_range(BIRD_HEIGHT_MIN, BIRD_HEIGHT_MAX);
+        let mut center = self.player.position + spawn_dir * BIRD_SPAWN_DISTANCE;
+        center.y = height;
+
+        let count = BIRD_MIN_COUNT
+            + (self.next_bird_f32() * (BIRD_MAX_COUNT - BIRD_MIN_COUNT + 1) as f32) as usize;
+        let count = count.min(BIRD_MAX_COUNT);
+        let birds = (0..count)
+            .map(|_| {
+                let offset_angle = self.next_bird_f32() * std::f32::consts::TAU;
+                let offset_radius = self.next_bird_f32() * BIRD_SPREAD_RADIUS;
+                let offset = Vec3::new(
+                    offset_angle.cos() * offset_radius,
+                    self.next_bird_range(-1.0, 1.0),
+                    offset_angle.sin() * offset_radius,
+                );
+                let wingspan = self.next_bird_range(BIRD_WINGSPAN_MIN, BIRD_WINGSPAN_MAX);
+                let phase = self.next_bird_f32() * std::f32::consts::TAU;
+                let flap_rate = self.next_bird_range(BIRD_FLAP_RATE_MIN, BIRD_FLAP_RATE_MAX);
+                (offset, wingspan, phase, flap_rate)
+            })
+            .collect();
+
+        BirdFlock {
+            center,
+            velocity: flight_dir * BIRD_SPEED,
+            age: 0.0,
+            lifetime: self.next_bird_range(BIRD_MIN_LIFETIME_SECS, BIRD_MAX_LIFETIME_SECS),
+            birds,
+        }
+    }
+
+    /// Rebuilds the bird vertex buffer for the current flock (a no-op if
+    /// none is active). Each bird is two line segments -- left wingtip to
+    /// center, center to right wingtip -- meeting at a shared center point
+    /// for a continuous shallow "V" silhouette, with the wing axis
+    /// perpendicular to the flock's flight direction so birds visibly face
+    /// the way they're flying rather than always being wing-aligned to
+    /// world X. Wingtips bob vertically on a per-bird phase/rate so the
+    /// flock doesn't flap in unison. (A square-billboard version of this
+    /// was tried and reverted -- back to two lines, just at 2x the
+    /// original wingspan/flap amplitude; see BIRD_WINGSPAN_MIN/MAX.)
+    fn write_bird_vertices(&self) {
+        let Some(flock) = &self.bird_flock else {
+            return;
+        };
+        let forward = if flock.velocity.length_squared() > 0.0001 {
+            flock.velocity.normalize()
+        } else {
+            Vec3::X
+        };
+        let wing_axis = Vec3::new(-forward.z, 0.0, forward.x);
+
+        let mut verts: Vec<BirdVertex> = Vec::with_capacity(flock.birds.len() * BIRD_VERTICES_PER_BIRD);
+        for &(offset, wingspan, phase, flap_rate) in &flock.birds {
+            let pos = flock.center + offset;
+            let flap = (flock.age * flap_rate + phase).sin() * BIRD_FLAP_AMPLITUDE;
+            let half = wing_axis * (wingspan * 0.5);
+            let left = pos - half + Vec3::new(0.0, flap, 0.0);
+            let right = pos + half + Vec3::new(0.0, flap, 0.0);
+            verts.push(BirdVertex { position: left.to_array() });
+            verts.push(BirdVertex { position: pos.to_array() });
+            verts.push(BirdVertex { position: pos.to_array() });
+            verts.push(BirdVertex { position: right.to_array() });
+        }
+        self.queue
+            .write_buffer(&self.bird_vertex_buffer, 0, bytemuck::cast_slice(&verts));
+    }
+
     /// Sends a chat message from the local player. The host logs and
     /// broadcasts it directly; a joined client hands it to the host, which
     /// attributes it to the sender and relays it back to everyone
@@ -1091,6 +1360,7 @@ impl App {
         // period -- the animation is periodic anyway so this is seamless.
         self.water_time = (self.water_time + dt) % 10_000.0;
         self.update_lightning(dt);
+        self.update_birds(dt);
 
         const SENSITIVITY: f32 = 0.0022;
         self.camera.yaw += self.input.mouse_delta.0 * SENSITIVITY;
@@ -2380,6 +2650,13 @@ impl App {
         } else {
             0
         };
+        let bird_vertex_count = if let Some(flock) = &self.bird_flock {
+            let count = (flock.birds.len() * BIRD_VERTICES_PER_BIRD) as u32;
+            self.write_bird_vertices();
+            count
+        } else {
+            0
+        };
 
         let mut encoder = self
             .device
@@ -2470,6 +2747,12 @@ impl App {
                 rpass.set_bind_group(0, &self.camera_bind_group, &[]);
                 rpass.set_vertex_buffer(0, self.rain_vertex_buffer.slice(..));
                 rpass.draw(0..rain_vertex_count, 0..1);
+            }
+            if bird_vertex_count > 0 {
+                rpass.set_pipeline(&self.bird_pipeline);
+                rpass.set_bind_group(0, &self.camera_bind_group, &[]);
+                rpass.set_vertex_buffer(0, self.bird_vertex_buffer.slice(..));
+                rpass.draw(0..bird_vertex_count, 0..1);
             }
         }
 
