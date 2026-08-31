@@ -69,6 +69,8 @@ pub struct ChatEntry {
 pub struct UiRequests {
     pub toggle_index: Option<usize>,
     pub delete_index: Option<usize>,
+    /// Set when the player clicks "Run" on an instant spell (`Module::is_instant`).
+    pub run_index: Option<usize>,
     pub submit_prompt: Option<String>,
     pub confirm_quit: bool,
     pub cancel_quit: bool,
@@ -150,16 +152,38 @@ impl Ui {
                     ui.label(format!("{fps:.0} FPS"));
                 });
 
+            egui::Window::new("health")
+                .title_bar(false)
+                .anchor(egui::Align2::RIGHT_TOP, [-8.0, 32.0])
+                .resizable(false)
+                .collapsible(false)
+                .interactable(false)
+                .show(ctx, |ui| {
+                    let health_color = if player.health <= 25.0 {
+                        egui::Color32::from_rgb(220, 90, 90)
+                    } else if player.health <= 60.0 {
+                        IMPORTANT_TOAST_COLOR
+                    } else {
+                        egui::Color32::from_rgb(100, 200, 100)
+                    };
+                    ui.colored_label(health_color, format!("Health: {:.0}/100", player.health));
+                    if player.poisoned {
+                        ui.colored_label(egui::Color32::from_rgb(140, 210, 100), "POISONED");
+                    }
+                });
+
             egui::Window::new("Rules")
                 .anchor(egui::Align2::LEFT_TOP, [8.0, 8.0])
                 .resizable(false)
                 .collapsible(false)
                 .show(ctx, |ui| {
                     if scripting.modules.is_empty() {
-                        ui.label("No rules loaded. Press ~ to describe one.");
+                        ui.label("No rules or spells loaded. Press ~ to describe one.");
                     }
                     for (i, m) in scripting.modules.iter().enumerate() {
-                        let (status, status_color) = if m.error.is_some() {
+                        let (status, status_color) = if m.is_instant {
+                            ("SPELL", egui::Color32::from_rgb(180, 140, 230))
+                        } else if m.error.is_some() {
                             ("ERR", egui::Color32::from_rgb(220, 90, 90))
                         } else if m.enabled {
                             ("ON", egui::Color32::from_rgb(100, 200, 100))
@@ -180,24 +204,38 @@ impl Ui {
                                 viewing_index = if viewing_index == Some(i) { None } else { Some(i) };
                             }
                             if is_host {
-                                let label = if m.enabled { "Disable" } else { "Enable" };
-                                if ui.small_button(label).clicked() {
-                                    requests.toggle_index = Some(i);
+                                if m.is_instant {
+                                    if ui.small_button("Run").clicked() {
+                                        requests.run_index = Some(i);
+                                    }
+                                } else {
+                                    let label = if m.enabled { "Disable" } else { "Enable" };
+                                    if ui.small_button(label).clicked() {
+                                        requests.toggle_index = Some(i);
+                                    }
                                 }
                                 if ui.small_button("Delete").clicked() {
                                     requests.delete_index = Some(i);
                                 }
                             }
                         });
-                        // Spell it out for a rule that just came out of
-                        // generation and is still sitting disabled -- easy
-                        // to miss otherwise, since the toast announcing it
-                        // fades after a few seconds.
-                        if is_recent && !m.enabled && m.error.is_none() && is_host {
-                            ui.colored_label(
-                                IMPORTANT_TOAST_COLOR,
-                                "New -- click Enable above to activate it",
-                            );
+                        // Spell it out for something that just came out of
+                        // generation -- easy to miss otherwise, since the
+                        // toast announcing it fades after a few seconds. A
+                        // spell has no enabled state to flag, so it's always
+                        // worth pointing at Run while still "recent".
+                        if is_recent && m.error.is_none() && is_host {
+                            if m.is_instant {
+                                ui.colored_label(
+                                    IMPORTANT_TOAST_COLOR,
+                                    "New -- click Run above to cast it",
+                                );
+                            } else if !m.enabled {
+                                ui.colored_label(
+                                    IMPORTANT_TOAST_COLOR,
+                                    "New -- click Enable above to activate it",
+                                );
+                            }
                         }
                         if let Some(err) = &m.error {
                             ui.colored_label(egui::Color32::from_rgb(220, 90, 90), err);
@@ -331,7 +369,7 @@ impl Ui {
                     .show(ctx, |ui| {
                         ui.set_min_width(420.0);
                         if is_host {
-                            ui.label("Describe a rule for the world, then press Enter:");
+                            ui.label("Describe a rule, or an instant action, then press Enter:");
                             let response = ui.text_edit_singleline(prompt_input);
                             if !response.has_focus() && !response.lost_focus() {
                                 response.request_focus();

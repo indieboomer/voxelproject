@@ -230,7 +230,7 @@ def build_compact(schema, types, blocks):
     rule generation -- same load-bearing gotchas as the readme, minus the
     surrounding prose."""
     L = []
-    L.append(f"World API v{schema['version']} (the `api` table passed into on_tick/on_death/on_block_break)")
+    L.append(f"World API v{schema['version']} (the `api` table passed into on_tick/on_cast/on_death/on_block_break)")
     L.append("")
     L.append("Queries:")
     for m in schema["methods"]:
@@ -260,7 +260,9 @@ def build_compact(schema, types, blocks):
     L.append("")
     L.append(
         f"Actions (budget-limited per call: {schema['budgets']['block_edits_per_call']['value']} block edits, "
-        f"{schema['budgets']['creature_spawns_per_call']['value']} creature spawns; failures are silent -- check return values, not errors):"
+        f"{schema['budgets']['creature_spawns_per_call']['value']} creature spawns -- an on_cast call gets higher budgets instead, "
+        f"{schema['budgets']['block_edits_per_cast_call']['value']} block edits and {schema['budgets']['creature_spawns_per_cast_call']['value']} "
+        f"creature spawns, since it runs once rather than ~10/sec; failures are silent -- check return values, not errors):"
     )
     for m in schema["methods"]:
         if m["category"] == "action":
@@ -307,9 +309,16 @@ def build_stubs(schema, types, blocks):
         L.append(f"---@return {ret}")
         L.append(f"function api.{m['name']}({fmt_param_list(m['params'])}) end")
         L.append("")
-    L.append("--- Called ~10/sec while the module is enabled. Required.")
+    L.append("--- Called ~10/sec while the module is enabled. Defines a RULE module.")
+    L.append("--- Required unless the module defines on_cast instead (exactly one of the two).")
     L.append("---@param api WorldApi")
     L.append("function on_tick(api) end")
+    L.append("")
+    L.append("--- Runs once, immediately, when the host clicks Run. Defines an INSTANT SPELL")
+    L.append("--- module instead of a RULE -- mutually exclusive with on_tick.")
+    L.append("---@param api WorldApi")
+    L.append("---@param event CastEvent")
+    L.append("function on_cast(api, event) end")
     L.append("")
     L.append("--- Fires once per creature death. Optional.")
     L.append("---@param api WorldApi")

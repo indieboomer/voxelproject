@@ -11,6 +11,7 @@ const NIGHT_HUNT_EXAMPLE: &str = include_str!("../modules/night_hunt.lua");
 const REDSTONE_EXAMPLE: &str = include_str!("../modules/redstone_healing.lua");
 const STORM_SUMMONER_EXAMPLE: &str = include_str!("../modules/storm_summoner.lua");
 const JUMP_RAIN_EXAMPLE: &str = include_str!("../modules/jump_rain.lua");
+const ADD_STONE_EXAMPLE: &str = include_str!("../modules/add_stone.lua");
 
 /// These example files also load as real starter rules (`ScriptHost::scan_dir`),
 /// so they carry the same `-- api_version: X.Y.Z` leading comment every
@@ -76,26 +77,57 @@ impl LlmClient {
                 strip_api_version_tag(STORM_SUMMONER_EXAMPLE),
             )
             .replace("{JUMP_RAIN_EXAMPLE}", strip_api_version_tag(JUMP_RAIN_EXAMPLE))
+            .replace("{ADD_STONE_EXAMPLE}", strip_api_version_tag(ADD_STONE_EXAMPLE))
     }
 
-    /// Kicks off a background request generating a brand-new rule module
-    /// from a natural-language description. Poll the returned handle once
-    /// per frame; never blocks the caller.
-    pub fn generate(&self, user_request: &str) -> PendingGeneration {
+    /// One line prepended to the user's own request, telling the model
+    /// which of the two module contracts to write (see `PromptKind`)
+    /// instead of leaving it to guess. `App::start_generation` picks `kind`
+    /// via the cheap deterministic `classify_prompt` heuristic; if the
+    /// model's output doesn't end up matching, `App::poll_generation` asks
+    /// for one corrective retry, same as any other validation failure.
+    fn directive_for(kind: PromptKind) -> &'static str {
+        match kind {
+            PromptKind::Rule => {
+                "This is a persistent RULE request: define `function on_tick(api)`."
+            }
+            PromptKind::Instant => {
+                "This is a one-time INSTANT SPELL request: define `function on_cast(api, event)` \
+                 instead of on_tick. Its whole effect must happen once, immediately -- no \
+                 condition-checking, no waiting for a future tick."
+            }
+        }
+    }
+
+    fn build_user_turn(user_request: &str, kind: PromptKind) -> String {
+        format!("{}\n\nRequest: {user_request}", Self::directive_for(kind))
+    }
+
+    /// Kicks off a background request generating a brand-new module (a
+    /// continuous rule or an instant spell, per `kind`) from a
+    /// natural-language description. Poll the returned handle once per
+    /// frame; never blocks the caller.
+    pub fn generate(&self, user_request: &str, kind: PromptKind) -> PendingGeneration {
         let messages = vec![
             ChatMessage::system(Self::system_prompt()),
-            ChatMessage::user(user_request.to_string()),
+            ChatMessage::user(Self::build_user_turn(user_request, kind)),
         ];
         self.spawn_request(messages)
     }
 
-    /// Kicks off a background retry: gives the model its previous (invalid)
-    /// output plus the validation error so it can correct itself. Used for
-    /// exactly one retry -- see `App::poll_generation`.
-    pub fn retry(&self, user_request: &str, broken_code: &str, error: &str) -> PendingGeneration {
+    /// Kicks off a background retry: gives the model its previous (invalid,
+    /// or wrong-contract) output plus an error/correction message so it can
+    /// fix itself. Used for exactly one retry -- see `App::poll_generation`.
+    pub fn retry(
+        &self,
+        user_request: &str,
+        kind: PromptKind,
+        broken_code: &str,
+        error: &str,
+    ) -> PendingGeneration {
         let messages = vec![
             ChatMessage::system(Self::system_prompt()),
-            ChatMessage::user(user_request.to_string()),
+            ChatMessage::user(Self::build_user_turn(user_request, kind)),
             ChatMessage::assistant(broken_code.to_string()),
             ChatMessage::user(format!(
                 "That code failed validation with this error:\n{error}\n\nFix it and output only the corrected Lua source, no explanation."
@@ -172,6 +204,63 @@ fn extract_lua(text: &str) -> String {
         return after.trim().to_string();
     }
     text.trim().to_string()
+}
+
+/// Which of the two module contracts a prompt should generate -- see
+/// world_api/schema.yaml's `events.on_tick`/`events.on_cast`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptKind {
+    /// A continuous rule (`on_tick`): reacts to ongoing world/player state.
+    Rule,
+    /// A one-time instant spell (`on_cast`): a single immediate action.
+    Instant,
+}
+
+/// Conditional/temporal phrasing that marks a prompt as describing ongoing
+/// behavior rather than a one-time action -- checked first (and wins over
+/// any instant-leaning word below) since "when it jumps, add 10 stone" is a
+/// rule that happens to contain an instant-looking verb, not the reverse.
+/// Multi-word so a substring check is enough; single "if"/"when" would
+/// false-positive on unrelated words.
+const RULE_PHRASES: &[&str] = &[
+    "when ", "whenever ", " if ", " while ", " during ", "every time",
+    "each time", "as long as", "at night", "at day", "at dawn", "at dusk",
+    "at sunset", "at sunrise",
+];
+
+/// Imperative verbs that open a one-shot command ("add 100 stone", "spawn
+/// a dozen chickens", "give me some wood") -- checked only against the
+/// prompt's first word, matching how an imperative English sentence reads,
+/// so a rule like "spawning should stop at night" isn't misread as one.
+const INSTANT_FIRST_WORDS: &[&str] = &[
+    "add", "give", "grant", "spawn", "summon", "heal", "clear", "remove",
+    "delete", "kill", "fill", "place", "drop", "make", "set", "teleport",
+    "cast", "poison", "cure", "damage", "boost",
+];
+
+/// Cheap, deterministic heuristic guessing whether `prompt` describes an
+/// ongoing RULE or a one-time INSTANT SPELL -- the same kind of
+/// keyword-based approach `derive_rule_name` already uses, not real
+/// language understanding. Used only to bias which contract the model is
+/// asked to write (see `LlmClient::directive_for`); a wrong guess isn't
+/// fatal, since `App::poll_generation` accepts whatever contract the model
+/// actually produces after at most one corrective retry. Defaults to
+/// `Rule` for anything ambiguous, matching this project's behavior before
+/// instant spells existed (every prompt used to become a rule).
+pub fn classify_prompt(prompt: &str) -> PromptKind {
+    let lower = format!(" {} ", prompt.trim().to_ascii_lowercase());
+    if RULE_PHRASES.iter().any(|p| lower.contains(p)) {
+        return PromptKind::Rule;
+    }
+    let first_word = lower
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_matches(|c: char| !c.is_alphanumeric());
+    if INSTANT_FIRST_WORDS.contains(&first_word) {
+        return PromptKind::Instant;
+    }
+    PromptKind::Rule
 }
 
 /// Low-content English words dropped when deriving a short rule name from a
@@ -252,6 +341,10 @@ mod tests {
             prompt.contains("function on_tick(api)"),
             "expected the example modules' actual content to still be present after stripping the tag"
         );
+        assert!(
+            prompt.contains("function on_cast(api, event)"),
+            "expected the add_stone.lua instant-spell example to be spliced into the system prompt"
+        );
     }
 
     #[test]
@@ -315,6 +408,72 @@ mod tests {
         );
     }
 
+    #[test]
+    fn classify_prompt_recognizes_conditional_and_temporal_rules() {
+        assert_eq!(
+            classify_prompt(
+                "During the day, chickens flee from the nearest player if it gets within 6 blocks."
+            ),
+            PromptKind::Rule
+        );
+        assert_eq!(
+            classify_prompt("At night, sheep hunt players carrying a crystal."),
+            PromptKind::Rule
+        );
+        assert_eq!(
+            classify_prompt("When a player jumps, it starts raining"),
+            PromptKind::Rule
+        );
+        assert_eq!(
+            classify_prompt("During rain, soil near trees becomes mud that slows players."),
+            PromptKind::Rule
+        );
+    }
+
+    #[test]
+    fn classify_prompt_recognizes_imperative_one_shot_actions_as_instant() {
+        assert_eq!(classify_prompt("add 100 stone"), PromptKind::Instant);
+        assert_eq!(
+            classify_prompt("spawn 12 chickens around me"),
+            PromptKind::Instant
+        );
+        assert_eq!(
+            classify_prompt("give me 50 wood to my inventory"),
+            PromptKind::Instant
+        );
+        assert_eq!(classify_prompt("heal me"), PromptKind::Instant);
+        assert_eq!(classify_prompt("make it rain"), PromptKind::Instant);
+        assert_eq!(classify_prompt("kill all nearby sheep"), PromptKind::Instant);
+        assert_eq!(
+            classify_prompt("poison the nearest player"),
+            PromptKind::Instant
+        );
+        assert_eq!(classify_prompt("cure my poison"), PromptKind::Instant);
+        assert_eq!(
+            classify_prompt("boost my jump height"),
+            PromptKind::Instant
+        );
+    }
+
+    #[test]
+    fn classify_prompt_prefers_rule_when_a_conditional_phrase_and_an_instant_verb_both_appear() {
+        // "make" opens the sentence, which alone would read as an instant
+        // command, but the "when" clause means this is really describing
+        // ongoing behavior -- conditional phrasing must win.
+        assert_eq!(
+            classify_prompt("make it rain whenever a player jumps"),
+            PromptKind::Rule
+        );
+    }
+
+    #[test]
+    fn classify_prompt_defaults_to_rule_for_an_ambiguous_prompt() {
+        assert_eq!(
+            classify_prompt("sheep are afraid of red light"),
+            PromptKind::Rule
+        );
+    }
+
     /// Exercises the real end-to-end pipeline: a live llama-server generates
     /// Lua for a rule, and our real sandbox (`Module::load`) validates it.
     /// Requires `llama-server` running on 127.0.0.1:8090 -- not run by
@@ -326,9 +485,8 @@ mod tests {
         use std::time::{Duration, Instant};
 
         let client = LlmClient::new("http://127.0.0.1:8090".to_string());
-        let pending = client.generate(
-            "During the day, chickens flee from the nearest player if it gets within 6 blocks.",
-        );
+        let prompt = "During the day, chickens flee from the nearest player if it gets within 6 blocks.";
+        let pending = client.generate(prompt, classify_prompt(prompt));
 
         let deadline = Instant::now() + Duration::from_secs(90);
         let result = loop {
@@ -345,6 +503,84 @@ mod tests {
         println!("--- generated Lua ---\n{code}\n----------------------");
         let module = Module::load("test_rule".to_string(), "test".to_string(), code)
             .expect("generated module should pass validation");
+        assert!(!module.name.is_empty());
+        assert!(
+            !module.is_instant,
+            "a conditional prompt like this one should generate a RULE (on_tick), not a spell"
+        );
+    }
+
+    /// Same pipeline as `live_generation_produces_a_valid_module`, but for
+    /// an INSTANT SPELL request -- confirms classify_prompt's guess plus
+    /// the directive it drives actually gets the model to write on_cast
+    /// instead of on_tick for a real one-shot prompt, not just in the
+    /// (mocked/hand-written) unit tests. Same manual-run requirement.
+    #[test]
+    #[ignore = "requires a running llama-server on 127.0.0.1:8090"]
+    fn live_generation_produces_a_valid_instant_spell_module() {
+        use crate::scripting::Module;
+        use std::time::{Duration, Instant};
+
+        let client = LlmClient::new("http://127.0.0.1:8090".to_string());
+        let prompt = "add 100 stone";
+        let kind = classify_prompt(prompt);
+        assert_eq!(kind, PromptKind::Instant, "sanity check on the classifier itself");
+        let pending = client.generate(prompt, kind);
+
+        let deadline = Instant::now() + Duration::from_secs(90);
+        let result = loop {
+            if let Some(r) = pending.poll() {
+                break r;
+            }
+            if Instant::now() > deadline {
+                panic!("timed out waiting for llama-server");
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+
+        let code = result.expect("generation request should succeed");
+        println!("--- generated Lua ---\n{code}\n----------------------");
+        let module = Module::load("test_spell".to_string(), "test".to_string(), code)
+            .expect("generated module should pass validation");
+        assert!(
+            module.is_instant,
+            "expected \"add 100 stone\" to generate an INSTANT SPELL (on_cast), not a rule"
+        );
+    }
+
+    /// Same pipeline again, checking the model actually reaches for the new
+    /// 1.2.0 player-health/poison World API (not just that it produces
+    /// *some* valid module) when the prompt calls for it.
+    #[test]
+    #[ignore = "requires a running llama-server on 127.0.0.1:8090"]
+    fn live_generation_uses_the_poison_api_for_a_poison_prompt() {
+        use crate::scripting::Module;
+        use std::time::{Duration, Instant};
+
+        let client = LlmClient::new("http://127.0.0.1:8090".to_string());
+        let prompt = "poison the nearest player";
+        let kind = classify_prompt(prompt);
+        let pending = client.generate(prompt, kind);
+
+        let deadline = Instant::now() + Duration::from_secs(90);
+        let result = loop {
+            if let Some(r) = pending.poll() {
+                break r;
+            }
+            if Instant::now() > deadline {
+                panic!("timed out waiting for llama-server");
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+
+        let code = result.expect("generation request should succeed");
+        println!("--- generated Lua ---\n{code}\n----------------------");
+        let module = Module::load("test_poison".to_string(), "test".to_string(), code.clone())
+            .expect("generated module should pass validation");
+        assert!(
+            code.contains("set_poisoned"),
+            "expected \"poison the nearest player\" to call api.set_poisoned somewhere: {code}"
+        );
         assert!(!module.name.is_empty());
     }
 }

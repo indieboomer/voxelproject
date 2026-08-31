@@ -14,18 +14,19 @@ use crate::camera::Camera;
 use crate::creature::{mesh_for_snapshot, Creatures};
 use crate::daynight::{sky_lighting, DAY_LENGTH_SECS};
 use crate::input::Input;
-use crate::llm::{derive_rule_name, LlmClient, PendingGeneration};
+use crate::llm::{classify_prompt, derive_rule_name, LlmClient, PendingGeneration, PromptKind};
 use crate::net::{
     self, decode, encode, LaunchConfig, NotifyKind, Packet, PlayerId, ReliableChannel,
-    ReliableMsg, UnreliableMsg, CONNECTION_TIMEOUT, HOST_PLAYER_ID, MAX_NICKNAME_LEN,
-    SNAPSHOT_INTERVAL,
+    ReliableMsg, SnapshotPlayer, UnreliableMsg, CONNECTION_TIMEOUT, HOST_PLAYER_ID,
+    MAX_NICKNAME_LEN, SNAPSHOT_INTERVAL,
 };
-use crate::player::Player;
+use crate::player::{Player, MAX_ATTRIBUTE_MULTIPLIER, MAX_HEALTH, MIN_ATTRIBUTE_MULTIPLIER};
 use crate::raycast::raycast;
 use crate::remote_player::{self, RemotePlayer};
 use crate::save::{load_world, save_world};
 use crate::scripting::{
-    BlockBreakEvent, Module, PlayerSnapshot, ScriptHost, TICK_INTERVAL as LUA_TICK_INTERVAL,
+    BlockBreakEvent, Module, PlayerEffect, PlayerSnapshot, ScriptHost, TickOutcome,
+    TICK_INTERVAL as LUA_TICK_INTERVAL,
 };
 use crate::ui::{
     ChatEntry, Toast, Ui, CHAT_LOG_CAPACITY, CHAT_MESSAGE_COLOR, IMPORTANT_TOAST_COLOR,
@@ -39,6 +40,12 @@ use crate::world_api_validate;
 
 const REDSTONE_HEAL_RADIUS: f32 = 4.0;
 const REDSTONE_HEAL_AMOUNT: f32 = 0.5;
+/// How often a poisoned player loses health, and by how much -- see
+/// world_api/schema.yaml's `poison_tick_secs`/`api.set_poisoned`. Pure
+/// engine state, not driven by Lua at all; a module only ever flips
+/// `poisoned` on or off via `api.set_poisoned`.
+const POISON_TICK_INTERVAL: f32 = 10.0;
+const POISON_DAMAGE_PER_TICK: f32 = 1.0;
 /// Horizontal speed above which a remote player (no real sprint flag over
 /// the network) is approximated as "running" for `api.players()`. Above the
 /// 4.5 walk speed but comfortably below the 7.5 sprint speed in `player.rs`.
@@ -46,6 +53,45 @@ const REMOTE_SPRINT_THRESHOLD: f32 = 6.0;
 
 fn horizontal_speed(v: Vec3) -> f32 {
     Vec3::new(v.x, 0.0, v.z).length()
+}
+
+/// A seed for a brand-new world, different across (almost) every launch --
+/// terrain, creature placement, and weather all derive from `World::seed`
+/// (see `App::new`'s `world.seed`-seeded `Creatures::spawn_around`/
+/// `WeatherState::new`/`build_rain_particles`), so this one value is what
+/// actually varies "New World" from run to run.
+///
+/// Previously this was `Instant::now().elapsed().as_nanos()` -- but calling
+/// `.elapsed()` immediately on an `Instant` just created measures the tiny,
+/// near-constant time the two calls take back-to-back, not wall-clock time,
+/// so real launches produced almost the same seed every time (hence every
+/// world "looking the same"). Wall-clock time since the Unix epoch actually
+/// varies between launches; XORed with the process id so two launches
+/// starting in the same nanosecond-mod-2^32 window (unlikely, but the low
+/// 32 bits of a nanosecond counter wrap every ~4.3s) still diverge.
+///
+/// Nothing about spawn position, starter modules, starting time-of-day, or
+/// creature count depends on the seed (see the call site) -- only terrain/
+/// creature-scatter/weather *appearance* varies, so the first-minutes
+/// experience stays the same rule set and pacing every time, just on
+/// differently laid-out terrain.
+fn random_world_seed() -> u32 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u32)
+        .unwrap_or(0);
+    nanos ^ std::process::id() ^ 0x9E3779B9
+}
+
+/// The user-facing word for a `PromptKind`, used in generation status
+/// messages/logs so a spell request doesn't get called a "rule" while it's
+/// still in flight (its actual kind, `Module::is_instant`, isn't known
+/// until the model's output is loaded).
+fn generation_noun(kind: PromptKind) -> &'static str {
+    match kind {
+        PromptKind::Rule => "rule",
+        PromptKind::Instant => "spell",
+    }
 }
 
 fn is_in_water(world: &World, pos: Vec3) -> bool {
@@ -188,6 +234,7 @@ enum GenerationState {
     Idle,
     Waiting {
         user_request: String,
+        kind: PromptKind,
         pending: PendingGeneration,
         is_retry: bool,
     },
@@ -305,6 +352,8 @@ pub struct App {
     local_nickname: String,
     scripting: ScriptHost,
     lua_tick_timer: f32,
+    /// Host-only, like `lua_tick_timer` -- see `POISON_TICK_INTERVAL`.
+    poison_tick_timer: f32,
     llm: LlmClient,
     generation: GenerationState,
     next_rule_id: u32,
@@ -615,7 +664,7 @@ impl App {
                         ScriptHost::load_from_save(&loaded.modules),
                     ),
                     None => {
-                        let seed = (Instant::now().elapsed().as_nanos() as u32) ^ 0x9E3779B9;
+                        let seed = random_world_seed();
                         let world = World::new(seed);
                         let h = world.terrain_height(0, 0) as f32 + 2.0;
                         (
@@ -734,6 +783,7 @@ impl App {
             local_nickname: sanitize_nickname(&launch.nickname),
             scripting,
             lua_tick_timer: 0.0,
+            poison_tick_timer: 0.0,
             llm,
             generation: GenerationState::Idle,
             next_rule_id: 0,
@@ -1067,35 +1117,28 @@ impl App {
             if self.lua_tick_timer >= LUA_TICK_INTERVAL {
                 self.lua_tick_timer = 0.0;
                 let players = self.host_player_positions();
-                let (block_edits, crashes, broadcasts) = self.scripting.run_tick(
+                let outcome = self.scripting.run_tick(
                     &self.world,
                     &mut self.creatures,
                     &players,
                     &mut self.time_of_day,
                     &mut self.weather,
                     &self.pending_block_breaks,
+                    self.player.resources_snapshot(),
                 );
                 self.pending_block_breaks.clear();
-                for (x, y, z, block) in block_edits {
-                    self.apply_block_edit(x, y, z, block);
-                }
-                // A rule can pass load-time validation and still hit a
-                // runtime error the first time it actually executes (e.g.
-                // calling an undefined helper) -- surface that loudly
-                // rather than letting the rule go silently dark.
-                for message in crashes {
-                    self.notify_all_important(message);
-                }
-                // api.broadcast: relay through the same host-to-all path
-                // every other rule-triggered notification already uses.
-                for message in broadcasts {
-                    self.notify_all(message);
-                }
+                self.apply_tick_outcome(outcome);
                 for &(x, y, z) in self.world.redstone_positions.iter() {
                     let center = Vec3::new(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5);
                     self.creatures
                         .heal_near(center, REDSTONE_HEAL_RADIUS, REDSTONE_HEAL_AMOUNT);
                 }
+            }
+
+            self.poison_tick_timer += dt;
+            if self.poison_tick_timer >= POISON_TICK_INTERVAL {
+                self.poison_tick_timer = 0.0;
+                self.apply_poison_ticks();
             }
         }
 
@@ -1115,13 +1158,18 @@ impl App {
 
         self.toasts.retain(|t| !t.is_expired());
         let is_host = matches!(self.net, NetRole::Host(_));
-        let generation_status = match &self.generation {
-            GenerationState::Waiting { is_retry: true, .. } => {
-                Some("Retrying with error feedback...")
-            }
+        let generation_status: Option<String> = match &self.generation {
             GenerationState::Waiting {
-                is_retry: false, ..
-            } => Some("Generating..."),
+                kind, is_retry: true, ..
+            } => Some(format!(
+                "Retrying the {} with error feedback...",
+                generation_noun(*kind)
+            )),
+            GenerationState::Waiting {
+                kind,
+                is_retry: false,
+                ..
+            } => Some(format!("Generating a {}...", generation_noun(*kind))),
             GenerationState::Idle => None,
         };
         let (full_output, requests) = self.ui.draw(
@@ -1131,7 +1179,7 @@ impl App {
             is_host,
             &self.scripting,
             self.last_generated_index,
-            generation_status,
+            generation_status.as_deref(),
             &self.toasts,
             self.last_fps,
             self.quit_dialog_open,
@@ -1166,6 +1214,9 @@ impl App {
                     if enabled { "activated" } else { "deactivated" }
                 ));
             }
+        }
+        if let Some(idx) = requests.run_index {
+            self.run_instant(idx);
         }
         if let Some(idx) = requests.delete_index {
             if let Some(name) = self.scripting.remove(idx) {
@@ -1290,6 +1341,10 @@ impl App {
             on_ground: self.player.on_ground,
             sprinting: self.player.sprinting,
             in_water: is_in_water(&self.world, self.player.position),
+            health: self.player.health,
+            poisoned: self.player.poisoned,
+            speed_multiplier: self.player.speed_multiplier,
+            jump_multiplier: self.player.jump_multiplier,
         }];
         for (&id, rp) in host.remote_players.iter() {
             players.push(PlayerSnapshot {
@@ -1300,6 +1355,10 @@ impl App {
                 on_ground: approximate_on_ground(&self.world, rp.pos),
                 sprinting: horizontal_speed(rp.velocity) > REMOTE_SPRINT_THRESHOLD,
                 in_water: is_in_water(&self.world, rp.pos),
+                health: rp.health,
+                poisoned: rp.poisoned,
+                speed_multiplier: rp.speed_multiplier,
+                jump_multiplier: rp.jump_multiplier,
             });
         }
         players
@@ -1309,11 +1368,18 @@ impl App {
     /// the in-game console), and it goes to the LLM along with the World
     /// API doc and an example module.
     fn start_generation(&mut self, user_request: String) {
-        log::info!("Generating a rule from: {user_request}");
-        self.notify_all(format!("Host is generating a rule: \"{user_request}\""));
-        let pending = self.llm.generate(&user_request);
+        // A cheap deterministic heuristic (see llm::classify_prompt), not a
+        // hard requirement -- it just tells the model which contract to
+        // write; `poll_generation` accepts whatever it actually produces
+        // after at most one corrective retry.
+        let kind = classify_prompt(&user_request);
+        let noun = generation_noun(kind);
+        log::info!("Generating a {noun} from: {user_request}");
+        self.notify_all(format!("Host is generating a {noun}: \"{user_request}\""));
+        let pending = self.llm.generate(&user_request, kind);
         self.generation = GenerationState::Waiting {
             user_request,
+            kind,
             pending,
             is_retry: false,
         };
@@ -1354,18 +1420,20 @@ impl App {
         };
         let GenerationState::Waiting {
             user_request,
+            kind,
             is_retry,
             ..
         } = std::mem::replace(&mut self.generation, GenerationState::Idle)
         else {
             unreachable!()
         };
+        let noun = generation_noun(kind);
 
         let code = match result {
             Ok(code) => code,
             Err(e) => {
-                log::error!("Rule generation failed: {e}");
-                self.notify_important(format!("Rule generation failed: {e}"));
+                log::error!("{noun} generation failed: {e}");
+                self.notify_important(format!("{noun} generation failed: {e}"));
                 return;
             }
         };
@@ -1390,28 +1458,66 @@ impl App {
         };
         match load_result {
             Ok(module) => {
+                // classify_prompt is a hint, not a hard requirement -- if
+                // the model wrote the other contract, give it exactly one
+                // chance to redo it (reusing the same retry pipeline a
+                // validation failure uses), but if it *still* doesn't match
+                // afterward, accept the module as whatever kind it actually
+                // turned out to be rather than failing outright.
+                let kind_matches = module.is_instant == matches!(kind, PromptKind::Instant);
+                if !kind_matches && !is_retry {
+                    log::warn!(
+                        "Generated module's contract didn't match the expected kind, asking \
+                         the model to redo it"
+                    );
+                    let hint = match kind {
+                        PromptKind::Instant => {
+                            "This should have been an instant spell -- define \
+                             `function on_cast(api, event)` that does its whole effect once, \
+                             not `on_tick`."
+                        }
+                        PromptKind::Rule => {
+                            "This should have been a continuous rule -- define \
+                             `function on_tick(api)`, not `on_cast`."
+                        }
+                    };
+                    let pending = self.llm.retry(&user_request, kind, &code, hint);
+                    self.generation = GenerationState::Waiting {
+                        user_request,
+                        kind,
+                        pending,
+                        is_retry: true,
+                    };
+                    return;
+                }
+
+                let is_instant = module.is_instant;
                 self.next_rule_id += 1;
                 let idx = self.scripting.add_generated(module);
                 self.last_generated_index = Some(idx);
-                log::info!(
-                    "Generated rule module '{name}' from prompt (open the Rules panel to activate)"
-                );
+                let (label, action) = if is_instant {
+                    ("spell", "click Run to cast it")
+                } else {
+                    ("rule", "click Enable to activate it")
+                };
+                log::info!("Generated {label} module '{name}' from prompt (open the Rules panel and {action})");
                 self.notify_all_important(format!(
-                    "New rule generated: '{name}' -- not active yet, open the Rules panel and click Enable"
+                    "New {label} generated: '{name}' -- open the Rules panel and {action}"
                 ));
             }
             Err(err) if !is_retry => {
-                log::warn!("Generated rule failed validation, asking the model to fix it: {err}");
-                let pending = self.llm.retry(&user_request, &code, &err);
+                log::warn!("Generated {noun} failed validation, asking the model to fix it: {err}");
+                let pending = self.llm.retry(&user_request, kind, &code, &err);
                 self.generation = GenerationState::Waiting {
                     user_request,
+                    kind,
                     pending,
                     is_retry: true,
                 };
             }
             Err(err) => {
-                log::error!("Generated rule failed validation twice, giving up: {err}");
-                self.notify_important(format!("Rule generation failed: {err}"));
+                log::error!("Generated {noun} failed validation twice, giving up: {err}");
+                self.notify_important(format!("{noun} generation failed: {err}"));
             }
         }
     }
@@ -1436,6 +1542,185 @@ impl App {
                     ReliableMsg::BlockEdit { x, y, z, block },
                 );
             }
+        }
+    }
+
+    /// Applies everything one `ScriptHost::run_tick`/`run_cast` call
+    /// produced -- shared between the regular tick loop and `run_instant`
+    /// (a spell's Run click) so both go through identical block-edit
+    /// replication, crash/broadcast notification, and item-grant handling.
+    fn apply_tick_outcome(&mut self, outcome: TickOutcome) {
+        for (x, y, z, block) in outcome.block_edits {
+            self.apply_block_edit(x, y, z, block);
+        }
+        // A rule/spell can pass load-time validation and still hit a
+        // runtime error the first time it actually executes (e.g. calling
+        // an undefined helper) -- surface that loudly rather than letting
+        // it go silently dark.
+        for message in outcome.crashes {
+            self.notify_all_important(message);
+        }
+        // api.broadcast: relay through the same host-to-all path every
+        // other rule-triggered notification already uses.
+        for message in outcome.broadcasts {
+            self.notify_all(message);
+        }
+        for effect in outcome.player_effects {
+            self.apply_player_effect(effect);
+        }
+    }
+
+    /// Applies one `PlayerEffect` to its target's authoritative state --
+    /// directly on the host's own `Player` for `HOST_PLAYER_ID`, or on that
+    /// connection's `RemotePlayer` record for anyone else (silently
+    /// dropped if `player_id` isn't connected, matching the World API
+    /// action that produced it already having checked this in Lua and
+    /// returned `false`). Health/poisoned/speed/jump reach the *remote*
+    /// player's own client purely by riding the next `Snapshot` broadcast
+    /// (see world_api/schema.yaml's `replication.player_attributes`) --
+    /// only item grants need an explicit targeted message, since inventory
+    /// doesn't ride the snapshot.
+    fn apply_player_effect(&mut self, effect: PlayerEffect) {
+        match effect {
+            PlayerEffect::GiveItem { player_id, block, amount } => {
+                if player_id == HOST_PLAYER_ID {
+                    self.player.add_resources(block, amount);
+                    return;
+                }
+                let NetRole::Host(host) = &mut self.net else {
+                    return;
+                };
+                let Some(addr) = host
+                    .clients
+                    .iter()
+                    .find(|(_, &id)| id == player_id)
+                    .map(|(&addr, _)| addr)
+                else {
+                    return;
+                };
+                host.reliable
+                    .send(&host.socket, addr, ReliableMsg::GrantItem { block, amount });
+            }
+            PlayerEffect::TakeItem { player_id, block, amount } => {
+                // Only ever queued for HOST_PLAYER_ID -- see take_item's
+                // doc in world_api/schema.yaml. The Lua-visible success
+                // bool already reflected a host_resources snapshot check
+                // at call time, and nothing can have changed
+                // self.player.resources between then and now within the
+                // same tick, so this always succeeds when it gets here.
+                if player_id == HOST_PLAYER_ID {
+                    self.player.take_resources(block, amount);
+                }
+            }
+            PlayerEffect::Health { player_id, delta } => {
+                if player_id == HOST_PLAYER_ID {
+                    if delta >= 0.0 {
+                        self.player.heal(delta);
+                    } else {
+                        self.player.damage(-delta);
+                    }
+                } else if let NetRole::Host(host) = &mut self.net {
+                    if let Some(rp) = host.remote_players.get_mut(&player_id) {
+                        rp.health = (rp.health + delta).clamp(0.0, MAX_HEALTH);
+                    }
+                }
+            }
+            PlayerEffect::Poisoned { player_id, poisoned } => {
+                let changed = if player_id == HOST_PLAYER_ID {
+                    let was = self.player.poisoned;
+                    self.player.poisoned = poisoned;
+                    was != poisoned
+                } else if let NetRole::Host(host) = &mut self.net {
+                    match host.remote_players.get_mut(&player_id) {
+                        Some(rp) => {
+                            let was = rp.poisoned;
+                            rp.poisoned = poisoned;
+                            was != poisoned
+                        }
+                        None => false,
+                    }
+                } else {
+                    false
+                };
+                // Edge-triggered, not every call -- a rule re-asserting
+                // "still poisoned" every tick shouldn't spam a toast.
+                if changed {
+                    let verb = if poisoned { "poisoned" } else { "no longer poisoned" };
+                    self.notify_all(format!("P{player_id} is {verb}"));
+                }
+            }
+            PlayerEffect::SpeedMultiplier { player_id, multiplier } => {
+                if player_id == HOST_PLAYER_ID {
+                    self.player.set_speed_multiplier(multiplier);
+                } else if let NetRole::Host(host) = &mut self.net {
+                    if let Some(rp) = host.remote_players.get_mut(&player_id) {
+                        rp.speed_multiplier =
+                            multiplier.clamp(MIN_ATTRIBUTE_MULTIPLIER, MAX_ATTRIBUTE_MULTIPLIER);
+                    }
+                }
+            }
+            PlayerEffect::JumpMultiplier { player_id, multiplier } => {
+                if player_id == HOST_PLAYER_ID {
+                    self.player.set_jump_multiplier(multiplier);
+                } else if let NetRole::Host(host) = &mut self.net {
+                    if let Some(rp) = host.remote_players.get_mut(&player_id) {
+                        rp.jump_multiplier =
+                            multiplier.clamp(MIN_ATTRIBUTE_MULTIPLIER, MAX_ATTRIBUTE_MULTIPLIER);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Damages every currently-poisoned player by `POISON_DAMAGE_PER_TICK`
+    /// -- called every `POISON_TICK_INTERVAL` seconds, host-only. Pure
+    /// engine state, not a `PlayerEffect`/World API action: no Lua callback
+    /// fires for this, matching world_api/schema.yaml's `poison_tick_secs`
+    /// note that it's "only observable by polling ... .health from on_tick".
+    fn apply_poison_ticks(&mut self) {
+        if self.player.poisoned {
+            self.player.damage(POISON_DAMAGE_PER_TICK);
+        }
+        if let NetRole::Host(host) = &mut self.net {
+            for rp in host.remote_players.values_mut() {
+                if rp.poisoned {
+                    rp.health = (rp.health - POISON_DAMAGE_PER_TICK).max(0.0);
+                }
+            }
+        }
+    }
+
+    /// Runs one instant spell exactly once -- the Rules panel Run button's
+    /// entry point. Host-only, like generating/activating a rule; a no-op
+    /// otherwise (mirrors the same restriction `is_host` already gates in
+    /// the UI, checked again here since `requests.run_index` is plain user
+    /// input the UI layer can't fully trust on its own).
+    fn run_instant(&mut self, index: usize) {
+        if !matches!(self.net, NetRole::Host(_)) {
+            return;
+        }
+        let Some(module) = self.scripting.modules.get(index) else {
+            return;
+        };
+        if !module.is_instant {
+            return;
+        }
+        let name = module.name.clone();
+        let players = self.host_player_positions();
+        let outcome = self.scripting.run_cast(
+            index,
+            &self.world,
+            &mut self.creatures,
+            &players,
+            &mut self.time_of_day,
+            &mut self.weather,
+            HOST_PLAYER_ID,
+            self.player.resources_snapshot(),
+        );
+        let had_crash = !outcome.crashes.is_empty();
+        self.apply_tick_outcome(outcome);
+        if !had_crash {
+            self.notify_all(format!("Host cast '{name}'"));
         }
     }
 
@@ -1486,14 +1771,27 @@ impl App {
         host.broadcast_timer += dt;
         if host.broadcast_timer >= SNAPSHOT_INTERVAL {
             host.broadcast_timer = 0.0;
-            let mut players: Vec<(PlayerId, [f32; 3], f32, bool)> = vec![(
-                HOST_PLAYER_ID,
-                self.player.position.to_array(),
-                self.camera.yaw,
-                self.player.carrying_crystal,
-            )];
+            let mut players: Vec<SnapshotPlayer> = vec![SnapshotPlayer {
+                id: HOST_PLAYER_ID,
+                pos: self.player.position.to_array(),
+                yaw: self.camera.yaw,
+                carrying_crystal: self.player.carrying_crystal,
+                health: self.player.health,
+                poisoned: self.player.poisoned,
+                speed_multiplier: self.player.speed_multiplier,
+                jump_multiplier: self.player.jump_multiplier,
+            }];
             for (&id, rp) in host.remote_players.iter() {
-                players.push((id, rp.pos.to_array(), rp.yaw, rp.carrying_crystal));
+                players.push(SnapshotPlayer {
+                    id,
+                    pos: rp.pos.to_array(),
+                    yaw: rp.yaw,
+                    carrying_crystal: rp.carrying_crystal,
+                    health: rp.health,
+                    poisoned: rp.poisoned,
+                    speed_multiplier: rp.speed_multiplier,
+                    jump_multiplier: rp.jump_multiplier,
+                });
             }
             let snapshot = UnreliableMsg::Snapshot {
                 time_of_day: self.time_of_day,
@@ -1541,14 +1839,7 @@ impl App {
                         host.clients.insert(from, player_id);
                         host.remote_players.insert(
                             player_id,
-                            RemotePlayer {
-                                pos: spawn,
-                                yaw: 0.0,
-                                carrying_crystal: false,
-                                last_seen: Instant::now(),
-                                velocity: Vec3::ZERO,
-                                nickname: nickname.clone(),
-                            },
+                            RemotePlayer::new(spawn, 0.0, false, nickname.clone()),
                         );
                         host.reliable.send(
                             &host.socket,
@@ -1713,6 +2004,9 @@ impl App {
                         });
                         self.log_message(text, color);
                     }
+                    ReliableMsg::GrantItem { block, amount } => {
+                        self.player.add_resources(block, amount);
+                    }
                     _ => {}
                 }
             }
@@ -1729,27 +2023,51 @@ impl App {
                     unreachable!()
                 };
                 client.creature_snapshot = creatures;
+                let local_player_id = self.local_player_id;
                 let now = Instant::now();
-                for (id, pos, yaw, carrying_crystal) in players {
+                for sp in players {
+                    // The host is authoritative for health/poison/movement
+                    // attributes -- for *my own* entry, apply them straight
+                    // to the local Player that actually simulates my
+                    // physics/HUD, not to a RemotePlayer record of myself.
+                    if sp.id == local_player_id {
+                        self.player.health = sp.health;
+                        self.player.poisoned = sp.poisoned;
+                        self.player.speed_multiplier = sp.speed_multiplier;
+                        self.player.jump_multiplier = sp.jump_multiplier;
+                        continue;
+                    }
+                    let NetRole::Joined(client) = &mut self.net else {
+                        unreachable!()
+                    };
                     client
                         .remote_players
-                        .entry(id)
+                        .entry(sp.id)
                         .and_modify(|rp| {
-                            rp.pos = Vec3::from_array(pos);
-                            rp.yaw = yaw;
-                            rp.carrying_crystal = carrying_crystal;
+                            rp.pos = Vec3::from_array(sp.pos);
+                            rp.yaw = sp.yaw;
+                            rp.carrying_crystal = sp.carrying_crystal;
+                            rp.health = sp.health;
+                            rp.poisoned = sp.poisoned;
+                            rp.speed_multiplier = sp.speed_multiplier;
+                            rp.jump_multiplier = sp.jump_multiplier;
                             rp.last_seen = now;
                         })
-                        .or_insert(RemotePlayer {
-                            pos: Vec3::from_array(pos),
-                            yaw,
-                            carrying_crystal,
-                            last_seen: now,
-                            velocity: Vec3::ZERO,
+                        .or_insert_with(|| {
                             // Unused on the client -- only the host formats
                             // chat/join text, so it never asks a client for
                             // another player's nickname.
-                            nickname: String::new(),
+                            let mut rp = RemotePlayer::new(
+                                Vec3::from_array(sp.pos),
+                                sp.yaw,
+                                sp.carrying_crystal,
+                                String::new(),
+                            );
+                            rp.health = sp.health;
+                            rp.poisoned = sp.poisoned;
+                            rp.speed_multiplier = sp.speed_multiplier;
+                            rp.jump_multiplier = sp.jump_multiplier;
+                            rp
                         });
                 }
             }
@@ -2385,5 +2703,26 @@ mod tests {
     #[test]
     fn sanitize_nickname_passes_through_a_normal_name_unchanged() {
         assert_eq!(sanitize_nickname("Alex"), "Alex");
+    }
+
+    /// Regression test for the bug this replaced: seeding from
+    /// `Instant::now().elapsed()` measured almost nothing (the tiny gap
+    /// between two back-to-back calls) instead of real wall-clock time, so
+    /// consecutive "New World" launches got the same seed -- and since
+    /// terrain/creatures/weather all derive from it, every world looked the
+    /// same. A handful of calls spread over a few milliseconds should not
+    /// all collide.
+    #[test]
+    fn random_world_seed_varies_across_calls() {
+        let mut seeds = Vec::new();
+        for _ in 0..20 {
+            seeds.push(random_world_seed());
+            std::thread::sleep(std::time::Duration::from_micros(200));
+        }
+        let first = seeds[0];
+        assert!(
+            seeds.iter().any(|&s| s != first),
+            "expected at least one different seed across 20 calls, got {seeds:?}"
+        );
     }
 }

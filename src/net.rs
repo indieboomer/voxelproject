@@ -62,6 +62,31 @@ pub enum ReliableMsg {
     /// can't spoof another player's identity) and relays the formatted
     /// result to everyone as `Notify`.
     ChatMessage(String),
+    /// Credits `amount` of `block` into the receiving client's own
+    /// Resources inventory -- the network side of `api.give_item`
+    /// targeting a remote player. Sent only to that one player (unlike
+    /// `Notify`, never broadcast to everyone); the host's own grant is
+    /// applied locally instead of round-tripping through the network.
+    GrantItem { block: BlockType, amount: u32 },
+}
+
+/// One player's position/status as carried in a `Snapshot` -- see
+/// `UnreliableMsg::Snapshot::players`. Broadcast to every connected player,
+/// not just the one it belongs to (see world_api/schema.yaml's
+/// `replication.player_attributes`); each client applies its own entry's
+/// `health`/`poisoned`/`speed_multiplier`/`jump_multiplier` to its local
+/// `Player`, and everyone else's purely for future display (nothing reads
+/// another player's copy of these yet).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SnapshotPlayer {
+    pub id: PlayerId,
+    pub pos: [f32; 3],
+    pub yaw: f32,
+    pub carrying_crystal: bool,
+    pub health: f32,
+    pub poisoned: bool,
+    pub speed_multiplier: f32,
+    pub jump_multiplier: f32,
 }
 
 /// Best-effort messages sent every tick; a dropped one is superseded by the
@@ -76,7 +101,7 @@ pub enum UnreliableMsg {
     Snapshot {
         time_of_day: f32,
         weather: u8,
-        players: Vec<(PlayerId, [f32; 3], f32, bool)>,
+        players: Vec<SnapshotPlayer>,
         creatures: Vec<([f32; 3], u8, f32)>,
     },
 }
@@ -207,10 +232,20 @@ mod tests {
     /// only actually visible to clients if this shape round-trips.
     #[test]
     fn snapshot_round_trips_through_encode_decode() {
+        let player = SnapshotPlayer {
+            id: 7,
+            pos: [1.0, 2.0, 3.0],
+            yaw: 1.57,
+            carrying_crystal: true,
+            health: 63.0,
+            poisoned: true,
+            speed_multiplier: 1.5,
+            jump_multiplier: 0.8,
+        };
         let packet = Packet::Unreliable(UnreliableMsg::Snapshot {
             time_of_day: 0.42,
             weather: Weather::Rain.to_u8(),
-            players: vec![(7, [1.0, 2.0, 3.0], 1.57, true)],
+            players: vec![player],
             creatures: vec![([4.0, 5.0, 6.0], CreatureKind::Chicken.to_u8(), 0.5)],
         });
         let bytes = encode(&packet);
@@ -224,7 +259,7 @@ mod tests {
             }) => {
                 assert_eq!(time_of_day, 0.42);
                 assert_eq!(weather, Weather::Rain.to_u8());
-                assert_eq!(players, vec![(7, [1.0, 2.0, 3.0], 1.57, true)]);
+                assert_eq!(players, vec![player]);
                 assert_eq!(
                     creatures,
                     vec![([4.0, 5.0, 6.0], CreatureKind::Chicken.to_u8(), 0.5)]
@@ -257,6 +292,32 @@ mod tests {
                 assert_eq!(text, "a rule broadcast this");
             }
             other => panic!("expected a Reliable Notify packet, got {other:?}"),
+        }
+    }
+
+    /// api.give_item targeting a remote player reaches that client as a
+    /// `GrantItem` (see world_api/schema.yaml's `replication.item_grants`)
+    /// -- confirms the block kind and amount both survive the wire.
+    #[test]
+    fn grant_item_round_trips_through_encode_decode() {
+        let packet = Packet::Reliable {
+            id: 5,
+            msg: ReliableMsg::GrantItem {
+                block: BlockType::Stone,
+                amount: 100,
+            },
+        };
+        let bytes = encode(&packet);
+        let decoded = decode(&bytes).expect("a just-encoded packet must decode");
+        match decoded {
+            Packet::Reliable {
+                msg: ReliableMsg::GrantItem { block, amount },
+                ..
+            } => {
+                assert_eq!(block, BlockType::Stone);
+                assert_eq!(amount, 100);
+            }
+            other => panic!("expected a Reliable GrantItem packet, got {other:?}"),
         }
     }
 

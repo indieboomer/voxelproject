@@ -34,6 +34,38 @@ pub struct RemotePlayer {
     /// client's own `remote_players` entries leave this empty since they
     /// never need it (no in-world name tags yet).
     pub nickname: String,
+    /// The host's authoritative record of this player's health/poison/
+    /// movement-attribute state, set via the World API (`api.damage_player`
+    /// et al) and the poison DoT timer, then broadcast to everyone in the
+    /// same `Snapshot` `carrying_crystal` already rides. Like `nickname`,
+    /// only meaningful on the host -- a joined client's entries for *other*
+    /// players are never read for anything beyond mesh rendering, since
+    /// each client only applies these to its own local `Player`.
+    pub health: f32,
+    pub poisoned: bool,
+    pub speed_multiplier: f32,
+    pub jump_multiplier: f32,
+}
+
+impl RemotePlayer {
+    /// Constructs a fresh entry with the same defaults `Player::new` uses --
+    /// full health, unpoisoned, 1.0 multipliers -- so a newly joined player
+    /// starts identically whether the host is looking at its own `Player`
+    /// or this `RemotePlayer` record of someone else's.
+    pub fn new(pos: Vec3, yaw: f32, carrying_crystal: bool, nickname: String) -> Self {
+        Self {
+            pos,
+            yaw,
+            carrying_crystal,
+            last_seen: Instant::now(),
+            velocity: Vec3::ZERO,
+            nickname,
+            health: crate::player::MAX_HEALTH,
+            poisoned: false,
+            speed_multiplier: 1.0,
+            jump_multiplier: 1.0,
+        }
+    }
 }
 
 /// Builds a mesh for every tracked remote player except `exclude` (the

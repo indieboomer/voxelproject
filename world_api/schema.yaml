@@ -18,13 +18,13 @@
 # (air, mud, redstone, crystal), so it can't drift out of sync with the
 # actual block system the way a third hand-copied list would.
 
-version: "1.0.0"
+version: "1.2.0"
 title: World API
 description: >
   The Lua API exposed to sandboxed rule modules as the `api` table passed
-  into on_tick/on_death/on_block_break. Every member is flat under `api`
-  (single "world" namespace) -- there is no api.player.*/api.world.* nesting
-  yet. `namespace: world` is still tagged on each entry so a future
+  into on_tick/on_cast/on_death/on_block_break. Every member is flat under
+  `api` (single "world" namespace) -- there is no api.player.*/api.world.*
+  nesting yet. `namespace: world` is still tagged on each entry so a future
   namespace can be introduced without reshaping this schema or its
   generated artifacts.
 
@@ -49,17 +49,22 @@ engine:
 authority: >
   Every World API call executes ONLY on the host -- Lua does not run on
   joined clients at all (ScriptHost is host-only state). A module's effects
-  (block edits, creature spawns/state, weather, time of day, broadcasts)
-  reach clients purely through the replication channels below; there is no
-  separate "multiplayer mode" a rule opts into. Only the host can generate
-  or activate rules (a menu/UI restriction, not something this API itself
-  enforces or exposes).
+  (block edits, creature spawns/state, weather, time of day, broadcasts,
+  item grants, player attributes) reach clients purely through the
+  replication channels below;
+  there is no separate "multiplayer mode" a rule opts into. Only the host
+  can generate, activate, or run a module (a menu/UI restriction, not
+  something this API itself enforces or exposes) -- so an on_cast's
+  `event.player_id` is currently always the host's own id, even though the
+  API shape allows for any player.
 
 replication:
   block_edits: "Reliable, ordered, resent until acknowledged (ReliableMsg::BlockEdit) -- guaranteed delivery, may lag under packet loss."
   creature_state: "Best-effort, ~20 Hz (UnreliableMsg::Snapshot) -- a dropped snapshot is superseded by the next; no guaranteed delivery, but self-healing within one snapshot interval."
   weather_and_time_of_day: "Carried in the same best-effort Snapshot as creature state -- see creature_state."
   broadcast_messages: "One reliable Notify message per api.broadcast call, the same path used for host system notifications (rule enabled/disabled, player joined, etc.)."
+  item_grants: "One reliable, targeted ReliableMsg::GrantItem per give_item call, sent only to the named player_id (not broadcast to everyone like Notify) -- the host applies its own grant locally instead of round-tripping through the network."
+  player_attributes: "health, poisoned, speed_multiplier, and jump_multiplier all ride the same best-effort Snapshot creature_state already uses (~20Hz, self-healing) -- broadcast to every connected player, not just the one they belong to, the same way carrying_crystal already is. A player's own client also applies its own speed_multiplier/jump_multiplier from this to its local movement physics, since movement itself is simulated client-side."
 
 persistence:
   saved_fields: [name, prompt, source, enabled]
@@ -71,6 +76,24 @@ persistence:
     scratch in a fresh Lua VM, so any such memory resets to its initial
     value -- only a module's enabled/disabled flag and source code survive
     a save/reload, never its accumulated runtime state.
+  instant_vs_rule: >
+    Whether a module is a RULE or an INSTANT SPELL is NOT a saved field --
+    like api_version_tagging below, it's derived every load by re-executing
+    `source` and checking which of on_tick/on_cast it defines
+    (Module::is_instant). This is deliberate, following the same
+    ModuleSaveEntry-stays-frozen discipline api_version_tagging established:
+    it keeps the two kinds fully interchangeable in the save format and
+    means this feature needed zero changes to WorldSave's bincode layout.
+  player_state_not_saved: >
+    health, poisoned, speed_multiplier, jump_multiplier, and Resources
+    inventory counts are NOT saved with the world, the same way a module's
+    Lua runtime state isn't (see not_saved above) -- every player starts
+    every session at full health (100), unpoisoned, with 1.0 multipliers,
+    and an empty inventory, regardless of how the previous session ended.
+    This was already true for the inventory before this API version; health/
+    poisoned/multipliers are new state introduced alongside it and follow
+    the same precedent rather than becoming the first per-player state that
+    does persist.
   api_version_tagging: >
     Every module's `source` may begin with a `-- api_version: X.Y.Z` comment
     line recording which World API version it was written/generated
@@ -103,6 +126,39 @@ budgets:
     value: 64
     applies_to: [find_creatures, find_blocks]
     on_exceeded: "results beyond the cap are silently dropped, not an error; don't rely on finding more than this."
+  block_edits_per_cast_call:
+    value: 300
+    scope: "per instant-spell module, per on_cast call -- higher than block_edits_per_call since a spell runs once, not ~10/sec"
+    applies_to: [replace_block]
+    on_exhausted: "replace_block returns false; not an error."
+  creature_spawns_per_cast_call:
+    value: 30
+    scope: "per instant-spell module, per on_cast call -- higher than creature_spawns_per_call since a spell runs once, not ~10/sec"
+    applies_to: [spawn_creature, spawn_creature_near_player]
+    on_exhausted: "the call returns nil; not an error."
+  item_grant_max:
+    value: 500
+    scope: "per give_item call -- caps the amount argument itself, not a call count"
+    applies_to: [give_item]
+    on_exceeded: "amount is silently clamped to this value, not an error."
+  attribute_multiplier_min:
+    value: 0.1
+    applies_to: [set_player_speed, set_player_jump]
+    note: "A multiplier below this (e.g. 0) would functionally freeze/disable the attribute; clamped instead of allowed."
+  attribute_multiplier_max:
+    value: 5.0
+    applies_to: [set_player_speed, set_player_jump]
+    on_exceeded: "multiplier is silently clamped into [attribute_multiplier_min, attribute_multiplier_max], not an error."
+  max_health:
+    value: 100.0
+    scope: "every player, fixed -- not per-kind like a creature's max_health"
+    applies_to: [heal_player]
+    note: "Also the starting health for every player, every session (see persistence.player_state_not_saved)."
+  poison_tick_secs:
+    value: 10.0
+    scope: "global -- how often every currently-poisoned player loses health, engine-driven, not a Lua call"
+    applies_to: [set_poisoned]
+    note: "1 health lost per tick, for as long as PlayerSnapshot.poisoned stays true. No Lua callback fires for this -- it's pure engine state, only observable by polling api.players()/nearest_player().health from on_tick."
 
 creature_kinds: [sheep, chicken]
 
@@ -123,6 +179,10 @@ types:
       - {name: on_ground, type: boolean, desc: "True when standing on solid ground. Never true the same tick vertical_speed is positive -- a jump sets both at once, so 'on_ground and vertical_speed > 0' can never be true. There is no separate on_jump/on_land event; detect a one-shot transition by remembering the previous tick's on_ground per player id."}
       - {name: running, type: boolean, desc: "True while sprinting, as opposed to walking."}
       - {name: in_water, type: boolean, desc: "True while standing in a water block."}
+      - {name: health, type: number, desc: "0-100. Starts at 100 for every player every session -- like resources, health is NOT saved/reloaded with the world (see persistence.player_state_not_saved)."}
+      - {name: poisoned, type: boolean, desc: "While true, this player loses 1 health every poison_tick_secs, until something sets it back to false (e.g. a future medication item -- see set_poisoned). Sourced from and reported through this flag only; there is no separate 'poison timer' exposed."}
+      - {name: speed_multiplier, type: number, desc: "Multiplies this player's base walk/sprint speed. 1.0 = normal; see set_player_speed."}
+      - {name: jump_multiplier, type: number, desc: "Multiplies this player's base jump speed (so roughly jump *height* scales with its square, not linearly). 1.0 = normal; see set_player_jump."}
   PlayerSnapshotWithDistance:
     desc: "PlayerSnapshot plus the straight-line distance from the query point, as returned by nearest_player()."
     extends: PlayerSnapshot
@@ -149,6 +209,10 @@ types:
       - {name: x, type: integer}
       - {name: y, type: integer}
       - {name: z, type: integer}
+  CastEvent:
+    desc: "Passed as `event` to on_cast."
+    fields:
+      - {name: player_id, type: integer, desc: "id of the player who clicked Run (matches PlayerSnapshot.id). Only the host can run a spell, so this is currently always the host's id, but treat it as any connected player's id -- don't hardcode 0."}
   DeathEvent:
     desc: "Passed as `event` to on_death. The creature no longer exists by the time this fires."
     fields:
@@ -445,6 +509,99 @@ methods:
     errors: []
     since: "1.0.0"
 
+  - name: give_item
+    namespace: world
+    category: action
+    summary: "Grants items straight into a player's Resources inventory (the panel populated by hand-gathering blocks), bypassing the world entirely. Only use this when the request explicitly asks to add to a player's inventory/resources -- for everything else (\"add 100 stone\", \"fill this area with water\"), prefer replace_block to place blocks in the world instead."
+    params:
+      - {name: player_id, type: integer, desc: "Target player (matches PlayerSnapshot.id)."}
+      - {name: kind, type: string, desc: "A block id from block_kinds, but only the ones gatherable by hand (a resource, not e.g. \"air\" or \"water\") count -- anything else is rejected."}
+      - {name: amount, type: integer, desc: "Clamped into [0, item_grant_max]."}
+    returns: {type: boolean, desc: "false if kind isn't a grantable resource, player_id isn't connected, or amount clamped to 0 -- these failure cases are indistinguishable from Lua. true otherwise."}
+    errors: []
+    budget_ref: item_grant_max
+    since: "1.1.0"
+
+  - name: take_item
+    namespace: world
+    category: action
+    summary: "Removes items from a player's Resources inventory -- the reverse of give_item. ONLY works for the host's own player right now: a remote player's inventory isn't tracked host-side (nothing reports it up), so this is a no-op for any other player_id. Prefer give_item for a remote player (granting doesn't need to know what they already have)."
+    params:
+      - {name: player_id, type: integer, desc: "Must be the host's own id (see summary) or this always fails."}
+      - {name: kind, type: string, desc: "A block id from block_kinds; only a gatherable resource can be held at all."}
+      - {name: amount, type: integer, desc: "How many to remove."}
+    returns: {type: boolean, desc: "true only if player_id is the host AND it currently holds at least amount of kind (the whole amount is removed, never a partial take). false for every other case -- wrong player, unknown/ungrantable kind, or not enough held."}
+    errors: []
+    since: "1.2.0"
+
+  - name: get_resource_count
+    namespace: world
+    category: query
+    summary: "How much of one resource a player's inventory currently holds. Same host-only limitation as take_item -- a remote player's inventory isn't tracked host-side yet."
+    params:
+      - {name: player_id, type: integer, desc: "Must be the host's own id or this returns nil."}
+      - {name: kind, type: string, desc: "A block id from block_kinds."}
+    returns: {type: "integer | nil", desc: "nil if player_id isn't the host or kind isn't a real gatherable resource -- indistinguishable from Lua. Otherwise the count, which can legitimately be 0 (holds none, as opposed to nil meaning 'can't tell')."}
+    errors: []
+    since: "1.2.0"
+
+  - name: damage_player
+    namespace: world
+    category: action
+    summary: "Reduces a player's health, clamped at 0 -- there is no death/respawn system yet, so health just stops there."
+    params:
+      - {name: player_id, type: integer}
+      - {name: amount, type: number}
+    returns: {type: boolean, desc: "false if player_id isn't connected, true otherwise."}
+    errors: []
+    since: "1.2.0"
+
+  - name: heal_player
+    namespace: world
+    category: action
+    summary: "Restores a player's health, clamped at 100 (max_health)."
+    params:
+      - {name: player_id, type: integer}
+      - {name: amount, type: number}
+    returns: {type: boolean, desc: "false if player_id isn't connected, true otherwise."}
+    errors: []
+    since: "1.2.0"
+
+  - name: set_poisoned
+    namespace: world
+    category: action
+    summary: "Sets a player's poisoned flag directly -- true starts the 1-health-per-poison_tick_secs drain (see PlayerSnapshot.poisoned), false stops it (the hook a future medication item/effect would call; nothing in the engine calls this with false on its own yet)."
+    params:
+      - {name: player_id, type: integer}
+      - {name: poisoned, type: boolean}
+    returns: {type: boolean, desc: "false if player_id isn't connected, true otherwise."}
+    errors: []
+    since: "1.2.0"
+
+  - name: set_player_speed
+    namespace: world
+    category: action
+    summary: "Sets a player's speed_multiplier (applied to their base walk/sprint speed)."
+    params:
+      - {name: player_id, type: integer}
+      - {name: multiplier, type: number, desc: "Clamped into [attribute_multiplier_min, attribute_multiplier_max]."}
+    returns: {type: boolean, desc: "false if player_id isn't connected, true otherwise."}
+    errors: []
+    budget_ref: attribute_multiplier_max
+    since: "1.2.0"
+
+  - name: set_player_jump
+    namespace: world
+    category: action
+    summary: "Sets a player's jump_multiplier (applied to their base jump speed)."
+    params:
+      - {name: player_id, type: integer}
+      - {name: multiplier, type: number, desc: "Clamped into [attribute_multiplier_min, attribute_multiplier_max]."}
+    returns: {type: boolean, desc: "false if player_id isn't connected, true otherwise."}
+    errors: []
+    budget_ref: attribute_multiplier_max
+    since: "1.2.0"
+
 # ---------------------------------------------------------------------------
 # Event callbacks a module may define as global functions.
 # ---------------------------------------------------------------------------
@@ -453,8 +610,28 @@ events:
     required: true
     signature: "function on_tick(api)"
     frequency: "~10/sec, every tick_interval_secs, for as long as the module is enabled"
-    desc: "The only required callback -- Module::load rejects a source file that doesn't define this."
+    desc: >
+      Defines a RULE module. Required unless the module defines on_cast
+      instead -- a module must define EXACTLY ONE of on_tick or on_cast,
+      never both, never neither; Module::load rejects any other
+      combination.
     since: "1.0.0"
+
+  - name: on_cast
+    required: false
+    signature: "function on_cast(api, event)"
+    event_type: CastEvent
+    frequency: "Exactly once, immediately, when the host clicks Run in the Rules panel -- never on a timer, never re-run automatically."
+    desc: >
+      Defines an INSTANT SPELL module instead of a RULE: a one-time
+      immediate action with no ongoing condition to check (e.g. "add 100
+      stone", "spawn a dozen chickens around me", "heal me"), as opposed to
+      a RULE's continuous "when/if/at night/while ..." behavior. Mutually
+      exclusive with on_tick -- see on_tick's desc. Since it only runs
+      once per click instead of ~10/sec, its per-call action budgets are
+      higher than a RULE's -- see block_edits_per_cast_call and
+      creature_spawns_per_cast_call.
+    since: "1.1.0"
 
   - name: on_death
     required: false
