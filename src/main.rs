@@ -4,6 +4,7 @@ mod creature;
 mod daynight;
 mod input;
 mod llm;
+mod llm_server;
 mod menu;
 mod net;
 mod player;
@@ -52,6 +53,14 @@ fn main() {
     );
 
     let launch_config = net::parse_args();
+
+    // Checked/started on a background thread so a forgotten-after-reboot
+    // llama-server doesn't block the window from opening -- rule generation
+    // just stays unavailable until it finishes coming up.
+    {
+        let llm_url = launch_config.llm_url.clone();
+        std::thread::spawn(move || llm_server::ensure_running(&llm_url));
+    }
 
     // `--connect` on the command line bypasses the menu entirely (used for
     // scripted/automated testing); any other launch starts at the main menu
