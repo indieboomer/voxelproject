@@ -232,10 +232,10 @@ mod tests {
 
     #[test]
     fn validate_source_flags_an_unrelated_name_without_a_forced_suggestion() {
-        let source = "function on_tick(api) api.teleport_player(1, 2, 3) end";
+        let source = "function on_tick(api) api.cast_fireball(1, 2, 3) end";
         let issues = validate_source(source);
         assert_eq!(issues.len(), 1, "{issues:?}");
-        assert!(issues[0].message.contains("api.teleport_player"));
+        assert!(issues[0].message.contains("api.cast_fireball"));
     }
 
     #[test]

@@ -15,6 +15,7 @@ use crate::creature::{mesh_for_snapshot, Creatures};
 use crate::daynight::{sky_lighting, DAY_LENGTH_SECS};
 use crate::input::Input;
 use crate::llm::{classify_prompt, derive_rule_name, LlmClient, PendingGeneration, PromptKind};
+use crate::model::Models;
 use crate::net::{
     self, decode, encode, LaunchConfig, NotifyKind, Packet, PlayerId, ReliableChannel,
     ReliableMsg, SnapshotPlayer, UnreliableMsg, CONNECTION_TIMEOUT, HOST_PLAYER_ID,
@@ -28,7 +29,7 @@ use crate::raycast::raycast;
 use crate::remote_player::{self, RemotePlayer};
 use crate::save::{load_world, save_world};
 use crate::scripting::{
-    BlockBreakEvent, Module, PlayerEffect, PlayerSnapshot, ScriptHost, TickOutcome,
+    BlockBreakEvent, InteractEvent, Module, PlayerEffect, PlayerSnapshot, ScriptHost, TickOutcome,
     TICK_INTERVAL as LUA_TICK_INTERVAL,
 };
 use crate::ui::{
@@ -316,7 +317,7 @@ struct ClientNet {
     player_id: PlayerId,
     reliable: ReliableChannel,
     remote_players: HashMap<PlayerId, RemotePlayer>,
-    creature_snapshot: Vec<([f32; 3], u8, f32)>,
+    creature_snapshot: Vec<([f32; 3], u8, f32, u8, f32)>,
     send_timer: f32,
     last_server_packet: Instant,
     lost_connection_logged: bool,
@@ -418,6 +419,97 @@ fn upload_mesh(device: &wgpu::Device, mesh: &MeshData) -> Option<GpuMesh> {
     })
 }
 
+/// A GPU mesh buffer pair that persists across frames and is updated in
+/// place with `queue.write_buffer` instead of being destroyed and recreated
+/// every frame the way `entity_mesh` used to be (via a fresh `upload_mesh`/
+/// `create_buffer_init` call every single frame, unlike `chunk_meshes`,
+/// which only ever get a new `upload_mesh` when that specific chunk
+/// actually changes). The creature/player mesh's *CPU-side* data genuinely
+/// does need rebuilding every frame -- positions and poses change
+/// continuously -- but that never implied the GPU buffer itself needed to
+/// be torn down and reallocated that often too. Grows (with headroom, to
+/// avoid reallocating on every small fluctuation) when new data no longer
+/// fits; never shrinks, since the entity mesh's size only varies within a
+/// fairly narrow band frame to frame.
+struct DynamicMesh {
+    vertex_buffer: wgpu::Buffer,
+    vertex_capacity: usize,
+    index_buffer: wgpu::Buffer,
+    index_capacity: usize,
+    index_count: u32,
+}
+
+impl DynamicMesh {
+    /// Starting capacities are just a reasonable guess to make the very
+    /// first real update unlikely to need an immediate regrow; any size is
+    /// safe since `update` grows on demand regardless.
+    fn new(device: &wgpu::Device) -> Self {
+        let vertex_capacity = 4096;
+        let index_capacity = 8192;
+        Self {
+            vertex_buffer: Self::make_buffer(
+                device,
+                "entity vbuf",
+                vertex_capacity * std::mem::size_of::<Vertex>(),
+                wgpu::BufferUsages::VERTEX,
+            ),
+            vertex_capacity,
+            index_buffer: Self::make_buffer(
+                device,
+                "entity ibuf",
+                index_capacity * std::mem::size_of::<u32>(),
+                wgpu::BufferUsages::INDEX,
+            ),
+            index_capacity,
+            index_count: 0,
+        }
+    }
+
+    fn make_buffer(device: &wgpu::Device, label: &str, size_bytes: usize, usage: wgpu::BufferUsages) -> wgpu::Buffer {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            // wgpu requires a nonzero buffer size even when there's
+            // nothing to draw yet (index_count stays 0, so nothing reads
+            // from it until the first real mesh arrives).
+            size: (size_bytes.max(1)) as u64,
+            usage: usage | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
+    }
+
+    /// Uploads `mesh`'s current contents into the persistent buffers,
+    /// growing them first if they're too small to hold it.
+    fn update(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, mesh: &MeshData) {
+        self.index_count = mesh.indices.len() as u32;
+
+        if mesh.vertices.len() > self.vertex_capacity {
+            self.vertex_capacity = mesh.vertices.len() * 3 / 2;
+            self.vertex_buffer = Self::make_buffer(
+                device,
+                "entity vbuf",
+                self.vertex_capacity * std::mem::size_of::<Vertex>(),
+                wgpu::BufferUsages::VERTEX,
+            );
+        }
+        if mesh.indices.len() > self.index_capacity {
+            self.index_capacity = mesh.indices.len() * 3 / 2;
+            self.index_buffer = Self::make_buffer(
+                device,
+                "entity ibuf",
+                self.index_capacity * std::mem::size_of::<u32>(),
+                wgpu::BufferUsages::INDEX,
+            );
+        }
+
+        if !mesh.vertices.is_empty() {
+            queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&mesh.vertices));
+        }
+        if !mesh.indices.is_empty() {
+            queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&mesh.indices));
+        }
+    }
+}
+
 pub struct App {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -464,6 +556,9 @@ pub struct App {
     world: World,
     input: Input,
     creatures: Creatures,
+    /// Loaded once at startup and shared by every creature -- see
+    /// `model::Models`.
+    models: Models,
     time_of_day: f32,
     weather: WeatherState,
     /// State for `update_lightning`'s local-only strike timer -- see
@@ -481,6 +576,10 @@ pub struct App {
     /// Block breaks (local or network-relayed from joined clients) collected
     /// since the last Lua tick, fed into `on_block_break` and cleared after.
     pending_block_breaks: Vec<BlockBreakEvent>,
+    /// Interact-key presses (local or network-relayed from joined clients)
+    /// collected since the last Lua tick, fed into `on_interact` and
+    /// cleared after -- same lifecycle as `pending_block_breaks`.
+    pending_interacts: Vec<InteractEvent>,
     net: NetRole,
     local_player_id: PlayerId,
     /// Shown instead of "P{id}" in chat and join notifications. Set once
@@ -514,7 +613,7 @@ pub struct App {
     return_to_menu: bool,
 
     chunk_meshes: HashMap<(i32, i32), GpuMesh>,
-    entity_mesh: Option<GpuMesh>,
+    entity_mesh: DynamicMesh,
     /// The block a right click places, chosen from gathered resources via
     /// the hotbar keys or the Resources panel. `None` until the player has
     /// picked something (or gathered anything) to place.
@@ -937,12 +1036,14 @@ impl App {
         if spawn_creatures {
             creatures.spawn_around(&world, spawn_pos, CREATURE_COUNT, world.seed);
         }
+        let models = Models::load();
         let weather = WeatherState::new(world.seed);
         let rain_particles = build_rain_particles(world.seed);
         let lightning_seed = world.seed;
 
         let llm = LlmClient::new(launch.llm_url.clone());
         let ui = Ui::new(&device, config.format, &window);
+        let entity_mesh = DynamicMesh::new(&device);
 
         let mut app = Self {
             window,
@@ -975,12 +1076,14 @@ impl App {
             world,
             input: Input::new(),
             creatures,
+            models,
             time_of_day,
             weather,
             lightning_rng: (lightning_seed as u64) ^ 0xB0C7_11C4_71E5,
             lightning_timer: LIGHTNING_MIN_INTERVAL_SECS,
             lightning_flash: 0.0,
             pending_block_breaks: Vec::new(),
+            pending_interacts: Vec::new(),
             net,
             local_player_id,
             local_nickname: sanitize_nickname(&launch.nickname),
@@ -1002,7 +1105,7 @@ impl App {
             quit_dialog_open: false,
             return_to_menu: false,
             chunk_meshes: HashMap::new(),
-            entity_mesh: None,
+            entity_mesh,
             selected_block: None,
             mining_target: None,
             mining_hits: 0,
@@ -1456,6 +1559,43 @@ impl App {
             }
         }
 
+        // Interact (E): a deliberate, non-destructive "use" aimed at
+        // whatever's under the crosshair, distinct from mining (left click)
+        // and placing (right click) -- see world_api/schema.yaml's
+        // `on_interact`. Only reports the event; a rule decides what, if
+        // anything, happens.
+        if !self.console_open && !self.chat_open && self.input.interact_clicked {
+            let origin = self.camera.eye_position();
+            let dir = self.camera.forward();
+            if let Some(hit) = raycast(&self.world, origin, dir, REACH) {
+                match &mut self.net {
+                    NetRole::Host(_) => {
+                        let block = self
+                            .world
+                            .get_block(hit.target.0, hit.target.1, hit.target.2);
+                        self.pending_interacts.push(InteractEvent {
+                            x: hit.target.0,
+                            y: hit.target.1,
+                            z: hit.target.2,
+                            block,
+                            player_id: self.local_player_id,
+                        });
+                    }
+                    NetRole::Joined(client) => {
+                        client.reliable.send(
+                            &client.socket,
+                            client.server_addr,
+                            ReliableMsg::Interact {
+                                x: hit.target.0,
+                                y: hit.target.1,
+                                z: hit.target.2,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+
         if self.input.save_requested {
             if matches!(self.net, NetRole::Host(_)) {
                 save_world(
@@ -1502,9 +1642,11 @@ impl App {
                     &mut self.time_of_day,
                     &mut self.weather,
                     &self.pending_block_breaks,
+                    &self.pending_interacts,
                     self.player.resources_snapshot(),
                 );
                 self.pending_block_breaks.clear();
+                self.pending_interacts.clear();
                 self.apply_tick_outcome(outcome);
                 for &(x, y, z) in self.world.redstone_positions.iter() {
                     let center = Vec3::new(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5);
@@ -1523,8 +1665,8 @@ impl App {
         }
 
         let mut mesh = match &self.net {
-            NetRole::Host(_) => self.creatures.build_mesh(),
-            NetRole::Joined(client) => mesh_for_snapshot(&client.creature_snapshot),
+            NetRole::Host(_) => self.creatures.build_mesh(&self.models),
+            NetRole::Joined(client) => mesh_for_snapshot(&client.creature_snapshot, &self.models),
         };
         let remote_players = match &self.net {
             NetRole::Host(host) => &host.remote_players,
@@ -1534,7 +1676,7 @@ impl App {
             remote_players,
             self.local_player_id,
         ));
-        self.entity_mesh = upload_mesh(&self.device, &mesh);
+        self.entity_mesh.update(&self.device, &self.queue, &mesh);
 
         self.toasts.retain(|t| !t.is_expired());
         let is_host = matches!(self.net, NetRole::Host(_));
@@ -1875,7 +2017,13 @@ impl App {
 
                 let is_instant = module.is_instant;
                 self.next_rule_id += 1;
-                let idx = self.scripting.add_generated(module);
+                let idx = match self.scripting.add_generated(module) {
+                    Ok(index) => index,
+                    Err(error) => {
+                        self.notify_important(error);
+                        return;
+                    }
+                };
                 self.last_generated_index = Some(idx);
                 let (label, action) = if is_instant {
                     ("spell", "click Run to cast it")
@@ -1932,6 +2080,9 @@ impl App {
     /// (a spell's Run click) so both go through identical block-edit
     /// replication, crash/broadcast notification, and item-grant handling.
     fn apply_tick_outcome(&mut self, outcome: TickOutcome) {
+        for warning in outcome.warnings {
+            self.notify_all_important(warning);
+        }
         for (x, y, z, block) in outcome.block_edits {
             self.apply_block_edit(x, y, z, block);
         }
@@ -1986,10 +2137,9 @@ impl App {
             PlayerEffect::TakeItem { player_id, block, amount } => {
                 // Only ever queued for HOST_PLAYER_ID -- see take_item's
                 // doc in world_api/schema.yaml. The Lua-visible success
-                // bool already reflected a host_resources snapshot check
-                // at call time, and nothing can have changed
-                // self.player.resources between then and now within the
-                // same tick, so this always succeeds when it gets here.
+                // bool already reflected the transaction balance after
+                // earlier accepted inventory effects. Applying commands
+                // in the same order honors those reservations.
                 if player_id == HOST_PLAYER_ID {
                     self.player.take_resources(block, amount);
                 }
@@ -2050,6 +2200,39 @@ impl App {
                             multiplier.clamp(MIN_ATTRIBUTE_MULTIPLIER, MAX_ATTRIBUTE_MULTIPLIER);
                     }
                 }
+            }
+            PlayerEffect::Teleport { player_id, pos } => {
+                if player_id == HOST_PLAYER_ID {
+                    self.player.position = pos;
+                    // Zeroed so a spell/rule teleport reads as an instant
+                    // relocation, not a jump-cut that then keeps carrying
+                    // whatever velocity the player had right before it.
+                    self.player.velocity = Vec3::ZERO;
+                    self.camera.position = pos;
+                    return;
+                }
+                let NetRole::Host(host) = &mut self.net else {
+                    return;
+                };
+                if let Some(rp) = host.remote_players.get_mut(&player_id) {
+                    // Snaps the host's own view of them immediately, ahead
+                    // of the next PlayerState update the client itself will
+                    // send once it applies the same teleport locally.
+                    rp.pos = pos;
+                }
+                let Some(addr) = host
+                    .clients
+                    .iter()
+                    .find(|(_, &id)| id == player_id)
+                    .map(|(&addr, _)| addr)
+                else {
+                    return;
+                };
+                host.reliable.send(
+                    &host.socket,
+                    addr,
+                    ReliableMsg::Teleport { pos: pos.to_array() },
+                );
             }
         }
     }
@@ -2136,7 +2319,7 @@ impl App {
         let had_crash = !outcome.crashes.is_empty();
         self.apply_tick_outcome(outcome);
         if !had_crash {
-            self.notify_all(format!("Host cast '{name}'"));
+            self.notify_all(format!("Host requested cast '{name}'"));
         }
     }
 
@@ -2313,6 +2496,23 @@ impl App {
                             self.broadcast_chat(format!("{nickname}: {text}"));
                         }
                     }
+                    ReliableMsg::Interact { x, y, z } => {
+                        // The host reads the block itself rather than
+                        // trusting anything the client claims about it --
+                        // the host's world state is authoritative, and a
+                        // client's view of it could be stale by the time
+                        // this reliable message arrives.
+                        if let Some(&player_id) = host.clients.get(&from) {
+                            let block = self.world.get_block(x, y, z);
+                            self.pending_interacts.push(InteractEvent {
+                                x,
+                                y,
+                                z,
+                                block,
+                                player_id,
+                            });
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -2424,6 +2624,12 @@ impl App {
                     }
                     ReliableMsg::GrantItem { block, amount } => {
                         self.player.add_resources(block, amount);
+                    }
+                    ReliableMsg::Teleport { pos } => {
+                        let pos = Vec3::from_array(pos);
+                        self.player.position = pos;
+                        self.player.velocity = Vec3::ZERO;
+                        self.camera.position = pos;
                     }
                     _ => {}
                 }
@@ -2686,7 +2892,8 @@ impl App {
                 shadow_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 shadow_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
             }
-            if let Some(mesh) = &self.entity_mesh {
+            if self.entity_mesh.index_count > 0 {
+                let mesh = &self.entity_mesh;
                 shadow_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                 shadow_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 shadow_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
@@ -2737,7 +2944,8 @@ impl App {
                 rpass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 rpass.draw_indexed(0..mesh.index_count, 0, 0..1);
             }
-            if let Some(mesh) = &self.entity_mesh {
+            if self.entity_mesh.index_count > 0 {
+                let mesh = &self.entity_mesh;
                 rpass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                 rpass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 rpass.draw_indexed(0..mesh.index_count, 0, 0..1);

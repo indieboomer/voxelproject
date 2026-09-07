@@ -68,6 +68,19 @@ pub enum ReliableMsg {
     /// `Notify`, never broadcast to everyone); the host's own grant is
     /// applied locally instead of round-tripping through the network.
     GrantItem { block: BlockType, amount: u32 },
+    /// A joined client reporting that it pressed the interact key aimed at
+    /// this block position -- the network side of `on_interact`'s trigger.
+    /// Client -> host only, mirroring how a client's own block break is
+    /// reported via `BlockEdit` rather than run through Lua locally (Lua
+    /// only ever runs on the host). Carries no block kind: the host reads
+    /// the block at `(x, y, z)` itself, since it's the authoritative copy
+    /// and a client's view could be stale.
+    Interact { x: i32, y: i32, z: i32 },
+    /// Snaps the receiving client's own player to `pos` -- the network side
+    /// of `api.teleport_player` targeting a remote player. Sent only to
+    /// that one player, same as `GrantItem`; the host applies its own
+    /// teleport locally instead of round-tripping through the network.
+    Teleport { pos: [f32; 3] },
 }
 
 /// One player's position/status as carried in a `Snapshot` -- see
@@ -103,7 +116,10 @@ pub enum UnreliableMsg {
         time_of_day: f32,
         weather: u8,
         players: Vec<SnapshotPlayer>,
-        creatures: Vec<([f32; 3], u8, f32)>,
+        /// `(pos, kind, facing, anim_clip, anim_time)` -- see
+        /// `creature::Creatures::snapshot`/`AnimClip::to_u8` for what the
+        /// two anim fields mean.
+        creatures: Vec<([f32; 3], u8, f32, u8, f32)>,
     },
 }
 
@@ -193,7 +209,7 @@ pub fn bind_nonblocking(addr: &str) -> std::io::Result<UdpSocket> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::creature::CreatureKind;
+    use crate::creature::{AnimClip, CreatureKind};
     use crate::weather::Weather;
 
     /// A World API rule's `replace_block` reaches clients exclusively as a
@@ -248,7 +264,13 @@ mod tests {
             time_of_day: 0.42,
             weather: Weather::Rain.to_u8(),
             players: vec![player],
-            creatures: vec![([4.0, 5.0, 6.0], CreatureKind::Chicken.to_u8(), 0.5)],
+            creatures: vec![(
+                [4.0, 5.0, 6.0],
+                CreatureKind::Chicken.to_u8(),
+                0.5,
+                AnimClip::Walk.to_u8(),
+                1.2,
+            )],
         });
         let bytes = encode(&packet);
         let decoded = decode(&bytes).expect("a just-encoded packet must decode");
@@ -264,7 +286,13 @@ mod tests {
                 assert_eq!(players, vec![player]);
                 assert_eq!(
                     creatures,
-                    vec![([4.0, 5.0, 6.0], CreatureKind::Chicken.to_u8(), 0.5)]
+                    vec![(
+                        [4.0, 5.0, 6.0],
+                        CreatureKind::Chicken.to_u8(),
+                        0.5,
+                        AnimClip::Walk.to_u8(),
+                        1.2,
+                    )]
                 );
             }
             other => panic!("expected an Unreliable Snapshot packet, got {other:?}"),
@@ -320,6 +348,50 @@ mod tests {
                 assert_eq!(amount, 100);
             }
             other => panic!("expected a Reliable GrantItem packet, got {other:?}"),
+        }
+    }
+
+    /// A joined client's interact-key press reaches the host as an
+    /// `Interact` (see world_api/schema.yaml's `on_interact`) -- confirms
+    /// the target position survives the wire.
+    #[test]
+    fn interact_round_trips_through_encode_decode() {
+        let packet = Packet::Reliable {
+            id: 9,
+            msg: ReliableMsg::Interact { x: 10, y: -2, z: 30 },
+        };
+        let bytes = encode(&packet);
+        let decoded = decode(&bytes).expect("a just-encoded packet must decode");
+        match decoded {
+            Packet::Reliable {
+                msg: ReliableMsg::Interact { x, y, z },
+                ..
+            } => {
+                assert_eq!((x, y, z), (10, -2, 30));
+            }
+            other => panic!("expected a Reliable Interact packet, got {other:?}"),
+        }
+    }
+
+    /// api.teleport_player targeting a remote player reaches that client as
+    /// a `Teleport` (see world_api/schema.yaml's `replication`) -- confirms
+    /// the destination survives the wire.
+    #[test]
+    fn teleport_round_trips_through_encode_decode() {
+        let packet = Packet::Reliable {
+            id: 6,
+            msg: ReliableMsg::Teleport { pos: [1.5, 64.0, -8.25] },
+        };
+        let bytes = encode(&packet);
+        let decoded = decode(&bytes).expect("a just-encoded packet must decode");
+        match decoded {
+            Packet::Reliable {
+                msg: ReliableMsg::Teleport { pos },
+                ..
+            } => {
+                assert_eq!(pos, [1.5, 64.0, -8.25]);
+            }
+            other => panic!("expected a Reliable Teleport packet, got {other:?}"),
         }
     }
 

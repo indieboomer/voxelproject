@@ -102,8 +102,18 @@ def build_readme(schema, types, blocks):
     L.append(f"- Removed stdlib: {', '.join(eng['stdlib_removed'])} (never exist in this sandbox)")
     L.append(f"- Memory limit: {eng['memory_limit_bytes']:,} bytes")
     L.append(f"- Time budget: {eng['time_budget_ms']}ms per call (checked every {eng['instruction_hook_interval']} instructions)")
+    L.append(f"- Instruction limit: {eng['instruction_limit']:,} per initialization/callback")
+    L.append(f"- Source limit: {eng['source_limit_bytes']:,} UTF-8 bytes")
+    L.append("")
+    L.append(eng["execution_limits"].strip())
+    L.append("")
+    L.append(eng["scheduling"].strip())
     L.append("")
     L.append(eng["isolation"].strip())
+    L.append("")
+    L.append("## Callback transactions")
+    L.append("")
+    L.append(eng["transactions"].strip())
     L.append("")
 
     L.append("## Multiplayer authority")
@@ -230,7 +240,13 @@ def build_compact(schema, types, blocks):
     rule generation -- same load-bearing gotchas as the readme, minus the
     surrounding prose."""
     L = []
-    L.append(f"World API v{schema['version']} (the `api` table passed into on_tick/on_cast/on_death/on_block_break)")
+    L.append(f"World API v{schema['version']} (the `api` table passed into on_tick/on_cast/on_death/on_block_break/on_interact)")
+    L.append("")
+    L.append(schema["engine"]["execution_limits"].strip())
+    L.append(schema["engine"]["scheduling"].strip())
+    L.append(f"World API spawns return nil at {schema['budgets']['creatures_max']['value']} live creatures (including starter creatures); destroying one frees capacity.")
+    L.append(f"All API methods share {schema['budgets']['api_calls_per_invocation']['value']} calls per callback; exceeding this aborts execution. Coordinates must be within +/-{schema['budgets']['coordinate_abs_max']['value']} blocks; all numeric arguments must be finite f32 values.")
+    L.append(schema["engine"]["transactions"].strip())
     L.append("")
     L.append("Queries:")
     for m in schema["methods"]:
@@ -330,6 +346,12 @@ def build_stubs(schema, types, blocks):
     L.append("---@param event BlockBreakEvent")
     L.append("function on_block_break(api, event) end")
     L.append("")
+    L.append("--- Fires once per real player-caused interact-key press (E), never changing")
+    L.append("--- the block. Optional.")
+    L.append("---@param api WorldApi")
+    L.append("---@param event InteractEvent")
+    L.append("function on_interact(api, event) end")
+    L.append("")
     return "\n".join(L) + "\n"
 
 
@@ -349,6 +371,45 @@ def build_rust(schema, blocks):
     L.append("")
     L.append(f'pub const VERSION: &str = "{schema["version"]}";')
     L.append("")
+    L.append("// Runtime execution limits, shared with the generated documentation.")
+    for name, rust_type, value in [
+        ("SCRIPT_TIME_MS", "u64", schema["engine"]["time_budget_ms"]),
+        ("SCRIPT_INSTRUCTIONS", "u32", schema["engine"]["instruction_limit"]),
+        ("SCRIPT_HOOK_INTERVAL", "u32", schema["engine"]["instruction_hook_interval"]),
+        ("SCRIPT_MEMORY_BYTES", "usize", schema["engine"]["memory_limit_bytes"]),
+        ("SCRIPT_SOURCE_BYTES", "usize", schema["engine"]["source_limit_bytes"]),
+        ("SCRIPT_API_CALLS", "u32", schema["budgets"]["api_calls_per_invocation"]["value"]),
+        ("SCRIPT_BROADCASTS", "u32", schema["budgets"]["broadcasts_per_invocation"]["value"]),
+        ("SCRIPT_BROADCAST_BYTES", "usize", schema["budgets"]["broadcast_bytes_max"]["value"]),
+        ("SCRIPT_COORDINATE_MAX", "i32", schema["budgets"]["coordinate_abs_max"]["value"]),
+        ("SCRIPT_NATIVE_WORK", "u32", schema["budgets"]["native_work_per_invocation"]["value"]),
+        ("SCRIPT_CREATURES_MAX", "usize", schema["budgets"]["creatures_max"]["value"]),
+    ]:
+        L.append(f"pub const {name}: {rust_type} = {value};")
+    for name, rust_type, key in [
+        ("DISPATCH_CALLBACKS", "usize", "callbacks_per_dispatch"),
+        ("DISPATCH_TIME_MS", "u64", "time_ms"),
+        ("DISPATCH_INSTRUCTIONS", "u32", "instructions"),
+        ("DISPATCH_API_CALLS", "u32", "api_calls"),
+        ("DISPATCH_NATIVE_WORK", "u32", "native_work"),
+        ("PENDING_TOTAL", "usize", "pending_total"),
+        ("PENDING_PER_MODULE", "usize", "pending_per_module"),
+        ("SCRIPT_MODULES_MAX", "usize", "modules_max"),
+    ]:
+        L.append(f"pub const {name}: {rust_type} = {schema['engine']['scheduler'][key]};")
+    L.append("")
+    L.append("// Zero-based parameter positions used by native argument validation.")
+    for registry, select in [
+        ("NUMERIC_ARGUMENTS", lambda p: p["type"] in ("number", "integer")),
+        ("COORDINATE_ARGUMENTS", lambda p: p["name"] in ("x", "y", "z", "cx", "cy", "cz", "x1", "y1", "z1", "x2", "y2", "z2")),
+    ]:
+        L.append(f"pub const {registry}: &[(&str, &[usize])] = &[")
+        for method in schema["methods"]:
+            indexes = [str(i) for i, param in enumerate(method["params"]) if select(param)]
+            if indexes:
+                L.append(f'    ("{method["name"]}", &[{", ".join(indexes)}]),')
+        L.append("];")
+        L.append("")
     L.append("/// Every `api.<name>` callable method this World API version defines.")
     L.append(f"pub const METHOD_NAMES: &[&str] = &[{rust_str_list(method_names)}];")
     L.append("")

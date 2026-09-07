@@ -120,6 +120,7 @@ impl Weather {
 /// independent of the day/night cycle. A Lua rule can still force a change
 /// via `api.set_weather`, which just resets this timer using the newly-set
 /// weather's own `stretch_range`.
+#[derive(Clone, Debug, PartialEq)]
 pub struct WeatherState {
     pub current: Weather,
     timer: f32,

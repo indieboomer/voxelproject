@@ -9,6 +9,13 @@ pub struct Input {
     pub mouse_delta: (f32, f32),
     pub left_clicked: bool,
     pub right_clicked: bool,
+    /// Edge-triggered, like `left_clicked`/`right_clicked` -- set once on
+    /// the frame the interact key (E) is pressed, aimed at whatever's under
+    /// the crosshair. Distinct from both: unlike a left click it never
+    /// breaks a block, and unlike a right click it never places one -- it
+    /// only reports "the player deliberately used this" for `on_interact`
+    /// to react to (see world_api/schema.yaml).
+    pub interact_clicked: bool,
     pub hotbar_select: Option<usize>,
     pub save_requested: bool,
 }
@@ -32,6 +39,7 @@ impl Input {
                     KeyCode::Digit7 => self.hotbar_select = Some(6),
                     KeyCode::Digit8 => self.hotbar_select = Some(7),
                     KeyCode::F5 => self.save_requested = true,
+                    KeyCode::KeyE => self.interact_clicked = true,
                     _ => {}
                 }
             }
@@ -67,6 +75,7 @@ impl Input {
         self.mouse_delta = (0.0, 0.0);
         self.left_clicked = false;
         self.right_clicked = false;
+        self.interact_clicked = false;
         self.hotbar_select = None;
         self.save_requested = false;
     }

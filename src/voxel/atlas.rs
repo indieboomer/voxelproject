@@ -31,8 +31,15 @@ pub fn uv_rect(tile: u8) -> [f32; 4] {
     [u0, v0, u1, v1]
 }
 
+/// A constant UV at the center of the white swatch, in rect form for
+/// `push_cuboid`. Flat-colored meshes must not sample a tile boundary:
+/// interpolation rounding can otherwise select a neighboring colored or
+/// transparent texel and make entire faces flicker as the camera moves.
 pub fn white_uv() -> [f32; 4] {
-    uv_rect(TILE_WHITE)
+    let [u0, v0, u1, v1] = uv_rect(TILE_WHITE);
+    let u = (u0 + u1) * 0.5;
+    let v = (v0 + v1) * 0.5;
+    [u, v, u, v]
 }
 
 /// Whether this block's faces should be alpha-tested (cutout) rather than

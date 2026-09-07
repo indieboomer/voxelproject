@@ -1,0 +1,150 @@
+//! Private callback state. Only commit can mutate the authoritative world.
+use super::*;
+use crate::creature::CreatureDraft;
+use std::collections::HashMap;
+
+pub(super) struct CallbackTransaction<'a> {
+    pub world: &'a World,
+    pub creatures: RefCell<CreatureDraft>,
+    pub weather: RefCell<WeatherState>,
+    pub time: RefCell<f32>,
+    pub blocks: RefCell<Vec<(i32, i32, i32, BlockType)>>,
+    pub deaths: RefCell<Vec<DeathEvent>>,
+    pub broadcasts: RefCell<Vec<String>>,
+    pub effects: RefCell<Vec<PlayerEffect>>,
+    pub spawn_seed: Cell<u64>,
+    prior_blocks: HashMap<(i32, i32, i32), BlockType>,
+    base_players: Vec<PlayerSnapshot>,
+    resources: [u32; COLLECTIBLE_BLOCKS.len()],
+}
+
+impl<'a> CallbackTransaction<'a> {
+    pub fn new(input: &TickInput<'a>, spawn_seed: u64) -> Self {
+        let mut players = input.players.to_vec();
+        for effect in input.player_effects.iter() {
+            apply_player_preview(&mut players, effect);
+        }
+        let mut resources = input.host_resources;
+        for (i, block) in COLLECTIBLE_BLOCKS.iter().enumerate() {
+            resources[i] = resource_balance(resources[i], *block, input.player_effects);
+        }
+        Self {
+            world: input.world,
+            creatures: RefCell::new(CreatureDraft::new(input.creatures)),
+            weather: RefCell::new(input.weather.clone()),
+            time: RefCell::new(*input.time_of_day),
+            blocks: RefCell::new(Vec::new()),
+            deaths: RefCell::new(Vec::new()),
+            broadcasts: RefCell::new(Vec::new()),
+            effects: RefCell::new(Vec::new()),
+            spawn_seed: Cell::new(spawn_seed),
+            prior_blocks: input
+                .block_edits
+                .iter()
+                .map(|&(x, y, z, block)| ((x, y, z), block))
+                .collect(),
+            base_players: players,
+            resources,
+        }
+    }
+
+    pub fn get_block(&self, x: i32, y: i32, z: i32) -> BlockType {
+        self.blocks
+            .borrow()
+            .iter()
+            .rev()
+            .find(|&&(bx, by, bz, _)| (bx, by, bz) == (x, y, z))
+            .map(|entry| entry.3)
+            .or_else(|| self.prior_blocks.get(&(x, y, z)).copied())
+            .unwrap_or_else(|| self.world.get_block(x, y, z))
+    }
+
+    pub fn native_scan_cost(&self) -> u32 {
+        1 + self.creatures.borrow().snapshot.len() as u32
+            + self.base_players.len() as u32
+            + self.effects.borrow().len() as u32
+            + self.blocks.borrow().len() as u32
+    }
+
+    pub fn players(&self) -> Vec<PlayerSnapshot> {
+        let mut players = self.base_players.clone();
+        for effect in self.effects.borrow().iter() {
+            apply_player_preview(&mut players, effect);
+        }
+        players
+    }
+
+    pub fn resource_count(&self, index: usize) -> u32 {
+        resource_balance(
+            self.resources[index],
+            COLLECTIBLE_BLOCKS[index],
+            &self.effects.borrow(),
+        )
+    }
+
+    pub fn commit(self, input: &mut TickInput, spawn_seed: &Cell<u64>, emit_deaths: bool) {
+        self.creatures.into_inner().commit(input.creatures);
+        *input.weather = self.weather.into_inner();
+        *input.time_of_day = self.time.into_inner();
+        input.block_edits.extend(self.blocks.into_inner());
+        input.player_effects.extend(self.effects.into_inner());
+        if emit_deaths {
+            input.death_events.extend(self.deaths.into_inner());
+        }
+        for message in self.broadcasts.into_inner() {
+            log::info!("[rule] {message}");
+            input.broadcasts.push(message);
+        }
+        spawn_seed.set(self.spawn_seed.get());
+    }
+}
+
+fn resource_balance(mut balance: u32, block: BlockType, effects: &[PlayerEffect]) -> u32 {
+    for effect in effects {
+        match *effect {
+            PlayerEffect::GiveItem {
+                player_id: HOST_PLAYER_ID,
+                block: b,
+                amount,
+            } if b == block => {
+                balance = balance.saturating_add(amount);
+            }
+            PlayerEffect::TakeItem {
+                player_id: HOST_PLAYER_ID,
+                block: b,
+                amount,
+            } if b == block => {
+                balance = balance.saturating_sub(amount);
+            }
+            _ => {}
+        }
+    }
+    balance
+}
+
+fn apply_player_preview(players: &mut [PlayerSnapshot], effect: &PlayerEffect) {
+    for player in players {
+        match *effect {
+            PlayerEffect::Health { player_id, delta } if player_id == player.id => {
+                player.health = (player.health + delta).clamp(0.0, crate::player::MAX_HEALTH);
+            }
+            PlayerEffect::Poisoned {
+                player_id,
+                poisoned,
+            } if player_id == player.id => player.poisoned = poisoned,
+            PlayerEffect::SpeedMultiplier {
+                player_id,
+                multiplier,
+            } if player_id == player.id => player.speed_multiplier = multiplier,
+            PlayerEffect::JumpMultiplier {
+                player_id,
+                multiplier,
+            } if player_id == player.id => player.jump_multiplier = multiplier,
+            PlayerEffect::Teleport { player_id, pos } if player_id == player.id => {
+                player.pos = pos;
+                player.velocity = Vec3::ZERO;
+            }
+            _ => {}
+        }
+    }
+}

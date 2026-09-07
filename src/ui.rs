@@ -281,7 +281,7 @@ impl Ui {
                         });
                     }
                     ui.separator();
-                    ui.label("Break blocks to gather them, right-click to place the selected one.");
+                    ui.label("Break blocks to gather them, right-click to place the selected one, E to interact.");
                 });
 
             // Read-only viewer for one rule's generated Lua -- so you can

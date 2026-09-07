@@ -12,6 +12,207 @@ Then update this file by hand with what actually changed and why -- the docs
 regenerate automatically, but "what changed and why" is not mechanically
 derivable from a diff of the schema alone.
 
+## 1.12.0 -- 2026-09-07 (bounded rule scheduling)
+
+- Host tick/cast dispatches share instruction, API-call, native-work and
+  cooperative time budgets, with at most 16 callbacks per dispatch. Full
+  invocation allowances are reserved before execution; deferred work does
+  not reset Lua state or replay committed effects.
+- Round-robin recipient queues preserve event payloads and per-rule FIFO
+  order, coalesce ticks, and cancel pending work on disable/delete. Queue
+  overflow drops newest requests with a visible notice. Pending work is
+  transient and is not persisted on world exit.
+- Native API scans consume a per-callback work budget; block scans check
+  time between rows. Protected Lua calls cannot swallow work exhaustion.
+- World API spawns return nil at 256 live creatures. Destroying a creature
+  frees capacity, and rejected spawns do not reserve creature IDs.
+- At most 64 modules load. Overflow and invalid saved source are preserved
+  on subsequent saves, with a host notice; new generated modules report a
+  capacity error. Failed VMs can rebuild even after erasing their callback.
+- Updated generated prompt documentation and regression coverage for fair
+  deferral, cancellation, overflow, resource admission, save preservation,
+  creature capacity, deferred deaths, and native-work rollback.
+
+## 1.11.0 -- 2026-09-07 (callback transactions)
+
+- All five callbacks stage effects and commit only after execution and final
+  budget checks succeed. Errors discard block edits, creature actions and
+  deaths, player effects, inventory changes, time/weather state, broadcasts,
+  and spawn ID/random-sequence changes.
+- Queries see accepted changes within the callback and earlier committed
+  callbacks in the same dispatch. Repeated inventory removals reserve funds;
+  inventory grants become available immediately in the staged view.
+- Failed Lua VMs are rebuilt from source before retry/reactivation, resetting
+  their globals. Healthy VMs keep their existing state across callbacks.
+- Extracted the Lua bindings and callback transaction boundary from the
+  script host; creature changes replay bounded commands without cloning ECS.
+- Block edits outside the world's vertical bounds now return false.
+- This adds failure rollback, not player-facing undo/history, full simulation
+  extraction, ordered network commits, or persistent Lua state. Save layout
+  and the public method/entrypoint set remain unchanged.
+
+## 1.10.0 -- 2026-09-07 (execution guards)
+
+- Initialization and every callback now share the same execution guard:
+  5ms cooperative wall-time limit, 100,000 instructions, and an 8 MiB Lua
+  memory cap. Sources over 64 KiB are rejected before compilation.
+- Instruction/time/API-call/broadcast exhaustion cannot be suppressed by
+  Lua protected calls. Ordinary protected Lua errors continue to work.
+- API calls are capped at 512 per callback, with at most 8 broadcasts of
+  512 UTF-8 bytes each. Invalid non-finite numbers and coordinates outside
+  +/-1,000,000 blocks are rejected before native execution.
+- Documented the current limitations accurately: native calls are not
+  forcibly preempted, world mutations are not transactional, aggregate
+  tick budgets are pending, and UDP retries do not enforce edit ordering.
+- No save layout or API method changes. Existing rules within the limits
+  keep their existing entrypoints and per-call block/spawn allowances.
+
+## 1.9.0 -- 2026-09-07 (goblin)
+
+Adds a fourth hostile creature kind, `goblin`: a club-wielding melee bruiser
+that sits between `wolf` and `stone_golem` on every axis.
+
+- **Added the `goblin` creature kind**, hostile like `stone_golem`/`wolf`/
+  `stinger` (`CreatureKind::is_hostile`): tankier and harder-hitting than a
+  wolf but not as tanky/hard-hitting as a golem, on a cooldown between the
+  two (1.1s vs wolf's 0.9s and golem's 1.5s). Has a "run" clip like wolf
+  (`CreatureKind::has_run_clip`), so it visibly speeds up while
+  aggro-chasing, at a pace a step under a wolf's. Excluded from the starter
+  world scatter like every other hostile kind.
+
+## 1.8.0 -- 2026-09-07 (creature model winding fix, stinger, cow)
+
+Fixes the flicker that showed up on every part of every creature right after
+1.7.0's real models landed, and adds two more creature kinds: hostile
+`stinger` and neutral `cow`.
+
+- **Fixed creature model triangle winding** (`src/model.rs`'s `load_glb`):
+  glTF's front-face winding convention is counter-clockwise, but this
+  engine's main render pipeline uses clockwise as front-face with back-face
+  culling on (`app.rs`'s `render_pipeline`, matching the voxel mesher's own
+  convention). 1.7.0 loaded glTF indices as-is, so every triangle in every
+  creature model was backwards -- the pipeline culled each part's actually-
+  visible surface and rendered its inside instead, and with these models'
+  many closely-stacked decorative sub-parts (eye glints, moss patches,
+  cracks, ...), that read as flicker/z-fighting everywhere rather than a
+  clean "inside-out" look. Fixed by swapping each triangle's last two
+  indices once, at load time. Locked in by a new test,
+  `triangle_winding_matches_the_engines_clockwise_front_face_convention`,
+  which checks the loaded winding against vertex normals for every bundled
+  model and would fail loudly if this regresses.
+- **Added the `stinger` creature kind**, hostile like `stone_golem`/`wolf`:
+  fastest attack cooldown and lightest hit of the three, but no "run"
+  clip -- it stays on its "walk" clip even while aggro-closing (its threat
+  is attack rhythm, not chase speed). Excluded from the starter world
+  scatter like every other hostile kind.
+- **Added the `cow` creature kind**, neutral like `sheep`/`chicken` -- only
+  ever moves under Lua's `chase()`, never attacks on its own. Unlike sheep/
+  chicken, its model has a "run" clip, which a fast (`Wander::hunting`)
+  Lua-driven chase now uses (`CreatureKind::has_run_clip`). Not added to the
+  starter world scatter for now, kept opt-in via `spawn_creature`/
+  `spawn_creature_near_player` like every hostile kind, so a fresh world's
+  first minutes don't change.
+
+## 1.7.0 -- 2026-09-07 (real creature models, wolf)
+
+Every creature is now rendered as an actual animated model (loaded from
+`models/*.glb`) instead of the two-box placeholder shape, and a new hostile
+`wolf` creature kind joins `stone_golem` as a creature that fights back on
+its own.
+
+- **Real models for every creature kind** (`src/model.rs`, new): a
+  dependency-free glTF/GLB loader (`serde_json` against the JSON chunk, hand
+  parsed against the binary chunk) built for exactly the shape these
+  Blockbench exports use -- a node hierarchy with no skinning (every moving
+  part is its own node, animated by keyframing that node's own translation/
+  rotation/scale), flat `baseColorFactor` materials (no images), and
+  LINEAR-only sampler interpolation. `push_model` walks the hierarchy each
+  frame, samples the requested clip at a given time, and appends the posed
+  mesh straight into the same `Vertex` buffer the voxel terrain uses (real
+  per-vertex normals now drive lighting for creatures too, instead of the
+  old flat per-face shading). `creature::push_creature`'s box-drawing is
+  gone entirely.
+- **Per-creature animation state** (`src/creature.rs`): every creature now
+  tracks a current `AnimClip` (`idle`/`walk`/`run`/`attack`) and elapsed
+  time, chosen each tick from its movement this tick (idle when
+  stationary, run instead of walk while aggro-chasing or Lua-`chase()`d fast
+  if the kind's model actually has a run clip, attack for a fixed window
+  right after a landed hit) -- not every kind has every clip; sheep/chicken
+  only ever show idle/walk.
+- **Added the `wolf` creature kind**, hostile like `stone_golem`
+  (`CreatureKind::is_hostile` -- both now share one generalized aggro/attack
+  code path in `Creatures::update` instead of a golem-only branch) but
+  faster and lighter: it chases at `WOLF_RUN_SPEED` (6.0, under the player's
+  own sprint speed so it stays escapable) rather than a golem's slow
+  beeline, and bites for less damage on a much shorter cooldown. Like
+  `stone_golem`, excluded from the starter world scatter -- only appears via
+  `spawn_creature`/`spawn_creature_near_player`.
+- **Creature snapshots now carry anim state**
+  (`net::UnreliableMsg::Snapshot::creatures`, `Creatures::snapshot`): the
+  `(pos, kind, facing)` tuple gained `(anim_clip, anim_time)` so a joined
+  client renders the same pose the host computed, instead of only the box
+  placeholder's position/facing.
+
+
+
+Adds two new ways a rule/spell can be triggered by, and act on, a player
+directly: `on_interact`, a non-destructive counterpart to `on_block_break`
+fired by a dedicated "use" key, and `api.teleport_player`, the first way for
+Lua to move a player at all (previously it could only read a player's
+position, never set it).
+
+- **Added the interact key (E)** (`src/input.rs`): edge-triggered like a
+  mouse click, aimed at whatever's under the crosshair via the same
+  `raycast` mining/placing already uses, but changes nothing on its own --
+  it only reports "the player deliberately used this" for a rule to react
+  to. Distinct from both existing clicks: unlike left-click it never breaks
+  the block, unlike right-click it never places one.
+- **Added `on_interact(api, event)`**, mirroring `on_block_break`'s
+  optionality and `InteractEvent` shape (`kind`/`x`/`y`/`z`/`player_id`) --
+  fires once per interact-key press aimed at a block, whether or not a rule
+  does anything in response. Collected and dispatched the same way
+  `BlockBreakEvent` is (`ScriptHost::run_tick`'s new `interacts` parameter),
+  so a module defining only one of the two events never sees the other's
+  event by construction, not by convention.
+- **Added `api.teleport_player(player_id, x, y, z)`**: moves a player
+  straight to a position, bypassing movement/collision entirely, and zeroes
+  their velocity so the jump doesn't carry over whatever momentum they had.
+  Applied directly to the host's own `Player::position` for `HOST_PLAYER_ID`;
+  for anyone else it's a new targeted `ReliableMsg::Teleport`, the same
+  single-recipient pattern `GrantItem` already uses -- the host applies its
+  own teleport locally instead of round-tripping through the network. A
+  remote target's `RemotePlayer::pos` is also snapped immediately on the
+  host's side, ahead of the next `PlayerState` update the client will send
+  once it applies the same teleport itself.
+- **Added `ReliableMsg::Interact { x, y, z }`** (client -> host): a joined
+  client's own interact-key press has no local effect to apply optimistically
+  (unlike a block break, which removes the block client-side immediately) --
+  it's reported to the host as-is, which reads the block at that position
+  itself (its world state is authoritative, a client's view could be stale)
+  before constructing the `InteractEvent`.
+- **Rules panel hint text** now mentions the new key alongside the existing
+  break/place hint.
+- Added automated test coverage: `on_interact` firing with the correct event
+  fields and never mutating the block it names; a block break never firing
+  `on_interact` and vice versa (and the reverse, already covered by the
+  existing `on_block_break` test); `teleport_player` queuing a `Teleport`
+  effect for a connected player and failing for a missing one, the same
+  connection-check pattern every other player-targeted action already
+  follows; `Interact`/`Teleport` wire round-trips in `net.rs`.
+
+### Compatibility
+
+No breaking changes. `ModuleSaveEntry`'s serialized shape is untouched --
+both additions are new optional API surface, so every existing rule/spell
+keeps loading and running exactly as before (a module that doesn't define
+`on_interact` simply never receives the new event, and nothing calls
+`teleport_player` on its own). `UnreliableMsg::Snapshot`'s wire shape is
+unchanged this time; the two new messages (`Interact`, `Teleport`) are
+additions to `ReliableMsg`, which (like every past addition to it) breaks
+wire compatibility between differently-versioned host/client binaries --
+already true of any `Packet` shape change in this project, since there's no
+protocol version negotiation yet.
+
 ## 1.5.0 -- 2026-08-31 (five-weather system)
 
 Expands weather from a strict clear/rain alternation to five kinds --

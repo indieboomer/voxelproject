@@ -618,6 +618,108 @@ mod tests {
         assert!(!module.name.is_empty());
     }
 
+    /// Same pipeline once more, for the 1.7.0 wolf creature kind.
+    #[test]
+    #[ignore = "requires a running llama-server on 127.0.0.1:8090"]
+    fn live_generation_uses_the_wolf_kind_for_a_summon_prompt() {
+        use crate::scripting::Module;
+        use std::time::{Duration, Instant};
+
+        let client = LlmClient::new("http://127.0.0.1:8090".to_string());
+        let prompt = "summon a wolf near me";
+        let kind = classify_prompt(prompt);
+        let pending = client.generate(prompt, kind);
+
+        let deadline = Instant::now() + Duration::from_secs(90);
+        let result = loop {
+            if let Some(r) = pending.poll() {
+                break r;
+            }
+            if Instant::now() > deadline {
+                panic!("timed out waiting for llama-server");
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+
+        let code = result.expect("generation request should succeed");
+        println!("--- generated Lua ---\n{code}\n----------------------");
+        let module = Module::load("test_wolf".to_string(), "test".to_string(), code.clone())
+            .expect("generated module should pass validation");
+        assert!(
+            code.contains("wolf"),
+            "expected \"summon a wolf near me\" to reference the wolf kind: {code}"
+        );
+        assert!(!module.name.is_empty());
+    }
+
+    /// Same pipeline once more, for the 1.8.0 stinger creature kind.
+    #[test]
+    #[ignore = "requires a running llama-server on 127.0.0.1:8090"]
+    fn live_generation_uses_the_stinger_kind_for_a_summon_prompt() {
+        use crate::scripting::Module;
+        use std::time::{Duration, Instant};
+
+        let client = LlmClient::new("http://127.0.0.1:8090".to_string());
+        let prompt = "summon a stinger near me";
+        let kind = classify_prompt(prompt);
+        let pending = client.generate(prompt, kind);
+
+        let deadline = Instant::now() + Duration::from_secs(90);
+        let result = loop {
+            if let Some(r) = pending.poll() {
+                break r;
+            }
+            if Instant::now() > deadline {
+                panic!("timed out waiting for llama-server");
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+
+        let code = result.expect("generation request should succeed");
+        println!("--- generated Lua ---\n{code}\n----------------------");
+        let module = Module::load("test_stinger".to_string(), "test".to_string(), code.clone())
+            .expect("generated module should pass validation");
+        assert!(
+            code.contains("stinger"),
+            "expected \"summon a stinger near me\" to reference the stinger kind: {code}"
+        );
+        assert!(!module.name.is_empty());
+    }
+
+    /// Same pipeline once more, for the 1.9.0 goblin creature kind.
+    #[test]
+    #[ignore = "requires a running llama-server on 127.0.0.1:8090"]
+    fn live_generation_uses_the_goblin_kind_for_a_summon_prompt() {
+        use crate::scripting::Module;
+        use std::time::{Duration, Instant};
+
+        let client = LlmClient::new("http://127.0.0.1:8090".to_string());
+        let prompt = "summon a goblin near me";
+        let kind = classify_prompt(prompt);
+        let pending = client.generate(prompt, kind);
+
+        let deadline = Instant::now() + Duration::from_secs(90);
+        let result = loop {
+            if let Some(r) = pending.poll() {
+                break r;
+            }
+            if Instant::now() > deadline {
+                panic!("timed out waiting for llama-server");
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+
+        let code = result.expect("generation request should succeed");
+        println!("--- generated Lua ---\n{code}\n----------------------");
+        let module = Module::load("test_goblin".to_string(), "test".to_string(), code.clone())
+            .expect("generated module should pass validation");
+        assert!(
+            code.contains("goblin"),
+            "expected \"summon a goblin near me\" to reference the goblin kind: {code}"
+        );
+        assert!(!module.name.is_empty());
+    }
+
     /// Same pipeline once more, for the 1.5.0 five-weather system.
     #[test]
     #[ignore = "requires a running llama-server on 127.0.0.1:8090"]

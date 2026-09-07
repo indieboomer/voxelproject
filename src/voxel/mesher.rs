@@ -487,65 +487,6 @@ pub fn push_cuboid(
     }
 }
 
-/// Like `push_cuboid`, but for entities that need to visually face their
-/// direction of travel (creatures, players) instead of sitting world-axis
-/// aligned. `local_min`/`local_max` define the box in a frame centered on
-/// `origin` where local +Z is "forward"; the box is rotated by `yaw`
-/// radians around Y (same convention as `Camera::forward`: yaw 0 faces +X,
-/// increasing yaw turns toward +Z) and placed at `origin`.
-#[allow(clippy::too_many_arguments)]
-pub fn push_cuboid_facing(
-    vertices: &mut Vec<Vertex>,
-    indices: &mut Vec<u32>,
-    origin: Vec3,
-    local_min: Vec3,
-    local_max: Vec3,
-    yaw: f32,
-    color: [f32; 3],
-    uv_rect: [f32; 4],
-) {
-    let (s, c) = yaw.sin_cos();
-    // Maps local (x, z), where +Z is "forward", onto the world offset for a
-    // body facing yaw (so local forward (0,1) lands on (cos(yaw), sin(yaw)),
-    // matching `Camera::forward`'s x/z).
-    let rotate = |x: f32, z: f32| (x * s + z * c, -x * c + z * s);
-    let size = local_max - local_min;
-    for (face_idx, normal) in FACE_NORMALS.iter().enumerate() {
-        let shade = face_shade(face_idx);
-        let shaded = [color[0] * shade, color[1] * shade, color[2] * shade];
-        let (nx, nz) = rotate(normal[0] as f32, normal[2] as f32);
-        let base_index = vertices.len() as u32;
-        for (corner_idx, corner) in FACE_VERTS[face_idx].iter().enumerate() {
-            let [uc, vc] = FACE_UV_CORNERS[corner_idx];
-            let lx = local_min.x + corner[0] * size.x;
-            let ly = local_min.y + corner[1] * size.y;
-            let lz = local_min.z + corner[2] * size.z;
-            let (wx, wz) = rotate(lx, lz);
-            vertices.push(Vertex {
-                position: [origin.x + wx, origin.y + ly, origin.z + wz],
-                color: shaded,
-                normal: [nx, normal[1] as f32, nz],
-                uv: [
-                    uv_rect[0] + uc * (uv_rect[2] - uv_rect[0]),
-                    uv_rect[1] + vc * (uv_rect[3] - uv_rect[1]),
-                ],
-                ao: 1.0,
-                reflectivity: 0.0,
-                emission: 0.0,
-                wind: 0.0,
-            });
-        }
-        indices.extend_from_slice(&[
-            base_index,
-            base_index + 1,
-            base_index + 2,
-            base_index,
-            base_index + 2,
-            base_index + 3,
-        ]);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

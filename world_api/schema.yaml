@@ -18,11 +18,11 @@
 # (air, mud, redstone, crystal), so it can't drift out of sync with the
 # actual block system the way a third hand-copied list would.
 
-version: "1.5.0"
+version: "1.12.0"
 title: World API
 description: >
   The Lua API exposed to sandboxed rule modules as the `api` table passed
-  into on_tick/on_cast/on_death/on_block_break. Every member is flat under
+  into on_tick/on_cast/on_death/on_block_break/on_interact. Every member is flat under
   `api` (single "world" namespace) -- there is no api.player.*/api.world.*
   nesting yet. `namespace: world` is still tagged on each entry so a future
   namespace can be introduced without reshaping this schema or its
@@ -36,22 +36,86 @@ engine:
   memory_limit_bytes: 8388608
   time_budget_ms: 5
   instruction_hook_interval: 1000
+  instruction_limit: 100000
+  source_limit_bytes: 65536
+  scheduler:
+    callbacks_per_dispatch: 16
+    time_ms: 20
+    instructions: 400000
+    api_calls: 4096
+    native_work: 262144
+    pending_total: 512
+    pending_per_module: 64
+    modules_max: 64
+  execution_limits: >
+    Source is limited to 65,536 UTF-8 bytes. Initialization and every callback
+    each receive 100,000 Lua instructions and a 5ms wall-time budget. Hooks
+    check every 1,000 instructions; API entry/exit and execution completion
+    also check time. Limits reset for each invocation. Budget exhaustion
+    cannot be caught or suppressed with pcall/xpcall; ordinary Lua errors
+    remain catchable. Native operations are not forcibly interrupted, so
+    the time budget is a cooperative limit, not a hard realtime deadline.
+    Each host tick/cast dispatch admits at most 16 callbacks under shared
+    ceilings of 400,000 instructions, 4,096 API calls, 262,144 native work
+    units and 20ms cooperative time. Admission reserves the full per-callback
+    allowance (plus initialization for a failed VM reload); unstarted work
+    waits for a later dispatch without resetting or replaying the callback.
+    Native work is limited to 65,536 units per callback: find_blocks charges
+    its bounding cube candidates times (1 + staged block edits); other methods
+    charge 1 + creature count + player count + staged player effects + staged
+    block edits. find_blocks also checks time between scan rows. These units
+    conservatively bound repeated scans, not CPU instructions or hard realtime.
+  scheduling: >
+    Pending callbacks use round-robin recipient queues, FIFO within each rule.
+    Tick requests coalesce to one pending tick per rule. Events retain their
+    original recipient and payload, but query current world state when run.
+    Disabling/deleting a rule cancels its queued work. Re-enabling a rule or
+    adding a new rule never delivers old events to that new activation.
+    Queues hold at most 512 callbacks total and 64 per module; newest excess
+    requests are dropped with a visible saturation notice. Only the first
+    512 incoming block-break events and first 512 interactions per dispatch
+    are considered. Queues are transient and are not saved on world exit.
+    Up to 64 modules are loaded; saved overflow or invalid source is preserved
+    without execution and reported to the host. Removing loaded modules and
+    reloading the world can make room for preserved overflow modules.
   isolation: >
     Each module gets its own Lua VM: one module's globals/persistent state
-    can never leak into another's, and a crashed module cannot corrupt the
-    rest. A module that exceeds its time/instruction/memory budget, or
-    throws any runtime error (including from a call this schema documents
-    as budget-limited, once every call in the same tick has already
-    consumed its own separate budget), is automatically disabled; the host
-    is notified with the error so a rule going silently dark is never
-    mistaken for "nothing happened".
+    can never leak into another's. Initialization errors reject the module;
+    an unhandled callback error or instruction/time/API-call/broadcast budget
+    violation disables a continuous rule and notifies the host. An instant
+    spell reports failure for that cast and can be run again. Lua memory
+    allocations are capped at 8 MiB; ordinary Lua errors, including allocation
+    errors, can be handled by pcall/xpcall. World effects are staged per
+    callback and committed only after successful execution and final budget
+    checks. Failed callbacks discard every staged effect. Before retrying a
+    failed cast or reactivating a failed rule, its Lua VM is rebuilt from
+    source; Lua globals reset because explicit persistent module state is
+    not implemented yet.
+  transactions: >
+    Each callback is one transaction. Block edits, creature spawning/chasing/
+    damage/destruction, player effects, inventory changes, weather (including
+    its RNG/timer), time, and broadcasts are staged. Queries read the callback's
+    own accepted writes plus earlier successful callbacks in the same host
+    dispatch. Returned query tables are snapshots; query again after an action.
+    time_of_day/is_night/weather properties refresh after API calls. Movement
+    and physics are not simulated during a callback; terrain_height remains
+    the procedural generator height, not a scan of edited blocks. Failed
+    callbacks emit no death events, broadcasts, replication effects, or spawn
+    ID/RNG advances. Successful callbacks commit in scheduler order. Death
+    events enqueue one level of notifications only after their cause commits.
+    A failing death handler rolls back only its own changes, not the earlier
+    death that triggered it. Ordinary errors caught by Lua do not abort the
+    transaction; instruction/time/API/native-work/broadcast budget failures cannot be caught.
+    This is callback failure rollback, not user-facing history/undo or atomic
+    network delivery. Shared admission bounds callback work; native commit/apply
+    and operating-system scheduling can overrun the cooperative wall-time target.
 
 authority: >
   Every World API call executes ONLY on the host -- Lua does not run on
   joined clients at all (ScriptHost is host-only state). A module's effects
   (block edits, creature spawns/state, weather, time of day, broadcasts,
-  item grants, player attributes) reach clients purely through the
-  replication channels below;
+  item grants, player attributes, player teleports) reach clients purely
+  through the replication channels below;
   there is no separate "multiplayer mode" a rule opts into. Only the host
   can generate, activate, or run a module (a menu/UI restriction, not
   something this API itself enforces or exposes) -- so an on_cast's
@@ -59,12 +123,13 @@ authority: >
   API shape allows for any player.
 
 replication:
-  block_edits: "Reliable, ordered, resent until acknowledged (ReliableMsg::BlockEdit) -- guaranteed delivery, may lag under packet loss."
+  block_edits: "Retried until acknowledged and deduplicated (ReliableMsg::BlockEdit), but NOT ordered. Reordered writes to the same block can leave a client stale; ordered/revisioned replication is pending."
   creature_state: "Best-effort, ~20 Hz (UnreliableMsg::Snapshot) -- a dropped snapshot is superseded by the next; no guaranteed delivery, but self-healing within one snapshot interval."
   weather_and_time_of_day: "Carried in the same best-effort Snapshot as creature state -- see creature_state."
   broadcast_messages: "One reliable Notify message per api.broadcast call, the same path used for host system notifications (rule enabled/disabled, player joined, etc.)."
   item_grants: "One reliable, targeted ReliableMsg::GrantItem per give_item call, sent only to the named player_id (not broadcast to everyone like Notify) -- the host applies its own grant locally instead of round-tripping through the network."
   player_attributes: "health, poisoned, speed_multiplier, jump_multiplier, and oxygen all ride the same best-effort Snapshot creature_state already uses (~20Hz, self-healing) -- broadcast to every connected player, not just the one they belong to, the same way carrying_crystal already is. A player's own client also applies its own speed_multiplier/jump_multiplier from this to its local movement physics, since movement itself is simulated client-side."
+  player_teleport: "One reliable, targeted ReliableMsg::Teleport per teleport_player call, sent only to the named player_id, same targeted pattern as item_grants -- the host applies its own teleport locally instead of round-tripping through the network. A joined client's own interact-key press is reported the other direction, host-ward, as a reliable ReliableMsg::Interact carrying only the target position; the host reads the block there itself (its world state is authoritative) rather than trusting anything the client says about it."
 
 persistence:
   saved_fields: [name, prompt, source, enabled]
@@ -104,6 +169,36 @@ persistence:
     before -- see CHANGELOG.md.
 
 budgets:
+  native_work_per_invocation:
+    value: 65536
+    scope: "per callback; conservative logical query/action work, not CPU instructions"
+    applies_to: [all_methods]
+    on_exhausted: "Uncatchable budget failure with callback rollback."
+  creatures_max:
+    value: 256
+    scope: "live creatures, including starter creatures; enforced on World API spawns"
+    applies_to: [spawn_creature, spawn_creature_near_player]
+    on_exhausted: "Returns nil without reserving an ID; destroy a creature to free capacity."
+  api_calls_per_invocation:
+    value: 512
+    scope: "per module callback, shared by all API methods, including failed calls"
+    applies_to: [all_methods]
+    on_exhausted: "Uncatchable budget failure; continuous rule disabled, instant cast fails."
+  broadcasts_per_invocation:
+    value: 8
+    scope: "per module callback"
+    applies_to: [broadcast]
+    on_exhausted: "Uncatchable budget failure."
+  broadcast_bytes_max:
+    value: 512
+    scope: "UTF-8 bytes per message"
+    applies_to: [broadcast]
+    on_exceeded: "Uncatchable budget failure; message is not queued or logged."
+  coordinate_abs_max:
+    value: 1000000
+    scope: "absolute value of any explicit API x/y/z coordinate, in blocks"
+    applies_to: [nearest_player, get_block, replace_block, terrain_height, distance, find_creatures, nearest_creature, find_blocks, chase, spawn_creature, teleport_player]
+    on_exceeded: "Argument error before native execution. All numeric arguments, including numeric strings, must also be finite and representable as f32."
   block_edits_per_call:
     value: 32
     scope: "per module, per on_tick/on_death/on_block_break call"
@@ -175,7 +270,7 @@ budgets:
     applies_to: []
     note: "1 health every 10 seconds -- slow enough to give a player time to notice and surface rather than punishing a moment of carelessness, but a real, escalating cost for staying under with no air. Stacks with poison_tick_secs if a player is unlucky enough to be both."
 
-creature_kinds: [sheep, chicken, stone_golem]
+creature_kinds: [sheep, chicken, stone_golem, wolf, stinger, cow, goblin]
 
 # ---------------------------------------------------------------------------
 # Shared table shapes returned by queries / passed to event handlers.
@@ -213,7 +308,7 @@ types:
       - {name: y, type: number}
       - {name: z, type: number}
       - {name: health, type: number}
-      - {name: max_health, type: number, desc: "Fixed per kind (sheep 12, chicken 6, stone_golem 40); never changes at runtime."}
+      - {name: max_health, type: number, desc: "Fixed per kind (sheep 12, chicken 6, stone_golem 40, wolf 18, stinger 14, cow 20, goblin 24); never changes at runtime."}
   CreatureSnapshotWithDistance:
     desc: "CreatureSnapshot plus distance from the query point, as returned by nearest_creature()."
     extends: CreatureSnapshot
@@ -244,6 +339,14 @@ types:
       - {name: y, type: integer}
       - {name: z, type: integer}
       - {name: player_id, type: integer, desc: "id of the player who broke it (matches PlayerSnapshot.id)."}
+  InteractEvent:
+    desc: "Passed as `event` to on_interact. Fires on a deliberate, non-destructive 'use' aimed at a block (the E key), never changes the block itself -- same shape as BlockBreakEvent, but the block still exists afterward."
+    fields:
+      - {name: kind, type: string, desc: "Snake_case id of the block interacted with -- see block_kinds. Same vocabulary as get_block's return value."}
+      - {name: x, type: integer}
+      - {name: y, type: integer}
+      - {name: z, type: integer}
+      - {name: player_id, type: integer, desc: "id of the player who interacted (matches PlayerSnapshot.id)."}
 
 # ---------------------------------------------------------------------------
 # Read-only fields on the `api` table itself.
@@ -307,7 +410,7 @@ methods:
     category: query
     summary: "Creatures of one kind within a radius of a point."
     params:
-      - {name: kind, type: string, enum_ref: creature_kinds, desc: "\"sheep\", \"chicken\", \"stone_golem\", or \"any\". An unrecognized string is treated the same as \"any\" -- it is NOT an error, so a typo silently matches every creature instead of failing loudly."}
+      - {name: kind, type: string, enum_ref: creature_kinds, desc: "\"sheep\", \"chicken\", \"stone_golem\", \"wolf\", \"stinger\", \"cow\", \"goblin\", or \"any\". An unrecognized string is treated the same as \"any\" -- it is NOT an error, so a typo silently matches every creature instead of failing loudly."}
       - {name: cx, type: number}
       - {name: cy, type: number}
       - {name: cz, type: number}
@@ -322,7 +425,7 @@ methods:
     category: query
     summary: "The single closest creature of one kind to a point. No radius argument -- it searches every creature in the world unconditionally."
     params:
-      - {name: kind, type: string, enum_ref: creature_kinds, desc: "\"sheep\", \"chicken\", \"stone_golem\", or \"any\" -- same unrecognized-string-means-any behavior as find_creatures."}
+      - {name: kind, type: string, enum_ref: creature_kinds, desc: "\"sheep\", \"chicken\", \"stone_golem\", \"wolf\", \"stinger\", \"cow\", \"goblin\", or \"any\" -- same unrecognized-string-means-any behavior as find_creatures."}
       - {name: x, type: number}
       - {name: y, type: number}
       - {name: z, type: number}
@@ -421,9 +524,9 @@ methods:
   - name: spawn_creature
     namespace: world
     category: action
-    summary: "Spawns a new creature at a position. sheep/chicken are passive (only ever move under a rule's chase, never attack). stone_golem is different: large, slow, and hostile -- entirely on its own, with no Lua involved, it closes on and periodically damages the nearest player within its aggro radius. Only spawn one when a hostile/dangerous creature is actually what the request wants."
+    summary: "Spawns a new creature at a position. sheep/chicken/cow are passive (only ever move under a rule's chase, never attack). stone_golem, wolf, stinger, and goblin are different: all four hostile entirely on their own, with no Lua involved -- each closes on and periodically damages the nearest player within its own aggro radius. stone_golem is large, slow, and hits hardest on the longest cooldown; goblin is a mid-weight melee bruiser (moderate speed/damage/cooldown, tankier than wolf); wolf is faster and lighter; stinger is fastest to attack (shortest cooldown) but hits lightest and is the most fragile. Only spawn a hostile one when a hostile/dangerous creature is actually what the request wants."
     params:
-      - {name: kind, type: string, enum_ref: creature_kinds, desc: "\"sheep\", \"chicken\", or \"stone_golem\"; anything else (including a typo) silently becomes \"sheep\" -- not an error."}
+      - {name: kind, type: string, enum_ref: creature_kinds, desc: "\"sheep\", \"chicken\", \"stone_golem\", \"wolf\", \"stinger\", \"cow\", or \"goblin\"; anything else (including a typo) silently becomes \"sheep\" -- not an error."}
       - {name: x, type: number}
       - {name: y, type: number}
       - {name: z, type: number}
@@ -454,7 +557,7 @@ methods:
       - {name: y, type: integer}
       - {name: z, type: integer}
       - {name: kind, type: string, desc: "A block id from block_kinds (e.g. \"air\" to clear a block)."}
-    returns: {type: boolean, desc: "false if kind isn't a recognized block id, OR this call's block-edit budget is used up -- these two failure cases are indistinguishable from Lua. true otherwise."}
+    returns: {type: boolean, desc: "false if kind isn't a recognized block id, y is outside the world's vertical bounds, or the block-edit budget is used up. true means the edit was staged; it is applied only if the callback commits."}
     errors: []
     budget_ref: block_edits_per_call
     since: "1.0.0"
@@ -518,7 +621,7 @@ methods:
   - name: broadcast
     namespace: world
     category: action
-    summary: "Shows a message as a notification to every connected player, and logs it server-side. Use sparingly -- there is no per-call rate limit, only the shared time/instruction budget."
+    summary: "Queues a notification and server log message, emitted only if the callback commits. At most 8 messages per callback, each at most 512 UTF-8 bytes; exceeding either limit aborts execution with an uncatchable budget failure."
     params:
       - {name: message, type: string}
     returns: {type: nil}
@@ -546,14 +649,14 @@ methods:
       - {name: player_id, type: integer, desc: "Must be the host's own id (see summary) or this always fails."}
       - {name: kind, type: string, desc: "A block id from block_kinds; only a gatherable resource can be held at all."}
       - {name: amount, type: integer, desc: "How many to remove."}
-    returns: {type: boolean, desc: "true only if player_id is the host AND it currently holds at least amount of kind (the whole amount is removed, never a partial take). false for every other case -- wrong player, unknown/ungrantable kind, or not enough held."}
+    returns: {type: boolean, desc: "true only if player_id is the host AND the transaction balance holds at least amount of kind. The whole amount is reserved immediately, including against repeated calls and later modules. Removal is applied only if the callback commits. false for wrong player, unknown/ungrantable kind, or insufficient funds."}
     errors: []
     since: "1.2.0"
 
   - name: get_resource_count
     namespace: world
     category: query
-    summary: "How much of one resource a player's inventory currently holds. Same host-only limitation as take_item -- a remote player's inventory isn't tracked host-side yet."
+    summary: "How much of one resource a player's inventory currently holds, including staged give/take operations and earlier committed callbacks in this dispatch. Same host-only limitation as take_item -- a remote player's inventory isn't tracked host-side yet."
     params:
       - {name: player_id, type: integer, desc: "Must be the host's own id or this returns nil."}
       - {name: kind, type: string, desc: "A block id from block_kinds."}
@@ -618,6 +721,19 @@ methods:
     budget_ref: attribute_multiplier_max
     since: "1.2.0"
 
+  - name: teleport_player
+    namespace: world
+    category: action
+    summary: "Moves a player straight to a position, bypassing normal movement and collision entirely (the same way replace_block bypasses mining). Resets that player's velocity to zero, so they don't keep carrying whatever momentum they had right before the jump."
+    params:
+      - {name: player_id, type: integer}
+      - {name: x, type: number}
+      - {name: y, type: number}
+      - {name: z, type: number}
+    returns: {type: boolean, desc: "false if player_id isn't connected, true otherwise."}
+    errors: []
+    since: "1.6.0"
+
 # ---------------------------------------------------------------------------
 # Event callbacks a module may define as global functions.
 # ---------------------------------------------------------------------------
@@ -666,3 +782,16 @@ events:
     event_type: BlockBreakEvent
     desc: "Fires once per real player-caused block break (mining). A rule's own replace_block calls, even ones that set a block to air, never trigger this."
     since: "1.0.0"
+
+  - name: on_interact
+    required: false
+    signature: "function on_interact(api, event)"
+    event_type: InteractEvent
+    desc: >
+      Fires once per real player-caused interact-key press (E) aimed at a
+      block, whether or not anything is actually done in response -- the
+      non-destructive counterpart to on_block_break, for a rule that reacts
+      to a player deliberately using/examining something (e.g. a crystal
+      that heals on touch) rather than mining it. Never fires from a rule's
+      own replace_block calls, and never changes the block itself.
+    since: "1.6.0"

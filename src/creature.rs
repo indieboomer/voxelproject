@@ -1,8 +1,8 @@
 use glam::Vec3;
 
+use crate::model::{push_model, Models};
 use crate::net::PlayerId;
-use crate::voxel::atlas::white_uv;
-use crate::voxel::mesher::{push_cuboid_facing, MeshData, Vertex};
+use crate::voxel::mesher::MeshData;
 use crate::voxel::world::SEA_LEVEL;
 use crate::voxel::World;
 
@@ -33,12 +33,24 @@ impl SimpleRng {
 pub enum CreatureKind {
     Sheep,
     Chicken,
-    /// Large, slow, hostile -- the only creature kind with built-in combat
-    /// behavior (see `Creatures::update`'s golem aggro/attack pass). Every
-    /// other kind only ever moves under Lua's `chase()`; a golem also
-    /// autonomously closes on and damages the nearest player within
-    /// `STONE_GOLEM_AGGRO_RADIUS`, entirely independent of any rule.
+    /// Large, slow, hostile. See `is_hostile`/`Creatures::update`'s aggro
+    /// pass -- every non-hostile kind only ever moves under Lua's `chase()`.
     StoneGolem,
+    /// Fast, hostile, fragile compared to a golem -- attacks quickly on a
+    /// short cooldown rather than hitting hard and slow. See `is_hostile`.
+    Wolf,
+    /// Hostile, fragile, precise -- stings for light damage on the shortest
+    /// cooldown of any hostile kind rather than closing distance fast (no
+    /// "run" clip, unlike Wolf). See `is_hostile`.
+    Stinger,
+    /// Neutral like Sheep/Chicken -- only ever moves under Lua's `chase()`,
+    /// never attacks on its own.
+    Cow,
+    /// Hostile melee bruiser -- hits harder than Wolf and is tankier, but
+    /// on a longer cooldown; chases at a real (if not Wolf-fast) run.
+    /// Sits between Wolf and StoneGolem on every axis (speed, health,
+    /// damage, cooldown). See `is_hostile`.
+    Goblin,
 }
 
 impl CreatureKind {
@@ -49,6 +61,12 @@ impl CreatureKind {
             // Deliberately slower than either -- "moves slowly" is meant to
             // be an escapable, avoidable threat, not a fast ambush.
             CreatureKind::StoneGolem => 0.9,
+            // Wander/walk pace; see `aggro_speed` for how fast it closes in
+            // once it notices a player.
+            CreatureKind::Wolf => 1.8,
+            CreatureKind::Stinger => 2.2,
+            CreatureKind::Cow => 1.3,
+            CreatureKind::Goblin => 1.6,
         }
     }
 
@@ -57,33 +75,108 @@ impl CreatureKind {
             CreatureKind::Sheep => 12.0,
             CreatureKind::Chicken => 6.0,
             CreatureKind::StoneGolem => 40.0,
+            CreatureKind::Wolf => 18.0,
+            CreatureKind::Stinger => 14.0,
+            CreatureKind::Cow => 20.0,
+            CreatureKind::Goblin => 24.0,
         }
     }
 
-    fn body_half_extent(self) -> Vec3 {
+    /// Whether this kind autonomously aggroes/chases/attacks the nearest
+    /// player on its own -- entirely independent of any Lua rule, unlike
+    /// every other kind which only ever moves under `chase()`. See
+    /// `Creatures::update`'s aggro pass and `spawn_around`'s doc comment for
+    /// why hostile kinds are excluded from the starter world scatter.
+    fn is_hostile(self) -> bool {
+        matches!(
+            self,
+            CreatureKind::StoneGolem
+                | CreatureKind::Wolf
+                | CreatureKind::Stinger
+                | CreatureKind::Goblin
+        )
+    }
+
+    /// Aggro detection radius -- only meaningful for a hostile kind.
+    fn aggro_radius(self) -> f32 {
         match self {
-            CreatureKind::Sheep => Vec3::new(0.35, 0.45, 0.5),
-            CreatureKind::Chicken => Vec3::new(0.2, 0.22, 0.28),
-            // Full size ~(1.3, 2.3, 1.3) -- taller and wider than the player
-            // (0.6 x 1.8 x 0.6), reads as "large" next to everything else.
-            CreatureKind::StoneGolem => Vec3::new(0.65, 1.15, 0.65),
+            CreatureKind::StoneGolem => STONE_GOLEM_AGGRO_RADIUS,
+            CreatureKind::Wolf => WOLF_AGGRO_RADIUS,
+            CreatureKind::Stinger => STINGER_AGGRO_RADIUS,
+            CreatureKind::Goblin => GOBLIN_AGGRO_RADIUS,
+            _ => 0.0,
         }
     }
 
-    fn body_color(self) -> [f32; 3] {
+    /// Movement speed while actively closing on an aggroed player. The
+    /// golem deliberately reuses its own (slow) `speed()` here -- "moves
+    /// slowly" is meant to stay true even while attacking -- while a wolf
+    /// (and, a step slower, a goblin) speeds up into a real chase, matching
+    /// its "run" animation clip. A stinger speeds up too (it has no run
+    /// clip to show it, but it's still meaningfully quicker at closing
+    /// distance than its wander pace).
+    fn aggro_speed(self) -> f32 {
         match self {
-            CreatureKind::Sheep => [0.92, 0.92, 0.88],
-            CreatureKind::Chicken => [0.92, 0.82, 0.25],
-            CreatureKind::StoneGolem => [0.52, 0.52, 0.55],
+            CreatureKind::Wolf => WOLF_RUN_SPEED,
+            CreatureKind::Stinger => STINGER_AGGRO_SPEED,
+            CreatureKind::Goblin => GOBLIN_RUN_SPEED,
+            _ => self.speed(),
         }
     }
 
-    fn head_color(self) -> [f32; 3] {
+    /// How long this kind will keep chasing an aggroed player before giving
+    /// up and reverting to wandering, even if the player is still within
+    /// `aggro_radius` -- `None` means it never gives up on its own (a
+    /// golem/stinger's aggro is purely radius-gated, re-evaluated fresh
+    /// every tick). See `Creatures::update`'s `ChaseState` handling and
+    /// `CHASE_GIVEUP_COOLDOWN_SECS` for what happens right after giving up.
+    fn chase_giveup_duration(self) -> Option<f32> {
         match self {
-            CreatureKind::Sheep => [0.72, 0.68, 0.62],
-            CreatureKind::Chicken => [0.85, 0.25, 0.2],
-            CreatureKind::StoneGolem => [0.4, 0.4, 0.43],
+            CreatureKind::Wolf => Some(WOLF_CHASE_GIVEUP_SECS),
+            CreatureKind::Goblin => Some(GOBLIN_CHASE_GIVEUP_SECS),
+            _ => None,
         }
+    }
+
+    fn attack_range(self) -> f32 {
+        match self {
+            CreatureKind::StoneGolem => STONE_GOLEM_ATTACK_RANGE,
+            CreatureKind::Wolf => WOLF_ATTACK_RANGE,
+            CreatureKind::Stinger => STINGER_ATTACK_RANGE,
+            CreatureKind::Goblin => GOBLIN_ATTACK_RANGE,
+            _ => 0.0,
+        }
+    }
+
+    fn attack_damage(self) -> f32 {
+        match self {
+            CreatureKind::StoneGolem => STONE_GOLEM_ATTACK_DAMAGE,
+            CreatureKind::Wolf => WOLF_ATTACK_DAMAGE,
+            CreatureKind::Stinger => STINGER_ATTACK_DAMAGE,
+            CreatureKind::Goblin => GOBLIN_ATTACK_DAMAGE,
+            _ => 0.0,
+        }
+    }
+
+    fn attack_cooldown(self) -> f32 {
+        match self {
+            CreatureKind::StoneGolem => STONE_GOLEM_ATTACK_COOLDOWN,
+            CreatureKind::Wolf => WOLF_ATTACK_COOLDOWN,
+            CreatureKind::Stinger => STINGER_ATTACK_COOLDOWN,
+            CreatureKind::Goblin => GOBLIN_ATTACK_COOLDOWN,
+            _ => f32::MAX,
+        }
+    }
+
+    /// Whether this kind's model has a dedicated "run" animation clip to
+    /// switch to while moving at an elevated pace (aggro-chasing, or
+    /// Lua-`chase()`d with `Wander::hunting` set) -- every other kind falls
+    /// back to its "walk" clip played at normal speed instead.
+    fn has_run_clip(self) -> bool {
+        matches!(
+            self,
+            CreatureKind::Wolf | CreatureKind::Cow | CreatureKind::Goblin
+        )
     }
 
     pub fn to_u8(self) -> u8 {
@@ -91,6 +184,10 @@ impl CreatureKind {
             CreatureKind::Sheep => 0,
             CreatureKind::Chicken => 1,
             CreatureKind::StoneGolem => 2,
+            CreatureKind::Wolf => 3,
+            CreatureKind::Stinger => 4,
+            CreatureKind::Cow => 5,
+            CreatureKind::Goblin => 6,
         }
     }
 
@@ -98,62 +195,55 @@ impl CreatureKind {
         match v {
             1 => CreatureKind::Chicken,
             2 => CreatureKind::StoneGolem,
+            3 => CreatureKind::Wolf,
+            4 => CreatureKind::Stinger,
+            5 => CreatureKind::Cow,
+            6 => CreatureKind::Goblin,
             _ => CreatureKind::Sheep,
         }
     }
 }
 
-/// Appends the two boxes (body + head) representing one creature at `feet`,
-/// facing `facing` radians (same convention as `Camera::forward`), to a
-/// mesh being built. Shared by the live ECS-driven mesh and the
-/// network-snapshot mesh so both draw identically.
-fn push_creature(
-    vertices: &mut Vec<Vertex>,
-    indices: &mut Vec<u32>,
-    feet: Vec3,
-    kind: CreatureKind,
-    facing: f32,
-) {
-    let uv = white_uv();
-    let half = kind.body_half_extent();
-    // Boxes are expressed relative to `feet` (local +Z = forward) so
-    // `push_cuboid_facing` can rotate them to face the creature's actual
-    // heading instead of always facing world +Z.
-    let body_min = Vec3::new(-half.x, 0.0, -half.z);
-    let body_max = Vec3::new(half.x, half.y * 2.0, half.z);
-    push_cuboid_facing(
-        vertices,
-        indices,
-        feet,
-        body_min,
-        body_max,
-        facing,
-        kind.body_color(),
-        uv,
-    );
+/// Which animation clip a creature is currently posed with. Not every model
+/// has every clip (see `AnimatedModel`'s doc comment) -- `Creatures::update`
+/// only ever picks `Run`/`Attack` for a kind whose model actually has that
+/// clip (`CreatureKind::has_run_clip`/`is_hostile`), so `model_name` always
+/// resolves to something the model defines in practice.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AnimClip {
+    Idle,
+    Walk,
+    Run,
+    Attack,
+}
 
-    let head_size = half * 0.55;
-    let head_center_z = half.z * 0.8;
-    let head_min = Vec3::new(
-        -head_size.x,
-        body_max.y - head_size.y * 0.5,
-        head_center_z - head_size.z,
-    );
-    let head_max = Vec3::new(
-        head_size.x,
-        body_max.y + head_size.y * 1.1,
-        head_center_z + head_size.z,
-    );
-    push_cuboid_facing(
-        vertices,
-        indices,
-        feet,
-        head_min,
-        head_max,
-        facing,
-        kind.head_color(),
-        uv,
-    );
+impl AnimClip {
+    fn model_name(self) -> &'static str {
+        match self {
+            AnimClip::Idle => "idle",
+            AnimClip::Walk => "walk",
+            AnimClip::Run => "run",
+            AnimClip::Attack => "attack",
+        }
+    }
+
+    pub fn to_u8(self) -> u8 {
+        match self {
+            AnimClip::Idle => 0,
+            AnimClip::Walk => 1,
+            AnimClip::Run => 2,
+            AnimClip::Attack => 3,
+        }
+    }
+
+    pub fn from_u8(v: u8) -> AnimClip {
+        match v {
+            1 => AnimClip::Walk,
+            2 => AnimClip::Run,
+            3 => AnimClip::Attack,
+            _ => AnimClip::Idle,
+        }
+    }
 }
 
 /// Steps `current` toward `target` (both radians) by at most `max_delta`,
@@ -179,10 +269,16 @@ struct Wander {
 struct Kind(CreatureKind);
 struct Health(f32);
 /// Seconds until this creature may attack again -- only ever decremented/
-/// read for a `StoneGolem`, but attached to every creature uniformly
-/// (unused, harmless) rather than giving hecs entities two different
-/// component shapes depending on kind.
+/// read for a hostile kind (see `CreatureKind::is_hostile`), but attached to
+/// every creature uniformly (unused, harmless) rather than giving hecs
+/// entities two different component shapes depending on kind.
 struct AttackCooldown(f32);
+/// Seconds remaining to show the "attack" animation clip, set to
+/// `ATTACK_ANIM_DURATION` whenever a hostile creature's attack lands (see
+/// `Creatures::update`) -- separate from `AttackCooldown` since the two
+/// durations differ per kind and the clip should finish well before the next
+/// hit is even possible.
+struct AttackAnimTimer(f32);
 /// Stable id exposed to Lua scripts, since a `hecs::Entity` isn't a
 /// convenient thing to hand across the API boundary.
 struct CreatureId(u32);
@@ -191,6 +287,28 @@ struct CreatureId(u32);
 /// direction each tick the creature is actually moving; held steady while
 /// idle, so a stopped creature doesn't visibly snap back to some default.
 struct Facing(f32);
+/// Which animation clip is currently posed, and how long it's been playing.
+/// `time` resets to 0 whenever `clip` changes (see `Creatures::update`) so a
+/// freshly-switched-to clip always starts from its first frame instead of
+/// jumping into the middle of it.
+struct AnimState {
+    clip: AnimClip,
+    time: f32,
+}
+/// Only meaningful for a kind with a `chase_giveup_duration` (currently
+/// Wolf/Goblin) -- attached to every creature uniformly regardless (same
+/// pattern as `AttackCooldown`), harmlessly staying at zero for every other
+/// kind.
+struct ChaseState {
+    /// Seconds this creature has been continuously aggro-chasing a player.
+    /// Reset to 0 whenever aggro lapses (player leaves aggro_radius) or it
+    /// hits `chase_giveup_duration` and gives up.
+    chasing_for: f32,
+    /// Seconds remaining before this creature will consider aggroing again
+    /// -- set to `CHASE_GIVEUP_COOLDOWN_SECS` the instant it gives up, so
+    /// it doesn't just re-aggro the very next tick.
+    giveup_cooldown: f32,
+}
 
 const HUNT_SPEED_MULTIPLIER: f32 = 1.6;
 /// How fast a creature visually turns to face its movement direction --
@@ -200,6 +318,11 @@ const TURN_RATE: f32 = 3.84;
 /// How long a Lua-set chase target stays valid before the creature reverts
 /// to normal wandering if it isn't refreshed again.
 const HUNT_TARGET_TTL: f32 = 0.3;
+/// How long the "attack" animation clip plays for after a hostile creature's
+/// attack lands, regardless of kind -- shorter than either kind's attack
+/// cooldown, so it always finishes (and the creature is back to idle/walk/
+/// run) well before the next hit is even possible.
+const ATTACK_ANIM_DURATION: f32 = 0.5;
 
 /// How close a player has to be before a stone golem notices and starts
 /// closing in, overriding whatever it was doing (wandering, or even a
@@ -213,10 +336,66 @@ const STONE_GOLEM_ATTACK_DAMAGE: f32 = 4.0;
 /// player has a real window to retreat or fight back between hits.
 const STONE_GOLEM_ATTACK_COOLDOWN: f32 = 1.5;
 
+/// How close a player has to be before a wolf notices and starts chasing --
+/// see `STONE_GOLEM_AGGRO_RADIUS`.
+const WOLF_AGGRO_RADIUS: f32 = 10.0;
+/// Chase speed once aggroed -- well under the player's sprint speed (7.5,
+/// see `player.rs::SPRINT_SPEED`) so a wolf stays a real but escapable
+/// threat: a player who notices in time and sprints away can outrun it.
+const WOLF_RUN_SPEED: f32 = 5.0;
+/// Bite reach -- tighter than the golem's, matching a wolf's smaller frame.
+const WOLF_ATTACK_RANGE: f32 = 1.6;
+/// Weaker per hit than the golem but on a much shorter cooldown (see
+/// `WOLF_ATTACK_COOLDOWN`) -- a fast, nagging threat rather than a heavy one.
+const WOLF_ATTACK_DAMAGE: f32 = 3.0;
+const WOLF_ATTACK_COOLDOWN: f32 = 0.9;
+/// How long a wolf keeps chasing before giving up -- see
+/// `CreatureKind::chase_giveup_duration`.
+const WOLF_CHASE_GIVEUP_SECS: f32 = 6.0;
+
+/// How close a player has to be before a stinger notices and starts closing
+/// in -- see `STONE_GOLEM_AGGRO_RADIUS`.
+const STINGER_AGGRO_RADIUS: f32 = 9.0;
+/// Chase speed once aggroed -- quicker than its wander pace but, unlike a
+/// wolf, it has no "run" clip to show the speedup with (its threat is a fast
+/// attack rhythm, not a fast chase).
+const STINGER_AGGRO_SPEED: f32 = 5.0;
+/// Sting reach -- tight, matching a small, precise attacker.
+const STINGER_ATTACK_RANGE: f32 = 1.4;
+/// Weakest hit of any hostile kind, but on the shortest cooldown (see
+/// `STINGER_ATTACK_COOLDOWN`) -- many light, fast stings rather than a
+/// wolf's moderate bite or a golem's heavy blow.
+const STINGER_ATTACK_DAMAGE: f32 = 2.5;
+const STINGER_ATTACK_COOLDOWN: f32 = 0.7;
+
+/// How close a player has to be before a goblin notices and starts closing
+/// in -- see `STONE_GOLEM_AGGRO_RADIUS`.
+const GOBLIN_AGGRO_RADIUS: f32 = 11.0;
+/// Chase speed once aggroed -- a real run (it has the clip), but a step
+/// slower than a wolf's, matching its bulkier, weapon-wielding build.
+const GOBLIN_RUN_SPEED: f32 = 4.2;
+/// Club reach -- longer than a wolf's bite, shorter than a golem's.
+const GOBLIN_ATTACK_RANGE: f32 = 1.9;
+/// Sits between Wolf and StoneGolem on both damage and cooldown -- a
+/// mid-weight melee threat rather than either extreme.
+const GOBLIN_ATTACK_DAMAGE: f32 = 3.5;
+const GOBLIN_ATTACK_COOLDOWN: f32 = 1.1;
+/// How long a goblin keeps chasing before giving up -- see
+/// `CreatureKind::chase_giveup_duration`.
+const GOBLIN_CHASE_GIVEUP_SECS: f32 = 7.0;
+
+/// How long a creature that just gave up a chase (see
+/// `CreatureKind::chase_giveup_duration`) waits before it will consider
+/// aggroing again -- without this, a creature that gives up while the
+/// player is still standing right next to it would just re-aggro the very
+/// next tick, making the "give up" invisible in practice.
+const CHASE_GIVEUP_COOLDOWN_SECS: f32 = 4.0;
+
 /// Reported when `damage`/`destroy` kills a creature, so the caller can
 /// fire the `on_death` event to every rule module (not just the one that
 /// caused it) and so the corpse's last position is still available after
 /// the entity itself has already been despawned.
+#[derive(Clone, Copy)]
 pub struct DeathEvent {
     pub kind: CreatureKind,
     pub pos: Vec3,
@@ -225,6 +404,80 @@ pub struct DeathEvent {
 pub struct Creatures {
     ecs: hecs::World,
     next_id: u32,
+}
+
+/// A callback's private creature view and ordered commands. No live ECS
+/// mutation occurs until commit, so discarded drafts also preserve AI,
+/// animation, entity IDs, and the spawn sequence without cloning the ECS.
+pub(crate) struct CreatureDraft {
+    pub snapshot: Vec<(u32, u8, [f32; 3], f32, f32)>,
+    next_id: u32,
+    commands: Vec<CreatureCommand>,
+}
+
+enum CreatureCommand {
+    Spawn(u32, CreatureKind, Vec3, u64),
+    Chase(u32, Vec3),
+    Damage(u32, f32),
+    Destroy(u32),
+}
+
+impl CreatureDraft {
+    pub fn new(creatures: &Creatures) -> Self {
+        let mut snapshot = creatures.snapshot_with_ids();
+        snapshot.sort_by_key(|entry| entry.0);
+        Self { snapshot, next_id: creatures.next_id, commands: Vec::new() }
+    }
+
+    pub fn spawn(&mut self, kind: CreatureKind, pos: Vec3, seed: u64) -> Option<u32> {
+        if self.snapshot.len() >= crate::world_api_gen::SCRIPT_CREATURES_MAX {
+            return None;
+        }
+        let id = self.next_id;
+        self.next_id = id.checked_add(1)?;
+        self.snapshot.push((id, kind.to_u8(), pos.to_array(), kind.max_health(), kind.max_health()));
+        self.commands.push(CreatureCommand::Spawn(id, kind, pos, seed));
+        Some(id)
+    }
+
+    pub fn chase(&mut self, id: u32, target: Vec3) {
+        if self.snapshot.iter().any(|entry| entry.0 == id) {
+            self.commands.push(CreatureCommand::Chase(id, target));
+        }
+    }
+
+    pub fn damage(&mut self, id: u32, amount: f32) -> Option<DeathEvent> {
+        let index = self.snapshot.iter().position(|entry| entry.0 == id)?;
+        self.snapshot[index].3 -= amount;
+        self.commands.push(CreatureCommand::Damage(id, amount));
+        if self.snapshot[index].3 <= 0.0 {
+            let (_, kind, pos, ..) = self.snapshot.remove(index);
+            Some(DeathEvent { kind: CreatureKind::from_u8(kind), pos: Vec3::from_array(pos) })
+        } else {
+            None
+        }
+    }
+
+    pub fn destroy(&mut self, id: u32) -> Option<DeathEvent> {
+        let index = self.snapshot.iter().position(|entry| entry.0 == id)?;
+        let (_, kind, pos, ..) = self.snapshot.remove(index);
+        self.commands.push(CreatureCommand::Destroy(id));
+        Some(DeathEvent { kind: CreatureKind::from_u8(kind), pos: Vec3::from_array(pos) })
+    }
+
+    pub fn commit(self, creatures: &mut Creatures) {
+        for command in self.commands {
+            match command {
+                CreatureCommand::Spawn(id, kind, pos, seed) => {
+                    let actual = creatures.spawn_one(kind, pos, seed);
+                    debug_assert_eq!(actual, id, "callbacks commit before simulation advances");
+                }
+                CreatureCommand::Chase(id, target) => { creatures.set_chase_target(id, target); }
+                CreatureCommand::Damage(id, amount) => { creatures.damage(id, amount); }
+                CreatureCommand::Destroy(id) => { creatures.destroy(id); }
+            }
+        }
+    }
 }
 
 impl Creatures {
@@ -236,12 +489,14 @@ impl Creatures {
     }
 
     /// Populates a brand-new world's starter creatures -- sheep and chicken
-    /// only, deliberately never a golem. A hostile creature ambushing a
-    /// player in their first minutes with no way to have anticipated it
-    /// would undercut the "same experience in the first minutes" a fresh
-    /// world is supposed to guarantee; a golem only ever appears because a
-    /// rule/spell explicitly summons one (`api.spawn_creature`/
-    /// `spawn_creature_near_player`), which the player asked for.
+    /// only, deliberately never a hostile kind (golem, wolf, stinger, or
+    /// goblin, see `CreatureKind::is_hostile`) and, for now, never a cow
+    /// either even though it's neutral -- both stay opt-in via
+    /// `api.spawn_creature`/`spawn_creature_near_player` rather than
+    /// changing what a fresh world's first minutes look like by default. A
+    /// hostile creature ambushing a player with no way to have anticipated
+    /// it would directly undercut that "same experience in the first
+    /// minutes" guarantee.
     pub fn spawn_around(&mut self, world: &World, center: Vec3, count: usize, seed: u32) {
         let mut rng = SimpleRng::new(seed as u64 ^ 0xC0FFEE);
         for i in 0..count {
@@ -274,8 +529,17 @@ impl Creatures {
             Kind(kind),
             Health(kind.max_health()),
             AttackCooldown(0.0),
+            AttackAnimTimer(0.0),
             CreatureId(id),
             Facing(0.0),
+            AnimState {
+                clip: AnimClip::Idle,
+                time: 0.0,
+            },
+            ChaseState {
+                chasing_for: 0.0,
+                giveup_cooldown: 0.0,
+            },
             SimpleRng::new(rng_seed),
         ));
         id
@@ -288,12 +552,12 @@ impl Creatures {
 
     /// Only the host runs creature AI; joined clients just render whatever
     /// positions the host's snapshot reports. `player_targets` (id +
-    /// position) drives stone golem aggro -- the only creature-vs-player
-    /// interaction that isn't Lua-driven; everything else about this
-    /// method's per-tick wander/chase movement is unchanged for sheep and
-    /// chicken. Returns `(player_id, damage)` for every golem attack that
-    /// landed this tick, for the caller to apply via the same
-    /// `PlayerEffect::Health` path `api.damage_player` uses.
+    /// position) drives hostile-kind aggro (`CreatureKind::is_hostile`) --
+    /// the only creature-vs-player interaction that isn't Lua-driven;
+    /// everything else about this method's per-tick wander/chase movement is
+    /// unchanged for sheep and chicken. Returns `(player_id, damage)` for
+    /// every attack that landed this tick, for the caller to apply via the
+    /// same `PlayerEffect::Health` path `api.damage_player` uses.
     pub fn update(
         &mut self,
         world: &World,
@@ -302,44 +566,74 @@ impl Creatures {
     ) -> Vec<(PlayerId, f32)> {
         let mut attacks = Vec::new();
 
-        for (_, (pos, wander, kind, rng, facing, cooldown)) in self.ecs.query_mut::<(
-            &mut Pos,
-            &mut Wander,
-            &Kind,
-            &mut SimpleRng,
-            &mut Facing,
-            &mut AttackCooldown,
-        )>() {
+        for (_, (pos, wander, kind, rng, facing, cooldown, atk_anim, anim, chase)) in
+            self.ecs.query_mut::<(
+                &mut Pos,
+                &mut Wander,
+                &Kind,
+                &mut SimpleRng,
+                &mut Facing,
+                &mut AttackCooldown,
+                &mut AttackAnimTimer,
+                &mut AnimState,
+                &mut ChaseState,
+            )>()
+        {
             cooldown.0 = (cooldown.0 - dt).max(0.0);
+            atk_anim.0 = (atk_anim.0 - dt).max(0.0);
+            chase.giveup_cooldown = (chase.giveup_cooldown - dt).max(0.0);
 
-            let aggro = if kind.0 == CreatureKind::StoneGolem {
+            let mut aggro = if kind.0.is_hostile() && chase.giveup_cooldown <= 0.0 {
                 player_targets
                     .iter()
                     .map(|&(id, p)| (id, p, pos.0.distance(p)))
-                    .filter(|&(_, _, dist)| dist <= STONE_GOLEM_AGGRO_RADIUS)
+                    .filter(|&(_, _, dist)| dist <= kind.0.aggro_radius())
                     .min_by(|a, b| a.2.total_cmp(&b.2))
             } else {
                 None
             };
 
+            // A kind with a `chase_giveup_duration` tracks how long it's
+            // been continuously chasing and forces itself back to
+            // wandering once it's had enough, even if the player never
+            // left aggro_radius -- see `ChaseState`/`CHASE_GIVEUP_COOLDOWN_SECS`.
+            if let Some(giveup_secs) = kind.0.chase_giveup_duration() {
+                if aggro.is_some() {
+                    chase.chasing_for += dt;
+                    if chase.chasing_for >= giveup_secs {
+                        aggro = None;
+                        chase.chasing_for = 0.0;
+                        chase.giveup_cooldown = CHASE_GIVEUP_COOLDOWN_SECS;
+                    }
+                } else {
+                    chase.chasing_for = 0.0;
+                }
+            }
+
+            let mut moving = false;
+            // Whether this tick's movement should read as the elevated
+            // "run" pace -- either built-in aggro-chasing, or Lua-`chase()`d
+            // fast (`Wander::hunting`) -- as opposed to ordinary wandering.
+            let mut fast = false;
+
             if let Some((player_id, player_pos, dist)) = aggro {
                 // Beeline for the player every tick this close, overriding
-                // whatever wander/Lua-chase target it had -- deliberately
-                // at the golem's own (slow) speed, never
-                // HUNT_SPEED_MULTIPLIER, so "moves slowly" stays true even
-                // while it's actively attacking.
+                // whatever wander/Lua-chase target it had.
                 let to_target = Vec3::new(player_pos.x - pos.0.x, 0.0, player_pos.z - pos.0.z);
                 let horiz_dist = to_target.length();
                 if horiz_dist > 0.05 {
                     let dir = to_target / horiz_dist;
-                    let step = (kind.0.speed() * dt).min(horiz_dist);
+                    let step = (kind.0.aggro_speed() * dt).min(horiz_dist);
                     pos.0.x += dir.x * step;
                     pos.0.z += dir.z * step;
                     facing.0 = turn_toward(facing.0, dir.z.atan2(dir.x), TURN_RATE * dt);
+                    moving = true;
+                    fast = true;
                 }
-                if dist <= STONE_GOLEM_ATTACK_RANGE && cooldown.0 <= 0.0 {
-                    attacks.push((player_id, STONE_GOLEM_ATTACK_DAMAGE));
-                    cooldown.0 = STONE_GOLEM_ATTACK_COOLDOWN;
+                if dist <= kind.0.attack_range() && cooldown.0 <= 0.0 {
+                    attacks.push((player_id, kind.0.attack_damage()));
+                    cooldown.0 = kind.0.attack_cooldown();
+                    atk_anim.0 = ATTACK_ANIM_DURATION.min(kind.0.attack_cooldown());
                 }
                 // Force an immediate retarget (see the `timer <= 0.0` check
                 // below) the moment aggro lapses, instead of resuming a
@@ -373,32 +667,69 @@ impl Creatures {
                     pos.0.x += dir.x * step;
                     pos.0.z += dir.z * step;
                     facing.0 = turn_toward(facing.0, dir.z.atan2(dir.x), TURN_RATE * dt);
+                    moving = true;
+                    fast = wander.hunting;
                 }
             }
 
             let ground = world.terrain_height(pos.0.x.floor() as i32, pos.0.z.floor() as i32);
             pos.0.y = ground as f32 + 1.0;
+
+            let clip = if atk_anim.0 > 0.0 {
+                AnimClip::Attack
+            } else if !moving {
+                AnimClip::Idle
+            } else if fast && kind.0.has_run_clip() {
+                AnimClip::Run
+            } else {
+                AnimClip::Walk
+            };
+            if clip != anim.clip {
+                anim.clip = clip;
+                anim.time = 0.0;
+            } else {
+                anim.time += dt;
+            }
         }
 
         attacks
     }
 
-    pub fn build_mesh(&self) -> MeshData {
-        let mut vertices: Vec<Vertex> = Vec::new();
-        let mut indices: Vec<u32> = Vec::new();
-        for (_, (pos, kind, facing)) in self.ecs.query::<(&Pos, &Kind, &Facing)>().iter() {
-            push_creature(&mut vertices, &mut indices, pos.0, kind.0, facing.0);
+    pub fn build_mesh(&self, models: &Models) -> MeshData {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        for (_, (pos, kind, facing, anim)) in
+            self.ecs.query::<(&Pos, &Kind, &Facing, &AnimState)>().iter()
+        {
+            push_model(
+                &mut vertices,
+                &mut indices,
+                models.for_kind(kind.0),
+                anim.clip.model_name(),
+                anim.time,
+                pos.0,
+                facing.0,
+            );
         }
         MeshData { vertices, indices }
     }
 
-    /// Positions + kinds + facing for broadcasting to clients over the
-    /// network, so a creature turns the same way on every screen.
-    pub fn snapshot(&self) -> Vec<([f32; 3], u8, f32)> {
+    /// Positions + kinds + facing + anim clip/time for broadcasting to
+    /// clients over the network, so a creature turns and animates the same
+    /// way on every screen.
+    pub fn snapshot(&self) -> Vec<([f32; 3], u8, f32, u8, f32)> {
         self.ecs
-            .query::<(&Pos, &Kind, &Facing)>()
+            .query::<(&Pos, &Kind, &Facing, &AnimState)>()
             .iter()
-            .map(|(_, (pos, kind, facing))| (pos.0.to_array(), kind.0.to_u8(), facing.0))
+            .map(|(_, (pos, kind, facing, anim))| {
+                (
+                    pos.0.to_array(),
+                    kind.0.to_u8(),
+                    facing.0,
+                    anim.clip.to_u8(),
+                    anim.time,
+                )
+            })
             .collect()
     }
 
@@ -517,20 +848,34 @@ impl Creatures {
             .find(|(_, (cid, _))| cid.0 == id)
             .map(|(_, (_, facing))| facing.0)
     }
+
+    /// Current animation clip of the creature with this id, if it still
+    /// exists. Exposed mainly for tests.
+    #[allow(dead_code)]
+    pub fn anim_clip_of(&self, id: u32) -> Option<AnimClip> {
+        self.ecs
+            .query::<(&CreatureId, &AnimState)>()
+            .iter()
+            .find(|(_, (cid, _))| cid.0 == id)
+            .map(|(_, (_, anim))| anim.clip)
+    }
 }
 
 /// Builds a creature mesh straight from a network snapshot, for clients that
 /// don't run creature AI locally.
-pub fn mesh_for_snapshot(entries: &[([f32; 3], u8, f32)]) -> MeshData {
-    let mut vertices: Vec<Vertex> = Vec::new();
-    let mut indices: Vec<u32> = Vec::new();
-    for (pos, kind, facing) in entries {
-        push_creature(
+pub fn mesh_for_snapshot(entries: &[([f32; 3], u8, f32, u8, f32)], models: &Models) -> MeshData {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    for &(pos, kind, facing, clip, time) in entries {
+        let kind = CreatureKind::from_u8(kind);
+        push_model(
             &mut vertices,
             &mut indices,
-            Vec3::from_array(*pos),
-            CreatureKind::from_u8(*kind),
-            *facing,
+            models.for_kind(kind),
+            AnimClip::from_u8(clip).model_name(),
+            time,
+            Vec3::from_array(pos),
+            facing,
         );
     }
     MeshData { vertices, indices }
@@ -660,11 +1005,15 @@ mod tests {
     }
 
     #[test]
-    fn creature_kind_u8_round_trips_including_stone_golem() {
-        assert_eq!(CreatureKind::from_u8(0).to_u8(), 0);
-        assert_eq!(CreatureKind::from_u8(1).to_u8(), 1);
-        assert_eq!(CreatureKind::from_u8(2).to_u8(), 2);
+    fn creature_kind_u8_round_trips_for_every_kind() {
+        for v in 0..=6u8 {
+            assert_eq!(CreatureKind::from_u8(v).to_u8(), v);
+        }
         assert_eq!(CreatureKind::StoneGolem.to_u8(), 2);
+        assert_eq!(CreatureKind::Wolf.to_u8(), 3);
+        assert_eq!(CreatureKind::Stinger.to_u8(), 4);
+        assert_eq!(CreatureKind::Cow.to_u8(), 5);
+        assert_eq!(CreatureKind::Goblin.to_u8(), 6);
     }
 
     #[test]
@@ -712,15 +1061,16 @@ mod tests {
     }
 
     #[test]
-    fn only_stone_golems_ever_attack_a_nearby_player() {
+    fn sheep_chicken_and_cow_never_attack_a_nearby_player() {
         let world = World::new(1);
         let mut creatures = Creatures::new();
         let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
         let spawn = Vec3::new(0.0, spawn_y, 0.0);
         creatures.spawn_one(CreatureKind::Sheep, spawn, 1);
         creatures.spawn_one(CreatureKind::Chicken, spawn, 2);
+        creatures.spawn_one(CreatureKind::Cow, spawn, 3);
         let player_id: PlayerId = 7;
-        // Standing right on top of both -- if either could attack, this is
+        // Standing right on top of all three -- if any could attack, this is
         // as favorable a setup for it as possible.
         let player_pos = spawn;
 
@@ -728,7 +1078,94 @@ mod tests {
             let attacks = creatures.update(&world, 1.0 / 60.0, &[(player_id, player_pos)]);
             assert!(
                 attacks.is_empty(),
-                "sheep and chicken must never attack a player, regardless of proximity"
+                "sheep, chicken, and cow must never attack a player, regardless of proximity"
+            );
+        }
+    }
+
+    #[test]
+    fn a_wolf_closes_in_on_a_player_within_its_aggro_radius() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let wolf_pos = Vec3::new(0.0, spawn_y, 0.0);
+        creatures.spawn_one(CreatureKind::Wolf, wolf_pos, 1);
+        let player_id: PlayerId = 5;
+        // Within aggro range but well outside melee range, so this window
+        // only exercises the "close the distance" part of the behavior.
+        let player_pos = wolf_pos + Vec3::new(6.0, 0.0, 0.0);
+        let initial_dist = wolf_pos.distance(player_pos);
+
+        for _ in 0..60 {
+            creatures.update(&world, 1.0 / 60.0, &[(player_id, player_pos)]);
+        }
+
+        let wolf_pos_after = Vec3::from_array(creatures.snapshot_with_ids()[0].2);
+        let dist_after = wolf_pos_after.distance(player_pos);
+        assert!(
+            dist_after < initial_dist,
+            "expected the wolf to have moved closer to the player: {initial_dist} -> {dist_after}"
+        );
+    }
+
+    #[test]
+    fn a_wolf_ignores_a_player_outside_its_aggro_radius() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let wolf_pos = Vec3::new(0.0, spawn_y, 0.0);
+        creatures.spawn_one(CreatureKind::Wolf, wolf_pos, 1);
+        let player_id: PlayerId = 5;
+        let player_pos = wolf_pos + Vec3::new(WOLF_AGGRO_RADIUS + 5.0, 0.0, 0.0);
+
+        for _ in 0..120 {
+            let attacks = creatures.update(&world, 1.0 / 60.0, &[(player_id, player_pos)]);
+            assert!(
+                attacks.is_empty(),
+                "a wolf should never attack a player outside its aggro radius"
+            );
+        }
+    }
+
+    #[test]
+    fn a_wolf_already_in_melee_range_attacks_on_a_cooldown_not_every_tick() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let wolf_pos = Vec3::new(0.0, spawn_y, 0.0);
+        creatures.spawn_one(CreatureKind::Wolf, wolf_pos, 1);
+        let player_id: PlayerId = 5;
+        let player_pos = wolf_pos + Vec3::new(1.0, 0.0, 0.0);
+        assert!(wolf_pos.distance(player_pos) <= WOLF_ATTACK_RANGE);
+
+        let dt = 1.0 / 60.0;
+        let duration = WOLF_ATTACK_COOLDOWN * 3.0 + 0.5;
+        let ticks = (duration / dt) as usize;
+        let mut hit_times = Vec::new();
+        let mut t = 0.0f32;
+        for _ in 0..ticks {
+            let attacks = creatures.update(&world, dt, &[(player_id, player_pos)]);
+            if !attacks.is_empty() {
+                assert_eq!(
+                    attacks,
+                    vec![(player_id, WOLF_ATTACK_DAMAGE)],
+                    "at most one hit per tick, for the right amount"
+                );
+                hit_times.push(t);
+            }
+            t += dt;
+        }
+
+        assert!(
+            hit_times.len() >= 3,
+            "expected several hits over {duration}s at a {WOLF_ATTACK_COOLDOWN}s cooldown, got {}: {hit_times:?}",
+            hit_times.len()
+        );
+        for pair in hit_times.windows(2) {
+            let gap = pair[1] - pair[0];
+            assert!(
+                gap >= WOLF_ATTACK_COOLDOWN - dt * 2.0,
+                "hits should be spaced at least the cooldown apart, got a {gap}s gap: {hit_times:?}"
             );
         }
     }
@@ -774,5 +1211,412 @@ mod tests {
                 "hits should be spaced at least the cooldown apart, got a {gap}s gap: {hit_times:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_wolf_chasing_a_player_plays_the_run_clip_not_walk() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let wolf_pos = Vec3::new(0.0, spawn_y, 0.0);
+        let id = creatures.spawn_one(CreatureKind::Wolf, wolf_pos, 1);
+        // Within aggro range but well outside melee range, so this stays in
+        // the "closing the distance" phase rather than the attack clip.
+        let player_pos = wolf_pos + Vec3::new(6.0, 0.0, 0.0);
+
+        creatures.update(&world, 1.0 / 60.0, &[(1, player_pos)]);
+
+        assert_eq!(
+            creatures.anim_clip_of(id),
+            Some(AnimClip::Run),
+            "an aggroed wolf closing on a player should play its run clip"
+        );
+    }
+
+    #[test]
+    fn a_sheep_wandering_never_plays_the_run_clip() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let spawn = Vec3::new(0.0, spawn_y, 0.0);
+        let id = creatures.spawn_one(CreatureKind::Sheep, spawn, 1);
+
+        let mut saw_walk = false;
+        for _ in 0..300 {
+            creatures.update(&world, 1.0 / 60.0, &[]);
+            match creatures.anim_clip_of(id) {
+                Some(AnimClip::Run) | Some(AnimClip::Attack) => {
+                    panic!("sheep has no run/attack clip and must never play one")
+                }
+                Some(AnimClip::Walk) => saw_walk = true,
+                _ => {}
+            }
+        }
+        assert!(saw_walk, "expected the wandering sheep to walk at some point");
+    }
+
+    #[test]
+    fn an_attack_landing_switches_to_the_attack_clip_which_later_lapses() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let golem_pos = Vec3::new(0.0, spawn_y, 0.0);
+        let id = creatures.spawn_one(CreatureKind::StoneGolem, golem_pos, 1);
+        let player_pos = golem_pos + Vec3::new(1.0, 0.0, 0.0);
+
+        let dt = 1.0 / 60.0;
+        let mut attacked = false;
+        for _ in 0..600 {
+            let attacks = creatures.update(&world, dt, &[(1, player_pos)]);
+            if !attacks.is_empty() {
+                attacked = true;
+                assert_eq!(
+                    creatures.anim_clip_of(id),
+                    Some(AnimClip::Attack),
+                    "the tick an attack lands should immediately show the attack clip"
+                );
+                break;
+            }
+        }
+        assert!(attacked, "expected the golem to land at least one attack");
+
+        // ATTACK_ANIM_DURATION is well under STONE_GOLEM_ATTACK_COOLDOWN, so
+        // ticking well past it (without the golem attacking again, since
+        // it's on cooldown) must let the clip lapse back to idle/walk.
+        for _ in 0..((ATTACK_ANIM_DURATION + 0.2) / dt) as usize {
+            creatures.update(&world, dt, &[(1, player_pos)]);
+        }
+        assert_ne!(
+            creatures.anim_clip_of(id),
+            Some(AnimClip::Attack),
+            "the attack clip should lapse once ATTACK_ANIM_DURATION has passed"
+        );
+    }
+
+    #[test]
+    fn a_stinger_closes_in_on_a_player_within_its_aggro_radius() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let stinger_pos = Vec3::new(0.0, spawn_y, 0.0);
+        creatures.spawn_one(CreatureKind::Stinger, stinger_pos, 1);
+        let player_id: PlayerId = 5;
+        let player_pos = stinger_pos + Vec3::new(6.0, 0.0, 0.0);
+        let initial_dist = stinger_pos.distance(player_pos);
+
+        for _ in 0..60 {
+            creatures.update(&world, 1.0 / 60.0, &[(player_id, player_pos)]);
+        }
+
+        let stinger_pos_after = Vec3::from_array(creatures.snapshot_with_ids()[0].2);
+        let dist_after = stinger_pos_after.distance(player_pos);
+        assert!(
+            dist_after < initial_dist,
+            "expected the stinger to have moved closer to the player: {initial_dist} -> {dist_after}"
+        );
+    }
+
+    #[test]
+    fn a_stinger_ignores_a_player_outside_its_aggro_radius() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let stinger_pos = Vec3::new(0.0, spawn_y, 0.0);
+        creatures.spawn_one(CreatureKind::Stinger, stinger_pos, 1);
+        let player_id: PlayerId = 5;
+        let player_pos = stinger_pos + Vec3::new(STINGER_AGGRO_RADIUS + 5.0, 0.0, 0.0);
+
+        for _ in 0..120 {
+            let attacks = creatures.update(&world, 1.0 / 60.0, &[(player_id, player_pos)]);
+            assert!(
+                attacks.is_empty(),
+                "a stinger should never attack a player outside its aggro radius"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stinger_already_in_melee_range_attacks_on_a_cooldown_not_every_tick() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let stinger_pos = Vec3::new(0.0, spawn_y, 0.0);
+        creatures.spawn_one(CreatureKind::Stinger, stinger_pos, 1);
+        let player_id: PlayerId = 5;
+        let player_pos = stinger_pos + Vec3::new(1.0, 0.0, 0.0);
+        assert!(stinger_pos.distance(player_pos) <= STINGER_ATTACK_RANGE);
+
+        let dt = 1.0 / 60.0;
+        let duration = STINGER_ATTACK_COOLDOWN * 3.0 + 0.5;
+        let ticks = (duration / dt) as usize;
+        let mut hit_times = Vec::new();
+        let mut t = 0.0f32;
+        for _ in 0..ticks {
+            let attacks = creatures.update(&world, dt, &[(player_id, player_pos)]);
+            if !attacks.is_empty() {
+                assert_eq!(
+                    attacks,
+                    vec![(player_id, STINGER_ATTACK_DAMAGE)],
+                    "at most one hit per tick, for the right amount"
+                );
+                hit_times.push(t);
+            }
+            t += dt;
+        }
+
+        assert!(
+            hit_times.len() >= 3,
+            "expected several hits over {duration}s at a {STINGER_ATTACK_COOLDOWN}s cooldown, got {}: {hit_times:?}",
+            hit_times.len()
+        );
+        for pair in hit_times.windows(2) {
+            let gap = pair[1] - pair[0];
+            assert!(
+                gap >= STINGER_ATTACK_COOLDOWN - dt * 2.0,
+                "hits should be spaced at least the cooldown apart, got a {gap}s gap: {hit_times:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stinger_chasing_a_player_plays_walk_not_run_since_it_has_no_run_clip() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let stinger_pos = Vec3::new(0.0, spawn_y, 0.0);
+        let id = creatures.spawn_one(CreatureKind::Stinger, stinger_pos, 1);
+        let player_pos = stinger_pos + Vec3::new(6.0, 0.0, 0.0);
+
+        creatures.update(&world, 1.0 / 60.0, &[(1, player_pos)]);
+
+        assert_eq!(
+            creatures.anim_clip_of(id),
+            Some(AnimClip::Walk),
+            "a stinger has no run clip -- even while aggro-closing it should stay on walk"
+        );
+    }
+
+    #[test]
+    fn a_cow_lua_chased_fast_plays_its_run_clip() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let spawn = Vec3::new(0.0, spawn_y, 0.0);
+        let id = creatures.spawn_one(CreatureKind::Cow, spawn, 1);
+        let target = spawn + Vec3::new(10.0, 0.0, 0.0);
+
+        creatures.set_chase_target(id, target);
+        creatures.update(&world, 1.0 / 60.0, &[]);
+
+        assert_eq!(
+            creatures.anim_clip_of(id),
+            Some(AnimClip::Run),
+            "a cow's model has a run clip, so a fast Lua chase() should use it, unlike sheep/chicken"
+        );
+    }
+
+    #[test]
+    fn a_goblin_closes_in_on_a_player_within_its_aggro_radius() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let goblin_pos = Vec3::new(0.0, spawn_y, 0.0);
+        creatures.spawn_one(CreatureKind::Goblin, goblin_pos, 1);
+        let player_id: PlayerId = 5;
+        let player_pos = goblin_pos + Vec3::new(6.0, 0.0, 0.0);
+        let initial_dist = goblin_pos.distance(player_pos);
+
+        for _ in 0..60 {
+            creatures.update(&world, 1.0 / 60.0, &[(player_id, player_pos)]);
+        }
+
+        let goblin_pos_after = Vec3::from_array(creatures.snapshot_with_ids()[0].2);
+        let dist_after = goblin_pos_after.distance(player_pos);
+        assert!(
+            dist_after < initial_dist,
+            "expected the goblin to have moved closer to the player: {initial_dist} -> {dist_after}"
+        );
+    }
+
+    #[test]
+    fn a_goblin_ignores_a_player_outside_its_aggro_radius() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let goblin_pos = Vec3::new(0.0, spawn_y, 0.0);
+        creatures.spawn_one(CreatureKind::Goblin, goblin_pos, 1);
+        let player_id: PlayerId = 5;
+        let player_pos = goblin_pos + Vec3::new(GOBLIN_AGGRO_RADIUS + 5.0, 0.0, 0.0);
+
+        for _ in 0..120 {
+            let attacks = creatures.update(&world, 1.0 / 60.0, &[(player_id, player_pos)]);
+            assert!(
+                attacks.is_empty(),
+                "a goblin should never attack a player outside its aggro radius"
+            );
+        }
+    }
+
+    #[test]
+    fn a_goblin_already_in_melee_range_attacks_on_a_cooldown_not_every_tick() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let goblin_pos = Vec3::new(0.0, spawn_y, 0.0);
+        creatures.spawn_one(CreatureKind::Goblin, goblin_pos, 1);
+        let player_id: PlayerId = 5;
+        let player_pos = goblin_pos + Vec3::new(1.0, 0.0, 0.0);
+        assert!(goblin_pos.distance(player_pos) <= GOBLIN_ATTACK_RANGE);
+
+        let dt = 1.0 / 60.0;
+        let duration = GOBLIN_ATTACK_COOLDOWN * 3.0 + 0.5;
+        let ticks = (duration / dt) as usize;
+        let mut hit_times = Vec::new();
+        let mut t = 0.0f32;
+        for _ in 0..ticks {
+            let attacks = creatures.update(&world, dt, &[(player_id, player_pos)]);
+            if !attacks.is_empty() {
+                assert_eq!(
+                    attacks,
+                    vec![(player_id, GOBLIN_ATTACK_DAMAGE)],
+                    "at most one hit per tick, for the right amount"
+                );
+                hit_times.push(t);
+            }
+            t += dt;
+        }
+
+        assert!(
+            hit_times.len() >= 3,
+            "expected several hits over {duration}s at a {GOBLIN_ATTACK_COOLDOWN}s cooldown, got {}: {hit_times:?}",
+            hit_times.len()
+        );
+        for pair in hit_times.windows(2) {
+            let gap = pair[1] - pair[0];
+            assert!(
+                gap >= GOBLIN_ATTACK_COOLDOWN - dt * 2.0,
+                "hits should be spaced at least the cooldown apart, got a {gap}s gap: {hit_times:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_goblin_chasing_a_player_plays_the_run_clip_not_walk() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let goblin_pos = Vec3::new(0.0, spawn_y, 0.0);
+        let id = creatures.spawn_one(CreatureKind::Goblin, goblin_pos, 1);
+        let player_pos = goblin_pos + Vec3::new(6.0, 0.0, 0.0);
+
+        creatures.update(&world, 1.0 / 60.0, &[(1, player_pos)]);
+
+        assert_eq!(
+            creatures.anim_clip_of(id),
+            Some(AnimClip::Run),
+            "a goblin's model has a run clip, so an aggroed goblin closing on a player should use it"
+        );
+    }
+
+    #[test]
+    fn a_wolf_gives_up_chasing_after_a_while_even_if_the_player_stays_in_range() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let wolf_pos = Vec3::new(0.0, spawn_y, 0.0);
+        creatures.spawn_one(CreatureKind::Wolf, wolf_pos, 1);
+        let player_id: PlayerId = 5;
+        // Right in melee range the whole test, and never moves -- isolates
+        // the give-up timer from "did it just fail to close the distance".
+        let player_pos = wolf_pos + Vec3::new(1.0, 0.0, 0.0);
+        let dt = 1.0 / 60.0;
+        let run_and_check_for_attacks = |creatures: &mut Creatures, seconds: f32| -> bool {
+            let mut attacked = false;
+            for _ in 0..((seconds / dt) as usize) {
+                if !creatures.update(&world, dt, &[(player_id, player_pos)]).is_empty() {
+                    attacked = true;
+                }
+            }
+            attacked
+        };
+
+        assert!(
+            run_and_check_for_attacks(&mut creatures, 2.0),
+            "expected the wolf to have attacked at least once early on"
+        );
+        // Run well past the give-up point without checking anything --
+        // gives the *exact* crossing tick (which can still land one last
+        // legitimate attack right up until the moment it actually gives
+        // up) a full second of margin on either side, so it can't leak
+        // into either measured window.
+        run_and_check_for_attacks(&mut creatures, WOLF_CHASE_GIVEUP_SECS - 2.0 + 1.0);
+        assert!(
+            !run_and_check_for_attacks(&mut creatures, 2.0),
+            "expected the wolf to give up (and stop attacking) after {WOLF_CHASE_GIVEUP_SECS}s of \
+             continuous chasing, even with the player still standing in melee range"
+        );
+    }
+
+    #[test]
+    fn a_goblin_gives_up_chasing_after_a_while_even_if_the_player_stays_in_range() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let goblin_pos = Vec3::new(0.0, spawn_y, 0.0);
+        creatures.spawn_one(CreatureKind::Goblin, goblin_pos, 1);
+        let player_id: PlayerId = 5;
+        let player_pos = goblin_pos + Vec3::new(1.0, 0.0, 0.0);
+        let dt = 1.0 / 60.0;
+        let run_and_check_for_attacks = |creatures: &mut Creatures, seconds: f32| -> bool {
+            let mut attacked = false;
+            for _ in 0..((seconds / dt) as usize) {
+                if !creatures.update(&world, dt, &[(player_id, player_pos)]).is_empty() {
+                    attacked = true;
+                }
+            }
+            attacked
+        };
+
+        assert!(
+            run_and_check_for_attacks(&mut creatures, 2.0),
+            "expected the goblin to have attacked at least once early on"
+        );
+        run_and_check_for_attacks(&mut creatures, GOBLIN_CHASE_GIVEUP_SECS - 2.0 + 1.0);
+        assert!(
+            !run_and_check_for_attacks(&mut creatures, 2.0),
+            "expected the goblin to give up (and stop attacking) after {GOBLIN_CHASE_GIVEUP_SECS}s of \
+             continuous chasing, even with the player still standing in melee range"
+        );
+    }
+
+    #[test]
+    fn a_stone_golem_never_gives_up_chasing_a_player_who_stays_in_range() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let golem_pos = Vec3::new(0.0, spawn_y, 0.0);
+        creatures.spawn_one(CreatureKind::StoneGolem, golem_pos, 1);
+        let player_id: PlayerId = 5;
+        let player_pos = golem_pos + Vec3::new(1.0, 0.0, 0.0);
+        let dt = 1.0 / 60.0;
+
+        // Well past both a wolf's and a goblin's give-up duration -- a
+        // golem has no `chase_giveup_duration`, so it should keep landing
+        // hits on its normal cooldown the entire time, never falling
+        // silent the way a wolf/goblin would.
+        let ticks = ((WOLF_CHASE_GIVEUP_SECS.max(GOBLIN_CHASE_GIVEUP_SECS) + 3.0) / dt) as usize;
+        let mut hit_count = 0;
+        for _ in 0..ticks {
+            if !creatures.update(&world, dt, &[(player_id, player_pos)]).is_empty() {
+                hit_count += 1;
+            }
+        }
+        let expected_min_hits =
+            ((WOLF_CHASE_GIVEUP_SECS.max(GOBLIN_CHASE_GIVEUP_SECS) + 3.0) / STONE_GOLEM_ATTACK_COOLDOWN) as i32 - 2;
+        assert!(
+            hit_count as i32 >= expected_min_hits,
+            "expected a golem to keep attacking on its normal cooldown throughout, with no give-up \
+             pause; got {hit_count} hits, expected at least {expected_min_hits}"
+        );
     }
 }

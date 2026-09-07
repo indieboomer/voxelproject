@@ -4,10 +4,72 @@
 // Consumed by src/world_api_validate.rs's pre-flight lint, which runs on
 // LLM-generated Lua before it's ever loaded into a real Lua VM.
 
-pub const VERSION: &str = "1.5.0";
+pub const VERSION: &str = "1.12.0";
+
+// Runtime execution limits, shared with the generated documentation.
+pub const SCRIPT_TIME_MS: u64 = 5;
+pub const SCRIPT_INSTRUCTIONS: u32 = 100000;
+pub const SCRIPT_HOOK_INTERVAL: u32 = 1000;
+pub const SCRIPT_MEMORY_BYTES: usize = 8388608;
+pub const SCRIPT_SOURCE_BYTES: usize = 65536;
+pub const SCRIPT_API_CALLS: u32 = 512;
+pub const SCRIPT_BROADCASTS: u32 = 8;
+pub const SCRIPT_BROADCAST_BYTES: usize = 512;
+pub const SCRIPT_COORDINATE_MAX: i32 = 1000000;
+pub const SCRIPT_NATIVE_WORK: u32 = 65536;
+pub const SCRIPT_CREATURES_MAX: usize = 256;
+pub const DISPATCH_CALLBACKS: usize = 16;
+pub const DISPATCH_TIME_MS: u64 = 20;
+pub const DISPATCH_INSTRUCTIONS: u32 = 400000;
+pub const DISPATCH_API_CALLS: u32 = 4096;
+pub const DISPATCH_NATIVE_WORK: u32 = 262144;
+pub const PENDING_TOTAL: usize = 512;
+pub const PENDING_PER_MODULE: usize = 64;
+pub const SCRIPT_MODULES_MAX: usize = 64;
+
+// Zero-based parameter positions used by native argument validation.
+pub const NUMERIC_ARGUMENTS: &[(&str, &[usize])] = &[
+    ("nearest_player", &[0, 1, 2]),
+    ("find_creatures", &[1, 2, 3, 4]),
+    ("nearest_creature", &[1, 2, 3]),
+    ("get_block", &[0, 1, 2]),
+    ("find_blocks", &[1, 2, 3, 4]),
+    ("terrain_height", &[0, 1]),
+    ("distance", &[0, 1, 2, 3, 4, 5]),
+    ("chase", &[0, 1, 2, 3]),
+    ("damage", &[0, 1]),
+    ("destroy", &[0]),
+    ("spawn_creature", &[1, 2, 3]),
+    ("spawn_creature_near_player", &[0, 2]),
+    ("replace_block", &[0, 1, 2]),
+    ("set_time_of_day", &[0]),
+    ("give_item", &[0, 2]),
+    ("take_item", &[0, 2]),
+    ("get_resource_count", &[0]),
+    ("damage_player", &[0, 1]),
+    ("heal_player", &[0, 1]),
+    ("set_poisoned", &[0]),
+    ("set_player_speed", &[0, 1]),
+    ("set_player_jump", &[0, 1]),
+    ("teleport_player", &[0, 1, 2, 3]),
+];
+
+pub const COORDINATE_ARGUMENTS: &[(&str, &[usize])] = &[
+    ("nearest_player", &[0, 1, 2]),
+    ("find_creatures", &[1, 2, 3]),
+    ("nearest_creature", &[1, 2, 3]),
+    ("get_block", &[0, 1, 2]),
+    ("find_blocks", &[1, 2, 3]),
+    ("terrain_height", &[0, 1]),
+    ("distance", &[0, 1, 2, 3, 4, 5]),
+    ("chase", &[1, 2, 3]),
+    ("spawn_creature", &[1, 2, 3]),
+    ("replace_block", &[0, 1, 2]),
+    ("teleport_player", &[1, 2, 3]),
+];
 
 /// Every `api.<name>` callable method this World API version defines.
-pub const METHOD_NAMES: &[&str] = &["players", "nearest_player", "creatures", "find_creatures", "nearest_creature", "get_block", "find_blocks", "terrain_height", "distance", "chase", "damage", "destroy", "spawn_creature", "spawn_creature_near_player", "replace_block", "set_weather", "start_rain", "stop_rain", "set_time_of_day", "set_time_dawn", "set_time_night", "broadcast", "give_item", "take_item", "get_resource_count", "damage_player", "heal_player", "set_poisoned", "set_player_speed", "set_player_jump"];
+pub const METHOD_NAMES: &[&str] = &["players", "nearest_player", "creatures", "find_creatures", "nearest_creature", "get_block", "find_blocks", "terrain_height", "distance", "chase", "damage", "destroy", "spawn_creature", "spawn_creature_near_player", "replace_block", "set_weather", "start_rain", "stop_rain", "set_time_of_day", "set_time_dawn", "set_time_night", "broadcast", "give_item", "take_item", "get_resource_count", "damage_player", "heal_player", "set_poisoned", "set_player_speed", "set_player_jump", "teleport_player"];
 
 /// Every read-only `api.<name>` field (not callable) this version defines.
 pub const PROPERTY_NAMES: &[&str] = &["time_of_day", "is_night", "weather"];
@@ -21,5 +83,5 @@ pub const BLOCK_KINDS: &[&str] = &["basalt", "bedrock", "birch_leaves", "birch_w
 /// schema.yaml) rather than crash, so they're lower-value to flag than a bad
 /// block kind -- but kept here for a future validator check or Lua stub use.
 #[allow(dead_code)]
-pub const CREATURE_KINDS: &[&str] = &["sheep", "chicken", "stone_golem"];
+pub const CREATURE_KINDS: &[&str] = &["sheep", "chicken", "stone_golem", "wolf", "stinger", "cow", "goblin"];
 
