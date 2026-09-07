@@ -1489,6 +1489,7 @@ impl App {
         self.player
             .update(&self.world, &self.input, forward, right, dt);
         self.camera.position = self.player.position;
+        self.audio.update_listener(self.camera.eye_position(), right);
         for _ in 0..self.player.take_steps() {
             self.audio.play_player_step();
         }
@@ -1690,17 +1691,17 @@ impl App {
             // doesn't get these; only the fully-local ambience/lightning/
             // birds/footstep sounds play for it too.
             let events = self.creatures.take_audio_events();
-            for kind in events.attacks {
-                self.audio.play_creature_attack(kind);
+            for (kind, pos) in events.attacks {
+                self.audio.play_creature_attack(kind, pos);
             }
-            for _ in &events.steps {
-                self.audio.play_creature_step();
+            for (_, pos) in events.steps {
+                self.audio.play_creature_step(pos);
             }
-            for kind in events.ambient_calls {
-                self.audio.play_creature_ambient(kind);
+            for (kind, pos) in events.ambient_calls {
+                self.audio.play_creature_ambient(kind, pos);
             }
-            for _ in events.deaths {
-                self.audio.play_creature_death();
+            for (_, pos) in events.deaths {
+                self.audio.play_creature_death(pos);
             }
         }
 

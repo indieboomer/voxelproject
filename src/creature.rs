@@ -506,18 +506,24 @@ pub struct DeathEvent {
 /// threading through `scripting.rs`'s `TickOutcome` since `deaths` in
 /// particular is only actually known at `damage`/`destroy` commit time,
 /// deep inside Lua dispatch.
+/// Kind plus the world position it happened at, so the caller can spatialize
+/// the sound (distance falloff + left/right panning relative to the
+/// listener) -- see `audio.rs`'s `AudioEngine::play_creature_attack` and
+/// friends, all of which take a position for exactly this reason.
+pub type CreatureAudioEvent = (CreatureKind, Vec3);
+
 #[derive(Default)]
 pub struct CreatureAudioEvents {
     /// One entry per creature that died this call (`damage` reaching zero
     /// health, or `destroy`) -- see `audio.rs`'s generic death sound.
-    pub deaths: Vec<CreatureKind>,
+    pub deaths: Vec<CreatureAudioEvent>,
     /// One entry per hostile creature's attack that landed on a player.
-    pub attacks: Vec<CreatureKind>,
+    pub attacks: Vec<CreatureAudioEvent>,
     /// One entry per creature that completed a `CREATURE_STEP_LENGTH`
     /// stride while walking/running.
-    pub steps: Vec<CreatureKind>,
+    pub steps: Vec<CreatureAudioEvent>,
     /// One entry per cow/sheep idle vocalization that fired.
-    pub ambient_calls: Vec<CreatureKind>,
+    pub ambient_calls: Vec<CreatureAudioEvent>,
 }
 
 pub struct Creatures {
@@ -724,7 +730,7 @@ impl Creatures {
             // it to/below zero and this never fires for those kinds.
             ambient_call.0 -= dt;
             if ambient_call.0 <= 0.0 {
-                ambient_events.push(kind.0);
+                ambient_events.push((kind.0, pos.0));
                 ambient_call.0 = AMBIENT_CALL_INTERVAL_MIN
                     + rng.next_f32() * (AMBIENT_CALL_INTERVAL_MAX - AMBIENT_CALL_INTERVAL_MIN);
             }
@@ -783,7 +789,7 @@ impl Creatures {
                 }
                 if dist <= kind.0.attack_range() && cooldown.0 <= 0.0 {
                     attacks.push((player_id, kind.0.attack_damage()));
-                    attack_sound_events.push(kind.0);
+                    attack_sound_events.push((kind.0, pos.0));
                     cooldown.0 = kind.0.attack_cooldown();
                     atk_anim.0 = ATTACK_ANIM_DURATION.min(kind.0.attack_cooldown());
                 }
@@ -833,7 +839,7 @@ impl Creatures {
                     // (fast movement at a low framerate) doesn't lose the
                     // leftover distance toward its next footstep.
                     steps.0 %= CREATURE_STEP_LENGTH;
-                    step_events.push(kind.0);
+                    step_events.push((kind.0, pos.0));
                 }
             }
 
@@ -967,7 +973,7 @@ impl Creatures {
         }
         if let Some((entity, event)) = target {
             let _ = self.ecs.despawn(entity);
-            self.pending_audio.deaths.push(event.kind);
+            self.pending_audio.deaths.push((event.kind, event.pos));
             return Some(event);
         }
         None
@@ -991,7 +997,7 @@ impl Creatures {
         }
         if let Some((entity, event)) = target {
             let _ = self.ecs.despawn(entity);
-            self.pending_audio.deaths.push(event.kind);
+            self.pending_audio.deaths.push((event.kind, event.pos));
             return Some(event);
         }
         None
@@ -1999,7 +2005,7 @@ mod tests {
         for _ in 0..600 {
             creatures.update(&world, 1.0 / 60.0, &[]);
             let events = creatures.take_audio_events();
-            if events.steps.contains(&CreatureKind::Sheep) {
+            if events.steps.iter().any(|&(kind, _)| kind == CreatureKind::Sheep) {
                 saw_step = true;
                 break;
             }
@@ -2053,10 +2059,12 @@ mod tests {
         creatures.update(&world, 1.0 / 60.0, &[(5, player_pos)]);
         let events = creatures.take_audio_events();
 
-        assert_eq!(
-            events.attacks,
-            vec![CreatureKind::Wolf],
-            "a landed wolf attack should queue exactly one Wolf attack-sound event"
+        assert_eq!(events.attacks.len(), 1, "expected exactly one attack-sound event: {:?}", events.attacks);
+        let (kind, pos) = events.attacks[0];
+        assert_eq!(kind, CreatureKind::Wolf, "a landed wolf attack should queue a Wolf attack-sound event");
+        assert!(
+            pos.distance(wolf_pos) < 0.5,
+            "the attack sound's position should be roughly where the wolf actually is: {pos:?} vs {wolf_pos:?}"
         );
     }
 
@@ -2065,13 +2073,16 @@ mod tests {
         let world = World::new(1);
         let mut creatures = Creatures::new();
         let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
-        let id = creatures.spawn_one(CreatureKind::Sheep, Vec3::new(0.0, spawn_y, 0.0), 1);
+        let spawn = Vec3::new(0.0, spawn_y, 0.0);
+        let id = creatures.spawn_one(CreatureKind::Sheep, spawn, 1);
 
         let event = creatures.damage(id, 1000.0);
         assert!(event.is_some(), "expected lethal damage to actually kill the sheep");
 
         let events = creatures.take_audio_events();
-        assert_eq!(events.deaths, vec![CreatureKind::Sheep]);
+        assert_eq!(events.deaths.len(), 1);
+        assert_eq!(events.deaths[0].0, CreatureKind::Sheep);
+        assert_eq!(events.deaths[0].1, spawn, "the death sound's position should be where the sheep died");
     }
 
     #[test]
@@ -2095,7 +2106,8 @@ mod tests {
 
         creatures.destroy(id);
         let events = creatures.take_audio_events();
-        assert_eq!(events.deaths, vec![CreatureKind::Goblin]);
+        assert_eq!(events.deaths.len(), 1);
+        assert_eq!(events.deaths[0].0, CreatureKind::Goblin);
     }
 
     #[test]
@@ -2107,7 +2119,8 @@ mod tests {
         creatures.damage(id, 1000.0);
 
         let first = creatures.take_audio_events();
-        assert_eq!(first.deaths, vec![CreatureKind::Sheep]);
+        assert_eq!(first.deaths.len(), 1);
+        assert_eq!(first.deaths[0].0, CreatureKind::Sheep);
         let second = creatures.take_audio_events();
         assert!(second.deaths.is_empty(), "a drained event must not reappear on the next take_audio_events call");
     }
@@ -2126,10 +2139,10 @@ mod tests {
             creatures.update(&world, 1.0 / 60.0, &[]);
             let events = creatures.take_audio_events();
             assert!(
-                !events.ambient_calls.contains(&CreatureKind::Goblin),
+                !events.ambient_calls.iter().any(|&(kind, _)| kind == CreatureKind::Goblin),
                 "a goblin has no ambient sound and should never queue an ambient_call event"
             );
-            if events.ambient_calls.contains(&CreatureKind::Cow) {
+            if events.ambient_calls.iter().any(|&(kind, _)| kind == CreatureKind::Cow) {
                 saw_cow_call = true;
             }
         }

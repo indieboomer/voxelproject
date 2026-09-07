@@ -3,14 +3,18 @@
 //! pattern `model.rs` uses for the bundled `.glb` files), decoded fresh
 //! each time they're played via `rodio`.
 //!
-//! Deliberately non-spatial: every sound is a flat 2D "play this clip"
-//! fire-and-forget, the same complexity level as the rest of the engine's
-//! effects (no listener-relative panning/attenuation infrastructure exists
-//! here, unlike a fuller game audio system).
+//! Creature-originated sounds (steps/attacks/deaths/ambient calls) are
+//! spatialized -- distance falloff and left/right panning relative to the
+//! listener (the local player's camera) -- via `rodio`'s `SpatialSink`; see
+//! `spatial_positions`. Everything else (the player's own footsteps/mining
+//! swing, weather ambience, lightning, bird flocks) plays centered/flat,
+//! since it either originates at the listener itself or is meant to read
+//! as diffuse/omnipresent atmosphere rather than coming from one point.
 
 use std::io::Cursor;
 
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
+use glam::Vec3;
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, SpatialSink, Source};
 
 use crate::creature::CreatureKind;
 use crate::daynight::is_night;
@@ -107,6 +111,24 @@ impl AmbientTrack {
 /// sound competing with steps/attacks.
 const AMBIENT_VOLUME: f32 = 0.35;
 
+/// Half the ear-to-ear separation used to derive left/right panning for a
+/// creature sound -- see `spatial_positions`. Not a real physical head
+/// width; just enough separation for `rodio`'s per-ear falloff model to
+/// produce a clear stereo balance without being so wide it distorts the
+/// distance falloff itself.
+const EAR_HALF_SEPARATION: f32 = 0.1;
+
+/// Reference distance (in blocks) within which a creature sound plays at
+/// full volume; beyond it, volume falls off with the inverse square of how
+/// far past the reference distance the source is -- see
+/// `spatial_positions`. Tuned per sound category: an attack should still
+/// read clearly across a typical aggro radius, while a single footstep is
+/// a much smaller/closer-range detail sound.
+const ATTACK_REFERENCE_DISTANCE: f32 = 7.0;
+const DEATH_REFERENCE_DISTANCE: f32 = 7.0;
+const AMBIENT_CALL_REFERENCE_DISTANCE: f32 = 5.0;
+const STEP_REFERENCE_DISTANCE: f32 = 3.0;
+
 /// Cheap xorshift RNG for pitch/volume jitter -- same style as
 /// `creature.rs`'s `SimpleRng`, not shared with it since this lives in a
 /// different module and doesn't need anything creature-specific.
@@ -128,10 +150,11 @@ impl Rng {
     }
 }
 
-/// Owns the audio output device and the one active looping ambience sink.
-/// If no output device is available (e.g. a headless CI box), every method
-/// silently no-ops rather than panicking -- sound is a nice-to-have, not
-/// something that should ever crash or block the game.
+/// Owns the audio output device, the current listener pose, and the one
+/// active looping ambience sink. If no output device is available (e.g. a
+/// headless CI box), every method silently no-ops rather than panicking --
+/// sound is a nice-to-have, not something that should ever crash or block
+/// the game.
 pub struct AudioEngine {
     /// Kept alive for as long as the engine exists -- dropping it stops
     /// all playback. Never read otherwise, hence the leading underscore.
@@ -140,6 +163,14 @@ pub struct AudioEngine {
     rng: Rng,
     ambient_sink: Option<Sink>,
     ambient_track: AmbientTrack,
+    /// The local player's camera eye position -- the origin every creature
+    /// sound's distance/panning is computed relative to. Updated once per
+    /// frame via `update_listener`.
+    listener_pos: Vec3,
+    /// The local player's camera "right" direction (world-space, always
+    /// horizontal -- see `Camera::right`), used to place the two virtual
+    /// ears either side of `listener_pos` for panning.
+    listener_right: Vec3,
 }
 
 impl AudioEngine {
@@ -151,6 +182,8 @@ impl AudioEngine {
                 rng: Rng(0x9E3779B97F4A7C15),
                 ambient_sink: None,
                 ambient_track: AmbientTrack::Silence,
+                listener_pos: Vec3::ZERO,
+                listener_right: Vec3::X,
             },
             Err(err) => {
                 log::warn!("No audio output device available, sounds disabled: {err}");
@@ -160,14 +193,51 @@ impl AudioEngine {
                     rng: Rng(1),
                     ambient_sink: None,
                     ambient_track: AmbientTrack::Silence,
+                    listener_pos: Vec3::ZERO,
+                    listener_right: Vec3::X,
                 }
             }
         }
     }
 
-    /// Fire-and-forget one-shot playback at an exact volume/pitch. A no-op
-    /// if there's no output device, or (defensively) if decoding somehow
-    /// fails -- a bad sound should never crash the game.
+    /// Updates the listener pose every creature sound's distance falloff
+    /// and left/right panning is computed relative to -- call once per
+    /// frame (with the camera's eye position and its always-horizontal
+    /// `right()` vector) before playing any creature sounds that frame.
+    pub fn update_listener(&mut self, pos: Vec3, right: Vec3) {
+        self.listener_pos = pos;
+        self.listener_right = right;
+    }
+
+    /// Derives the emitter/left-ear/right-ear positions `rodio`'s
+    /// `SpatialSink` needs to reproduce both distance falloff and
+    /// left/right panning for a sound at `emitter_pos`, relative to the
+    /// current listener.
+    ///
+    /// Positions are expressed relative to the listener and uniformly
+    /// scaled by `1 / reference_distance` before being handed to
+    /// `SpatialSink` -- `rodio`'s own falloff model is a flat
+    /// `1 / distance^2` with no "stays at full volume up close" floor,
+    /// which (fed real block distances directly) would make even a
+    /// creature standing right next to the player sound quietly
+    /// attenuated. Scaling by the reference distance turns that into a
+    /// floor: distances at or inside `reference_distance` collapse to
+    /// `<= 1.0` in the scaled space (full volume, since `rodio` caps each
+    /// ear's modifier at `1.0`), and distances beyond it fall off with the
+    /// inverse square of how far past it they are. Left/right panning is
+    /// unaffected by the uniform scale -- it only depends on the *ratio*
+    /// between the two ears' distances to the emitter, which a uniform
+    /// scale preserves.
+    fn spatial_positions(&self, emitter_pos: Vec3, reference_distance: f32) -> ([f32; 3], [f32; 3], [f32; 3]) {
+        let scale = 1.0 / reference_distance.max(0.01);
+        let emitter = ((emitter_pos - self.listener_pos) * scale).to_array();
+        let ear_offset = self.listener_right * (EAR_HALF_SEPARATION * scale);
+        ((emitter), (-ear_offset).to_array(), ear_offset.to_array())
+    }
+
+    /// Fire-and-forget centered (non-spatial) one-shot playback at an exact
+    /// volume/pitch. A no-op if there's no output device, or (defensively)
+    /// if decoding somehow fails -- a bad sound should never crash the game.
     fn play(&self, bytes: &'static [u8], volume: f32, pitch: f32) {
         let Some(handle) = &self.handle else { return };
         let Ok(decoder) = Decoder::new(Cursor::new(bytes)) else { return };
@@ -187,52 +257,91 @@ impl AudioEngine {
         self.play(bytes, volume, pitch);
     }
 
+    /// Fire-and-forget spatialized one-shot playback -- distance falloff
+    /// plus left/right panning relative to the listener, with the usual
+    /// pitch/volume jitter on top. Falls back to a harmless no-op under the
+    /// same conditions as `play`.
+    fn play_spatial(
+        &mut self,
+        bytes: &'static [u8],
+        base_volume: f32,
+        pitch_spread: f32,
+        volume_spread: f32,
+        emitter_pos: Vec3,
+        reference_distance: f32,
+    ) {
+        let Some(handle) = &self.handle else { return };
+        let Ok(decoder) = Decoder::new(Cursor::new(bytes)) else { return };
+        let (emitter, left_ear, right_ear) = self.spatial_positions(emitter_pos, reference_distance);
+        let Ok(sink) = SpatialSink::try_new(handle, emitter, left_ear, right_ear) else { return };
+        let pitch = self.rng.jitter(pitch_spread);
+        let volume = base_volume * self.rng.jitter(volume_spread);
+        sink.set_volume(volume.max(0.0));
+        sink.set_speed(pitch.max(0.05));
+        sink.append(decoder);
+        sink.detach();
+    }
+
     /// One player footstep -- alternates between the two human step clips
     /// (not just repeating one) on top of the usual pitch/volume jitter.
+    /// Centered/non-spatial: it originates at the listener itself.
     pub fn play_player_step(&mut self) {
         let bytes = if self.rng.next_f32() < 0.5 { HUMAN_STEP } else { HUMAN_STEP_2 };
         self.play_varied(bytes, 0.45, 0.08, 0.18);
     }
 
-    /// One creature footstep, any kind -- a single generic clip (see
-    /// `ANIMAL_STEP`), since the engine doesn't ship per-kind step sounds.
-    pub fn play_creature_step(&mut self) {
-        self.play_varied(ANIMAL_STEP, 0.3, 0.12, 0.22);
+    /// One creature footstep at `pos`, any kind -- a single generic clip
+    /// (see `ANIMAL_STEP`), since the engine doesn't ship per-kind step
+    /// sounds. Spatialized, falls off over a short range (see
+    /// `STEP_REFERENCE_DISTANCE`) since it's a close-range detail sound.
+    pub fn play_creature_step(&mut self, pos: Vec3) {
+        self.play_spatial(ANIMAL_STEP, 0.3, 0.12, 0.22, pos, STEP_REFERENCE_DISTANCE);
     }
 
-    /// A hostile creature's attack landing on a player. A no-op for a kind
-    /// with no attack sound (sheep/chicken/cow never attack).
-    pub fn play_creature_attack(&mut self, kind: CreatureKind) {
+    /// A hostile creature's attack landing on a player, at `pos`. A no-op
+    /// for a kind with no attack sound (sheep/chicken/cow never attack).
+    /// Spatialized, carries further than a footstep (see
+    /// `ATTACK_REFERENCE_DISTANCE`) so it still reads clearly across a
+    /// typical aggro radius.
+    pub fn play_creature_attack(&mut self, kind: CreatureKind, pos: Vec3) {
         if let Some(bytes) = attack_sound(kind) {
-            self.play_varied(bytes, 0.6, 0.05, 0.1);
+            self.play_spatial(bytes, 0.6, 0.05, 0.1, pos, ATTACK_REFERENCE_DISTANCE);
         }
     }
 
     /// The player's own mining swing landing a hit -- the closest existing
     /// action to "attack" the player currently has (there's no player-vs-
-    /// creature melee yet).
+    /// creature melee yet). Centered/non-spatial: it originates at the
+    /// listener itself.
     pub fn play_player_attack(&mut self) {
         self.play_varied(PLAYER_ATTACK, 0.5, 0.06, 0.12);
     }
 
-    /// Any creature's death -- one generic clip regardless of kind.
-    pub fn play_creature_death(&mut self) {
-        self.play_varied(CREATURE_DEATH, 0.55, 0.05, 0.1);
+    /// Any creature's death at `pos` -- one generic clip regardless of
+    /// kind. Spatialized, same carry as an attack.
+    pub fn play_creature_death(&mut self, pos: Vec3) {
+        self.play_spatial(CREATURE_DEATH, 0.55, 0.05, 0.1, pos, DEATH_REFERENCE_DISTANCE);
     }
 
-    /// A cow/sheep's idle vocalization. A no-op for any other kind.
-    pub fn play_creature_ambient(&mut self, kind: CreatureKind) {
+    /// A cow/sheep's idle vocalization at `pos`. A no-op for any other
+    /// kind. Spatialized.
+    pub fn play_creature_ambient(&mut self, kind: CreatureKind, pos: Vec3) {
         if let Some(bytes) = ambient_sound(kind) {
-            self.play_varied(bytes, 0.4, 0.08, 0.15);
+            self.play_spatial(bytes, 0.4, 0.08, 0.15, pos, AMBIENT_CALL_REFERENCE_DISTANCE);
         }
     }
 
-    /// A lightning strike (see `App::update_lightning`).
+    /// A lightning strike (see `App::update_lightning`). Centered: no
+    /// world position is tracked for a strike, and thunder reads as
+    /// diffuse/overhead rather than from one point anyway.
     pub fn play_lightning(&mut self) {
         self.play_varied(LIGHTNING, 0.7, 0.03, 0.1);
     }
 
-    /// A new bird flock spawning (see `App::update_birds`).
+    /// A new bird flock spawning (see `App::update_birds`). Centered,
+    /// deliberately -- kept as ambience rather than spatialized to the
+    /// flock's spawn point, which starts far outside `ATTACK_REFERENCE_
+    /// DISTANCE`-scale ranges and would just play near-silent.
     pub fn play_bird_flock(&mut self) {
         self.play_varied(BIRDS_FLOCK, 0.25, 0.03, 0.08);
     }
@@ -240,7 +349,7 @@ impl AudioEngine {
     /// Starts/stops/swaps the single looping ambience sink to match the
     /// current weather + time of day -- see `ambient_track_for`. Cheap to
     /// call every frame: it's a no-op unless the desired track actually
-    /// changed since the last call.
+    /// changed since the last call. Centered, like all ambience.
     pub fn update_ambience(&mut self, weather: Weather, time_of_day: f32) {
         let Some(handle) = &self.handle else { return };
         let desired = ambient_track_for(weather, time_of_day);
@@ -337,17 +446,30 @@ mod tests {
         assert!(AmbientTrack::Silence.bytes().is_none());
     }
 
+    fn silent_engine() -> AudioEngine {
+        AudioEngine {
+            _stream: None,
+            handle: None,
+            rng: Rng(42),
+            ambient_sink: None,
+            ambient_track: AmbientTrack::Silence,
+            listener_pos: Vec3::ZERO,
+            listener_right: Vec3::X,
+        }
+    }
+
     /// A degenerate/missing audio device (as in a headless test run) must
     /// never panic -- every public method should just silently no-op.
     #[test]
     fn every_playback_method_is_a_harmless_no_op_without_an_output_device() {
-        let mut engine = AudioEngine { _stream: None, handle: None, rng: Rng(42), ambient_sink: None, ambient_track: AmbientTrack::Silence };
+        let mut engine = silent_engine();
+        engine.update_listener(Vec3::new(1.0, 2.0, 3.0), Vec3::X);
         engine.play_player_step();
-        engine.play_creature_step();
-        engine.play_creature_attack(CreatureKind::Wolf);
+        engine.play_creature_step(Vec3::new(5.0, 0.0, 0.0));
+        engine.play_creature_attack(CreatureKind::Wolf, Vec3::new(2.0, 0.0, 0.0));
         engine.play_player_attack();
-        engine.play_creature_death();
-        engine.play_creature_ambient(CreatureKind::Cow);
+        engine.play_creature_death(Vec3::new(3.0, 0.0, 3.0));
+        engine.play_creature_ambient(CreatureKind::Cow, Vec3::new(-4.0, 0.0, 1.0));
         engine.play_lightning();
         engine.play_bird_flock();
         engine.update_ambience(Weather::Storm, 0.75);
@@ -360,5 +482,67 @@ mod tests {
             let j = rng.jitter(0.2);
             assert!((0.8..=1.2).contains(&j), "jitter {j} escaped its [0.8, 1.2] spread");
         }
+    }
+
+    #[test]
+    fn a_source_dead_ahead_within_reference_distance_pans_dead_center() {
+        let mut engine = silent_engine();
+        engine.update_listener(Vec3::ZERO, Vec3::X);
+        // Straight down the listener's forward axis (Z here, since "right"
+        // is X) -- equidistant from both ears, so panning should be exactly
+        // centered regardless of the (well within reference_distance) range.
+        let (_, left_ear, right_ear) = engine.spatial_positions(Vec3::new(0.0, 0.0, 2.0), STEP_REFERENCE_DISTANCE);
+        let left_dist = Vec3::from_array(left_ear).distance(Vec3::new(0.0, 0.0, 2.0) / STEP_REFERENCE_DISTANCE);
+        let right_dist = Vec3::from_array(right_ear).distance(Vec3::new(0.0, 0.0, 2.0) / STEP_REFERENCE_DISTANCE);
+        assert!(
+            (left_dist - right_dist).abs() < 1e-5,
+            "a dead-ahead source should be equidistant from both ears: left={left_dist} right={right_dist}"
+        );
+    }
+
+    #[test]
+    fn a_source_to_the_right_is_closer_to_the_right_ear_than_the_left() {
+        let mut engine = silent_engine();
+        engine.update_listener(Vec3::ZERO, Vec3::X);
+        let emitter = Vec3::new(4.0, 0.0, 0.0); // straight along "right"
+        let (scaled_emitter, left_ear, right_ear) = engine.spatial_positions(emitter, STEP_REFERENCE_DISTANCE);
+        let scaled_emitter = Vec3::from_array(scaled_emitter);
+        let left_dist = Vec3::from_array(left_ear).distance(scaled_emitter);
+        let right_dist = Vec3::from_array(right_ear).distance(scaled_emitter);
+        assert!(
+            right_dist < left_dist,
+            "a source to the listener's right should measure closer to the right ear: left={left_dist} right={right_dist}"
+        );
+    }
+
+    #[test]
+    fn moving_the_listener_changes_the_relative_emitter_position() {
+        let mut engine = silent_engine();
+        let emitter = Vec3::new(10.0, 0.0, 0.0);
+
+        engine.update_listener(Vec3::ZERO, Vec3::X);
+        let (near, ..) = engine.spatial_positions(emitter, ATTACK_REFERENCE_DISTANCE);
+
+        engine.update_listener(Vec3::new(9.0, 0.0, 0.0), Vec3::X);
+        let (far, ..) = engine.spatial_positions(emitter, ATTACK_REFERENCE_DISTANCE);
+
+        let near_dist = Vec3::from_array(near).length();
+        let far_dist = Vec3::from_array(far).length();
+        assert!(
+            far_dist < near_dist,
+            "moving the listener toward the emitter should shrink the relative (scaled) distance: {near_dist} -> {far_dist}"
+        );
+    }
+
+    #[test]
+    fn a_source_at_the_reference_distance_scales_to_unit_distance() {
+        let mut engine = silent_engine();
+        engine.update_listener(Vec3::ZERO, Vec3::X);
+        let (emitter, ..) = engine.spatial_positions(Vec3::new(0.0, 0.0, ATTACK_REFERENCE_DISTANCE), ATTACK_REFERENCE_DISTANCE);
+        assert!(
+            (Vec3::from_array(emitter).length() - 1.0).abs() < 1e-4,
+            "a source exactly at the reference distance should scale to length 1.0, got {:?}",
+            emitter
+        );
     }
 }
