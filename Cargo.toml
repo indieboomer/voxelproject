@@ -21,6 +21,7 @@ egui = "0.27"
 egui-winit = "0.27"
 egui-wgpu = "0.27"
 image = { version = "0.24", default-features = false, features = ["png"] }
+rodio = { version = "0.19", default-features = false, features = ["mp3"] }
 
 [profile.dev]
 opt-level = 1

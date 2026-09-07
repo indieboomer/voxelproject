@@ -1,17 +1,36 @@
-//! Minimal glTF/GLB loader for the game's creature models (see `models/`).
+//! glTF/GLB loader for the game's creature models (see `models/`).
 //!
-//! Each model was exported from Blockbench as a GLB with: no skinning (every
-//! moving part is its own node, animated by keyframing the node's own
-//! translation/rotation/scale -- a "rigid rig" rather than a skinned mesh),
-//! no images (materials are flat `baseColorFactor` colors, rendered through
-//! the same solid-white texel every other flat-shaded engine vertex uses),
-//! and LINEAR-only sampler interpolation. This loader only supports that
-//! shape -- it is not a general-purpose glTF importer.
+//! Two rig shapes are supported, chosen automatically per file based on
+//! whether it has a `skin`:
 //!
-//! Kept dependency-free (hand-parsed against the already-present
-//! `serde_json`, mirroring `creature.rs`'s own `SimpleRng` -- this project
+//! - **Rigid** (sheep, chicken): no skinning -- every moving part is its own
+//!   node, animated by keyframing that node's own translation/rotation/
+//!   scale, with flat `baseColorFactor` materials (no images).
+//! - **Skinned** (every other creature): the glTF-standard shape -- one
+//!   mesh, one skin, per-vertex `JOINTS_0`/`WEIGHTS_0` blending against an
+//!   animated joint hierarchy, with a real `baseColorTexture`. Since this
+//!   engine has no per-model texture/bind-group plumbing, that texture is
+//!   baked into per-vertex colors once at load time (sampled at each
+//!   vertex's UV) rather than sampled at draw time -- the posed mesh still
+//!   renders through the exact same flat-vertex-color pipeline (and the
+//!   same shared `entity_mesh` buffer/draw call) every other creature does.
+//!
+//! Both shapes share the same animation-channel/keyframe-sampling code
+//! (`local_trs`/`sample`) and the same clip-driven node-hierarchy walk
+//! (`compute_world_matrices`) -- a skin's joints are just nodes in that same
+//! hierarchy, so a skinned model's joint world matrices come from exactly
+//! the code path a rigid model's part world matrices always have.
+//!
+//! Only LINEAR sampler interpolation, non-negative/relative accessor
+//! indices, and (for a skinned model) a single mesh/primitive/skin/material/
+//! image are supported -- this loader targets exactly the shape these
+//! bundled files use, not general-purpose glTF import.
+//!
+//! Kept dependency-free: hand-parsed against the already-present
+//! `serde_json` (mirroring `creature.rs`'s own `SimpleRng` -- this project
 //! avoids adding a crate for something this self-contained) rather than
-//! pulling in the `gltf` crate.
+//! pulling in the `gltf` crate; texture decoding reuses the already-present
+//! `image` crate (see `voxel::atlas::ATLAS_BYTES`'s use of it).
 
 use std::collections::HashMap;
 
@@ -34,6 +53,9 @@ struct ModelNode {
     translation: Vec3,
     rotation: Quat,
     scale: Vec3,
+    /// Rigid-rig geometry attached directly to this node -- empty for every
+    /// joint node in a skinned model, and for a skinned model's own mesh
+    /// node (that mesh is reached through `AnimatedModel::skin` instead).
     mesh: Vec<Primitive>,
 }
 
@@ -56,18 +78,45 @@ struct AnimationClip {
     nodes: HashMap<usize, NodeAnim>,
 }
 
+/// One mesh skinned against a joint hierarchy -- see this module's doc
+/// comment. The joint hierarchy itself lives in the owning `AnimatedModel`'s
+/// `nodes`; this only holds the skin's own joint list/inverse-bind matrices
+/// and its one mesh.
+struct Skin {
+    /// Node index (into the owning `AnimatedModel::nodes`) for each joint
+    /// slot, in the same order as `inverse_bind`. `SkinnedMesh::joint_indices`
+    /// indexes into *this* array, not directly into `nodes`.
+    joints: Vec<usize>,
+    /// One inverse bind matrix per joint, same order as `joints`.
+    inverse_bind: Vec<Mat4>,
+    mesh: SkinnedMesh,
+}
+
+struct SkinnedMesh {
+    positions: Vec<Vec3>,
+    normals: Vec<Vec3>,
+    /// Up to 4 joint slot indices (into `Skin::joints`) per vertex, as
+    /// glTF's `JOINTS_0` attribute stores them.
+    joint_indices: Vec<[u16; 4]>,
+    /// Blend weights matching `joint_indices`, summing to ~1.0 per vertex.
+    joint_weights: Vec<[f32; 4]>,
+    /// Baked per-vertex color -- see this module's doc comment.
+    colors: Vec<[f32; 3]>,
+    indices: Vec<u32>,
+}
+
 /// One loaded creature model: a node hierarchy (translated into world space
 /// each frame by `push_model`) plus its named animation clips ("idle",
-/// "walk", ...). Not every model has every clip -- see each `.glb`'s own
-/// export (chicken/sheep: idle+walk; stone_golem/stinger: idle+walk+attack;
-/// wolf/goblin: idle+walk+run+attack; cow: idle+walk+run).
+/// "walk", ...), and -- for every model but sheep/chicken -- a `Skin`.
+/// Not every model has every clip; see each `.glb`'s own export.
 pub struct AnimatedModel {
     nodes: Vec<ModelNode>,
     roots: Vec<usize>,
     animations: HashMap<String, AnimationClip>,
+    skin: Option<Skin>,
 }
 
-/// The seven creature models, loaded once at startup and shared by every
+/// The eight creature models, loaded once at startup and shared by every
 /// spawned creature of that kind (see `App::new`).
 pub struct Models {
     sheep: AnimatedModel,
@@ -77,6 +126,7 @@ pub struct Models {
     stinger: AnimatedModel,
     cow: AnimatedModel,
     goblin: AnimatedModel,
+    sunscorch: AnimatedModel,
 }
 
 impl Models {
@@ -89,6 +139,7 @@ impl Models {
             stinger: load_glb(include_bytes!("../models/stinger.glb")),
             cow: load_glb(include_bytes!("../models/cow.glb")),
             goblin: load_glb(include_bytes!("../models/goblin.glb")),
+            sunscorch: load_glb(include_bytes!("../models/sunscorch.glb")),
         }
     }
 
@@ -101,6 +152,7 @@ impl Models {
             CreatureKind::Stinger => &self.stinger,
             CreatureKind::Cow => &self.cow,
             CreatureKind::Goblin => &self.goblin,
+            CreatureKind::Sunscorch => &self.sunscorch,
         }
     }
 }
@@ -144,7 +196,8 @@ fn buffer_view_offset_stride(json: &Value, bv_idx: usize, item_size: usize) -> (
 }
 
 /// Reads a FLOAT accessor (componentType 5126) with `components` floats per
-/// item (1 for SCALAR, 3 for VEC3, 4 for VEC4) into a flat `Vec<f32>`.
+/// item (1 for SCALAR, 2 for VEC2, 3 for VEC3, 4 for VEC4, 16 for MAT4) into
+/// a flat `Vec<f32>`.
 fn accessor_floats(json: &Value, bin: &[u8], accessor_idx: usize, components: usize) -> Vec<f32> {
     let acc = &json["accessors"][accessor_idx];
     let count = acc["count"].as_u64().unwrap() as usize;
@@ -192,6 +245,48 @@ fn accessor_indices(json: &Value, bin: &[u8], accessor_idx: usize) -> Vec<u32> {
     out
 }
 
+/// Reads a VEC4 accessor of small unsigned integers -- glTF's `JOINTS_0`
+/// attribute is always componentType UNSIGNED_BYTE or UNSIGNED_SHORT -- into
+/// `[u16; 4]`s.
+fn accessor_u16_vec4(json: &Value, bin: &[u8], accessor_idx: usize) -> Vec<[u16; 4]> {
+    let acc = &json["accessors"][accessor_idx];
+    let count = acc["count"].as_u64().unwrap() as usize;
+    let component_type = acc["componentType"].as_u64().unwrap();
+    let acc_offset = acc.get("byteOffset").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let bv_idx = acc["bufferView"].as_u64().unwrap() as usize;
+    let item_size = match component_type {
+        5121 => 4, // 4 x u8
+        5123 => 8, // 4 x u16
+        other => panic!("unsupported JOINTS_0 component type {other}"),
+    };
+    let (bv_offset, stride) = buffer_view_offset_stride(json, bv_idx, item_size);
+    let start = bv_offset + acc_offset;
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        let base = start + i * stride;
+        let mut quad = [0u16; 4];
+        for (c, slot) in quad.iter_mut().enumerate() {
+            *slot = match component_type {
+                5121 => bin[base + c] as u16,
+                5123 => u16::from_le_bytes(bin[base + c * 2..base + c * 2 + 2].try_into().unwrap()),
+                _ => unreachable!(),
+            };
+        }
+        out.push(quad);
+    }
+    out
+}
+
+/// Reads a MAT4 accessor (componentType FLOAT, as `inverseBindMatrices`
+/// always is) into `glam::Mat4`s -- glTF stores matrices column-major, same
+/// as `Mat4::from_cols_array`.
+fn accessor_mat4s(json: &Value, bin: &[u8], accessor_idx: usize) -> Vec<Mat4> {
+    accessor_floats(json, bin, accessor_idx, 16)
+        .chunks_exact(16)
+        .map(|c| Mat4::from_cols_array(c.try_into().unwrap()))
+        .collect()
+}
+
 fn read_vec3(v: Option<&Value>, default: Vec3) -> Vec3 {
     match v.and_then(Value::as_array) {
         Some(a) if a.len() == 3 => Vec3::new(
@@ -233,6 +328,46 @@ fn material_color(json: &Value, idx: Option<usize>) -> [f32; 3] {
     }
 }
 
+/// Decodes a material's `baseColorTexture`, if it has one -- every bundled
+/// skinned model's image is embedded directly in the GLB's binary chunk via
+/// a `bufferView` (no external URIs), so this never touches the filesystem.
+fn material_base_color_image(json: &Value, bin: &[u8], material_idx: Option<usize>) -> Option<image::RgbaImage> {
+    let mat = material_idx.and_then(|i| json["materials"].get(i))?;
+    let tex_idx = mat
+        .get("pbrMetallicRoughness")?
+        .get("baseColorTexture")?
+        .get("index")?
+        .as_u64()? as usize;
+    let image_idx = json["textures"].get(tex_idx)?.get("source")?.as_u64()? as usize;
+    let image_json = json["images"].get(image_idx)?;
+    let bv_idx = image_json.get("bufferView")?.as_u64()? as usize;
+    let bv = &json["bufferViews"][bv_idx];
+    let offset = bv.get("byteOffset").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let length = bv["byteLength"].as_u64().unwrap() as usize;
+    Some(
+        image::load_from_memory(&bin[offset..offset + length])
+            .expect("embedded creature texture should decode")
+            .to_rgba8(),
+    )
+}
+
+/// Samples `texture` at each of `uvs`, baking a per-vertex color -- see this
+/// module's doc comment for why creatures bake textures into vertex colors
+/// instead of sampling them at draw time. glTF's UV origin is the image's
+/// top-left corner (unlike Wavefront OBJ's bottom-left), so no vertical
+/// flip is needed here.
+fn bake_uv_colors(texture: &image::RgbaImage, uvs: &[[f32; 2]]) -> Vec<[f32; 3]> {
+    let (w, h) = texture.dimensions();
+    uvs.iter()
+        .map(|uv| {
+            let x = ((uv[0].rem_euclid(1.0)) * w as f32) as u32;
+            let y = ((uv[1].rem_euclid(1.0)) * h as f32) as u32;
+            let p = texture.get_pixel(x.min(w - 1), y.min(h - 1));
+            [p[0] as f32 / 255.0, p[1] as f32 / 255.0, p[2] as f32 / 255.0]
+        })
+        .collect()
+}
+
 fn load_glb(bytes: &[u8]) -> AnimatedModel {
     let (json, bin) = parse_glb(bytes);
     let empty = Vec::new();
@@ -250,51 +385,53 @@ fn load_glb(bytes: &[u8]) -> AnimatedModel {
             .map(|arr| arr.iter().filter_map(|v| v.as_u64()).map(|v| v as usize).collect())
             .unwrap_or_default();
 
+        // A node with a "skin" is a skinned model's one mesh-holding node --
+        // its geometry is parsed separately below (into `AnimatedModel::skin`,
+        // with proper per-vertex joint blending) rather than as a rigid part
+        // attached to this single node.
         let mut mesh = Vec::new();
-        if let Some(mesh_idx) = n.get("mesh").and_then(Value::as_u64) {
-            for prim in meshes_json[mesh_idx as usize]["primitives"]
-                .as_array()
-                .unwrap_or(&empty)
-            {
-                let attrs = &prim["attributes"];
-                let Some(pos_idx) = attrs.get("POSITION").and_then(Value::as_u64) else {
-                    continue;
-                };
-                let positions: Vec<Vec3> = accessor_floats(&json, bin, pos_idx as usize, 3)
-                    .chunks_exact(3)
-                    .map(|c| Vec3::new(c[0], c[1], c[2]))
-                    .collect();
-                let normals: Vec<Vec3> = match attrs.get("NORMAL").and_then(Value::as_u64) {
-                    Some(idx) => accessor_floats(&json, bin, idx as usize, 3)
+        if n.get("skin").is_none() {
+            if let Some(mesh_idx) = n.get("mesh").and_then(Value::as_u64) {
+                for prim in meshes_json[mesh_idx as usize]["primitives"]
+                    .as_array()
+                    .unwrap_or(&empty)
+                {
+                    let attrs = &prim["attributes"];
+                    let Some(pos_idx) = attrs.get("POSITION").and_then(Value::as_u64) else {
+                        continue;
+                    };
+                    let positions: Vec<Vec3> = accessor_floats(&json, bin, pos_idx as usize, 3)
                         .chunks_exact(3)
                         .map(|c| Vec3::new(c[0], c[1], c[2]))
-                        .collect(),
-                    None => vec![Vec3::Y; positions.len()],
-                };
-                let mut indices = match prim.get("indices").and_then(Value::as_u64) {
-                    Some(idx) => accessor_indices(&json, bin, idx as usize),
-                    None => (0..positions.len() as u32).collect(),
-                };
-                // glTF's front-face winding is counter-clockwise (the spec
-                // convention every exporter, Blockbench included, follows),
-                // but this engine's main render pipeline uses clockwise as
-                // front-face with back-face culling on (see
-                // `app.rs`'s `render_pipeline`, matching the voxel mesher's
-                // own winding). Loaded as-is, every triangle here would be
-                // culled on its visible side and show its inside instead --
-                // with these models' many closely-stacked decorative parts,
-                // that reads as flicker/z-fighting everywhere, not just
-                // "inverted". Flip each triangle once, here, to match.
-                for tri in indices.chunks_exact_mut(3) {
-                    tri.swap(1, 2);
+                        .collect();
+                    let normals: Vec<Vec3> = match attrs.get("NORMAL").and_then(Value::as_u64) {
+                        Some(idx) => accessor_floats(&json, bin, idx as usize, 3)
+                            .chunks_exact(3)
+                            .map(|c| Vec3::new(c[0], c[1], c[2]))
+                            .collect(),
+                        None => vec![Vec3::Y; positions.len()],
+                    };
+                    let mut indices = match prim.get("indices").and_then(Value::as_u64) {
+                        Some(idx) => accessor_indices(&json, bin, idx as usize),
+                        None => (0..positions.len() as u32).collect(),
+                    };
+                    // glTF's front-face winding is counter-clockwise (the spec
+                    // convention every exporter follows), but this engine's
+                    // main render pipeline uses clockwise as front-face with
+                    // back-face culling on (see `app.rs`'s `render_pipeline`,
+                    // matching the voxel mesher's own winding). Flip each
+                    // triangle once, here, to match.
+                    for tri in indices.chunks_exact_mut(3) {
+                        tri.swap(1, 2);
+                    }
+                    let material_idx = prim.get("material").and_then(Value::as_u64).map(|v| v as usize);
+                    mesh.push(Primitive {
+                        positions,
+                        normals,
+                        indices,
+                        color: material_color(&json, material_idx),
+                    });
                 }
-                let material_idx = prim.get("material").and_then(Value::as_u64).map(|v| v as usize);
-                mesh.push(Primitive {
-                    positions,
-                    normals,
-                    indices,
-                    color: material_color(&json, material_idx),
-                });
             }
         }
 
@@ -372,7 +509,71 @@ fn load_glb(bytes: &[u8]) -> AnimatedModel {
         }
     }
 
-    AnimatedModel { nodes, roots, animations }
+    // A skinned model has exactly one skin, referenced by exactly one node
+    // (its mesh-holding node) -- see this module's doc comment.
+    let skin = json["skins"].as_array().and_then(|skins| skins.first()).map(|skin_json| {
+        let joints: Vec<usize> = skin_json["joints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap() as usize)
+            .collect();
+        let inverse_bind = accessor_mat4s(&json, bin, skin_json["inverseBindMatrices"].as_u64().unwrap() as usize);
+
+        let mesh_node = nodes_json
+            .iter()
+            .find(|n| n.get("skin").and_then(Value::as_u64) == Some(0))
+            .expect("a model with a skin should have exactly one node referencing it");
+        let mesh_idx = mesh_node["mesh"].as_u64().unwrap() as usize;
+        let prim = &meshes_json[mesh_idx]["primitives"][0];
+        let attrs = &prim["attributes"];
+
+        let positions: Vec<Vec3> = accessor_floats(&json, bin, attrs["POSITION"].as_u64().unwrap() as usize, 3)
+            .chunks_exact(3)
+            .map(|c| Vec3::new(c[0], c[1], c[2]))
+            .collect();
+        let normals: Vec<Vec3> = accessor_floats(&json, bin, attrs["NORMAL"].as_u64().unwrap() as usize, 3)
+            .chunks_exact(3)
+            .map(|c| Vec3::new(c[0], c[1], c[2]))
+            .collect();
+        let uvs: Vec<[f32; 2]> = accessor_floats(&json, bin, attrs["TEXCOORD_0"].as_u64().unwrap() as usize, 2)
+            .chunks_exact(2)
+            .map(|c| [c[0], c[1]])
+            .collect();
+        let joint_indices = accessor_u16_vec4(&json, bin, attrs["JOINTS_0"].as_u64().unwrap() as usize);
+        let joint_weights: Vec<[f32; 4]> = accessor_floats(&json, bin, attrs["WEIGHTS_0"].as_u64().unwrap() as usize, 4)
+            .chunks_exact(4)
+            .map(|c| [c[0], c[1], c[2], c[3]])
+            .collect();
+
+        let mut mesh_indices = accessor_indices(&json, bin, prim["indices"].as_u64().unwrap() as usize);
+        // Same CCW (glTF-standard) -> CW (this engine) winding flip as the
+        // rigid path above.
+        for tri in mesh_indices.chunks_exact_mut(3) {
+            tri.swap(1, 2);
+        }
+
+        let material_idx = prim.get("material").and_then(Value::as_u64).map(|v| v as usize);
+        let colors = match material_base_color_image(&json, bin, material_idx) {
+            Some(texture) => bake_uv_colors(&texture, &uvs),
+            None => vec![[1.0, 1.0, 1.0]; positions.len()],
+        };
+
+        Skin {
+            joints,
+            inverse_bind,
+            mesh: SkinnedMesh {
+                positions,
+                normals,
+                joint_indices,
+                joint_weights,
+                colors,
+                indices: mesh_indices,
+            },
+        }
+    });
+
+    AnimatedModel { nodes, roots, animations, skin }
 }
 
 // ---------------------------------------------------------------------------
@@ -422,12 +623,14 @@ fn local_trs(node: &ModelNode, clip: Option<&AnimationClip>, node_idx: usize, t:
 }
 
 /// Small per-node outward-normal nudge, scaled by the node's own index in
-/// the model's flat node array. These rigs have two sources of essentially
-/// zero-gap coincident geometry: thin decorative parts layered flush
-/// against a sibling's surface (moss patches, eye glints, cracks, combs,
-/// ...), and joints deliberately overlapping their neighbor by design (a
-/// forearm modeled to overlap the upper arm slightly, so no gap opens up
-/// mid-rotation) -- both leave the depth test with a near-exact tie. Which
+/// the model's flat node array -- only relevant to a *rigid* model
+/// (sheep/chicken; a skinned model is one continuous mesh with nothing to
+/// nudge apart). Those rigs have two sources of essentially zero-gap
+/// coincident geometry: thin decorative parts layered flush against a
+/// sibling's surface (moss patches, eye glints, cracks, combs, ...), and
+/// joints deliberately overlapping their neighbor by design (a forearm
+/// modeled to overlap the upper arm slightly, so no gap opens up mid-
+/// rotation) -- both leave the depth test with a near-exact tie. Which
 /// surface wins such a tie isn't stable frame to frame (tiny floating-point
 /// differences from animation or camera movement flip it), which reads as
 /// flicker on every such part. Nudging every vertex a hair outward along
@@ -453,57 +656,130 @@ fn anti_zfight_nudge_amount(node_idx: usize) -> f32 {
     node_idx as f32 * ANTI_ZFIGHT_NUDGE
 }
 
+/// Computes every node's current world matrix (parent-relative TRS
+/// composed all the way from the model's roots down), sampling `clip` at
+/// `t` for any node it animates and falling back to that node's bind pose
+/// otherwise. Shared by rigid-part emission (a part's own world matrix)
+/// and skinned-mesh emission (a joint's world matrix is exactly the same
+/// kind of node world matrix -- a skin's joints are just nodes in this same
+/// hierarchy).
+fn compute_world_matrices(model: &AnimatedModel, clip: Option<&AnimationClip>, t: f32) -> Vec<Mat4> {
+    fn visit(model: &AnimatedModel, clip: Option<&AnimationClip>, t: f32, node_idx: usize, parent_world: Mat4, out: &mut [Mat4]) {
+        let node = &model.nodes[node_idx];
+        let (translation, rotation, scale) = local_trs(node, clip, node_idx, t);
+        let world = parent_world * Mat4::from_scale_rotation_translation(scale, rotation, translation);
+        out[node_idx] = world;
+        for &child in &node.children {
+            visit(model, clip, t, child, world, out);
+        }
+    }
+    let mut out = vec![Mat4::IDENTITY; model.nodes.len()];
+    for &root in &model.roots {
+        visit(model, clip, t, root, Mat4::IDENTITY, &mut out);
+    }
+    out
+}
+
 #[allow(clippy::too_many_arguments)]
-fn visit(
+fn emit_rigid_parts(
     model: &AnimatedModel,
-    clip: Option<&AnimationClip>,
-    t: f32,
-    node_idx: usize,
-    parent_world: Mat4,
+    world_matrices: &[Mat4],
     vertices: &mut Vec<Vertex>,
     indices: &mut Vec<u32>,
     origin: Vec3,
     yaw_rotate: &dyn Fn(f32, f32) -> (f32, f32),
     uv: [f32; 4],
 ) {
-    let node = &model.nodes[node_idx];
-    let (translation, rotation, scale) = local_trs(node, clip, node_idx, t);
-    let local = Mat4::from_scale_rotation_translation(scale, rotation, translation);
-    let world = parent_world * local;
-    // Non-uniform per-part scale shows up in a couple of these rigs (e.g.
-    // squash/stretch-y bits), so normals need the proper inverse-transpose
-    // rather than just the rotation part.
-    let normal_mat = Mat3::from_mat4(world).inverse().transpose();
-    let nudge_amount = anti_zfight_nudge_amount(node_idx);
-
-    for prim in &node.mesh {
-        let base_index = vertices.len() as u32;
-        for (i, &local_pos) in prim.positions.iter().enumerate() {
-            let local_normal = prim.normals.get(i).copied().unwrap_or(Vec3::Y);
-            let world_normal = (normal_mat * local_normal).normalize_or_zero();
-            let world_pos = world.transform_point3(local_pos) + world_normal * nudge_amount;
-            let (wx, wz) = yaw_rotate(world_pos.x, world_pos.z);
-            let (nx, nz) = yaw_rotate(world_normal.x, world_normal.z);
-            vertices.push(Vertex {
-                position: [origin.x + wx, origin.y + world_pos.y, origin.z + wz],
-                color: prim.color,
-                normal: [nx, world_normal.y, nz],
-                uv: [uv[0], uv[1]],
-                ao: 1.0,
-                reflectivity: 0.0,
-                emission: 0.0,
-                wind: 0.0,
-            });
+    for (node_idx, node) in model.nodes.iter().enumerate() {
+        if node.mesh.is_empty() {
+            continue;
         }
-        for &idx in &prim.indices {
-            indices.push(base_index + idx);
+        let world = world_matrices[node_idx];
+        // Non-uniform per-part scale shows up in a couple of these rigs
+        // (e.g. squash/stretch-y bits), so normals need the proper
+        // inverse-transpose rather than just the rotation part.
+        let normal_mat = Mat3::from_mat4(world).inverse().transpose();
+        let nudge_amount = anti_zfight_nudge_amount(node_idx);
+
+        for prim in &node.mesh {
+            let base_index = vertices.len() as u32;
+            for (i, &local_pos) in prim.positions.iter().enumerate() {
+                let local_normal = prim.normals.get(i).copied().unwrap_or(Vec3::Y);
+                let world_normal = (normal_mat * local_normal).normalize_or_zero();
+                let world_pos = world.transform_point3(local_pos) + world_normal * nudge_amount;
+                let (wx, wz) = yaw_rotate(world_pos.x, world_pos.z);
+                let (nx, nz) = yaw_rotate(world_normal.x, world_normal.z);
+                vertices.push(Vertex {
+                    position: [origin.x + wx, origin.y + world_pos.y, origin.z + wz],
+                    color: prim.color,
+                    normal: [nx, world_normal.y, nz],
+                    uv: [uv[0], uv[1]],
+                    ao: 1.0,
+                    reflectivity: 0.0,
+                    emission: 0.0,
+                    wind: 0.0,
+                });
+            }
+            for &idx in &prim.indices {
+                indices.push(base_index + idx);
+            }
         }
     }
+}
 
-    for &child in &node.children {
-        visit(
-            model, clip, t, child, world, vertices, indices, origin, yaw_rotate, uv,
-        );
+#[allow(clippy::too_many_arguments)]
+fn emit_skinned_mesh(
+    skin: &Skin,
+    world_matrices: &[Mat4],
+    vertices: &mut Vec<Vertex>,
+    indices: &mut Vec<u32>,
+    origin: Vec3,
+    yaw_rotate: &dyn Fn(f32, f32) -> (f32, f32),
+    uv: [f32; 4],
+) {
+    // Per glTF's skinning formula, simplified for the case (true for every
+    // bundled skinned model) where the mesh-holding node itself has an
+    // identity transform: a joint's contribution to a vertex is its own
+    // animated world matrix composed with its inverse bind matrix, computed
+    // once per joint per frame rather than per vertex.
+    let skin_matrices: Vec<Mat4> = skin
+        .joints
+        .iter()
+        .zip(&skin.inverse_bind)
+        .map(|(&joint_node, inverse_bind)| world_matrices[joint_node] * *inverse_bind)
+        .collect();
+
+    let mesh = &skin.mesh;
+    let base_index = vertices.len() as u32;
+    for i in 0..mesh.positions.len() {
+        let ji = mesh.joint_indices[i];
+        let w = mesh.joint_weights[i];
+        // These rigs only ever use a single dominant joint per vertex in
+        // practice (weight [1,0,0,0]), but the general 4-way weighted blend
+        // costs nothing extra and is what glTF's JOINTS_0/WEIGHTS_0 actually
+        // promise to support.
+        let blended = skin_matrices[ji[0] as usize] * w[0]
+            + skin_matrices[ji[1] as usize] * w[1]
+            + skin_matrices[ji[2] as usize] * w[2]
+            + skin_matrices[ji[3] as usize] * w[3];
+        let normal_mat = Mat3::from_mat4(blended).inverse().transpose();
+        let world_pos = blended.transform_point3(mesh.positions[i]);
+        let world_normal = (normal_mat * mesh.normals[i]).normalize_or_zero();
+        let (wx, wz) = yaw_rotate(world_pos.x, world_pos.z);
+        let (nx, nz) = yaw_rotate(world_normal.x, world_normal.z);
+        vertices.push(Vertex {
+            position: [origin.x + wx, origin.y + world_pos.y, origin.z + wz],
+            color: mesh.colors[i],
+            normal: [nx, world_normal.y, nz],
+            uv: [uv[0], uv[1]],
+            ao: 1.0,
+            reflectivity: 0.0,
+            emission: 0.0,
+            wind: 0.0,
+        });
+    }
+    for &idx in &mesh.indices {
+        indices.push(base_index + idx);
     }
 }
 
@@ -533,24 +809,16 @@ pub fn push_model(
     // Local +Z is "forward"; `facing` rotates it around Y the same way
     // `Camera::forward` does (0 faces +X, increasing turns toward +Z) --
     // matches every model's own rig, which was confirmed to face +Z (nose/
-    // beak/muzzle at positive local Z, tail at negative Z) in each `.glb`.
+    // beak/muzzle/head at positive local Z, tail at negative Z) in each
+    // `.glb`.
     let (s, c) = facing.sin_cos();
     let yaw_rotate = move |x: f32, z: f32| (x * s + z * c, -x * c + z * s);
     let uv = white_uv();
 
-    for &root in &model.roots {
-        visit(
-            model,
-            clip,
-            t,
-            root,
-            Mat4::IDENTITY,
-            vertices,
-            indices,
-            origin,
-            &yaw_rotate,
-            uv,
-        );
+    let world_matrices = compute_world_matrices(model, clip, t);
+    emit_rigid_parts(model, &world_matrices, vertices, indices, origin, &yaw_rotate, uv);
+    if let Some(skin) = &model.skin {
+        emit_skinned_mesh(skin, &world_matrices, vertices, indices, origin, &yaw_rotate, uv);
     }
 }
 
@@ -564,7 +832,7 @@ mod tests {
             .unwrap()
             .to_rgba8();
         let models = Models::load();
-        for kind in 0..=6 {
+        for kind in 0..=7 {
             let model = models.for_kind(CreatureKind::from_u8(kind));
             for clip in model.animations.keys() {
                 let mut vertices = Vec::new();
@@ -605,14 +873,13 @@ mod tests {
     /// The main render pipeline uses `front_face: Cw` with back-face
     /// culling (`app.rs`'s `render_pipeline`), the opposite of glTF's own
     /// CCW convention -- loading indices unflipped culled the visible side
-    /// of every triangle and showed the inside instead, which with these
-    /// models' many closely-stacked decorative parts read as flicker on
-    /// every part of every creature. For a triangle wound correctly for
-    /// this engine (CW front-face), the standard right-hand-rule face
-    /// normal of its first two edges points *into* the surface, i.e.
-    /// opposite its vertex normals -- this pins that down against the real
-    /// files so a regression (e.g. someone "fixing" the winding back to
-    /// glTF's native order) fails loudly instead of only visually.
+    /// of every triangle and showed the inside instead. For a triangle
+    /// wound correctly for this engine (CW front-face), the standard
+    /// right-hand-rule face normal of its first two edges points *into*
+    /// the surface, i.e. opposite its vertex normals -- this pins that down
+    /// against the real files (both the rigid sheep/chicken and every
+    /// skinned model's own mesh) so a regression fails loudly instead of
+    /// only visually.
     #[test]
     fn triangle_winding_matches_the_engines_clockwise_front_face_convention() {
         let models = Models::load();
@@ -624,24 +891,32 @@ mod tests {
             ("stinger", &models.stinger),
             ("cow", &models.cow),
             ("goblin", &models.goblin),
+            ("sunscorch", &models.sunscorch),
         ] {
             let mut checked = 0;
             let mut wrong = 0;
+            let mut check_triangle = |i0: usize, i1: usize, i2: usize, positions: &[Vec3], normals: &[Vec3]| {
+                let (v0, v1, v2) = (positions[i0], positions[i1], positions[i2]);
+                let face_normal = (v1 - v0).cross(v2 - v0);
+                if face_normal.length_squared() < 1e-10 {
+                    return; // degenerate/near-zero-area triangle
+                }
+                let vertex_normal = (normals[i0] + normals[i1] + normals[i2]) / 3.0;
+                checked += 1;
+                if face_normal.dot(vertex_normal) > 0.0 {
+                    wrong += 1;
+                }
+            };
             for node in &model.nodes {
                 for prim in &node.mesh {
                     for tri in prim.indices.chunks_exact(3) {
-                        let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
-                        let (v0, v1, v2) = (prim.positions[i0], prim.positions[i1], prim.positions[i2]);
-                        let face_normal = (v1 - v0).cross(v2 - v0);
-                        if face_normal.length_squared() < 1e-10 {
-                            continue; // degenerate/near-zero-area triangle
-                        }
-                        let vertex_normal = (prim.normals[i0] + prim.normals[i1] + prim.normals[i2]) / 3.0;
-                        checked += 1;
-                        if face_normal.dot(vertex_normal) > 0.0 {
-                            wrong += 1;
-                        }
+                        check_triangle(tri[0] as usize, tri[1] as usize, tri[2] as usize, &prim.positions, &prim.normals);
                     }
+                }
+            }
+            if let Some(skin) = &model.skin {
+                for tri in skin.mesh.indices.chunks_exact(3) {
+                    check_triangle(tri[0] as usize, tri[1] as usize, tri[2] as usize, &skin.mesh.positions, &skin.mesh.normals);
                 }
             }
             assert!(checked > 0, "expected {name} to have triangles to check");
@@ -653,7 +928,6 @@ mod tests {
     }
 
     /// Every model is imported at full fidelity -- no decorative geometry
-    /// (wool locks, feathers, hackles, spines, moss/cracks/hoof splits, ...)
     /// is filtered out. This pins the sheep's posed triangle count to its
     /// full raw file total (1904 -- see `models/sheep.glb`), so a future
     /// reintroduction of any such filtering fails loudly here instead of
@@ -682,20 +956,21 @@ mod tests {
 
     /// Every real `.glb` under `models/` should parse without panicking and
     /// yield a non-trivial mesh for each clip the model is documented to
-    /// have (see each kind's animation list in `model.rs`'s module doc) --
-    /// this is the loader's own hand-parsed byte offsets/strides being
-    /// exercised against the actual shipped files, not synthetic data.
+    /// have -- this is the loader's own hand-parsed byte offsets/strides
+    /// being exercised against the actual shipped files, not synthetic
+    /// data, for both the rigid and skinned code paths.
     #[test]
     fn every_bundled_model_loads_and_poses_its_documented_clips() {
         let models = Models::load();
         let cases: &[(&AnimatedModel, &[&str])] = &[
             (&models.sheep, &["idle", "walk"]),
             (&models.chicken, &["idle", "walk"]),
-            (&models.stone_golem, &["idle", "walk", "attack"]),
-            (&models.wolf, &["idle", "walk", "run", "attack"]),
-            (&models.stinger, &["idle", "walk", "attack"]),
-            (&models.cow, &["idle", "walk", "run"]),
-            (&models.goblin, &["idle", "walk", "run", "attack"]),
+            (&models.stone_golem, &["idle", "walk", "attack", "die"]),
+            (&models.wolf, &["idle", "walk", "run", "attack", "die"]),
+            (&models.stinger, &["idle", "walk", "run", "attack", "die"]),
+            (&models.cow, &["idle", "walk", "die"]),
+            (&models.goblin, &["idle", "walk", "run", "attack", "die"]),
+            (&models.sunscorch, &["idle", "walk", "attack", "die"]),
         ];
         for (model, clips) in cases {
             assert!(
@@ -744,39 +1019,27 @@ mod tests {
 
     /// Proves the animation sampler is actually being evaluated over time --
     /// not just always returning the bind pose -- by checking the walk
-    /// clip's pose differs between two points in time.
+    /// clip's pose differs between two points in time. Checked for both a
+    /// rigid model (sheep) and a skinned one (wolf), since skinning has its
+    /// own separate pose-computation path (`emit_skinned_mesh`).
     #[test]
     fn a_walk_clip_pose_actually_changes_over_time() {
         let models = Models::load();
-        let mut early = Vec::new();
-        let mut early_i = Vec::new();
-        push_model(
-            &mut early,
-            &mut early_i,
-            &models.wolf,
-            "walk",
-            0.0,
-            Vec3::ZERO,
-            0.0,
-        );
-        let mut later = Vec::new();
-        let mut later_i = Vec::new();
-        push_model(
-            &mut later,
-            &mut later_i,
-            &models.wolf,
-            "walk",
-            0.35,
-            Vec3::ZERO,
-            0.0,
-        );
+        for model in [&models.sheep, &models.wolf] {
+            let mut early = Vec::new();
+            let mut early_i = Vec::new();
+            push_model(&mut early, &mut early_i, model, "walk", 0.0, Vec3::ZERO, 0.0);
+            let mut later = Vec::new();
+            let mut later_i = Vec::new();
+            push_model(&mut later, &mut later_i, model, "walk", 0.35, Vec3::ZERO, 0.0);
 
-        assert_eq!(early.len(), later.len(), "same clip should yield the same vertex count");
-        let moved = early
-            .iter()
-            .zip(later.iter())
-            .any(|(a, b)| Vec3::from_array(a.position).distance(Vec3::from_array(b.position)) > 1e-4);
-        assert!(moved, "expected at least one vertex to move between two different times in the walk cycle");
+            assert_eq!(early.len(), later.len(), "same clip should yield the same vertex count");
+            let moved = early
+                .iter()
+                .zip(later.iter())
+                .any(|(a, b)| Vec3::from_array(a.position).distance(Vec3::from_array(b.position)) > 1e-4);
+            assert!(moved, "expected at least one vertex to move between two different times in the walk cycle");
+        }
     }
 
     /// End-to-end sanity check of the whole node-hierarchy + facing-rotation
@@ -784,7 +1047,7 @@ mod tests {
     /// wide, so at facing 0 (forward = world +X, see `push_model`'s doc
     /// comment) its bounding box should be wider along X than along Z, and
     /// after a 90-degree turn that relationship should flip. A sign error
-    /// in the yaw rotation or a broken node transform would fail this.
+    /// in the yaw rotation or a broken skinning matrix would fail this.
     #[test]
     fn facing_rotates_the_whole_posed_model_not_just_its_root() {
         let models = Models::load();
@@ -860,31 +1123,41 @@ mod tests {
     /// triangles whose 3 vertex positions (rounded to 0.1mm) exactly
     /// coincide -- true duplicate geometry, which should never happen --
     /// and (b) any pair of *different* triangles whose centroids land
-    /// within 1mm of each other with nearly-parallel face normals -- close
-    /// enough that `ANTI_ZFIGHT_NUDGE` should have already pushed them
-    /// apart. A model can legitimately have two *distinct* decorative parts
-    /// a few millimeters apart by design (several are, e.g. a cluster of
-    /// moss patches) -- that's not what this checks for; the 1mm bar is
-    /// well under any such intentional gap found in these files.
+    /// within 1mm of each other with nearly-parallel face normals. A model
+    /// can legitimately have two *distinct* decorative parts a few
+    /// millimeters apart by design -- that's not what this checks for; the
+    /// 1mm bar is well under any such intentional gap found in these files.
     #[test]
-    fn posed_output_has_no_duplicate_or_truly_coincident_triangles() {
+    fn posed_output_has_no_unexpected_duplicate_or_coincident_triangles() {
         use std::collections::HashMap;
 
         let models = Models::load();
-        let cases: &[(&str, &AnimatedModel, &str, f32)] = &[
-            ("sheep", &models.sheep, "idle", 0.0),
-            ("sheep", &models.sheep, "walk", 0.3),
-            ("wolf", &models.wolf, "idle", 0.0),
-            ("wolf", &models.wolf, "walk", 0.3),
-            ("wolf", &models.wolf, "run", 0.3),
-            ("stone_golem", &models.stone_golem, "idle", 0.0),
-            ("stinger", &models.stinger, "idle", 0.0),
-            ("cow", &models.cow, "idle", 0.0),
-            ("goblin", &models.goblin, "idle", 0.0),
-            ("chicken", &models.chicken, "idle", 0.0),
+        // (name, model, clip, time, exact duplicate triangles expected,
+        // additional near-but-not-identical sub-mm pairs expected). Every
+        // case is (0, 0) except sunscorch, which has 64 *genuinely*
+        // duplicate triangles plus 12 more near-coincident ones baked into
+        // its own raw source mesh (its 64 exact dupes were independently
+        // verified offline against the bind-pose local-space geometry
+        // directly, so this isn't a loader bug -- likely a duplicated
+        // glow/aura shell, common for a ghost-type creature) -- reimporting
+        // without simplifying geometry means keeping it, not silently
+        // dropping it, so this pins the known counts down instead of
+        // asserting a blanket zero.
+        let cases: &[(&str, &AnimatedModel, &str, f32, usize, usize)] = &[
+            ("sheep", &models.sheep, "idle", 0.0, 0, 0),
+            ("sheep", &models.sheep, "walk", 0.3, 0, 0),
+            ("chicken", &models.chicken, "idle", 0.0, 0, 0),
+            ("wolf", &models.wolf, "idle", 0.0, 0, 0),
+            ("wolf", &models.wolf, "walk", 0.3, 0, 0),
+            ("wolf", &models.wolf, "run", 0.3, 0, 0),
+            ("stone_golem", &models.stone_golem, "idle", 0.0, 0, 0),
+            ("stinger", &models.stinger, "idle", 0.0, 0, 0),
+            ("cow", &models.cow, "idle", 0.0, 0, 0),
+            ("goblin", &models.goblin, "idle", 0.0, 0, 0),
+            ("sunscorch", &models.sunscorch, "idle", 0.0, 64, 12),
         ];
 
-        for (name, model, clip, time) in cases {
+        for (name, model, clip, time, expected_exact_dupes, expected_sub_mm_pairs) in cases {
             let mut vertices = Vec::new();
             let mut indices = Vec::new();
             push_model(&mut vertices, &mut indices, model, clip, *time, Vec3::ZERO, 0.0);
@@ -905,13 +1178,31 @@ mod tests {
             }
             let exact_dupes: usize = seen.values().filter(|&&c| c > 1).map(|&c| c - 1).sum();
             assert_eq!(
-                exact_dupes, 0,
-                "[{name}/{clip}] found {exact_dupes} exactly-duplicate triangles in the posed output"
+                exact_dupes, *expected_exact_dupes,
+                "[{name}/{clip}] found {exact_dupes} exactly-duplicate triangles in the posed output, expected {expected_exact_dupes}"
             );
 
-            let mut centroids = Vec::with_capacity(indices.len() / 3);
-            let mut normals = Vec::with_capacity(indices.len() / 3);
+            // One representative triangle per exact-duplicate group (not
+            // every copy) -- known, expected duplicates like sunscorch's
+            // shouldn't also trip the *separate* near-but-not-identical
+            // z-fight check below.
+            let mut centroids = Vec::with_capacity(seen.len());
+            let mut normals = Vec::with_capacity(seen.len());
+            let mut representative = std::collections::HashSet::new();
             for tri in indices.chunks_exact(3) {
+                let mut key = [[0i32; 3]; 3];
+                for (k, &vi) in tri.iter().enumerate() {
+                    let p = vertices[vi as usize].position;
+                    key[k] = [
+                        (p[0] * 10000.0).round() as i32,
+                        (p[1] * 10000.0).round() as i32,
+                        (p[2] * 10000.0).round() as i32,
+                    ];
+                }
+                key.sort();
+                if !representative.insert(key) {
+                    continue;
+                }
                 let p0 = Vec3::from_array(vertices[tri[0] as usize].position);
                 let p1 = Vec3::from_array(vertices[tri[1] as usize].position);
                 let p2 = Vec3::from_array(vertices[tri[2] as usize].position);
@@ -927,26 +1218,21 @@ mod tests {
                 }
             }
             assert_eq!(
-                sub_mm_pairs, 0,
-                "[{name}/{clip}] found {sub_mm_pairs} sub-millimeter near-parallel triangle pairs -- \
-                 ANTI_ZFIGHT_NUDGE should have separated these"
+                sub_mm_pairs, *expected_sub_mm_pairs,
+                "[{name}/{clip}] found {sub_mm_pairs} sub-millimeter near-parallel triangle pairs, expected {expected_sub_mm_pairs}"
             );
         }
     }
 
-    /// The reported "z-buffer fight" flicker's actual cause was frame-to-
-    /// frame instability: whichever of two near/exactly-coincident surfaces
-    /// (several of these rigs layer decorative parts flush against a
-    /// sibling's surface -- moss patches, eye glints, cracks, ...) wins the
-    /// depth test isn't stable unless a static pose produces the exact same
-    /// vertex positions every single call. This pins `push_model` down as a
-    /// pure function of its inputs -- byte-identical output for identical
-    /// arguments, not just "visually the same" -- which the `ANTI_ZFIGHT_NUDGE`
-    /// tie-break in `visit` depends on to actually fix anything.
+    /// `push_model` must be a pure function of its inputs -- byte-identical
+    /// output for identical arguments, not just "visually the same" --
+    /// which the `ANTI_ZFIGHT_NUDGE` tie-break (for rigid models) and
+    /// per-frame re-skinning (for skinned models) both depend on to render
+    /// stably rather than flickering.
     #[test]
     fn posed_mesh_is_bit_for_bit_deterministic_across_repeated_calls() {
         let models = Models::load();
-        for model in [&models.sheep, &models.wolf, &models.stone_golem, &models.goblin] {
+        for model in [&models.sheep, &models.wolf, &models.stone_golem, &models.goblin, &models.sunscorch] {
             let mut a_vertices = Vec::new();
             let mut a_indices = Vec::new();
             push_model(
@@ -982,12 +1268,7 @@ mod tests {
     /// `anti_zfight_nudge_amount` is the whole mechanism behind the tie-
     /// break: zero for the root (so nothing shifts for no reason), strictly
     /// increasing with node index (so no two distinct nodes ever tie), and
-    /// small enough at realistic node counts (rigs here top out around 100
-    /// nodes) to be visually imperceptible -- a regression that zeroed it
-    /// out, made it non-monotonic, or let it grow large would either bring
-    /// the flicker back or visibly separate geometry that should look
-    /// seamless (a larger version of this nudge did exactly that -- see
-    /// `ANTI_ZFIGHT_NUDGE`'s doc comment).
+    /// small enough at realistic node counts to be visually imperceptible.
     #[test]
     fn anti_zfight_nudge_amount_is_zero_at_root_and_grows_small_and_monotonically() {
         assert_eq!(anti_zfight_nudge_amount(0), 0.0);
@@ -1004,5 +1285,43 @@ mod tests {
             anti_zfight_nudge_amount(150) < 0.05,
             "expected even a very deep node's nudge to stay visually imperceptible"
         );
+    }
+
+    /// A skinned model's real `baseColorTexture` should be baked into real,
+    /// varied per-vertex colors -- not a single uniform value a broken
+    /// sampler (e.g. one that silently fell back to white on every lookup)
+    /// would produce. The bar is deliberately low (>5, not some larger
+    /// number): these are small, deliberately palette-limited hand-painted
+    /// textures (stone_golem's whole 256x256 texture has only 63 distinct
+    /// colors in it), so "many" distinct baked colors isn't the right
+    /// signal -- "more than a small handful" is enough to rule out a flat
+    /// fallback while still passing for a genuinely limited palette.
+    #[test]
+    fn skinned_models_bake_real_per_vertex_texture_colors_not_a_flat_fallback() {
+        let models = Models::load();
+        for (name, model) in [
+            ("stone_golem", &models.stone_golem),
+            ("wolf", &models.wolf),
+            ("sunscorch", &models.sunscorch),
+        ] {
+            let mut vertices = Vec::new();
+            let mut indices = Vec::new();
+            push_model(&mut vertices, &mut indices, model, "idle", 0.0, Vec3::ZERO, 0.0);
+            assert!(!vertices.is_empty(), "expected {name} to produce a non-empty mesh");
+
+            let mut distinct = std::collections::HashSet::new();
+            for v in &vertices {
+                distinct.insert(v.color.map(|c| (c * 255.0).round() as i32));
+            }
+            assert!(
+                distinct.len() > 5,
+                "{name}: expected several distinct baked vertex colors from a real texture sample, got only {}",
+                distinct.len()
+            );
+            assert!(
+                !vertices.iter().all(|v| v.color == [1.0, 1.0, 1.0]),
+                "{name}: every vertex baked to pure white -- texture sampling likely fell back silently"
+            );
+        }
     }
 }

@@ -45,6 +45,11 @@ pub const OXYGEN_REGEN_PER_SEC: f32 = MAX_OXYGEN / 8.0;
 /// player time to notice and swim up rather than punishing a moment of
 /// carelessness, but a real, escalating cost for staying under with no air.
 pub const DROWNING_DAMAGE_PER_SEC: f32 = 1.0 / 10.0;
+/// Horizontal ground distance between footstep sounds, in blocks -- see
+/// `Player::step_distance`/`take_steps`. Roughly a stride length; not tied
+/// to any particular speed, so sprinting naturally produces steps more
+/// often in real time than walking does, the same way real footsteps work.
+const STEP_LENGTH: f32 = 1.5;
 
 pub struct Player {
     /// Feet position (bottom-center of the collision box).
@@ -79,6 +84,10 @@ pub struct Player {
     /// `is_in_water`). Read-only from Lua (`api.players()[i].oxygen`);
     /// nothing sets it directly except submersion itself.
     pub oxygen: f32,
+    /// Horizontal ground distance walked/sprinted since the last footstep
+    /// sound, in blocks -- only accumulates while `on_ground` (airborne
+    /// movement produces no footsteps). Consumed via `take_steps`.
+    step_distance: f32,
 }
 
 impl Player {
@@ -95,7 +104,21 @@ impl Player {
             speed_multiplier: 1.0,
             jump_multiplier: 1.0,
             oxygen: MAX_OXYGEN,
+            step_distance: 0.0,
         }
+    }
+
+    /// Consumes accumulated walking distance in `STEP_LENGTH`-sized
+    /// increments, returning how many footstep sounds should play this
+    /// frame -- almost always 0 or 1, but more if a single frame's `dt`
+    /// (e.g. after a hitch) covers more than one step's worth of ground.
+    pub fn take_steps(&mut self) -> u32 {
+        let mut steps = 0;
+        while self.step_distance >= STEP_LENGTH {
+            self.step_distance -= STEP_LENGTH;
+            steps += 1;
+        }
+        steps
     }
 
     /// Clamped, symmetric with `heal` (a negative amount here is
@@ -225,7 +248,13 @@ impl Player {
         self.velocity.y = self.velocity.y.max(-50.0);
 
         let delta = self.velocity * dt;
+        let before = self.position;
         self.move_and_collide(world, delta);
+
+        if self.on_ground {
+            let moved = Vec3::new(self.position.x - before.x, 0.0, self.position.z - before.z);
+            self.step_distance += moved.length();
+        }
     }
 
     fn move_and_collide(&mut self, world: &World, delta: Vec3) {
@@ -291,6 +320,7 @@ impl Player {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use winit::event::ElementState;
 
     #[test]
     fn a_new_player_starts_at_full_health_unpoisoned_with_default_multipliers() {
@@ -435,5 +465,69 @@ mod tests {
         assert_eq!(player.resource_count(BlockType::OakWood), 2);
         assert_eq!(player.resource_count(BlockType::Sand), 1);
         assert_eq!(player.resource_count(BlockType::Soil), 0);
+    }
+
+    /// `World::new` doesn't eagerly generate chunk voxel data (only the
+    /// pure heightmap `terrain_height` reads from) -- `Player::collides`
+    /// needs actual loaded blocks via `is_solid`, so tests that expect the
+    /// player to land and stay `on_ground` must force-load the chunks
+    /// they'll walk through first.
+    fn world_with_loaded_ground(seed: u32) -> World {
+        let mut world = World::new(seed);
+        for cx in -1..=1 {
+            for cz in -1..=1 {
+                world.ensure_chunk_loaded(cx, cz);
+            }
+        }
+        world
+    }
+
+    #[test]
+    fn walking_forward_on_the_ground_eventually_queues_a_footstep() {
+        let world = world_with_loaded_ground(1);
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let mut player = Player::new(Vec3::new(0.0, spawn_y, 0.0));
+        let mut input = Input::new();
+        input.key_event(KeyCode::KeyW, ElementState::Pressed);
+
+        let mut total_steps = 0;
+        // 3 seconds at up to 4.5 blocks/sec keeps the player within the
+        // one-chunk-radius loaded above (CHUNK_X/Z == 16).
+        for _ in 0..180 {
+            player.update(&world, &input, Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0 / 60.0);
+            total_steps += player.take_steps();
+        }
+        assert!(total_steps > 0, "expected walking forward for 3s to queue at least one footstep");
+    }
+
+    #[test]
+    fn standing_still_never_queues_a_footstep() {
+        let world = world_with_loaded_ground(1);
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let mut player = Player::new(Vec3::new(0.0, spawn_y, 0.0));
+        let input = Input::new();
+
+        for _ in 0..120 {
+            player.update(&world, &input, Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0 / 60.0);
+            assert_eq!(player.take_steps(), 0, "standing still should never queue a footstep");
+        }
+        assert!(player.on_ground, "sanity check: the player should have actually landed");
+    }
+
+    #[test]
+    fn take_steps_drains_so_the_same_step_is_never_reported_twice() {
+        let world = world_with_loaded_ground(1);
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let mut player = Player::new(Vec3::new(0.0, spawn_y, 0.0));
+        let mut input = Input::new();
+        input.key_event(KeyCode::KeyW, ElementState::Pressed);
+
+        for _ in 0..180 {
+            player.update(&world, &input, Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0 / 60.0);
+        }
+        let first = player.take_steps();
+        assert!(first > 0, "expected accumulated distance to produce at least one step");
+        let second = player.take_steps();
+        assert_eq!(second, 0, "a drained step must not reappear on the next take_steps call");
     }
 }

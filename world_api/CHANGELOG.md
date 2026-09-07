@@ -12,6 +12,29 @@ Then update this file by hand with what actually changed and why -- the docs
 regenerate automatically, but "what changed and why" is not mechanically
 derivable from a diff of the schema alone.
 
+## 1.13.0 -- 2026-09-07 (sunscorch creature, reimported models, weighted starter spawns)
+
+- All bundled creature models were reimported from `models/`. Six of eight
+  kinds (stone_golem, wolf, stinger, cow, goblin, and the new sunscorch) came
+  back as standard glTF skinned meshes with real baked textures, replacing
+  the earlier rigid Blockbench-style rigs; sheep and chicken stayed on the
+  old rigid format. This is an internal rendering change with one visible
+  side effect: each kind's actual set of animation clips now reflects what
+  its source file actually exports, not a fixed assumption -- cow lost its
+  run clip (a Lua-driven fast chase() now plays walk, not run) and stinger
+  gained one (an aggro-closing stinger now plays run, not walk).
+- New hostile creature kind: `sunscorch`, a slow, tanky ghost. Like
+  stone_golem, it never speeds up while chasing (no run clip, and its aggro
+  speed equals its wander speed) and never gives up a chase once aggroed.
+  max_health 28. Added to `creature_kinds`, `spawn_creature`,
+  `spawn_creature_near_player`, `find_creatures`, and `nearest_creature`.
+- The starter world's initial creature scatter (`Creatures::spawn_around`)
+  no longer alternates only sheep/chicken -- it now draws every kind from a
+  weighted table: sheep and chicken most common, cow slightly less so,
+  wolf/stinger/goblin uncommon, and stone_golem/sunscorch rare. A brand-new
+  world can now include a hostile encounter within its first minutes, just
+  an infrequent one.
+
 ## 1.12.0 -- 2026-09-07 (bounded rule scheduling)
 
 - Host tick/cast dispatches share instruction, API-call, native-work and

@@ -10,6 +10,7 @@ use winit::event::{DeviceEvent, ElementState, MouseButton, WindowEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window};
 
+use crate::audio::AudioEngine;
 use crate::camera::Camera;
 use crate::creature::{mesh_for_snapshot, Creatures};
 use crate::daynight::{sky_lighting, DAY_LENGTH_SECS};
@@ -561,6 +562,12 @@ pub struct App {
     models: Models,
     time_of_day: f32,
     weather: WeatherState,
+    /// Sound output -- see `audio::AudioEngine`. Local-only, like
+    /// `lightning_flash`/`bird_flock`: every client (host or joined) drives
+    /// its own playback independently from the same shared, replicated
+    /// state (weather, creature positions/snapshot) rather than this being
+    /// networked itself.
+    audio: AudioEngine,
     /// State for `update_lightning`'s local-only strike timer -- see
     /// `LIGHTNING_MIN_INTERVAL_SECS`.
     lightning_rng: u64,
@@ -1079,6 +1086,7 @@ impl App {
             models,
             time_of_day,
             weather,
+            audio: AudioEngine::new(),
             lightning_rng: (lightning_seed as u64) ^ 0xB0C7_11C4_71E5,
             lightning_timer: LIGHTNING_MIN_INTERVAL_SECS,
             lightning_flash: 0.0,
@@ -1295,6 +1303,7 @@ impl App {
                 self.lightning_flash =
                     LIGHTNING_MIN_PEAK + self.next_lightning_f32() * (LIGHTNING_MAX_PEAK - LIGHTNING_MIN_PEAK);
                 self.lightning_timer = self.next_lightning_interval();
+                self.audio.play_lightning();
             }
         } else {
             // Don't let a stale near-zero timer cause an instant strike
@@ -1339,6 +1348,7 @@ impl App {
         self.bird_spawn_timer -= dt;
         if self.bird_spawn_timer <= 0.0 {
             self.bird_flock = Some(self.spawn_bird_flock());
+            self.audio.play_bird_flock();
         }
     }
 
@@ -1464,6 +1474,7 @@ impl App {
         self.water_time = (self.water_time + dt) % 10_000.0;
         self.update_lightning(dt);
         self.update_birds(dt);
+        self.audio.update_ambience(self.weather.current, self.time_of_day);
 
         const SENSITIVITY: f32 = 0.0022;
         self.camera.yaw += self.input.mouse_delta.0 * SENSITIVITY;
@@ -1478,6 +1489,9 @@ impl App {
         self.player
             .update(&self.world, &self.input, forward, right, dt);
         self.camera.position = self.player.position;
+        for _ in 0..self.player.take_steps() {
+            self.audio.play_player_step();
+        }
 
         if let Some(i) = self.input.hotbar_select {
             if let Some(b) = BlockType::from_hotbar_index(i) {
@@ -1507,6 +1521,11 @@ impl App {
                             self.mining_hits = 0;
                         }
                         self.mining_hits += 1;
+                        // No player-vs-creature melee exists yet, so a
+                        // mining swing is the closest thing to an "attack"
+                        // the player currently performs -- see
+                        // `audio::AudioEngine::play_player_attack`.
+                        self.audio.play_player_attack();
 
                         if self.mining_hits >= target_block.hardness() {
                             self.mining_target = None;
@@ -1662,6 +1681,27 @@ impl App {
             }
 
             self.update_oxygen(dt);
+
+            // Creature sound events (steps/attacks queued every tick inside
+            // `creatures.update` above; deaths queued during the Lua tick
+            // just above, if one ran this frame) -- host-only, same as
+            // creature AI itself. A joined client doesn't run creature AI
+            // locally at all (see `Creatures::update`'s doc comment), so it
+            // doesn't get these; only the fully-local ambience/lightning/
+            // birds/footstep sounds play for it too.
+            let events = self.creatures.take_audio_events();
+            for kind in events.attacks {
+                self.audio.play_creature_attack(kind);
+            }
+            for _ in &events.steps {
+                self.audio.play_creature_step();
+            }
+            for kind in events.ambient_calls {
+                self.audio.play_creature_ambient(kind);
+            }
+            for _ in events.deaths {
+                self.audio.play_creature_death();
+            }
         }
 
         let mut mesh = match &self.net {

@@ -485,6 +485,7 @@ fn creature_kind_filter(kind: &str) -> Option<u8> {
         "stinger" => Some(4),
         "cow" => Some(5),
         "goblin" => Some(6),
+        "sunscorch" => Some(7),
         _ => None,
     }
 }
@@ -501,6 +502,7 @@ fn creature_kind_name(kind_u8: u8) -> &'static str {
         4 => "stinger",
         5 => "cow",
         6 => "goblin",
+        7 => "sunscorch",
         _ => "sheep",
     }
 }
@@ -522,6 +524,8 @@ fn parse_creature_kind(kind: &str) -> CreatureKind {
         CreatureKind::Cow
     } else if kind.eq_ignore_ascii_case("goblin") {
         CreatureKind::Goblin
+    } else if kind.eq_ignore_ascii_case("sunscorch") {
+        CreatureKind::Sunscorch
     } else {
         CreatureKind::Sheep
     }
@@ -791,10 +795,15 @@ mod tests {
     use crate::player::{MAX_HEALTH, MAX_OXYGEN};
     use crate::voxel::World;
 
+    /// `spawn_around` now picks each creature's kind from a weighted mix of
+    /// every kind (see `creature.rs`'s `spawn_around`), so it no longer
+    /// deterministically guarantees a sheep among a small count -- spawn one
+    /// explicitly too, since several tests below need one to exist.
     fn make_creatures(seed: u32) -> Creatures {
         let world = World::new(seed);
         let mut creatures = Creatures::new();
         creatures.spawn_around(&world, Vec3::new(0.0, 0.0, 0.0), 6, seed);
+        creatures.spawn_one(CreatureKind::Sheep, Vec3::new(0.0, 5.0, 0.0), seed as u64);
         creatures
     }
 
@@ -3408,6 +3417,93 @@ mod tests {
         assert!(
             edits.iter().any(|(_, _, _, b)| *b == BlockType::RedStone),
             "expected find_creatures/nearest_creature to report kind \"goblin\" and the right max_health: {edits:?}"
+        );
+    }
+
+    #[test]
+    fn spawn_creature_and_spawn_creature_near_player_accept_the_sunscorch_kind() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let players = vec![snapshot(0, Vec3::new(0.0, 5.0, 0.0), false)];
+        let mut weather = WeatherState::new(1);
+
+        let source = r#"
+            function on_tick(api)
+                local a = api.spawn_creature("sunscorch", 5, 5, 5)
+                local b = api.spawn_creature_near_player(0, "sunscorch", 3)
+                if a ~= nil and b ~= nil then
+                    api.replace_block(0, 0, 0, "redstone")
+                end
+            end
+        "#
+        .to_string();
+        let mut module =
+            Module::load("sunscorch_spawn_check".into(), "test".into(), source).unwrap();
+        module.enabled = true;
+
+        let edits = run_one_tick(
+            &mut module,
+            &world,
+            &mut creatures,
+            &players,
+            0.5,
+            &mut weather,
+        );
+        assert!(module.error.is_none(), "module errored: {:?}", module.error);
+        assert!(
+            edits.iter().any(|(_, _, _, b)| *b == BlockType::RedStone),
+            "expected both spawn calls to accept \"sunscorch\" and return an id: {edits:?}"
+        );
+        assert_eq!(
+            creatures
+                .snapshot_with_ids()
+                .iter()
+                .filter(|(_, kind, ..)| *kind == CreatureKind::Sunscorch.to_u8())
+                .count(),
+            2,
+            "expected both spawned creatures to actually be sunscorches, not silently sheep"
+        );
+    }
+
+    #[test]
+    fn find_creatures_and_nearest_creature_report_the_sunscorch_kind() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let sunscorch_id =
+            creatures.spawn_one(CreatureKind::Sunscorch, Vec3::new(5.0, 5.0, 5.0), 1);
+        let players: Vec<PlayerSnapshot> = Vec::new();
+        let mut weather = WeatherState::new(1);
+
+        let source = format!(
+            r#"
+            function on_tick(api)
+                local found = api.find_creatures("sunscorch", 5, 5, 5, 1)
+                local nearest = api.nearest_creature("sunscorch", 5, 5, 5)
+                if #found == 1 and found[1].id == {sunscorch_id} and found[1].kind == "sunscorch"
+                    and found[1].max_health == 28.0
+                    and nearest ~= nil and nearest.id == {sunscorch_id}
+                then
+                    api.replace_block(0, 0, 0, "redstone")
+                end
+            end
+        "#
+        );
+        let mut module =
+            Module::load("sunscorch_query_check".into(), "test".into(), source).unwrap();
+        module.enabled = true;
+
+        let edits = run_one_tick(
+            &mut module,
+            &world,
+            &mut creatures,
+            &players,
+            0.5,
+            &mut weather,
+        );
+        assert!(module.error.is_none(), "module errored: {:?}", module.error);
+        assert!(
+            edits.iter().any(|(_, _, _, b)| *b == BlockType::RedStone),
+            "expected find_creatures/nearest_creature to report kind \"sunscorch\" and the right max_health: {edits:?}"
         );
     }
 }

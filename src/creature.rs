@@ -29,7 +29,7 @@ impl SimpleRng {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CreatureKind {
     Sheep,
     Chicken,
@@ -51,6 +51,13 @@ pub enum CreatureKind {
     /// Sits between Wolf and StoneGolem on every axis (speed, health,
     /// damage, cooldown). See `is_hostile`.
     Goblin,
+    /// Hostile, tanky, relentless -- a slow-moving ghost that never speeds
+    /// up even while aggro-chasing (like StoneGolem, "never runs" is true
+    /// both mechanically and literally: its model has no run clip), but
+    /// detects players from further away and hits close to as hard as a
+    /// golem. Never gives up a chase once aggroed (see
+    /// `chase_giveup_duration`), the same as StoneGolem. See `is_hostile`.
+    Sunscorch,
 }
 
 impl CreatureKind {
@@ -67,6 +74,9 @@ impl CreatureKind {
             CreatureKind::Stinger => 2.2,
             CreatureKind::Cow => 1.3,
             CreatureKind::Goblin => 1.6,
+            // Same pace whether wandering or aggro-chasing -- see
+            // `aggro_speed` and this variant's own doc comment.
+            CreatureKind::Sunscorch => 1.2,
         }
     }
 
@@ -79,6 +89,7 @@ impl CreatureKind {
             CreatureKind::Stinger => 14.0,
             CreatureKind::Cow => 20.0,
             CreatureKind::Goblin => 24.0,
+            CreatureKind::Sunscorch => 28.0,
         }
     }
 
@@ -94,6 +105,7 @@ impl CreatureKind {
                 | CreatureKind::Wolf
                 | CreatureKind::Stinger
                 | CreatureKind::Goblin
+                | CreatureKind::Sunscorch
         )
     }
 
@@ -104,17 +116,17 @@ impl CreatureKind {
             CreatureKind::Wolf => WOLF_AGGRO_RADIUS,
             CreatureKind::Stinger => STINGER_AGGRO_RADIUS,
             CreatureKind::Goblin => GOBLIN_AGGRO_RADIUS,
+            CreatureKind::Sunscorch => SUNSCORCH_AGGRO_RADIUS,
             _ => 0.0,
         }
     }
 
     /// Movement speed while actively closing on an aggroed player. The
     /// golem deliberately reuses its own (slow) `speed()` here -- "moves
-    /// slowly" is meant to stay true even while attacking -- while a wolf
-    /// (and, a step slower, a goblin) speeds up into a real chase, matching
-    /// its "run" animation clip. A stinger speeds up too (it has no run
-    /// clip to show it, but it's still meaningfully quicker at closing
-    /// distance than its wander pace).
+    /// slowly" is meant to stay true even while attacking -- while a wolf,
+    /// a stinger, and (a step slower) a goblin speed up into a real chase,
+    /// matching their "run" animation clip. Sunscorch reuses its own
+    /// (slow) `speed()` too, same as the golem -- see its own doc comment.
     fn aggro_speed(self) -> f32 {
         match self {
             CreatureKind::Wolf => WOLF_RUN_SPEED,
@@ -127,9 +139,10 @@ impl CreatureKind {
     /// How long this kind will keep chasing an aggroed player before giving
     /// up and reverting to wandering, even if the player is still within
     /// `aggro_radius` -- `None` means it never gives up on its own (a
-    /// golem/stinger's aggro is purely radius-gated, re-evaluated fresh
-    /// every tick). See `Creatures::update`'s `ChaseState` handling and
-    /// `CHASE_GIVEUP_COOLDOWN_SECS` for what happens right after giving up.
+    /// golem/stinger/sunscorch's aggro is purely radius-gated, re-evaluated
+    /// fresh every tick). See `Creatures::update`'s `ChaseState` handling
+    /// and `CHASE_GIVEUP_COOLDOWN_SECS` for what happens right after giving
+    /// up.
     fn chase_giveup_duration(self) -> Option<f32> {
         match self {
             CreatureKind::Wolf => Some(WOLF_CHASE_GIVEUP_SECS),
@@ -144,6 +157,7 @@ impl CreatureKind {
             CreatureKind::Wolf => WOLF_ATTACK_RANGE,
             CreatureKind::Stinger => STINGER_ATTACK_RANGE,
             CreatureKind::Goblin => GOBLIN_ATTACK_RANGE,
+            CreatureKind::Sunscorch => SUNSCORCH_ATTACK_RANGE,
             _ => 0.0,
         }
     }
@@ -154,6 +168,7 @@ impl CreatureKind {
             CreatureKind::Wolf => WOLF_ATTACK_DAMAGE,
             CreatureKind::Stinger => STINGER_ATTACK_DAMAGE,
             CreatureKind::Goblin => GOBLIN_ATTACK_DAMAGE,
+            CreatureKind::Sunscorch => SUNSCORCH_ATTACK_DAMAGE,
             _ => 0.0,
         }
     }
@@ -164,6 +179,7 @@ impl CreatureKind {
             CreatureKind::Wolf => WOLF_ATTACK_COOLDOWN,
             CreatureKind::Stinger => STINGER_ATTACK_COOLDOWN,
             CreatureKind::Goblin => GOBLIN_ATTACK_COOLDOWN,
+            CreatureKind::Sunscorch => SUNSCORCH_ATTACK_COOLDOWN,
             _ => f32::MAX,
         }
     }
@@ -171,12 +187,24 @@ impl CreatureKind {
     /// Whether this kind's model has a dedicated "run" animation clip to
     /// switch to while moving at an elevated pace (aggro-chasing, or
     /// Lua-`chase()`d with `Wander::hunting` set) -- every other kind falls
-    /// back to its "walk" clip played at normal speed instead.
+    /// back to its "walk" clip played at normal speed instead. Reflects
+    /// each model's actual exported clips (see `model.rs`), not a fixed
+    /// design choice -- e.g. Cow's reimported model dropped its run clip,
+    /// while Stinger's gained one.
     fn has_run_clip(self) -> bool {
         matches!(
             self,
-            CreatureKind::Wolf | CreatureKind::Cow | CreatureKind::Goblin
+            CreatureKind::Wolf | CreatureKind::Stinger | CreatureKind::Goblin
         )
+    }
+
+    /// Whether this kind periodically plays an idle vocalization while
+    /// alive and wandering -- only the two kinds with a dedicated ambient
+    /// sound file (see `audio.rs`'s `ambient_sound`). Every other kind's
+    /// `AmbientCall` timer is left at `f32::INFINITY` at spawn and never
+    /// fires; see `Creatures::spawn_with_rng`/`update`.
+    fn has_ambient_call(self) -> bool {
+        matches!(self, CreatureKind::Cow | CreatureKind::Sheep)
     }
 
     pub fn to_u8(self) -> u8 {
@@ -188,6 +216,7 @@ impl CreatureKind {
             CreatureKind::Stinger => 4,
             CreatureKind::Cow => 5,
             CreatureKind::Goblin => 6,
+            CreatureKind::Sunscorch => 7,
         }
     }
 
@@ -198,10 +227,45 @@ impl CreatureKind {
             3 => CreatureKind::Wolf,
             4 => CreatureKind::Stinger,
             5 => CreatureKind::Cow,
+            7 => CreatureKind::Sunscorch,
             6 => CreatureKind::Goblin,
             _ => CreatureKind::Sheep,
         }
     }
+}
+
+/// Relative weight of each kind in a fresh world's starter scatter (see
+/// `Creatures::spawn_around`) -- not a probability, just a share of the
+/// total (sums to 100 here for readability, but doesn't have to). Neutral
+/// grazers dominate (26+26+20 = 72%), hostile-but-common kinds are
+/// noticeably rarer (8% each, 24% together), and the two toughest/most
+/// dangerous hostile kinds -- stone_golem and sunscorch -- are rare (2%
+/// each, 4% together) rather than excluded outright.
+const STARTER_KIND_WEIGHTS: &[(CreatureKind, u32)] = &[
+    (CreatureKind::Sheep, 26),
+    (CreatureKind::Chicken, 26),
+    (CreatureKind::Cow, 20),
+    (CreatureKind::Wolf, 8),
+    (CreatureKind::Stinger, 8),
+    (CreatureKind::Goblin, 8),
+    (CreatureKind::StoneGolem, 2),
+    (CreatureKind::Sunscorch, 2),
+];
+
+/// Draws one creature kind for the starter world scatter, weighted per
+/// `STARTER_KIND_WEIGHTS`. The final entry is the fallback for any rounding
+/// slack in `next_f32`'s range, so this always returns *some* kind rather
+/// than needing an `Option`.
+fn pick_starter_kind(rng: &mut SimpleRng) -> CreatureKind {
+    let total: u32 = STARTER_KIND_WEIGHTS.iter().map(|&(_, w)| w).sum();
+    let mut roll = (rng.next_f32() * total as f32) as u32;
+    for &(kind, weight) in STARTER_KIND_WEIGHTS {
+        if roll < weight {
+            return kind;
+        }
+        roll -= weight;
+    }
+    STARTER_KIND_WEIGHTS.last().unwrap().0
 }
 
 /// Which animation clip a creature is currently posed with. Not every model
@@ -309,6 +373,17 @@ struct ChaseState {
     /// it doesn't just re-aggro the very next tick.
     giveup_cooldown: f32,
 }
+/// Horizontal distance walked/run since the last footstep sound, in
+/// blocks -- wraps back down by `CREATURE_STEP_LENGTH` (not reset to 0)
+/// each time it crosses that threshold, so a creature moving faster than
+/// one step's worth per tick doesn't lose the leftover distance. See
+/// `Creatures::update`'s `pending_audio.steps`.
+struct Steps(f32);
+/// Seconds remaining until this creature's next idle vocalization (only
+/// meaningful for `CreatureKind::has_ambient_call`; left at
+/// `f32::INFINITY` for every other kind so it harmlessly never fires). See
+/// `Creatures::update`'s `pending_audio.ambient_calls`.
+struct AmbientCall(f32);
 
 const HUNT_SPEED_MULTIPLIER: f32 = 1.6;
 /// How fast a creature visually turns to face its movement direction --
@@ -356,9 +431,9 @@ const WOLF_CHASE_GIVEUP_SECS: f32 = 6.0;
 /// How close a player has to be before a stinger notices and starts closing
 /// in -- see `STONE_GOLEM_AGGRO_RADIUS`.
 const STINGER_AGGRO_RADIUS: f32 = 9.0;
-/// Chase speed once aggroed -- quicker than its wander pace but, unlike a
-/// wolf, it has no "run" clip to show the speedup with (its threat is a fast
-/// attack rhythm, not a fast chase).
+/// Chase speed once aggroed -- quicker than its wander pace, and (like a
+/// wolf) shown with its own "run" clip; its threat is a fast attack rhythm
+/// more than raw chase speed, but it isn't slow either.
 const STINGER_AGGRO_SPEED: f32 = 5.0;
 /// Sting reach -- tight, matching a small, precise attacker.
 const STINGER_ATTACK_RANGE: f32 = 1.4;
@@ -384,12 +459,34 @@ const GOBLIN_ATTACK_COOLDOWN: f32 = 1.1;
 /// `CreatureKind::chase_giveup_duration`.
 const GOBLIN_CHASE_GIVEUP_SECS: f32 = 7.0;
 
+/// How close a player has to be before a sunscorch notices and starts
+/// closing in -- larger than any other hostile kind's, since it never
+/// speeds up once it has (see `CreatureKind::aggro_speed`) and relies on
+/// noticing early rather than closing distance fast.
+const SUNSCORCH_AGGRO_RADIUS: f32 = 13.0;
+/// Reach -- between a wolf's bite and a golem's much longer one.
+const SUNSCORCH_ATTACK_RANGE: f32 = 1.7;
+/// Close to a golem's heavy blow, on a shorter cooldown -- a real threat
+/// once it actually catches up, matching "never runs, but never stops."
+const SUNSCORCH_ATTACK_DAMAGE: f32 = 3.8;
+const SUNSCORCH_ATTACK_COOLDOWN: f32 = 1.3;
+
 /// How long a creature that just gave up a chase (see
 /// `CreatureKind::chase_giveup_duration`) waits before it will consider
 /// aggroing again -- without this, a creature that gives up while the
 /// player is still standing right next to it would just re-aggro the very
 /// next tick, making the "give up" invisible in practice.
 const CHASE_GIVEUP_COOLDOWN_SECS: f32 = 4.0;
+
+/// How far (in blocks) a creature walks/runs between footstep sounds --
+/// see `Steps`/`Creatures::update`. One value for every kind: the sound
+/// itself (`animal_step.mp3`) is generic, so a per-kind cadence wouldn't
+/// read as meaningfully different without kind-specific clips to match.
+const CREATURE_STEP_LENGTH: f32 = 1.6;
+/// Random range (seconds) between a cow/sheep's idle vocalization -- see
+/// `CreatureKind::has_ambient_call`/`AmbientCall`.
+const AMBIENT_CALL_INTERVAL_MIN: f32 = 8.0;
+const AMBIENT_CALL_INTERVAL_MAX: f32 = 22.0;
 
 /// Reported when `damage`/`destroy` kills a creature, so the caller can
 /// fire the `on_death` event to every rule module (not just the one that
@@ -401,9 +498,32 @@ pub struct DeathEvent {
     pub pos: Vec3,
 }
 
+/// Creature-triggered sound events accumulated since the last
+/// `Creatures::take_audio_events` call. Kept as a separate side channel
+/// rather than folded into `update`'s own `Vec<(PlayerId, f32)>` return
+/// (used for player damage application) so adding audio support didn't
+/// need to touch that already-widely-tested signature, and rather than
+/// threading through `scripting.rs`'s `TickOutcome` since `deaths` in
+/// particular is only actually known at `damage`/`destroy` commit time,
+/// deep inside Lua dispatch.
+#[derive(Default)]
+pub struct CreatureAudioEvents {
+    /// One entry per creature that died this call (`damage` reaching zero
+    /// health, or `destroy`) -- see `audio.rs`'s generic death sound.
+    pub deaths: Vec<CreatureKind>,
+    /// One entry per hostile creature's attack that landed on a player.
+    pub attacks: Vec<CreatureKind>,
+    /// One entry per creature that completed a `CREATURE_STEP_LENGTH`
+    /// stride while walking/running.
+    pub steps: Vec<CreatureKind>,
+    /// One entry per cow/sheep idle vocalization that fired.
+    pub ambient_calls: Vec<CreatureKind>,
+}
+
 pub struct Creatures {
     ecs: hecs::World,
     next_id: u32,
+    pending_audio: CreatureAudioEvents,
 }
 
 /// A callback's private creature view and ordered commands. No live ECS
@@ -485,26 +605,23 @@ impl Creatures {
         Self {
             ecs: hecs::World::new(),
             next_id: 1,
+            pending_audio: CreatureAudioEvents::default(),
         }
     }
 
-    /// Populates a brand-new world's starter creatures -- sheep and chicken
-    /// only, deliberately never a hostile kind (golem, wolf, stinger, or
-    /// goblin, see `CreatureKind::is_hostile`) and, for now, never a cow
-    /// either even though it's neutral -- both stay opt-in via
-    /// `api.spawn_creature`/`spawn_creature_near_player` rather than
-    /// changing what a fresh world's first minutes look like by default. A
-    /// hostile creature ambushing a player with no way to have anticipated
-    /// it would directly undercut that "same experience in the first
-    /// minutes" guarantee.
+    /// Populates a brand-new world's starter creatures by drawing each
+    /// spawn's kind from `STARTER_KIND_WEIGHTS` -- every kind can appear,
+    /// including hostile ones, but weighted heavily toward the neutral
+    /// grazers (sheep/chicken/cow together are ~70% of the table), with
+    /// wolf/stinger/goblin uncommon (~8% each) and stone_golem/sunscorch
+    /// rare (~2% each). This is a deliberate design choice, not a
+    /// left-over default: a fresh world's first minutes can now include a
+    /// hostile encounter, just an infrequent one. See
+    /// `STARTER_KIND_WEIGHTS`'s own doc comment for the exact numbers.
     pub fn spawn_around(&mut self, world: &World, center: Vec3, count: usize, seed: u32) {
         let mut rng = SimpleRng::new(seed as u64 ^ 0xC0FFEE);
         for i in 0..count {
-            let kind = if i % 2 == 0 {
-                CreatureKind::Sheep
-            } else {
-                CreatureKind::Chicken
-            };
+            let kind = pick_starter_kind(&mut rng);
             if let Some((x, z)) = find_land_spot(world, &mut rng, center.x, center.z, 24.0) {
                 let y = world.terrain_height(x.floor() as i32, z.floor() as i32) as f32 + 1.0;
                 self.spawn_with_rng(
@@ -519,6 +636,15 @@ impl Creatures {
     fn spawn_with_rng(&mut self, kind: CreatureKind, pos: Vec3, rng_seed: u64) -> u32 {
         let id = self.next_id;
         self.next_id += 1;
+        let mut rng = SimpleRng::new(rng_seed);
+        // Randomized per-creature so a whole herd doesn't call out in sync;
+        // a kind with no ambient sound gets `INFINITY` and never fires (see
+        // `AmbientCall`'s doc comment).
+        let ambient_call = AmbientCall(if kind.has_ambient_call() {
+            AMBIENT_CALL_INTERVAL_MIN + rng.next_f32() * (AMBIENT_CALL_INTERVAL_MAX - AMBIENT_CALL_INTERVAL_MIN)
+        } else {
+            f32::INFINITY
+        });
         self.ecs.spawn((
             Pos(pos),
             Wander {
@@ -540,7 +666,9 @@ impl Creatures {
                 chasing_for: 0.0,
                 giveup_cooldown: 0.0,
             },
-            SimpleRng::new(rng_seed),
+            Steps(0.0),
+            ambient_call,
+            rng,
         ));
         id
     }
@@ -565,8 +693,14 @@ impl Creatures {
         player_targets: &[(PlayerId, Vec3)],
     ) -> Vec<(PlayerId, f32)> {
         let mut attacks = Vec::new();
+        // Collected locally and merged into `self.pending_audio` after the
+        // loop, rather than pushed to it directly, since the loop already
+        // holds `self.ecs` borrowed via `query_mut`.
+        let mut step_events = Vec::new();
+        let mut attack_sound_events = Vec::new();
+        let mut ambient_events = Vec::new();
 
-        for (_, (pos, wander, kind, rng, facing, cooldown, atk_anim, anim, chase)) in
+        for (_, (pos, wander, kind, rng, facing, cooldown, atk_anim, anim, chase, steps, ambient_call)) in
             self.ecs.query_mut::<(
                 &mut Pos,
                 &mut Wander,
@@ -577,11 +711,23 @@ impl Creatures {
                 &mut AttackAnimTimer,
                 &mut AnimState,
                 &mut ChaseState,
+                &mut Steps,
+                &mut AmbientCall,
             )>()
         {
             cooldown.0 = (cooldown.0 - dt).max(0.0);
             atk_anim.0 = (atk_anim.0 - dt).max(0.0);
             chase.giveup_cooldown = (chase.giveup_cooldown - dt).max(0.0);
+
+            // `AmbientCall.0` is `f32::INFINITY` for a kind with no ambient
+            // sound (see `spawn_with_rng`), so subtracting dt never brings
+            // it to/below zero and this never fires for those kinds.
+            ambient_call.0 -= dt;
+            if ambient_call.0 <= 0.0 {
+                ambient_events.push(kind.0);
+                ambient_call.0 = AMBIENT_CALL_INTERVAL_MIN
+                    + rng.next_f32() * (AMBIENT_CALL_INTERVAL_MAX - AMBIENT_CALL_INTERVAL_MIN);
+            }
 
             let mut aggro = if kind.0.is_hostile() && chase.giveup_cooldown <= 0.0 {
                 player_targets
@@ -615,6 +761,10 @@ impl Creatures {
             // "run" pace -- either built-in aggro-chasing, or Lua-`chase()`d
             // fast (`Wander::hunting`) -- as opposed to ordinary wandering.
             let mut fast = false;
+            // Horizontal distance actually covered this tick, for the
+            // footstep accumulator below -- 0 unless one of the movement
+            // branches below sets it.
+            let mut moved = 0.0f32;
 
             if let Some((player_id, player_pos, dist)) = aggro {
                 // Beeline for the player every tick this close, overriding
@@ -629,9 +779,11 @@ impl Creatures {
                     facing.0 = turn_toward(facing.0, dir.z.atan2(dir.x), TURN_RATE * dt);
                     moving = true;
                     fast = true;
+                    moved = step;
                 }
                 if dist <= kind.0.attack_range() && cooldown.0 <= 0.0 {
                     attacks.push((player_id, kind.0.attack_damage()));
+                    attack_sound_events.push(kind.0);
                     cooldown.0 = kind.0.attack_cooldown();
                     atk_anim.0 = ATTACK_ANIM_DURATION.min(kind.0.attack_cooldown());
                 }
@@ -669,6 +821,19 @@ impl Creatures {
                     facing.0 = turn_toward(facing.0, dir.z.atan2(dir.x), TURN_RATE * dt);
                     moving = true;
                     fast = wander.hunting;
+                    moved = step;
+                }
+            }
+
+            if moved > 0.0 {
+                steps.0 += moved;
+                if steps.0 >= CREATURE_STEP_LENGTH {
+                    // `%=`, not reset to 0, so a creature covering more
+                    // than one step's worth of distance in a single tick
+                    // (fast movement at a low framerate) doesn't lose the
+                    // leftover distance toward its next footstep.
+                    steps.0 %= CREATURE_STEP_LENGTH;
+                    step_events.push(kind.0);
                 }
             }
 
@@ -692,7 +857,20 @@ impl Creatures {
             }
         }
 
+        self.pending_audio.attacks.extend(attack_sound_events);
+        self.pending_audio.steps.extend(step_events);
+        self.pending_audio.ambient_calls.extend(ambient_events);
+
         attacks
+    }
+
+    /// Drains and returns every creature-triggered sound event queued
+    /// since the last call -- see `CreatureAudioEvents`. Call once per
+    /// frame, after both `update` and any Lua tick (whose
+    /// `api.damage`/`api.destroy` calls are what actually produce
+    /// `deaths`, via `CreatureDraft::commit`) have run.
+    pub fn take_audio_events(&mut self) -> CreatureAudioEvents {
+        std::mem::take(&mut self.pending_audio)
     }
 
     pub fn build_mesh(&self, models: &Models) -> MeshData {
@@ -789,6 +967,7 @@ impl Creatures {
         }
         if let Some((entity, event)) = target {
             let _ = self.ecs.despawn(entity);
+            self.pending_audio.deaths.push(event.kind);
             return Some(event);
         }
         None
@@ -812,6 +991,7 @@ impl Creatures {
         }
         if let Some((entity, event)) = target {
             let _ = self.ecs.despawn(entity);
+            self.pending_audio.deaths.push(event.kind);
             return Some(event);
         }
         None
@@ -1379,7 +1559,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stinger_chasing_a_player_plays_walk_not_run_since_it_has_no_run_clip() {
+    fn a_stinger_chasing_a_player_plays_its_run_clip() {
         let world = World::new(1);
         let mut creatures = Creatures::new();
         let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
@@ -1391,13 +1571,13 @@ mod tests {
 
         assert_eq!(
             creatures.anim_clip_of(id),
-            Some(AnimClip::Walk),
-            "a stinger has no run clip -- even while aggro-closing it should stay on walk"
+            Some(AnimClip::Run),
+            "a stinger's model has a run clip, so an aggro-closing stinger should use it"
         );
     }
 
     #[test]
-    fn a_cow_lua_chased_fast_plays_its_run_clip() {
+    fn a_cow_lua_chased_fast_plays_walk_not_run_since_its_model_has_no_run_clip() {
         let world = World::new(1);
         let mut creatures = Creatures::new();
         let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
@@ -1410,8 +1590,8 @@ mod tests {
 
         assert_eq!(
             creatures.anim_clip_of(id),
-            Some(AnimClip::Run),
-            "a cow's model has a run clip, so a fast Lua chase() should use it, unlike sheep/chicken"
+            Some(AnimClip::Walk),
+            "a cow's model has no run clip -- even a fast Lua chase() should stay on walk"
         );
     }
 
@@ -1618,5 +1798,341 @@ mod tests {
             "expected a golem to keep attacking on its normal cooldown throughout, with no give-up \
              pause; got {hit_count} hits, expected at least {expected_min_hits}"
         );
+    }
+
+    #[test]
+    fn a_sunscorch_closes_in_on_a_player_within_its_aggro_radius() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let sunscorch_pos = Vec3::new(0.0, spawn_y, 0.0);
+        creatures.spawn_one(CreatureKind::Sunscorch, sunscorch_pos, 1);
+        let player_id: PlayerId = 5;
+        // Within aggro range but well outside melee range, so this window
+        // only exercises the "close the distance" part of the behavior.
+        let player_pos = sunscorch_pos + Vec3::new(6.0, 0.0, 0.0);
+        let initial_dist = sunscorch_pos.distance(player_pos);
+
+        for _ in 0..60 {
+            creatures.update(&world, 1.0 / 60.0, &[(player_id, player_pos)]);
+        }
+
+        let sunscorch_pos_after = Vec3::from_array(creatures.snapshot_with_ids()[0].2);
+        let dist_after = sunscorch_pos_after.distance(player_pos);
+        assert!(
+            dist_after < initial_dist,
+            "expected the sunscorch to have moved closer to the player: {initial_dist} -> {dist_after}"
+        );
+    }
+
+    #[test]
+    fn a_sunscorch_ignores_a_player_outside_its_aggro_radius() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let sunscorch_pos = Vec3::new(0.0, spawn_y, 0.0);
+        creatures.spawn_one(CreatureKind::Sunscorch, sunscorch_pos, 1);
+        let player_id: PlayerId = 5;
+        let player_pos = sunscorch_pos + Vec3::new(SUNSCORCH_AGGRO_RADIUS + 5.0, 0.0, 0.0);
+
+        for _ in 0..120 {
+            let attacks = creatures.update(&world, 1.0 / 60.0, &[(player_id, player_pos)]);
+            assert!(
+                attacks.is_empty(),
+                "a sunscorch should never attack a player outside its aggro radius"
+            );
+        }
+    }
+
+    #[test]
+    fn a_sunscorch_already_in_melee_range_attacks_on_a_cooldown_not_every_tick() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let sunscorch_pos = Vec3::new(0.0, spawn_y, 0.0);
+        creatures.spawn_one(CreatureKind::Sunscorch, sunscorch_pos, 1);
+        let player_id: PlayerId = 5;
+        let player_pos = sunscorch_pos + Vec3::new(1.0, 0.0, 0.0);
+        assert!(sunscorch_pos.distance(player_pos) <= SUNSCORCH_ATTACK_RANGE);
+
+        let dt = 1.0 / 60.0;
+        let duration = SUNSCORCH_ATTACK_COOLDOWN * 3.0 + 0.5;
+        let ticks = (duration / dt) as usize;
+        let mut hit_times = Vec::new();
+        let mut t = 0.0f32;
+        for _ in 0..ticks {
+            let attacks = creatures.update(&world, dt, &[(player_id, player_pos)]);
+            if !attacks.is_empty() {
+                assert_eq!(
+                    attacks,
+                    vec![(player_id, SUNSCORCH_ATTACK_DAMAGE)],
+                    "at most one hit per tick, for the right amount"
+                );
+                hit_times.push(t);
+            }
+            t += dt;
+        }
+
+        assert!(
+            hit_times.len() >= 3,
+            "expected several hits over {duration}s at a {SUNSCORCH_ATTACK_COOLDOWN}s cooldown, got {}: {hit_times:?}",
+            hit_times.len()
+        );
+        for pair in hit_times.windows(2) {
+            let gap = pair[1] - pair[0];
+            assert!(
+                gap >= SUNSCORCH_ATTACK_COOLDOWN - dt * 2.0,
+                "hits should be spaced at least the cooldown apart, got a {gap}s gap: {hit_times:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_sunscorch_never_gives_up_chasing_a_player_who_stays_in_range() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let sunscorch_pos = Vec3::new(0.0, spawn_y, 0.0);
+        creatures.spawn_one(CreatureKind::Sunscorch, sunscorch_pos, 1);
+        let player_id: PlayerId = 5;
+        let player_pos = sunscorch_pos + Vec3::new(1.0, 0.0, 0.0);
+        let dt = 1.0 / 60.0;
+
+        // Well past both a wolf's and a goblin's give-up duration -- like a
+        // golem, a sunscorch has no `chase_giveup_duration`, so it should
+        // keep landing hits on its normal cooldown the entire time, never
+        // falling silent the way a wolf/goblin would.
+        let ticks = ((WOLF_CHASE_GIVEUP_SECS.max(GOBLIN_CHASE_GIVEUP_SECS) + 3.0) / dt) as usize;
+        let mut hit_count = 0;
+        for _ in 0..ticks {
+            if !creatures.update(&world, dt, &[(player_id, player_pos)]).is_empty() {
+                hit_count += 1;
+            }
+        }
+        let expected_min_hits =
+            ((WOLF_CHASE_GIVEUP_SECS.max(GOBLIN_CHASE_GIVEUP_SECS) + 3.0) / SUNSCORCH_ATTACK_COOLDOWN) as i32 - 2;
+        assert!(
+            hit_count as i32 >= expected_min_hits,
+            "expected a sunscorch to keep attacking on its normal cooldown throughout, with no \
+             give-up pause; got {hit_count} hits, expected at least {expected_min_hits}"
+        );
+    }
+
+    #[test]
+    fn a_sunscorch_never_speeds_up_while_chasing_since_it_never_runs() {
+        let kind = CreatureKind::Sunscorch;
+        assert_eq!(
+            kind.aggro_speed(),
+            kind.speed(),
+            "a sunscorch's aggro speed must equal its wander speed -- it never runs, mechanically \
+             or in its animation, unlike a wolf/stinger/goblin which speed up while chasing"
+        );
+    }
+
+    #[test]
+    fn pick_starter_kind_can_draw_every_kind_and_roughly_matches_its_weights() {
+        let mut rng = SimpleRng::new(0xF00D);
+        let mut counts: std::collections::HashMap<u8, u32> = std::collections::HashMap::new();
+        const DRAWS: u32 = 200_000;
+        for _ in 0..DRAWS {
+            *counts.entry(pick_starter_kind(&mut rng).to_u8()).or_insert(0) += 1;
+        }
+
+        let total_weight: u32 = STARTER_KIND_WEIGHTS.iter().map(|&(_, w)| w).sum();
+        for &(kind, weight) in STARTER_KIND_WEIGHTS {
+            let observed = *counts.get(&kind.to_u8()).unwrap_or(&0);
+            let expected = DRAWS as f32 * weight as f32 / total_weight as f32;
+            let tolerance = (expected * 0.15).max(50.0);
+            assert!(
+                (observed as f32 - expected).abs() < tolerance,
+                "kind {:?}: expected roughly {expected:.0} draws out of {DRAWS} (weight {weight}/{total_weight}), got {observed}",
+                kind.to_u8(),
+            );
+        }
+    }
+
+    #[test]
+    fn starter_scatter_favors_neutral_kinds_over_common_hostiles_over_rare_hostiles() {
+        let world = World::new(7);
+        let mut creatures = Creatures::new();
+        creatures.spawn_around(&world, Vec3::new(0.0, 0.0, 0.0), 3000, 7);
+
+        let mut counts: std::collections::HashMap<u8, u32> = std::collections::HashMap::new();
+        for (_, kind, ..) in creatures.snapshot_with_ids() {
+            *counts.entry(kind).or_insert(0) += 1;
+        }
+        let neutral: u32 = [CreatureKind::Sheep, CreatureKind::Chicken, CreatureKind::Cow]
+            .iter()
+            .map(|k| *counts.get(&k.to_u8()).unwrap_or(&0))
+            .sum();
+        let common_hostile: u32 = [CreatureKind::Wolf, CreatureKind::Stinger, CreatureKind::Goblin]
+            .iter()
+            .map(|k| *counts.get(&k.to_u8()).unwrap_or(&0))
+            .sum();
+        let rare_hostile: u32 = [CreatureKind::StoneGolem, CreatureKind::Sunscorch]
+            .iter()
+            .map(|k| *counts.get(&k.to_u8()).unwrap_or(&0))
+            .sum();
+
+        assert!(
+            neutral > common_hostile,
+            "expected neutral kinds ({neutral}) to noticeably outnumber the common hostile kinds ({common_hostile})"
+        );
+        assert!(
+            common_hostile > rare_hostile,
+            "expected the common hostile kinds ({common_hostile}) to outnumber the rare ones ({rare_hostile})"
+        );
+        assert!(rare_hostile > 0, "expected at least one rare hostile kind to appear over 3000 spawns");
+    }
+
+    #[test]
+    fn a_walking_creature_eventually_queues_a_footstep_audio_event() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let id = creatures.spawn_one(CreatureKind::Sheep, Vec3::new(0.0, spawn_y, 0.0), 1);
+        // Force a distant wander/chase target so it walks in a straight
+        // line for long enough to cross CREATURE_STEP_LENGTH.
+        creatures.set_chase_target(id, Vec3::new(50.0, spawn_y, 0.0));
+
+        let mut saw_step = false;
+        for _ in 0..600 {
+            creatures.update(&world, 1.0 / 60.0, &[]);
+            let events = creatures.take_audio_events();
+            if events.steps.contains(&CreatureKind::Sheep) {
+                saw_step = true;
+                break;
+            }
+        }
+        assert!(saw_step, "expected a moving creature to eventually queue a footstep audio event");
+    }
+
+    #[test]
+    fn a_single_tick_never_covers_a_whole_step_length_so_never_queues_a_footstep_yet() {
+        // No kind's per-tick movement (speed * one 1/60s frame) comes
+        // anywhere close to CREATURE_STEP_LENGTH (1.6 blocks) -- the
+        // fastest kind, Stinger at up to HUNT_SPEED_MULTIPLIER * 2.2 ≈
+        // 3.5 blocks/sec, covers well under 0.1 blocks in a single 1/60s
+        // tick. So the very first tick after spawning (Steps starts at 0)
+        // should never itself queue a footstep, regardless of kind.
+        let world = World::new(1);
+        for &kind in &[
+            CreatureKind::Sheep,
+            CreatureKind::Chicken,
+            CreatureKind::StoneGolem,
+            CreatureKind::Wolf,
+            CreatureKind::Stinger,
+            CreatureKind::Cow,
+            CreatureKind::Goblin,
+            CreatureKind::Sunscorch,
+        ] {
+            let mut creatures = Creatures::new();
+            let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+            creatures.spawn_one(kind, Vec3::new(0.0, spawn_y, 0.0), 1);
+
+            creatures.update(&world, 1.0 / 60.0, &[]);
+            let events = creatures.take_audio_events();
+            assert!(
+                events.steps.is_empty(),
+                "kind {:?} queued a footstep on its very first tick, which should be impossible",
+                kind.to_u8()
+            );
+        }
+    }
+
+    #[test]
+    fn a_landed_hostile_attack_queues_an_attack_audio_event_of_its_own_kind() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let wolf_pos = Vec3::new(0.0, spawn_y, 0.0);
+        creatures.spawn_one(CreatureKind::Wolf, wolf_pos, 1);
+        let player_pos = wolf_pos + Vec3::new(1.0, 0.0, 0.0);
+        assert!(wolf_pos.distance(player_pos) <= WOLF_ATTACK_RANGE);
+
+        creatures.update(&world, 1.0 / 60.0, &[(5, player_pos)]);
+        let events = creatures.take_audio_events();
+
+        assert_eq!(
+            events.attacks,
+            vec![CreatureKind::Wolf],
+            "a landed wolf attack should queue exactly one Wolf attack-sound event"
+        );
+    }
+
+    #[test]
+    fn damage_that_kills_a_creature_queues_a_death_audio_event() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let id = creatures.spawn_one(CreatureKind::Sheep, Vec3::new(0.0, spawn_y, 0.0), 1);
+
+        let event = creatures.damage(id, 1000.0);
+        assert!(event.is_some(), "expected lethal damage to actually kill the sheep");
+
+        let events = creatures.take_audio_events();
+        assert_eq!(events.deaths, vec![CreatureKind::Sheep]);
+    }
+
+    #[test]
+    fn nonlethal_damage_queues_no_death_audio_event() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let id = creatures.spawn_one(CreatureKind::StoneGolem, Vec3::new(0.0, spawn_y, 0.0), 1);
+
+        creatures.damage(id, 1.0);
+        let events = creatures.take_audio_events();
+        assert!(events.deaths.is_empty(), "surviving damage shouldn't queue a death sound");
+    }
+
+    #[test]
+    fn destroy_queues_a_death_audio_event_too() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let id = creatures.spawn_one(CreatureKind::Goblin, Vec3::new(0.0, spawn_y, 0.0), 1);
+
+        creatures.destroy(id);
+        let events = creatures.take_audio_events();
+        assert_eq!(events.deaths, vec![CreatureKind::Goblin]);
+    }
+
+    #[test]
+    fn take_audio_events_drains_so_the_same_event_is_never_reported_twice() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        let id = creatures.spawn_one(CreatureKind::Sheep, Vec3::new(0.0, spawn_y, 0.0), 1);
+        creatures.damage(id, 1000.0);
+
+        let first = creatures.take_audio_events();
+        assert_eq!(first.deaths, vec![CreatureKind::Sheep]);
+        let second = creatures.take_audio_events();
+        assert!(second.deaths.is_empty(), "a drained event must not reappear on the next take_audio_events call");
+    }
+
+    #[test]
+    fn a_cow_eventually_queues_an_ambient_call_but_a_goblin_never_does() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let spawn_y = world.terrain_height(0, 0) as f32 + 1.0;
+        creatures.spawn_one(CreatureKind::Cow, Vec3::new(0.0, spawn_y, 0.0), 1);
+        creatures.spawn_one(CreatureKind::Goblin, Vec3::new(10.0, spawn_y, 0.0), 2);
+
+        let mut saw_cow_call = false;
+        // AMBIENT_CALL_INTERVAL_MAX is 22s; run comfortably past it.
+        for _ in 0..(30 * 60) {
+            creatures.update(&world, 1.0 / 60.0, &[]);
+            let events = creatures.take_audio_events();
+            assert!(
+                !events.ambient_calls.contains(&CreatureKind::Goblin),
+                "a goblin has no ambient sound and should never queue an ambient_call event"
+            );
+            if events.ambient_calls.contains(&CreatureKind::Cow) {
+                saw_cow_call = true;
+            }
+        }
+        assert!(saw_cow_call, "expected a cow to eventually queue an ambient_call event within 30s");
     }
 }
