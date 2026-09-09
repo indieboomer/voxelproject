@@ -13,7 +13,9 @@
       0
     ],
     "formula": null,
-    "texture": null
+    "texture": null,
+    "harvest_category": "soil",
+    "hand_pickable": false
   },
   {
     "id": "soil",
@@ -29,7 +31,9 @@
       0
     ],
     "formula": null,
-    "texture": null
+    "texture": null,
+    "harvest_category": "soil",
+    "hand_pickable": false
   },
   {
     "id": "stone",
@@ -54,7 +58,9 @@
         "amount": 1
       }
     ],
-    "texture": null
+    "texture": null,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "sand",
@@ -70,7 +76,9 @@
       0
     ],
     "formula": null,
-    "texture": null
+    "texture": null,
+    "harvest_category": "soil",
+    "hand_pickable": false
   },
   {
     "id": "oak_wood",
@@ -86,7 +94,9 @@
       0
     ],
     "formula": null,
-    "texture": null
+    "texture": null,
+    "harvest_category": "wood",
+    "hand_pickable": false
   },
   {
     "id": "oak_leaves",
@@ -102,7 +112,9 @@
       0
     ],
     "formula": null,
-    "texture": null
+    "texture": null,
+    "harvest_category": "plant",
+    "hand_pickable": false
   },
   {
     "id": "cobblestone",
@@ -127,7 +139,9 @@
         "amount": 1
       }
     ],
-    "texture": null
+    "texture": null,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "bricks",
@@ -152,7 +166,9 @@
         "amount": 1
       }
     ],
-    "texture": null
+    "texture": null,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "spruce_wood",
@@ -168,7 +184,9 @@
       0
     ],
     "formula": null,
-    "texture": null
+    "texture": null,
+    "harvest_category": "wood",
+    "hand_pickable": false
   },
   {
     "id": "spruce_leaves",
@@ -184,7 +202,9 @@
       0
     ],
     "formula": null,
-    "texture": null
+    "texture": null,
+    "harvest_category": "plant",
+    "hand_pickable": false
   },
   {
     "id": "cherry_wood",
@@ -200,7 +220,9 @@
       0
     ],
     "formula": null,
-    "texture": null
+    "texture": null,
+    "harvest_category": "wood",
+    "hand_pickable": false
   },
   {
     "id": "cherry_leaves",
@@ -216,7 +238,9 @@
       0
     ],
     "formula": null,
-    "texture": null
+    "texture": null,
+    "harvest_category": "plant",
+    "hand_pickable": false
   },
   {
     "id": "birch_wood",
@@ -232,7 +256,9 @@
       0
     ],
     "formula": null,
-    "texture": null
+    "texture": null,
+    "harvest_category": "wood",
+    "hand_pickable": false
   },
   {
     "id": "birch_leaves",
@@ -248,7 +274,9 @@
       0
     ],
     "formula": null,
-    "texture": null
+    "texture": null,
+    "harvest_category": "plant",
+    "hand_pickable": false
   },
   {
     "id": "basalt",
@@ -273,7 +301,9 @@
         "amount": 2
       }
     ],
-    "texture": null
+    "texture": null,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "gold_ore",
@@ -289,7 +319,9 @@
       0
     ],
     "formula": null,
-    "texture": null
+    "texture": null,
+    "harvest_category": "ore",
+    "hand_pickable": false
   },
   {
     "id": "diamond_ore",
@@ -305,7 +337,9 @@
       0
     ],
     "formula": null,
-    "texture": null
+    "texture": null,
+    "harvest_category": "ore",
+    "hand_pickable": false
   },
   {
     "id": "emerald_ore",
@@ -321,7 +355,9 @@
       0
     ],
     "formula": null,
-    "texture": null
+    "texture": null,
+    "harvest_category": "ore",
+    "hand_pickable": false
   },
   {
     "id": "copper_ore",
@@ -337,7 +373,9 @@
       0
     ],
     "formula": null,
-    "texture": null
+    "texture": null,
+    "harvest_category": "ore",
+    "hand_pickable": false
   },
   {
     "id": "pumpkin",
@@ -366,7 +404,9 @@
         "amount": 2
       }
     ],
-    "texture": null
+    "texture": null,
+    "harvest_category": "plant",
+    "hand_pickable": true
   },
   {
     "id": "short_grass",
@@ -382,7 +422,9 @@
       0
     ],
     "formula": null,
-    "texture": null
+    "texture": null,
+    "harvest_category": "plant",
+    "hand_pickable": true
   },
   {
     "id": "mud",
@@ -407,7 +449,9 @@
         "amount": 1
       }
     ],
-    "texture": null
+    "texture": null,
+    "harvest_category": "soil",
+    "hand_pickable": false
   },
   {
     "id": "redstone",
@@ -432,7 +476,9 @@
         "amount": 1
       }
     ],
-    "texture": null
+    "texture": null,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "iron_ore",
@@ -460,7 +506,9 @@
       "chance": 0.65,
       "min_size": 3,
       "max_size": 6
-    }
+    },
+    "harvest_category": "ore",
+    "hand_pickable": false
   },
   {
     "id": "tin_ore",
@@ -488,7 +536,9 @@
       "chance": 0.5,
       "min_size": 3,
       "max_size": 5
-    }
+    },
+    "harvest_category": "ore",
+    "hand_pickable": false
   },
   {
     "id": "silver_ore",
@@ -516,7 +566,9 @@
       "chance": 0.35,
       "min_size": 2,
       "max_size": 4
-    }
+    },
+    "harvest_category": "ore",
+    "hand_pickable": false
   },
   {
     "id": "coal",
@@ -544,7 +596,9 @@
       "chance": 0.7,
       "min_size": 4,
       "max_size": 7
-    }
+    },
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "sulfur",
@@ -572,7 +626,9 @@
       "chance": 0.45,
       "min_size": 3,
       "max_size": 5
-    }
+    },
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "rock_salt",
@@ -600,7 +656,9 @@
       "chance": 0.5,
       "min_size": 3,
       "max_size": 5
-    }
+    },
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "clay",
@@ -628,7 +686,9 @@
       "chance": 0.65,
       "min_size": 4,
       "max_size": 7
-    }
+    },
+    "harvest_category": "soil",
+    "hand_pickable": false
   },
   {
     "id": "limestone",
@@ -656,7 +716,9 @@
       "chance": 0.55,
       "min_size": 5,
       "max_size": 8
-    }
+    },
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "marble",
@@ -684,7 +746,9 @@
       "chance": 0.4,
       "min_size": 4,
       "max_size": 7
-    }
+    },
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "granite",
@@ -712,7 +776,9 @@
       "chance": 0.5,
       "min_size": 4,
       "max_size": 7
-    }
+    },
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "obsidian",
@@ -740,7 +806,9 @@
       "chance": 0.35,
       "min_size": 3,
       "max_size": 5
-    }
+    },
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "quartz",
@@ -768,7 +836,9 @@
       "chance": 0.5,
       "min_size": 3,
       "max_size": 5
-    }
+    },
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "amethyst",
@@ -796,7 +866,9 @@
       "chance": 0.3,
       "min_size": 2,
       "max_size": 4
-    }
+    },
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "sapphire_ore",
@@ -824,7 +896,9 @@
       "chance": 0.3,
       "min_size": 2,
       "max_size": 3
-    }
+    },
+    "harvest_category": "ore",
+    "hand_pickable": false
   },
   {
     "id": "ruby_ore",
@@ -852,7 +926,9 @@
       "chance": 0.3,
       "min_size": 2,
       "max_size": 3
-    }
+    },
+    "harvest_category": "ore",
+    "hand_pickable": false
   },
   {
     "id": "mithril_ore",
@@ -880,7 +956,9 @@
       "chance": 0.22,
       "min_size": 2,
       "max_size": 3
-    }
+    },
+    "harvest_category": "ore",
+    "hand_pickable": false
   },
   {
     "id": "moonstone",
@@ -908,7 +986,9 @@
       "chance": 0.25,
       "min_size": 2,
       "max_size": 3
-    }
+    },
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "amber",
@@ -936,7 +1016,9 @@
       "chance": 0.35,
       "min_size": 2,
       "max_size": 4
-    }
+    },
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "peat",
@@ -956,7 +1038,9 @@
       "pattern": "earth",
       "color": "#554432"
     },
-    "hardness": 2
+    "hardness": 2,
+    "harvest_category": "soil",
+    "hand_pickable": false
   },
   {
     "id": "reeds",
@@ -976,7 +1060,9 @@
       "pattern": "plant",
       "color": "#a9b776"
     },
-    "hardness": 1
+    "hardness": 1,
+    "harvest_category": "plant",
+    "hand_pickable": true
   },
   {
     "id": "flax",
@@ -996,7 +1082,9 @@
       "pattern": "plant",
       "color": "#97a5d3"
     },
-    "hardness": 1
+    "hardness": 1,
+    "harvest_category": "plant",
+    "hand_pickable": true
   },
   {
     "id": "wild_herbs",
@@ -1016,7 +1104,9 @@
       "pattern": "plant",
       "color": "#77b66d"
     },
-    "hardness": 1
+    "hardness": 1,
+    "harvest_category": "plant",
+    "hand_pickable": true
   },
   {
     "id": "iron",
@@ -1045,7 +1135,9 @@
       "pattern": "metal",
       "color": "#a7aeb5"
     },
-    "hardness": 6
+    "hardness": 6,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "copper",
@@ -1074,7 +1166,9 @@
       "pattern": "metal",
       "color": "#c98158"
     },
-    "hardness": 5
+    "hardness": 5,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "tin",
@@ -1107,7 +1201,9 @@
       "pattern": "metal",
       "color": "#b4c4c9"
     },
-    "hardness": 4
+    "hardness": 4,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "silver",
@@ -1140,7 +1236,9 @@
       "pattern": "metal",
       "color": "#dde2ee"
     },
-    "hardness": 6
+    "hardness": 6,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "gold",
@@ -1169,7 +1267,9 @@
       "pattern": "metal",
       "color": "#e5bd54"
     },
-    "hardness": 5
+    "hardness": 5,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "steel",
@@ -1202,7 +1302,9 @@
       "pattern": "metal",
       "color": "#747f90"
     },
-    "hardness": 8
+    "hardness": 8,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "bronze",
@@ -1235,7 +1337,9 @@
       "pattern": "metal",
       "color": "#ad8853"
     },
-    "hardness": 7
+    "hardness": 7,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "mithril",
@@ -1268,7 +1372,9 @@
       "pattern": "metal",
       "color": "#8ce3dc"
     },
-    "hardness": 10
+    "hardness": 10,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "diamond",
@@ -1301,7 +1407,9 @@
       "pattern": "crystal",
       "color": "#a6e4ee"
     },
-    "hardness": 12
+    "hardness": 12,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "emerald",
@@ -1334,7 +1442,9 @@
       "pattern": "crystal",
       "color": "#54c185"
     },
-    "hardness": 10
+    "hardness": 10,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "ruby",
@@ -1363,7 +1473,9 @@
       "pattern": "crystal",
       "color": "#e05671"
     },
-    "hardness": 10
+    "hardness": 10,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "sapphire",
@@ -1392,7 +1504,9 @@
       "pattern": "crystal",
       "color": "#629ae9"
     },
-    "hardness": 10
+    "hardness": 10,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "glass",
@@ -1421,7 +1535,9 @@
       "pattern": "glass",
       "color": "#95c5ca"
     },
-    "hardness": 2
+    "hardness": 2,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "charcoal",
@@ -1450,7 +1566,9 @@
       "pattern": "ore",
       "color": "#3b3432"
     },
-    "hardness": 2
+    "hardness": 2,
+    "harvest_category": "plant",
+    "hand_pickable": false
   },
   {
     "id": "ash",
@@ -1479,7 +1597,9 @@
       "pattern": "earth",
       "color": "#99938c"
     },
-    "hardness": 1
+    "hardness": 1,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "lime",
@@ -1512,7 +1632,9 @@
       "pattern": "earth",
       "color": "#e0dcbd"
     },
-    "hardness": 2
+    "hardness": 2,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "mortar",
@@ -1541,7 +1663,9 @@
       "pattern": "earth",
       "color": "#a9a49a"
     },
-    "hardness": 3
+    "hardness": 3,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "ceramic",
@@ -1574,7 +1698,9 @@
       "pattern": "ceramic",
       "color": "#c89173"
     },
-    "hardness": 4
+    "hardness": 4,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "planks",
@@ -1603,7 +1729,9 @@
       "pattern": "planks",
       "color": "#b8915c"
     },
-    "hardness": 3
+    "hardness": 3,
+    "harvest_category": "wood",
+    "hand_pickable": false
   },
   {
     "id": "wood_pulp",
@@ -1632,7 +1760,9 @@
       "pattern": "earth",
       "color": "#c4af82"
     },
-    "hardness": 1
+    "hardness": 1,
+    "harvest_category": "wood",
+    "hand_pickable": false
   },
   {
     "id": "plant_fiber",
@@ -1661,7 +1791,9 @@
       "pattern": "fiber",
       "color": "#c6bc89"
     },
-    "hardness": 1
+    "hardness": 1,
+    "harvest_category": "plant",
+    "hand_pickable": false
   },
   {
     "id": "cloth",
@@ -1690,7 +1822,9 @@
       "pattern": "cloth",
       "color": "#d4c7aa"
     },
-    "hardness": 1
+    "hardness": 1,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "resin",
@@ -1719,7 +1853,9 @@
       "pattern": "crystal",
       "color": "#ce914c"
     },
-    "hardness": 2
+    "hardness": 2,
+    "harvest_category": "plant",
+    "hand_pickable": false
   },
   {
     "id": "crystal_dust",
@@ -1752,7 +1888,9 @@
       "pattern": "earth",
       "color": "#ba9cdf"
     },
-    "hardness": 2
+    "hardness": 2,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "enchanted_glass",
@@ -1785,7 +1923,9 @@
       "pattern": "glass",
       "color": "#87d5c3"
     },
-    "hardness": 4
+    "hardness": 4,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "moon_silver",
@@ -1818,7 +1958,9 @@
       "pattern": "metal",
       "color": "#b4b8ea"
     },
-    "hardness": 8
+    "hardness": 8,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "runestone",
@@ -1851,7 +1993,9 @@
       "pattern": "rune",
       "color": "#77869a"
     },
-    "hardness": 8
+    "hardness": 8,
+    "harvest_category": "stone",
+    "hand_pickable": false
   },
   {
     "id": "fern",
@@ -1876,7 +2020,9 @@
       "habitat": "shade",
       "chance": 0.09
     },
-    "emission": 0
+    "emission": 0,
+    "harvest_category": "plant",
+    "hand_pickable": true
   },
   {
     "id": "clover",
@@ -1901,7 +2047,9 @@
       "habitat": "meadow",
       "chance": 0.025
     },
-    "emission": 0
+    "emission": 0,
+    "harvest_category": "plant",
+    "hand_pickable": true
   },
   {
     "id": "lavender",
@@ -1926,7 +2074,9 @@
       "habitat": "meadow",
       "chance": 0.015
     },
-    "emission": 0
+    "emission": 0,
+    "harvest_category": "plant",
+    "hand_pickable": true
   },
   {
     "id": "red_poppy",
@@ -1951,7 +2101,9 @@
       "habitat": "meadow",
       "chance": 0.012
     },
-    "emission": 0
+    "emission": 0,
+    "harvest_category": "plant",
+    "hand_pickable": true
   },
   {
     "id": "bluebell",
@@ -1976,7 +2128,9 @@
       "habitat": "shade",
       "chance": 0.065
     },
-    "emission": 0
+    "emission": 0,
+    "harvest_category": "plant",
+    "hand_pickable": true
   },
   {
     "id": "cattail",
@@ -2001,7 +2155,9 @@
       "habitat": "wet",
       "chance": 0.055
     },
-    "emission": 0
+    "emission": 0,
+    "harvest_category": "plant",
+    "hand_pickable": true
   },
   {
     "id": "brown_mushroom",
@@ -2026,7 +2182,9 @@
       "habitat": "shade",
       "chance": 0.07
     },
-    "emission": 0
+    "emission": 0,
+    "harvest_category": "plant",
+    "hand_pickable": true
   },
   {
     "id": "glowcap",
@@ -2051,7 +2209,9 @@
       "habitat": "shade",
       "chance": 0.025
     },
-    "emission": 0.35
+    "emission": 0.35,
+    "harvest_category": "plant",
+    "hand_pickable": true
   },
   {
     "id": "thorn_bush",
@@ -2076,7 +2236,9 @@
       "habitat": "meadow",
       "chance": 0.014
     },
-    "emission": 0
+    "emission": 0,
+    "harvest_category": "plant",
+    "hand_pickable": true
   },
   {
     "id": "dry_shrub",
@@ -2101,7 +2263,9 @@
       "habitat": "dry",
       "chance": 0.04
     },
-    "emission": 0
+    "emission": 0,
+    "harvest_category": "plant",
+    "hand_pickable": true
   },
   {
     "id": "crystal",
@@ -2118,6 +2282,8 @@
     ],
     "formula": null,
     "texture": null,
-    "hardness": 1
+    "hardness": 1,
+    "harvest_category": "stone",
+    "hand_pickable": false
   }
 ]

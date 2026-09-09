@@ -628,10 +628,11 @@ pub struct App {
 
     chunk_meshes: HashMap<(i32, i32), GpuMesh>,
     entity_mesh: DynamicMesh,
-    /// The block a right click places, chosen from gathered resources via
-    /// the hotbar keys or the Resources panel. `None` until the player has
-    /// picked something (or gathered anything) to place.
-    selected_block: Option<BlockType>,
+    held_mesh: DynamicMesh,
+    /// Host-owned mining progress and cooldowns, shared by local and remote interactions.
+    interaction_states: HashMap<PlayerId, crate::equipment::Mining>,
+    use_animation: f32,
+    inventory_ready: bool,
     /// Position of the block the player is currently chipping away at with
     /// left-click, and hits landed on it so far -- reset whenever a click
     /// targets a different position. A block breaks once hits reach its
@@ -724,103 +725,56 @@ impl App {
         );
     }
 
-    /// Joined players send intentions. The host owns both harvested resources and placement costs.
-    fn handle_remote_block_edit(
-        &mut self,
-        from: Peer,
-        x: i32,
-        y: i32,
-        z: i32,
-        block: BlockType,
-    ) {
-        let NetRole::Host(host) = &mut self.net else {
-            return;
-        };
-        let Some(&player_id) = host.clients.get(&from) else {
-            return;
-        };
-        let Some(rp) = host.remote_players.get(&player_id) else {
-            return;
-        };
-        let center = Vec3::new(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5);
-        let reachable = rp.pos.is_finite()
-            && rp.pos.abs().max_element() < 1_000_000.0
-            && (0..crate::voxel::chunk::CHUNK_Y).contains(&y)
-            && rp.pos.distance(center) <= REACH + 2.0;
-        if !reachable { return; }
-        crate::crafting::load_interaction_area(&mut self.world, rp.pos);
-        let old = self.world.get_block(x, y, z);
-        let account = self.guest_accounts.entry(from.account_key(&rp.nickname)).or_default();
-        let mut accepted = false;
-        if reachable && block == BlockType::Air && old != BlockType::Air && !old.is_unbreakable() {
-            if let Some(i) = crate::voxel::COLLECTIBLE_BLOCKS
-                .iter()
-                .position(|b| *b == old)
-            {
-                if let Some(count) = account.resources[i].checked_add(1) {
-                    account.resources[i] = count;
-                    accepted = true;
-                }
-            }
-        } else if reachable
-            && (old == BlockType::Air || old == BlockType::Water)
-            && center.distance(self.player.position + Vec3::Y) > 1.5
-            && host
-                .remote_players
-                .values()
-                .all(|p| center.distance(p.pos + Vec3::Y) > 1.5)
-        {
-            if let Some(i) = crate::voxel::COLLECTIBLE_BLOCKS
-                .iter()
-                .position(|b| *b == block)
-            {
-                if account.resources[i] > 0 {
-                    account.resources[i] -= 1;
-                    accepted = true;
-                }
-            }
+    fn publish_hotbar(&mut self) {
+        if let NetRole::Joined(client)=&mut self.net {
+            client.reliable.send(&client.socket,client.server_addr,ReliableMsg::Hotbar(self.player.crafting.hotbar.clone()));
         }
-        if accepted {
-            account.revision += 1;
-            self.world.set_block(x, y, z, block);
-            if block == BlockType::Air {
-                self.pending_block_breaks.push(BlockBreakEvent {
-                    x,
-                    y,
-                    z,
-                    block: old,
-                    player_id,
-                });
+    }
+
+    fn handle_remote_hotbar(&mut self, from:Peer, hotbar:crate::equipment::Hotbar) {
+        let NetRole::Host(host)=&mut self.net else{return;};
+        let Some(rp)=host.clients.get(&from).and_then(|id|host.remote_players.get_mut(id)) else{return;};
+        let account=self.guest_accounts.entry(from.account_key(&rp.nickname)).or_default();
+        let feedback=crate::equipment::accept_hotbar(account,&hotbar).err();
+        rp.held=account.hotbar.entry().filter(|e|e.count(account)>0);
+        host.reliable.send(&host.socket,from,ReliableMsg::CraftState{account:account.clone(),feedback});
+    }
+
+    fn perform_item_action(&mut self, from:Option<Peer>, intent:crate::equipment::Intent) {
+        let (id,feet,key)=if let Some(peer)=from {
+            let NetRole::Host(host)=&self.net else{return;};
+            let Some(&id)=host.clients.get(&peer) else{return;};
+            let Some(rp)=host.remote_players.get(&id) else{return;};
+            (id,rp.pos,Some(peer.account_key(&rp.nickname)))
+        } else {(self.local_player_id,self.player.position,None)};
+        crate::crafting::load_interaction_area(&mut self.world,feet);
+        let players:Vec<_>=self.host_player_positions().iter().map(|p|p.pos).collect();
+        let account=if let Some(key)=key {self.guest_accounts.entry(key).or_default()}else{&mut self.player.crafting};
+        let state=self.interaction_states.entry(id).or_default();
+        let result=if matches!(intent.action,crate::equipment::Action::Attack) {
+            crate::equipment::attack(&self.world,&mut self.creatures,account,state,feet,&intent).map(|()|None)
+        } else {crate::equipment::block_action(&self.world,account,state,feet,&players,&intent)};
+        let feedback=result.as_ref().err().filter(|s|!s.is_empty()).cloned();
+        if let Some(peer)=from {
+            if let NetRole::Host(host)=&mut self.net {
+                if let Some(rp)=host.remote_players.get_mut(&id){rp.held=account.hotbar.entry().filter(|e|e.count(account)>0);}
+                host.reliable.send(&host.socket,peer,ReliableMsg::CraftState{account:account.clone(),feedback:None});
+                if let Some(text)=feedback {host.reliable.send(&host.socket,peer,ReliableMsg::Notify{kind:NotifyKind::Info,text});}
             }
+        } else {
+            self.mining_hits=state.hits;self.mining_target=state.target.map(|v|v.0);
+            if let Some(text)=feedback {self.toasts.push(Toast::new(text));}
         }
-        host.reliable.send(
-            &host.socket,
-            from,
-            ReliableMsg::CraftState {
-                account: account.clone(),
-                feedback: None,
-            },
-        );
-        let authoritative = if accepted { block } else { old };
-        for &addr in host.clients.keys() {
-            if !accepted && addr != from { continue; }
-            host.reliable.send(
-                &host.socket,
-                addr,
-                ReliableMsg::BlockEdit {
-                    x,
-                    y,
-                    z,
-                    block: authoritative,
-                },
-            );
-        }
-        if accepted && block == BlockType::Air {
-            for pos in self.world.flood_from((x, y, z)) {
-                self.apply_block_edit(pos.0, pos.1, pos.2, BlockType::Water);
+        if let Ok(Some((p,block,old)))=result {
+            self.apply_block_edit(p.0,p.1,p.2,block);
+            if block==BlockType::Air {
+                self.pending_block_breaks.push(BlockBreakEvent{x:p.0,y:p.1,z:p.2,block:old,player_id:id});
+                if old==BlockType::Crystal && from.is_none(){self.player.carrying_crystal=true;}
+                for p in self.world.flood_from(p) {self.apply_block_edit(p.0,p.1,p.2,BlockType::Water);}
             }
         }
     }
+
     pub async fn new(window: Arc<Window>, launch: LaunchConfig) -> Result<Self, String> {
         let size = window.inner_size();
 
@@ -1222,6 +1176,8 @@ impl App {
         camera.yaw = yaw;
         camera.pitch = pitch;
         let mut player = Player::new(spawn_pos);
+        crate::equipment::remove_bow(&mut crafting_save.host);
+        for account in crafting_save.guests.values_mut(){crate::equipment::remove_bow(account);}
         player.crafting = crafting_save.host;
 
         let mut creatures = Creatures::new();
@@ -1241,6 +1197,7 @@ impl App {
         let block_target = crate::block_target::BlockTarget::new(&device, &camera_bgl, config.format);
         let ui = Ui::new(&device, config.format, &window);
         let entity_mesh = DynamicMesh::new(&device);
+        let held_mesh = DynamicMesh::new(&device);
 
         let mut app = Self {
             #[cfg(feature = "steam")]
@@ -1310,7 +1267,10 @@ impl App {
             return_to_menu: false,
             chunk_meshes: HashMap::new(),
             entity_mesh,
-            selected_block: None,
+            held_mesh,
+            interaction_states: HashMap::new(),
+            use_animation: 0.0,
+            inventory_ready: false,
             mining_target: None,
             mining_hits: 0,
             cursor_grabbed: false,
@@ -1386,6 +1346,13 @@ impl App {
                     }
                     return;
                 }
+                if code==KeyCode::KeyE && !(self.ui.inventory_open && self.ui.wants_keyboard_input()) && !key_event.repeat && !self.console_open && !self.chat_open && !self.quit_dialog_open && !self.crafting_ui.open {
+                    self.ui.inventory_open=!self.ui.inventory_open;self.sync_settings_input();return;
+                }
+                if self.ui.inventory_open {
+                    if code==KeyCode::Escape {self.ui.inventory_open=false;self.sync_settings_input();}
+                    return;
+                }
                 if code == KeyCode::KeyC && !key_event.repeat && !self.console_open && !self.chat_open && !self.quit_dialog_open {
                     self.crafting_ui.open = !self.crafting_ui.open;
                     self.input.release_all();
@@ -1423,12 +1390,12 @@ impl App {
                     }
                     return;
                 }
-                if !self.ui.settings.open && !self.crafting_ui.open && !self.console_open && !self.quit_dialog_open && !self.chat_open {
+                if !self.ui.inventory_open && !self.ui.settings.open && !self.crafting_ui.open && !self.console_open && !self.quit_dialog_open && !self.chat_open {
                     self.input.key_event(code, key_event.state);
                 }
             }
             WindowEvent::MouseInput { state, button, .. }
-                if !self.ui.settings.open && !self.crafting_ui.open && !self.console_open && !self.quit_dialog_open && !self.chat_open => {
+                if !self.ui.inventory_open && !self.ui.settings.open && !self.crafting_ui.open && !self.console_open && !self.quit_dialog_open && !self.chat_open => {
                     self.input.mouse_button_event(*button, *state);
                     if *state == ElementState::Pressed
                         && *button == MouseButton::Left
@@ -1437,13 +1404,17 @@ impl App {
                         self.grab_cursor(true);
                     }
             }
+            WindowEvent::MouseWheel {delta,..} if self.cursor_grabbed && (matches!(self.net,NetRole::Host(_)) || self.inventory_ready) => {
+                let y=match delta {winit::event::MouseScrollDelta::LineDelta(_,y)=>*y,winit::event::MouseScrollDelta::PixelDelta(p)=>p.y as f32};
+                if y.abs()>0.01 {self.player.crafting.hotbar.cycle(if y>0.0 {-1}else{1});self.publish_hotbar();}
+            }
             _ => {}
         }
     }
 
     fn sync_settings_input(&mut self) {
-        self.input.release_all();
-        self.grab_cursor(!self.ui.settings.open && !self.console_open && !self.chat_open
+        self.input.release_all();self.input.end_frame();
+        self.grab_cursor(!self.ui.inventory_open && !self.ui.settings.open && !self.console_open && !self.chat_open
             && !self.crafting_ui.open && !self.quit_dialog_open);
     }
 
@@ -1727,93 +1698,23 @@ impl App {
             self.audio.play_player_step();
         }
 
-        if let Some(i) = self.input.hotbar_select {
-            if let Some(b) = BlockType::from_hotbar_index(i) {
-                self.selected_block = Some(b);
+        self.use_animation=(self.use_animation-dt).max(0.0);
+        if let Some(i)=self.input.hotbar_select.filter(|_| matches!(self.net,NetRole::Host(_)) || self.inventory_ready) {
+            self.player.crafting.hotbar.select(i);self.publish_hotbar();
+        }
+        if self.cursor_grabbed && (matches!(self.net,NetRole::Host(_)) || self.inventory_ready) {
+            use crate::equipment::{Entry,Gear,Action,Intent};
+            let entry=self.player.crafting.hotbar.entry();
+            if self.input.left_clicked || self.input.right_clicked {
+                let action=if self.input.right_clicked {Action::Place} else {match entry {Some(Entry::Resource(_))=>Action::Place,Some(Entry::Gear(Gear::Sword))=>Action::Attack,_=>Action::Mine}};
+                let intent=Intent{hotbar:self.player.crafting.hotbar.clone(),item:entry,target:raycast(&self.world,self.camera.eye_position(),self.camera.forward(),REACH).map(|h|h.target),direction:self.camera.forward().to_array(),action};
+                if entry.is_none() || entry.is_some_and(|e|e.count(&self.player.crafting)>0) {self.use_animation=0.28;self.audio.play_player_attack();}
+                if let NetRole::Joined(client)=&mut self.net {client.reliable.send(&client.socket,client.server_addr,ReliableMsg::ItemAction(intent));}
+                else {self.perform_item_action(None,intent);}
             }
         }
 
-        if !self.console_open
-            && !self.chat_open
-            && (self.input.left_clicked || self.input.right_clicked)
-        {
-            let origin = self.camera.eye_position();
-            let dir = self.camera.forward();
-            if let Some(hit) = raycast(&self.world, origin, dir, REACH) {
-                if self.input.left_clicked {
-                    let target_block = self
-                        .world
-                        .get_block(hit.target.0, hit.target.1, hit.target.2);
-                    if target_block.is_unbreakable() {
-                        self.toasts.push(Toast::new(format!(
-                            "{} is unbreakable",
-                            target_block.name()
-                        )));
-                    } else {
-                        if self.mining_target != Some(hit.target) {
-                            self.mining_target = Some(hit.target);
-                            self.mining_hits = 0;
-                        }
-                        self.mining_hits += 1;
-                        // No player-vs-creature melee exists yet, so a
-                        // mining swing is the closest thing to an "attack"
-                        // the player currently performs -- see
-                        // `audio::AudioEngine::play_player_attack`.
-                        self.audio.play_player_attack();
-
-                        if self.mining_hits >= target_block.hardness() {
-                            self.mining_target = None;
-                            self.mining_hits = 0;
-                            let broken = target_block;
-                            if broken == BlockType::Crystal {
-                                self.player.carrying_crystal = true;
-                            }
-                            if matches!(self.net, NetRole::Host(_)) { self.player.add_resource(broken); }
-                            // Only the host records this for the Lua tick --
-                            // a joined client's own break is picked up on
-                            // the host via the network-relayed
-                            // `ReliableMsg::BlockEdit` path instead, so
-                            // recording it here too would double-fire.
-                            if broken != BlockType::Air && matches!(self.net, NetRole::Host(_)) {
-                                self.pending_block_breaks.push(BlockBreakEvent {
-                                    x: hit.target.0,
-                                    y: hit.target.1,
-                                    z: hit.target.2,
-                                    block: broken,
-                                    player_id: self.local_player_id,
-                                });
-                            }
-                            self.apply_block_edit(
-                                hit.target.0,
-                                hit.target.1,
-                                hit.target.2,
-                                BlockType::Air,
-                            );
-                            for pos in if matches!(self.net, NetRole::Host(_)) { self.world.flood_from(hit.target) } else { Vec::new() } {
-                                self.apply_block_edit(pos.0, pos.1, pos.2, BlockType::Water);
-                            }
-                        }
-                    }
-                } else if !self.would_hit_player(hit.place) {
-                    match self.selected_block {
-                        Some(block) if self.player.resource_count(block) > 0 => {
-                            if matches!(self.net, NetRole::Host(_)) { self.player.take_resource(block); }
-                            self.apply_block_edit(hit.place.0, hit.place.1, hit.place.2, block);
-                        }
-                        Some(block) => {
-                            self.toasts.push(Toast::new(format!("Out of {}", block.name())));
-                        }
-                        None => {
-                            self.toasts.push(Toast::new(
-                                "No block selected -- gather resources first",
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-
-        // Interact (E): a deliberate, non-destructive "use" aimed at
+        // Interact (F): a deliberate, non-destructive "use" aimed at
         // whatever's under the crosshair, distinct from mining (left click)
         // and placing (right click) -- see world_api/schema.yaml's
         // `on_interact`. Only reports the event; a rule decides what, if
@@ -1954,6 +1855,18 @@ impl App {
             self.local_player_id,
         ));
         self.entity_mesh.update(&self.device, &self.queue, &mesh);
+        let entry=self.player.crafting.hotbar.entry().filter(|e|e.count(&self.player.crafting)>0);
+        let forward=self.camera.forward();let right=self.camera.right();let up=right.cross(forward);
+        let swing=(self.use_animation/0.28*std::f32::consts::PI).sin();
+        let camera_basis=glam::Mat3::from_cols(right,up,-forward);
+        // Turn the original held pose AND its use motion around the vertical
+        // axis at the grip: +Y rotation is counterclockwise viewed from above.
+        let turn=if entry.is_some() {glam::Mat3::from_rotation_y(std::f32::consts::FRAC_PI_2)}else{glam::Mat3::IDENTITY};
+        let basis=camera_basis*turn*glam::Mat3::from_rotation_z(-0.30-swing*0.6);
+        let motion=Vec3::new(-swing*0.12,0.0,-swing*0.08);
+        let origin=self.camera.eye_position()+camera_basis*(Vec3::new(0.32,-0.42,-0.65)+turn*motion);
+        self.held_mesh.update(&self.device,&self.queue,&crate::held_item::mesh(entry,origin,basis,0.45));
+
 
         self.toasts.retain(|t| !t.is_expired());
         let is_host = matches!(self.net, NetRole::Host(_));
@@ -1994,7 +1907,6 @@ impl App {
             self.last_fps,
             self.quit_dialog_open,
             &self.player,
-            self.selected_block,
             self.chat_open,
             &mut self.chat_input,
             &self.chat_log,
@@ -2007,6 +1919,7 @@ impl App {
         );
         self.pending_egui_output = Some(full_output);
         if settings_was_open != self.ui.settings.open { self.sync_settings_input(); }
+        if requests.close_inventory {self.ui.inventory_open=false;self.sync_settings_input();}
         if let Some(action) = requests.crafting {
             self.submit_crafting(action);
         }
@@ -2014,8 +1927,11 @@ impl App {
         if requests.invite_friends {
             match &self.net { NetRole::Host(host) => host.socket.invite_friends(), NetRole::Joined(client) => client.socket.invite_friends() }
         }
-        if let Some(block) = requests.select_block {
-            self.selected_block = Some(block);
+        if let Some(slot)=requests.select_slot.filter(|_|matches!(self.net,NetRole::Host(_)) || self.inventory_ready) {self.player.crafting.hotbar.select(slot);self.publish_hotbar();}
+        if let Some(entry)=requests.assign_entry.filter(|_|matches!(self.net,NetRole::Host(_)) || self.inventory_ready) {
+            if entry.is_none() || entry.is_some_and(|e|e.count(&self.player.crafting)>0) {
+                self.player.crafting.hotbar.assign(entry);self.publish_hotbar();
+            }
         }
 
         if let Some(text) = requests.send_chat {
@@ -2072,10 +1988,7 @@ impl App {
                     client.server_addr, client.player_id
                 ),
             };
-            let block_info = match self.selected_block {
-                Some(b) => b.name(),
-                None => "none",
-            };
+            let block_info = self.player.crafting.hotbar.entry().map_or("Empty hand",|e|e.name());
             let mining_info = match self.mining_target {
                 Some(pos) => {
                     let target = self.world.get_block(pos.0, pos.1, pos.2);
@@ -2372,13 +2285,8 @@ impl App {
                     );
                 }
             }
-            NetRole::Joined(client) => {
-                client.reliable.send(
-                    &client.socket,
-                    client.server_addr,
-                    ReliableMsg::BlockEdit { x, y, z, block },
-                );
-            }
+            NetRole::Joined(_) => {} // Only the host publishes block edits.
+
         }
     }
 
@@ -2702,8 +2610,12 @@ impl App {
                 speed_multiplier: self.player.speed_multiplier,
                 jump_multiplier: self.player.jump_multiplier,
                 oxygen: self.player.oxygen,
+                held: self.player.crafting.hotbar.entry().filter(|e|e.count(&self.player.crafting)>0),
             }];
-            for (&id, rp) in host.remote_players.iter() {
+            for (&id, rp) in host.remote_players.iter_mut() {
+                if let Some(peer)=host.clients.iter().find_map(|(peer,pid)|(*pid==id).then_some(peer)) {
+                    if let Some(account)=self.guest_accounts.get(&peer.account_key(&rp.nickname)) {rp.held=account.hotbar.entry().filter(|e|e.count(account)>0);}
+                }
                 players.push(SnapshotPlayer {
                     id,
                     pos: rp.pos.to_array(),
@@ -2714,6 +2626,7 @@ impl App {
                     speed_multiplier: rp.speed_multiplier,
                     jump_multiplier: rp.jump_multiplier,
                     oxygen: rp.oxygen,
+                    held: rp.held,
                 });
             }
             let snapshot = UnreliableMsg::Snapshot {
@@ -2803,9 +2716,10 @@ impl App {
                     ReliableMsg::CraftRequest { revision, action } => {
                         self.handle_crafting_request(from, revision, action);
                     }
-                    ReliableMsg::BlockEdit { x, y, z, block } => {
-                        self.handle_remote_block_edit(from, x, y, z, block);
-                    }
+                    ReliableMsg::Hotbar(hotbar)=>self.handle_remote_hotbar(from,hotbar),
+                    ReliableMsg::ItemAction(intent)=>self.perform_item_action(Some(from),intent),
+                    // BlockEdit is host-to-client only. Never accept claimed destruction.
+                    ReliableMsg::BlockEdit { .. } => {}
                     ReliableMsg::ChatMessage(text) => {
                         let sender = host
                             .clients
@@ -2940,10 +2854,16 @@ impl App {
                         if registry.validate().is_ok() { self.crafting_registry = registry; }
                     }
                     ReliableMsg::CraftState { account, feedback } => {
-                        if account.revision >= self.player.crafting.revision {
+                        if account.revision >= self.player.crafting.revision || !self.inventory_ready {
+                            let local_hotbar=self.player.crafting.hotbar.clone();
+                            let keep_local=self.inventory_ready && local_hotbar.revision>account.hotbar.revision;
                             self.player.crafting = account;
+                            if keep_local {self.player.crafting.hotbar=local_hotbar;}
+                            self.inventory_ready=true;
+                            self.player.carrying_crystal |= self.player.resource_count(BlockType::Crystal)>0;
                         }
                         if let Some(text) = feedback {
+                            self.toasts.push(Toast::new(text.clone()));
                             self.crafting_ui.feedback = text;
                             self.crafting_ui.pending = false;
                         }
@@ -3026,6 +2946,7 @@ impl App {
                             rp.speed_multiplier = sp.speed_multiplier;
                             rp.jump_multiplier = sp.jump_multiplier;
                             rp.oxygen = sp.oxygen;
+                            rp.held = sp.held;
                             rp.last_seen = now;
                         })
                         .or_insert_with(|| {
@@ -3043,23 +2964,13 @@ impl App {
                             rp.speed_multiplier = sp.speed_multiplier;
                             rp.jump_multiplier = sp.jump_multiplier;
                             rp.oxygen = sp.oxygen;
+                            rp.held = sp.held;
                             rp
                         });
                 }
             }
             Packet::Unreliable(_) => {}
         }
-    }
-
-    fn would_hit_player(&self, block: (i32, i32, i32)) -> bool {
-        let p = self.player.position;
-        let bx = block.0 as f32;
-        let by = block.1 as f32;
-        let bz = block.2 as f32;
-        let overlaps_x = p.x + 0.3 > bx && p.x - 0.3 < bx + 1.0;
-        let overlaps_z = p.z + 0.3 > bz && p.z - 0.3 < bz + 1.0;
-        let overlaps_y = p.y + 1.8 > by && p.y < by + 1.0;
-        overlaps_x && overlaps_y && overlaps_z
     }
 
     fn update_chunks(&mut self) {
@@ -3207,9 +3118,14 @@ impl App {
 
         let target = if self.cursor_grabbed && self.ui.settings.values.gameplay.show_block_target {
             raycast(&self.world, cam_pos, self.camera.forward(), REACH).map(|hit| {
-                let breakable = !self.world.get_block(hit.target.0, hit.target.1, hit.target.2).is_unbreakable();
-                let placeable = !self.would_hit_player(hit.place)
-                    && self.selected_block.is_some_and(|block| self.player.resource_count(block) > 0);
+                let breakable = crate::equipment::can_mine(self.player.crafting.hotbar.entry(),self.world.get_block(hit.target.0,hit.target.1,hit.target.2),&self.player.crafting);
+                let mut account=self.player.crafting.clone();
+                let players=match &self.net {
+                    NetRole::Host(host)=>host.remote_players.values().map(|p|p.pos).collect::<Vec<_>>(),
+                    NetRole::Joined(client)=>client.remote_players.values().map(|p|p.pos).collect::<Vec<_>>(),
+                };
+                let intent=crate::equipment::Intent{hotbar:account.hotbar.clone(),item:account.hotbar.entry(),target:Some(hit.target),direction:self.camera.forward().to_array(),action:crate::equipment::Action::Place};
+                let placeable=matches!(crate::equipment::block_action(&self.world,&mut account,&mut crate::equipment::Mining::default(),self.player.position,&players,&intent),Ok(Some(_)));
                 (hit, breakable, placeable)
             })
         } else { None };
@@ -3329,6 +3245,18 @@ impl App {
                 rpass.draw(0..bird_vertex_count, 0..1);
             }
             self.block_target.draw(&mut rpass, &self.camera_bind_group);
+        }
+
+        if self.cursor_grabbed {
+            // Separate depth so the local view model cannot clip through nearby terrain.
+            let mut pass=encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label:Some("held item pass"),
+                color_attachments:&[Some(wgpu::RenderPassColorAttachment {view:&view,resolve_target:None,ops:wgpu::Operations{load:wgpu::LoadOp::Load,store:wgpu::StoreOp::Store}})],
+                depth_stencil_attachment:Some(wgpu::RenderPassDepthStencilAttachment{view:&self.depth_view,depth_ops:Some(wgpu::Operations{load:wgpu::LoadOp::Clear(1.0),store:wgpu::StoreOp::Store}),stencil_ops:None}),
+                occlusion_query_set:None,timestamp_writes:None,
+            });
+            pass.set_pipeline(&self.render_pipeline);pass.set_bind_group(0,&self.camera_bind_group,&[]);pass.set_bind_group(1,&self.texture_bind_group,&[]);pass.set_bind_group(2,&self.shadow_sample_bind_group,&[]);
+            pass.set_vertex_buffer(0,self.held_mesh.vertex_buffer.slice(..));pass.set_index_buffer(self.held_mesh.index_buffer.slice(..),wgpu::IndexFormat::Uint32);pass.draw_indexed(0..self.held_mesh.index_count,0,0..1);
         }
 
         if let Some(full_output) = self.pending_egui_output.take() {

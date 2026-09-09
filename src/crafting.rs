@@ -71,6 +71,8 @@ pub fn totals(slots: &[Slot]) -> Result<Composition, String> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Account {
+    pub gear: [u32;4],
+    pub hotbar: crate::equipment::Hotbar,
     pub elements: Composition,
     pub mana: u32,
     #[serde(with = "resource_counts")]
@@ -80,6 +82,8 @@ pub struct Account {
 impl Default for Account {
     fn default() -> Self {
         Self {
+            gear: [1,1,1,0],
+            hotbar: crate::equipment::Hotbar::default(),
             elements: [0; 5],
             mana: 0,
             resources: [0; COLLECTIBLE_BLOCKS.len()],

@@ -76,3 +76,7 @@ allow direct visual comparison at 1280 x 720. The test is ignored in the ordinar
 suite because machines without a GPU adapter should still run the unit tests.
 
 The Multiplayer section now selects Direct / LAN or Steam friends for the next session. Steam requires a build with `--features steam`; test App ID 480 is the default. See [Steam multiplayer](STEAM_MULTIPLAYER.md).
+
+## Hotbar and targeting
+
+See [HOTBAR.md](HOTBAR.md) for the nine-slot hotbar, E inventory assignment panel, tool requirements and multiplayer persistence. Settings > Gameplay > Show block targeting outlines toggles the local gold/green/red target previews.

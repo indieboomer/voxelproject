@@ -8,9 +8,10 @@ pub struct Input {
     keys_down: HashSet<KeyCode>,
     pub mouse_delta: (f32, f32),
     pub left_clicked: bool,
+    pub left_released: bool,
     pub right_clicked: bool,
     /// Edge-triggered, like `left_clicked`/`right_clicked` -- set once on
-    /// the frame the interact key (E) is pressed, aimed at whatever's under
+    /// the frame the interact key (F) is pressed, aimed at whatever's under
     /// the crosshair. Distinct from both: unlike a left click it never
     /// breaks a block, and unlike a right click it never places one -- it
     /// only reports "the player deliberately used this" for `on_interact`
@@ -38,8 +39,9 @@ impl Input {
                     KeyCode::Digit6 => self.hotbar_select = Some(5),
                     KeyCode::Digit7 => self.hotbar_select = Some(6),
                     KeyCode::Digit8 => self.hotbar_select = Some(7),
+                    KeyCode::Digit9 => self.hotbar_select = Some(8),
                     KeyCode::F5 => self.save_requested = true,
-                    KeyCode::KeyE => self.interact_clicked = true,
+                    KeyCode::KeyF => self.interact_clicked = true,
                     _ => {}
                 }
             }
@@ -50,6 +52,9 @@ impl Input {
     }
 
     pub fn mouse_button_event(&mut self, button: MouseButton, state: ElementState) {
+        if state == ElementState::Released && button == MouseButton::Left {
+            self.left_released = true;
+        }
         if state == ElementState::Pressed {
             match button {
                 MouseButton::Left => self.left_clicked = true,
@@ -74,6 +79,7 @@ impl Input {
     pub fn end_frame(&mut self) {
         self.mouse_delta = (0.0, 0.0);
         self.left_clicked = false;
+        self.left_released = false;
         self.right_clicked = false;
         self.interact_clicked = false;
         self.hotbar_select = None;

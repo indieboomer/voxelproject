@@ -9,7 +9,7 @@ use crate::voxel::block::BlockType;
 pub type PlayerId = u32;
 pub type WorldEdit = ((i32, i32, i32), BlockType);
 pub const MAX_PLAYERS: usize = 4;
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 8;
 pub const HOST_PLAYER_ID: PlayerId = 0;
 pub const DEFAULT_PORT: u16 = 7878;
 pub const RELIABLE_RESEND_INTERVAL: Duration = Duration::from_millis(200);
@@ -38,6 +38,8 @@ pub enum NotifyKind {
 /// acknowledges them. Safe to apply more than once (idempotent).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ReliableMsg {
+    Hotbar(crate::equipment::Hotbar),
+    ItemAction(crate::equipment::Intent),
     /// Client intention; the host resolves the recipe and checks its own account revision.
     CraftRequest {
         revision: u64,
@@ -129,6 +131,7 @@ pub enum ReliableMsg {
 /// another player's copy of these yet).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SnapshotPlayer {
+    pub held: Option<crate::equipment::Entry>,
     pub id: PlayerId,
     pub pos: [f32; 3],
     pub yaw: f32,
@@ -420,6 +423,7 @@ mod tests {
     #[test]
     fn snapshot_round_trips_through_encode_decode() {
         let player = SnapshotPlayer {
+            held: Some(crate::equipment::Entry::Gear(crate::equipment::Gear::Pickaxe)),
             id: 7,
             pos: [1.0, 2.0, 3.0],
             yaw: 1.57,

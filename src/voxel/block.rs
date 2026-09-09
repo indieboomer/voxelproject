@@ -154,7 +154,7 @@ pub struct BlockDef {
 }
 
 /// Block types the player can gather (by breaking) and place again, shown
-/// in the Resources HUD panel; hotbar keys 1-8 select the first eight.
+/// in the Resources inventory panel and assignable to the nine-slot hotbar.
 /// Air, Water, and Bedrock cannot be gathered. Keep slots append-only for saves.
 pub const COLLECTIBLE_BLOCKS: [BlockType; 83] = [
     BlockType::Grass,
@@ -390,10 +390,6 @@ impl BlockType {
                 | BlockType::CherryWood
                 | BlockType::BirchWood
         )
-    }
-
-    pub fn from_hotbar_index(i: usize) -> Option<BlockType> {
-        COLLECTIBLE_BLOCKS.get(i).copied()
     }
 
     pub fn name(self) -> &'static str {

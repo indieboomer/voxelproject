@@ -20,6 +20,7 @@ fn color_for(id: PlayerId) -> [f32; 3] {
 }
 
 pub struct RemotePlayer {
+    pub held: Option<crate::equipment::Entry>,
     pub pos: Vec3,
     pub yaw: f32,
     pub carrying_crystal: bool,
@@ -58,6 +59,7 @@ impl RemotePlayer {
     /// own `Player` or this `RemotePlayer` record of someone else's.
     pub fn new(pos: Vec3, yaw: f32, carrying_crystal: bool, nickname: String) -> Self {
         Self {
+            held:None,
             pos,
             yaw,
             carrying_crystal,
@@ -84,6 +86,8 @@ pub fn build_mesh(players: &HashMap<PlayerId, RemotePlayer>, exclude: PlayerId) 
         if id == exclude {
             continue;
         }
+        let held=crate::held_item::mesh(rp.held,rp.pos+Vec3::new(0.4,0.65,0.0),glam::Mat3::from_rotation_y(-rp.yaw),0.55);
+        let offset=vertices.len() as u32;vertices.extend(held.vertices);indices.extend(held.indices.into_iter().map(|i|i+offset));
         let color = color_for(id);
         let feet = rp.pos;
         let body_min = Vec3::new(feet.x - 0.3, feet.y, feet.z - 0.3);

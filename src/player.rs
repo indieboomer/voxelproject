@@ -159,6 +159,7 @@ impl Player {
 
     /// Adds one to the gathered count for `block`, if it's collectible.
     /// A no-op for anything not in `COLLECTIBLE_BLOCKS` (e.g. Water).
+    #[cfg(test)]
     pub fn add_resource(&mut self, block: BlockType) {
         self.add_resources(block, 1);
     }
@@ -182,6 +183,7 @@ impl Player {
 
     /// Consumes one gathered `block`, if any remain. Returns whether it
     /// succeeded -- the caller should only place the block on success.
+    #[cfg(test)]
     pub fn take_resource(&mut self, block: BlockType) -> bool {
         self.take_resources(block, 1)
     }

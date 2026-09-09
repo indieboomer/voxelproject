@@ -13,7 +13,7 @@ fn render_ui_previews() {
             .unwrap();
     let width = 1280;
     for (theme, name) in [(UiTheme::Generic, "generic"), (UiTheme::Fantasy, "fantasy")] {
-        for panel in ["settings", "crafting", "resources"] {
+        for panel in ["settings", "crafting", "resources", "hotbar"] {
             let height = if panel == "resources" { 1024 } else { 720 };
             let ctx = egui::Context::default();
             ui_theme::apply(&ctx, theme);
@@ -36,11 +36,14 @@ fn render_ui_previews() {
             let view = texture.create_view(&Default::default());
             let registry =
                 crate::crafting::Registry::parse(include_str!("../data/crafting.json")).unwrap();
-            let account = crate::crafting::Account {
+            let mut account = crate::crafting::Account {
                 elements: [12, 8, 4, 8, 3],
                 mana: 24,
                 ..Default::default()
             };
+            account.hotbar.slots[4]=Some(crate::equipment::Entry::Resource(crate::voxel::BlockType::OakWood));
+            account.hotbar.slots[5]=Some(crate::equipment::Entry::Resource(crate::voxel::BlockType::Crystal));
+            account.resources[4]=12;
             let world = crate::voxel::World::new(1);
             let creatures = crate::creature::Creatures::new();
             let mut craft = crate::crafting_ui::CraftingUi::default();
@@ -73,7 +76,9 @@ fn render_ui_previews() {
                                 ui_theme::menu_backdrop(ui);
                             }
                         });
-                        if panel == "crafting" {
+                        if panel == "hotbar" {
+                            crate::equipment_ui::hotbar(ctx,&account,false,true);
+                        } else if panel == "crafting" {
                             craft.draw(
                                 ctx,
                                 &registry,

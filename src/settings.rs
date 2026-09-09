@@ -132,8 +132,8 @@ impl SettingsPanel {
                 ui.separator();
                 ui.heading("Gameplay");
                 ui.checkbox(&mut self.values.gameplay.show_block_target, "Show block targeting outlines");
-                ui.small("Gold: break (left click). Green: build (right click). Red: unbreakable.");
-                ui.small("Build preview appears when you have the selected resource and the space is clear of you.");
+                ui.small("Gold: compatible tool. Green: build. Red: cannot harvest with the active item.");
+                ui.small("Build preview appears for an active resource when placement is valid.");
                 ui.separator();
                 ui.heading("Appearance");
                 ui.label("UI style");
