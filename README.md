@@ -131,3 +131,11 @@ Open **Settings** in the main menu or press **F10** in game to switch between **
 ## Steam multiplayer (development)
 
 Optional Steam friends sessions use test App ID **480**. Direct / LAN remains available in Settings. See [Steam build, implementation plan and validation checklist](STEAM_MULTIPLAYER.md).
+
+## Resource expansion
+
+The game now has 82 stackable resources, natural deposits, short elemental formulas and pixel textures. See [resource catalog, balance and migration notes](RESOURCES.md).
+
+## Landscape
+
+Winding rivers connect large lakes, occasional mountains have rocky summits, and submerged views have a blue tint. See [terrain behavior and compatibility](TERRAIN.md).

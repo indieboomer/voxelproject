@@ -112,7 +112,7 @@ impl SettingsPanel {
                     });
                 });
                 if !cfg!(feature = "steam") {
-                    ui.small("Steam support is not included in this build.");
+                    ui.small("Steam support is not included in this build. Build with build.bat steam, then restart the game.");
                 }
                 ui.label("Applies to your next session. One host and up to three guests.");
                 ui.separator();

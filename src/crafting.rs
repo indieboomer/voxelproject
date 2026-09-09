@@ -68,13 +68,63 @@ pub fn totals(slots: &[Slot]) -> Result<Composition, String> {
     Ok(result)
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Account {
     pub elements: Composition,
     pub mana: u32,
+    #[serde(with = "resource_counts")]
     pub resources: [u32; COLLECTIBLE_BLOCKS.len()],
     pub revision: u64,
+}
+impl Default for Account {
+    fn default() -> Self {
+        Self {
+            elements: [0; 5],
+            mana: 0,
+            resources: [0; COLLECTIBLE_BLOCKS.len()],
+            revision: 0,
+        }
+    }
+}
+// Append-only resource slots. Legacy JSON saves contain 23 entries; missing new slots are zero.
+// A bounded sequence also avoids serde's fixed-array limit and hostile length allocations.
+mod resource_counts {
+    use super::*;
+    pub fn serialize<S: serde::Serializer>(
+        value: &[u32; COLLECTIBLE_BLOCKS.len()],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        value.as_slice().serialize(serializer)
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<[u32; COLLECTIBLE_BLOCKS.len()], D::Error> {
+        struct Counts;
+        impl<'de> serde::de::Visitor<'de> for Counts {
+            type Value = [u32; COLLECTIBLE_BLOCKS.len()];
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "at most {} resource counts", COLLECTIBLE_BLOCKS.len())
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut values = [0; COLLECTIBLE_BLOCKS.len()];
+                for value in &mut values {
+                    match seq.next_element()? {
+                        Some(n) => *value = n,
+                        None => return Ok(values),
+                    }
+                }
+                if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                    return Err(serde::de::Error::custom("Too many resource counts"));
+                }
+                Ok(values)
+            }
+        }
+        deserializer.deserialize_seq(Counts)
+    }
 }
 impl Account {
     pub fn add_elements(&mut self, composition: Composition) -> Result<(), String> {
@@ -216,6 +266,29 @@ impl Registry {
             };
             if !valid {
                 return Err(format!("Unknown composition object: {}", c.id));
+            }
+        }
+        // Extraction must never recover more of any element than crafting spent.
+        // This component-wise invariant also prevents profit through longer recipe cycles.
+        for recipe in &self.recipes {
+            if recipe.output.kind == ObjectKind::Creature {
+                continue;
+            }
+            let cost = totals(&recipe.inputs)?;
+            let recovered = self.composition(recipe.output.kind, &recipe.output.id);
+            if !compositions.contains(&("block", &recipe.output.id)) {
+                return Err(format!("Missing output composition: {}", recipe.output.id));
+            }
+            for i in 0..5 {
+                if recovered[i]
+                    .checked_mul(recipe.output.quantity)
+                    .is_none_or(|n| n > cost[i])
+                {
+                    return Err(format!(
+                        "Recipe creates extractable elements: {}",
+                        recipe.id
+                    ));
+                }
             }
         }
         Ok(())
@@ -769,7 +842,7 @@ mod tests {
             id: 1,
             msg: ReliableMsg::CraftRequest {
                 revision: 0,
-                action: Action::Craft(formula(&[(Element::Earth, 1)])),
+                action: Action::Craft(formula(&[(Element::Earth, 1), (Element::Water, 1)])),
             },
         };
         let bytes = encode(&packet);
@@ -871,5 +944,191 @@ mod tests {
                 assert!(creatures.snapshot().is_empty());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod resource_balance_tests {
+    use super::*;
+    #[test]
+    fn all_resource_formulas_execute_without_recycling_profit() {
+        let registry = Registry::parse(include_str!("../data/crafting.json")).unwrap();
+        assert_eq!(COLLECTIBLE_BLOCKS.len(), 82);
+        let world = World::new(5);
+        let mut creatures = Creatures::new();
+        for (index, block) in COLLECTIBLE_BLOCKS.iter().enumerate() {
+            let info = crate::voxel::resource_catalog::info(*block);
+            assert_eq!(
+                crate::voxel::resource_catalog::RESOURCES[index].block,
+                *block
+            );
+            let comp = registry.composition(ObjectKind::Resource, block.id());
+            assert!(
+                comp.iter().sum::<u32>() > 0,
+                "{} has no composition",
+                block.id()
+            );
+            let recipe = registry.recipes.iter().find(|r| r.output.id == block.id());
+            assert_eq!(
+                recipe.is_some(),
+                info.source != "natural",
+                "{} source mismatch",
+                block.id()
+            );
+            if let Some(recipe) = recipe {
+                assert!((2..=3).contains(&recipe.inputs.len()));
+                assert_ne!(recipe.output.kind, ObjectKind::Item);
+                let mut slots = [None; 5];
+                for (i, s) in recipe.inputs.iter().enumerate() {
+                    slots[i] = Some(*s);
+                }
+                let initial = totals(&recipe.inputs).unwrap();
+                let mana = registry.mana_cost(&slots);
+                let mut account = Account {
+                    elements: initial,
+                    mana,
+                    ..Default::default()
+                };
+                registry
+                    .execute(
+                        &mut account,
+                        0,
+                        &Action::Craft(slots),
+                        &world,
+                        &mut creatures,
+                        Vec3::ZERO,
+                        &[],
+                    )
+                    .unwrap();
+                assert_eq!(account.resources[index], recipe.output.quantity);
+                registry
+                    .execute(
+                        &mut account,
+                        1,
+                        &Action::Extract {
+                            block: *block,
+                            amount: recipe.output.quantity,
+                        },
+                        &world,
+                        &mut creatures,
+                        Vec3::ZERO,
+                        &[],
+                    )
+                    .unwrap();
+                assert_eq!(account.resources[index], 0);
+                assert_eq!(account.mana, 0);
+                assert!(account.elements.iter().zip(initial).all(|(a, b)| *a <= b));
+            }
+        }
+        let bytes = crate::net::encode(&crate::net::Packet::Reliable {
+            id: 1,
+            msg: crate::net::ReliableMsg::CraftRegistry(registry),
+        });
+        assert!(bytes.len() < crate::transport::MAX_PACKET_BYTES);
+        assert!(crate::net::decode(&bytes).is_some());
+    }
+    #[test]
+    fn legacy_inventory_expands_without_shifting_counts() {
+        let legacy =
+            serde_json::json!({"resources":(1..=23).collect::<Vec<u32>>(),"mana":17,"revision":9});
+        let account: Account = serde_json::from_value(legacy).unwrap();
+        assert_eq!(account.resources[..23], (1..=23).collect::<Vec<u32>>());
+        assert!(account.resources[23..].iter().all(|n| *n == 0));
+        assert_eq!(account.mana, 17);
+        let previous: Account =
+            serde_json::from_value(serde_json::json!({"resources":(1..=72).collect::<Vec<u32>>()}))
+                .unwrap();
+        assert_eq!(previous.resources[71], 72);
+        assert!(previous.resources[72..].iter().all(|n| *n == 0));
+        assert_eq!(BlockType::Fern as u8, 76);
+        let mut expanded = account;
+        expanded.resources[COLLECTIBLE_BLOCKS.len() - 1] = 55;
+        let bytes = bincode::serialize(&expanded).unwrap();
+        assert_eq!(bincode::deserialize::<Account>(&bytes).unwrap(), expanded);
+        let too_many = serde_json::json!({"resources":vec![0;COLLECTIBLE_BLOCKS.len()+1]});
+        assert!(serde_json::from_value::<Account>(too_many).is_err());
+        assert_eq!(BlockType::RedStone as u8, 26);
+        assert_eq!(BlockType::IronOre as u8, 27);
+    }
+    #[test]
+    fn registry_rejects_element_multiplication() {
+        let mut registry = Registry::parse(include_str!("../data/crafting.json")).unwrap();
+        registry
+            .recipes
+            .iter_mut()
+            .find(|r| r.output.id == "iron")
+            .unwrap()
+            .output
+            .quantity = 2;
+        assert!(registry
+            .validate()
+            .unwrap_err()
+            .contains("creates extractable elements"));
+    }
+}
+
+#[cfg(test)]
+mod resource_progression_tests {
+    use super::*;
+    #[test]
+    fn iron_ore_and_coal_can_fund_iron_without_starter_mana() {
+        let registry = Registry::parse(include_str!("../data/crafting.json")).unwrap();
+        let mut account = Account::default();
+        account.resources[resource_index("iron_ore").unwrap()] = 1;
+        account.resources[resource_index("coal").unwrap()] = 1;
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        for block in [BlockType::IronOre, BlockType::Coal] {
+            let rev = account.revision;
+            registry
+                .execute(
+                    &mut account,
+                    rev,
+                    &Action::Extract { block, amount: 1 },
+                    &world,
+                    &mut creatures,
+                    Vec3::ZERO,
+                    &[],
+                )
+                .unwrap();
+        }
+        let rev = account.revision;
+        registry
+            .execute(
+                &mut account,
+                rev,
+                &Action::Convert {
+                    element: Element::Fire,
+                    amount: 2,
+                },
+                &world,
+                &mut creatures,
+                Vec3::ZERO,
+                &[],
+            )
+            .unwrap();
+        let mut slots = [None; 5];
+        slots[0] = Some(Slot {
+            element: Element::Earth,
+            amount: 3,
+        });
+        slots[1] = Some(Slot {
+            element: Element::Fire,
+            amount: 2,
+        });
+        let rev = account.revision;
+        registry
+            .execute(
+                &mut account,
+                rev,
+                &Action::Craft(slots),
+                &world,
+                &mut creatures,
+                Vec3::ZERO,
+                &[],
+            )
+            .unwrap();
+        assert_eq!(account.resources[resource_index("iron").unwrap()], 1);
+        assert_eq!(account.mana, 0);
     }
 }

@@ -14,6 +14,8 @@ Steam support uses **test App ID 480 (Spacewar)** by default. Up to four players
 
 From the repository directory:
 
+Use `build.bat steam` (or `build.bat steam release`) from Command Prompt. Plain `build.bat` and `cargo build` produce Direct-only builds, where the Steam option is disabled. Restart the game after rebuilding.
+
 ```powershell
 .\tools\build_steam.ps1
 .\target\debug\voxelproject.exe

@@ -34,8 +34,7 @@ pub enum BlockType {
     // -- blocks kept outside the CSV roster for existing gameplay mechanics
     // (see player.rs's mud slow-down, creature.rs/scripting.rs's redstone
     // heal-near-creatures, and the crystal carry/storm-summoner rules).
-    // Not part of the new asset set, so they render with a flat placeholder
-    // texture instead of a real tile.
+    // Their pixel tiles are generated alongside the expanded resource set.
     /// Pickup-able: breaking it sets the player's `carrying_crystal` flag
     /// instead of going to the hotbar. Rare natural spawn + host-placeable.
     Crystal,
@@ -47,10 +46,70 @@ pub enum BlockType {
     /// nearby creatures each tick. Placed by rules via `api.spawn_block` /
     /// `api.replace_block`.
     RedStone,
+    // Append-only resource expansion: preserve all existing save/network discriminants.
+    IronOre,
+    TinOre,
+    SilverOre,
+    Coal,
+    Sulfur,
+    RockSalt,
+    Clay,
+    Limestone,
+    Marble,
+    Granite,
+    Obsidian,
+    Quartz,
+    Amethyst,
+    SapphireOre,
+    RubyOre,
+    MithrilOre,
+    Moonstone,
+    Amber,
+    Peat,
+    Reeds,
+    Flax,
+    WildHerbs,
+    Iron,
+    Copper,
+    Tin,
+    Silver,
+    Gold,
+    Steel,
+    Bronze,
+    Mithril,
+    Diamond,
+    Emerald,
+    Ruby,
+    Sapphire,
+    Glass,
+    Charcoal,
+    Ash,
+    Lime,
+    Mortar,
+    Ceramic,
+    Planks,
+    WoodPulp,
+    PlantFiber,
+    Cloth,
+    Resin,
+    CrystalDust,
+    EnchantedGlass,
+    MoonSilver,
+    Runestone,
+    Fern,
+    Clover,
+    Lavender,
+    RedPoppy,
+    Bluebell,
+    Cattail,
+    BrownMushroom,
+    Glowcap,
+    ThornBush,
+    DryShrub,
 }
 
 /// Per-block static properties, transcribed 1:1 from `textures/blocks.csv`
-/// (plus the three non-CSV extras above, which use the placeholder tile).
+/// (plus the three non-CSV gameplay extras, which have generated pixel tiles).
 /// `only_on_top`/`single_item` match the CSV's "only on top"/"single items"
 /// columns: `only_on_top` blocks can only ever sit on a solid block below
 /// and render as a thin non-cube cross (see `cross`) instead of a full cube;
@@ -101,7 +160,7 @@ pub struct BlockDef {
 /// three can't be broken into a carryable resource, and Crystal is a
 /// special one-shot pickup tracked via `Player::carrying_crystal` instead
 /// of a stackable material.
-pub const COLLECTIBLE_BLOCKS: [BlockType; 23] = [
+pub const COLLECTIBLE_BLOCKS: [BlockType; 82] = [
     BlockType::Grass,
     BlockType::Soil,
     BlockType::Stone,
@@ -125,6 +184,65 @@ pub const COLLECTIBLE_BLOCKS: [BlockType; 23] = [
     BlockType::ShortGrass,
     BlockType::Mud,
     BlockType::RedStone,
+    BlockType::IronOre,
+    BlockType::TinOre,
+    BlockType::SilverOre,
+    BlockType::Coal,
+    BlockType::Sulfur,
+    BlockType::RockSalt,
+    BlockType::Clay,
+    BlockType::Limestone,
+    BlockType::Marble,
+    BlockType::Granite,
+    BlockType::Obsidian,
+    BlockType::Quartz,
+    BlockType::Amethyst,
+    BlockType::SapphireOre,
+    BlockType::RubyOre,
+    BlockType::MithrilOre,
+    BlockType::Moonstone,
+    BlockType::Amber,
+    BlockType::Peat,
+    BlockType::Reeds,
+    BlockType::Flax,
+    BlockType::WildHerbs,
+    BlockType::Iron,
+    BlockType::Copper,
+    BlockType::Tin,
+    BlockType::Silver,
+    BlockType::Gold,
+    BlockType::Steel,
+    BlockType::Bronze,
+    BlockType::Mithril,
+    BlockType::Diamond,
+    BlockType::Emerald,
+    BlockType::Ruby,
+    BlockType::Sapphire,
+    BlockType::Glass,
+    BlockType::Charcoal,
+    BlockType::Ash,
+    BlockType::Lime,
+    BlockType::Mortar,
+    BlockType::Ceramic,
+    BlockType::Planks,
+    BlockType::WoodPulp,
+    BlockType::PlantFiber,
+    BlockType::Cloth,
+    BlockType::Resin,
+    BlockType::CrystalDust,
+    BlockType::EnchantedGlass,
+    BlockType::MoonSilver,
+    BlockType::Runestone,
+    BlockType::Fern,
+    BlockType::Clover,
+    BlockType::Lavender,
+    BlockType::RedPoppy,
+    BlockType::Bluebell,
+    BlockType::Cattail,
+    BlockType::BrownMushroom,
+    BlockType::Glowcap,
+    BlockType::ThornBush,
+    BlockType::DryShrub,
 ];
 
 impl BlockType {
@@ -159,9 +277,9 @@ impl BlockType {
                 roughness: 0.5,
                 emission: 0.0,
                 hardness: 1,
-                tile_top: TILE_PLACEHOLDER,
-                tile_side: TILE_PLACEHOLDER,
-                tile_bottom: TILE_PLACEHOLDER,
+                tile_top: TILE_CRYSTAL,
+                tile_side: TILE_CRYSTAL,
+                tile_bottom: TILE_CRYSTAL,
                 only_on_top: false,
                 single_item: true,
                 cutout: false,
@@ -174,9 +292,9 @@ impl BlockType {
                 roughness: 1.0,
                 emission: 0.0,
                 hardness: 1,
-                tile_top: TILE_PLACEHOLDER,
-                tile_side: TILE_PLACEHOLDER,
-                tile_bottom: TILE_PLACEHOLDER,
+                tile_top: TILE_MUD,
+                tile_side: TILE_MUD,
+                tile_bottom: TILE_MUD,
                 only_on_top: false,
                 single_item: false,
                 cutout: false,
@@ -189,9 +307,9 @@ impl BlockType {
                 roughness: 0.85,
                 emission: 0.0,
                 hardness: 1,
-                tile_top: TILE_PLACEHOLDER,
-                tile_side: TILE_PLACEHOLDER,
-                tile_bottom: TILE_PLACEHOLDER,
+                tile_top: TILE_REDSTONE,
+                tile_side: TILE_REDSTONE,
+                tile_bottom: TILE_REDSTONE,
                 only_on_top: false,
                 single_item: false,
                 cutout: false,
@@ -200,8 +318,15 @@ impl BlockType {
             // Handled by `block_defs::csv_def` above.
             Grass | Sand | SpruceWood | Stone | Water | OakLeaves | Soil | Bedrock
             | Cobblestone | Basalt | CherryWood | CherryLeaves | BirchWood | BirchLeaves
-            | GoldOre | DiamondOre | EmeraldOre | CopperOre | OakWood | SpruceLeaves
-            | Pumpkin | Bricks | ShortGrass => {
+            | GoldOre | DiamondOre | EmeraldOre | CopperOre | OakWood | SpruceLeaves | Pumpkin
+            | Bricks | ShortGrass | IronOre | TinOre | SilverOre | Coal | Sulfur | RockSalt
+            | Clay | Limestone | Marble | Granite | Obsidian | Quartz | Amethyst | SapphireOre
+            | RubyOre | MithrilOre | Moonstone | Amber | Peat | Reeds | Flax | WildHerbs | Iron
+            | Copper | Tin | Silver | Gold | Steel | Bronze | Mithril | Diamond | Emerald
+            | Ruby | Sapphire | Glass | Charcoal | Ash | Lime | Mortar | Ceramic | Planks
+            | WoodPulp | PlantFiber | Cloth | Resin | CrystalDust | EnchantedGlass | MoonSilver
+            | Runestone | Fern | Clover | Lavender | RedPoppy | Bluebell | Cattail
+            | BrownMushroom | Glowcap | ThornBush | DryShrub => {
                 unreachable!("block_defs::csv_def should have handled every CSV block")
             }
         }
@@ -248,7 +373,10 @@ impl BlockType {
     pub fn is_wood(self) -> bool {
         matches!(
             self,
-            BlockType::OakWood | BlockType::SpruceWood | BlockType::CherryWood | BlockType::BirchWood
+            BlockType::OakWood
+                | BlockType::SpruceWood
+                | BlockType::CherryWood
+                | BlockType::BirchWood
         )
     }
 

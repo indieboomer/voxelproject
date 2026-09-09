@@ -1,0 +1,2106 @@
+[
+  {
+    "id": "grass",
+    "name": "Grass",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Trees and open grassland",
+    "composition": [
+      1,
+      0,
+      0,
+      1,
+      0
+    ],
+    "formula": null,
+    "texture": null
+  },
+  {
+    "id": "soil",
+    "name": "Soil",
+    "category": "Earth and stone",
+    "source": "natural",
+    "location": "Surface terrain",
+    "composition": [
+      2,
+      0,
+      0,
+      0,
+      0
+    ],
+    "formula": null,
+    "texture": null
+  },
+  {
+    "id": "stone",
+    "name": "Stone",
+    "category": "Earth and stone",
+    "source": "both",
+    "location": "Underground pockets",
+    "composition": [
+      1,
+      0,
+      0,
+      0,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 1
+      },
+      {
+        "element": "Water",
+        "amount": 1
+      }
+    ],
+    "texture": null
+  },
+  {
+    "id": "sand",
+    "name": "Sand",
+    "category": "Earth and stone",
+    "source": "natural",
+    "location": "Surface terrain",
+    "composition": [
+      2,
+      0,
+      0,
+      0,
+      0
+    ],
+    "formula": null,
+    "texture": null
+  },
+  {
+    "id": "oak_wood",
+    "name": "Oak Wood",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Trees and open grassland",
+    "composition": [
+      1,
+      0,
+      0,
+      2,
+      0
+    ],
+    "formula": null,
+    "texture": null
+  },
+  {
+    "id": "oak_leaves",
+    "name": "Oak Leaves",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Trees and open grassland",
+    "composition": [
+      0,
+      0,
+      1,
+      2,
+      0
+    ],
+    "formula": null,
+    "texture": null
+  },
+  {
+    "id": "cobblestone",
+    "name": "Cobblestone",
+    "category": "Earth and stone",
+    "source": "both",
+    "location": "Underground pockets",
+    "composition": [
+      2,
+      0,
+      0,
+      0,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 1
+      },
+      {
+        "element": "Earth",
+        "amount": 1
+      }
+    ],
+    "texture": null
+  },
+  {
+    "id": "bricks",
+    "name": "Bricks",
+    "category": "Earth and stone",
+    "source": "both",
+    "location": "Rare buried ruins",
+    "composition": [
+      2,
+      1,
+      0,
+      0,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 2
+      },
+      {
+        "element": "Fire",
+        "amount": 1
+      }
+    ],
+    "texture": null
+  },
+  {
+    "id": "spruce_wood",
+    "name": "Spruce Wood",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Trees and open grassland",
+    "composition": [
+      1,
+      0,
+      0,
+      2,
+      0
+    ],
+    "formula": null,
+    "texture": null
+  },
+  {
+    "id": "spruce_leaves",
+    "name": "Spruce Leaves",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Trees and open grassland",
+    "composition": [
+      0,
+      0,
+      1,
+      2,
+      0
+    ],
+    "formula": null,
+    "texture": null
+  },
+  {
+    "id": "cherry_wood",
+    "name": "Cherry Wood",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Trees and open grassland",
+    "composition": [
+      1,
+      0,
+      0,
+      2,
+      0
+    ],
+    "formula": null,
+    "texture": null
+  },
+  {
+    "id": "cherry_leaves",
+    "name": "Cherry Leaves",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Trees and open grassland",
+    "composition": [
+      0,
+      0,
+      1,
+      2,
+      0
+    ],
+    "formula": null,
+    "texture": null
+  },
+  {
+    "id": "birch_wood",
+    "name": "Birch Wood",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Trees and open grassland",
+    "composition": [
+      1,
+      0,
+      0,
+      2,
+      0
+    ],
+    "formula": null,
+    "texture": null
+  },
+  {
+    "id": "birch_leaves",
+    "name": "Birch Leaves",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Trees and open grassland",
+    "composition": [
+      0,
+      0,
+      1,
+      2,
+      0
+    ],
+    "formula": null,
+    "texture": null
+  },
+  {
+    "id": "basalt",
+    "name": "Basalt",
+    "category": "Earth and stone",
+    "source": "both",
+    "location": "Underground pockets",
+    "composition": [
+      2,
+      1,
+      0,
+      0,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Fire",
+        "amount": 1
+      },
+      {
+        "element": "Earth",
+        "amount": 2
+      }
+    ],
+    "texture": null
+  },
+  {
+    "id": "gold_ore",
+    "name": "Gold Ore",
+    "category": "Metals",
+    "source": "natural",
+    "location": "Underground pockets",
+    "composition": [
+      4,
+      2,
+      0,
+      0,
+      0
+    ],
+    "formula": null,
+    "texture": null
+  },
+  {
+    "id": "diamond_ore",
+    "name": "Diamond Ore",
+    "category": "Gems",
+    "source": "natural",
+    "location": "Underground pockets",
+    "composition": [
+      4,
+      2,
+      3,
+      0,
+      0
+    ],
+    "formula": null,
+    "texture": null
+  },
+  {
+    "id": "emerald_ore",
+    "name": "Emerald Ore",
+    "category": "Gems",
+    "source": "natural",
+    "location": "Underground pockets",
+    "composition": [
+      3,
+      0,
+      2,
+      3,
+      0
+    ],
+    "formula": null,
+    "texture": null
+  },
+  {
+    "id": "copper_ore",
+    "name": "Copper Ore",
+    "category": "Metals",
+    "source": "natural",
+    "location": "Underground pockets",
+    "composition": [
+      2,
+      1,
+      0,
+      0,
+      0
+    ],
+    "formula": null,
+    "texture": null
+  },
+  {
+    "id": "pumpkin",
+    "name": "Pumpkin",
+    "category": "Plants",
+    "source": "both",
+    "location": "Trees and open grassland",
+    "composition": [
+      1,
+      0,
+      1,
+      2,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 1
+      },
+      {
+        "element": "Water",
+        "amount": 1
+      },
+      {
+        "element": "Life",
+        "amount": 2
+      }
+    ],
+    "texture": null
+  },
+  {
+    "id": "short_grass",
+    "name": "Short Grass",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Trees and open grassland",
+    "composition": [
+      0,
+      0,
+      1,
+      2,
+      0
+    ],
+    "formula": null,
+    "texture": null
+  },
+  {
+    "id": "mud",
+    "name": "Mud",
+    "category": "Earth and stone",
+    "source": "both",
+    "location": "Wet ground near sea level",
+    "composition": [
+      0,
+      0,
+      1,
+      0,
+      1
+    ],
+    "formula": [
+      {
+        "element": "Water",
+        "amount": 1
+      },
+      {
+        "element": "Death",
+        "amount": 1
+      }
+    ],
+    "texture": null
+  },
+  {
+    "id": "redstone",
+    "name": "Redstone",
+    "category": "Arcane",
+    "source": "crafted",
+    "location": "Crafting or active world rules",
+    "composition": [
+      0,
+      0,
+      1,
+      0,
+      1
+    ],
+    "formula": [
+      {
+        "element": "Death",
+        "amount": 1
+      },
+      {
+        "element": "Water",
+        "amount": 1
+      }
+    ],
+    "texture": null
+  },
+  {
+    "id": "iron_ore",
+    "name": "Iron Ore",
+    "category": "Metals",
+    "source": "natural",
+    "location": "Underground, Y 3-30",
+    "composition": [
+      3,
+      1,
+      0,
+      0,
+      0
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "ore",
+      "color": "#b49a80"
+    },
+    "hardness": 6,
+    "vein": {
+      "min_y": 3,
+      "max_y": 30,
+      "attempts": 6,
+      "chance": 0.65,
+      "min_size": 3,
+      "max_size": 6
+    }
+  },
+  {
+    "id": "tin_ore",
+    "name": "Tin Ore",
+    "category": "Metals",
+    "source": "natural",
+    "location": "Underground, Y 8-32",
+    "composition": [
+      2,
+      0,
+      1,
+      0,
+      0
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "ore",
+      "color": "#a9bfc2"
+    },
+    "hardness": 5,
+    "vein": {
+      "min_y": 8,
+      "max_y": 32,
+      "attempts": 4,
+      "chance": 0.5,
+      "min_size": 3,
+      "max_size": 5
+    }
+  },
+  {
+    "id": "silver_ore",
+    "name": "Silver Ore",
+    "category": "Metals",
+    "source": "natural",
+    "location": "Underground, Y 3-20",
+    "composition": [
+      2,
+      0,
+      1,
+      0,
+      1
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "ore",
+      "color": "#dbe1ed"
+    },
+    "hardness": 8,
+    "vein": {
+      "min_y": 3,
+      "max_y": 20,
+      "attempts": 3,
+      "chance": 0.35,
+      "min_size": 2,
+      "max_size": 4
+    }
+  },
+  {
+    "id": "coal",
+    "name": "Coal",
+    "category": "Minerals",
+    "source": "natural",
+    "location": "Underground, Y 4-32",
+    "composition": [
+      1,
+      3,
+      0,
+      0,
+      0
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "ore",
+      "color": "#302b35"
+    },
+    "hardness": 4,
+    "vein": {
+      "min_y": 4,
+      "max_y": 32,
+      "attempts": 6,
+      "chance": 0.7,
+      "min_size": 4,
+      "max_size": 7
+    }
+  },
+  {
+    "id": "sulfur",
+    "name": "Sulfur",
+    "category": "Minerals",
+    "source": "natural",
+    "location": "Underground, Y 3-20",
+    "composition": [
+      1,
+      2,
+      0,
+      0,
+      1
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "ore",
+      "color": "#d0bd3c"
+    },
+    "hardness": 4,
+    "vein": {
+      "min_y": 3,
+      "max_y": 20,
+      "attempts": 3,
+      "chance": 0.45,
+      "min_size": 3,
+      "max_size": 5
+    }
+  },
+  {
+    "id": "rock_salt",
+    "name": "Rock Salt",
+    "category": "Minerals",
+    "source": "natural",
+    "location": "Underground, Y 5-24",
+    "composition": [
+      1,
+      0,
+      3,
+      0,
+      0
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "crystal",
+      "color": "#ebc4c0"
+    },
+    "hardness": 3,
+    "vein": {
+      "min_y": 5,
+      "max_y": 24,
+      "attempts": 3,
+      "chance": 0.5,
+      "min_size": 3,
+      "max_size": 5
+    }
+  },
+  {
+    "id": "clay",
+    "name": "Clay",
+    "category": "Earth and stone",
+    "source": "natural",
+    "location": "Underground, Y 10-27",
+    "composition": [
+      2,
+      0,
+      2,
+      0,
+      0
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "earth",
+      "color": "#b5846c"
+    },
+    "hardness": 2,
+    "vein": {
+      "min_y": 10,
+      "max_y": 27,
+      "attempts": 4,
+      "chance": 0.65,
+      "min_size": 4,
+      "max_size": 7
+    }
+  },
+  {
+    "id": "limestone",
+    "name": "Limestone",
+    "category": "Earth and stone",
+    "source": "natural",
+    "location": "Underground, Y 5-32",
+    "composition": [
+      3,
+      0,
+      1,
+      0,
+      0
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "stone",
+      "color": "#c6c5a2"
+    },
+    "hardness": 4,
+    "vein": {
+      "min_y": 5,
+      "max_y": 32,
+      "attempts": 4,
+      "chance": 0.55,
+      "min_size": 5,
+      "max_size": 8
+    }
+  },
+  {
+    "id": "marble",
+    "name": "Marble",
+    "category": "Earth and stone",
+    "source": "natural",
+    "location": "Underground, Y 3-22",
+    "composition": [
+      4,
+      0,
+      1,
+      0,
+      0
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "veined",
+      "color": "#d8d2df"
+    },
+    "hardness": 6,
+    "vein": {
+      "min_y": 3,
+      "max_y": 22,
+      "attempts": 3,
+      "chance": 0.4,
+      "min_size": 4,
+      "max_size": 7
+    }
+  },
+  {
+    "id": "granite",
+    "name": "Granite",
+    "category": "Earth and stone",
+    "source": "natural",
+    "location": "Underground, Y 3-28",
+    "composition": [
+      4,
+      1,
+      0,
+      0,
+      0
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "stone",
+      "color": "#ab8c89"
+    },
+    "hardness": 7,
+    "vein": {
+      "min_y": 3,
+      "max_y": 28,
+      "attempts": 4,
+      "chance": 0.5,
+      "min_size": 4,
+      "max_size": 7
+    }
+  },
+  {
+    "id": "obsidian",
+    "name": "Obsidian",
+    "category": "Earth and stone",
+    "source": "natural",
+    "location": "Underground, Y 2-12",
+    "composition": [
+      2,
+      3,
+      0,
+      0,
+      1
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "veined",
+      "color": "#392650"
+    },
+    "hardness": 9,
+    "vein": {
+      "min_y": 2,
+      "max_y": 12,
+      "attempts": 3,
+      "chance": 0.35,
+      "min_size": 3,
+      "max_size": 5
+    }
+  },
+  {
+    "id": "quartz",
+    "name": "Quartz",
+    "category": "Gems",
+    "source": "natural",
+    "location": "Underground, Y 5-28",
+    "composition": [
+      2,
+      0,
+      2,
+      0,
+      0
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "crystal",
+      "color": "#dadbe7"
+    },
+    "hardness": 5,
+    "vein": {
+      "min_y": 5,
+      "max_y": 28,
+      "attempts": 4,
+      "chance": 0.5,
+      "min_size": 3,
+      "max_size": 5
+    }
+  },
+  {
+    "id": "amethyst",
+    "name": "Amethyst",
+    "category": "Gems",
+    "source": "natural",
+    "location": "Underground, Y 3-18",
+    "composition": [
+      2,
+      0,
+      1,
+      0,
+      2
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "crystal",
+      "color": "#ad6ce0"
+    },
+    "hardness": 7,
+    "vein": {
+      "min_y": 3,
+      "max_y": 18,
+      "attempts": 3,
+      "chance": 0.3,
+      "min_size": 2,
+      "max_size": 4
+    }
+  },
+  {
+    "id": "sapphire_ore",
+    "name": "Sapphire Ore",
+    "category": "Gems",
+    "source": "natural",
+    "location": "Underground, Y 3-14",
+    "composition": [
+      2,
+      0,
+      4,
+      0,
+      0
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "ore",
+      "color": "#477ae3"
+    },
+    "hardness": 10,
+    "vein": {
+      "min_y": 3,
+      "max_y": 14,
+      "attempts": 2,
+      "chance": 0.3,
+      "min_size": 2,
+      "max_size": 3
+    }
+  },
+  {
+    "id": "ruby_ore",
+    "name": "Ruby Ore",
+    "category": "Gems",
+    "source": "natural",
+    "location": "Underground, Y 3-14",
+    "composition": [
+      2,
+      4,
+      0,
+      0,
+      0
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "ore",
+      "color": "#d34b66"
+    },
+    "hardness": 10,
+    "vein": {
+      "min_y": 3,
+      "max_y": 14,
+      "attempts": 2,
+      "chance": 0.3,
+      "min_size": 2,
+      "max_size": 3
+    }
+  },
+  {
+    "id": "mithril_ore",
+    "name": "Mithril Ore",
+    "category": "Arcane",
+    "source": "natural",
+    "location": "Underground, Y 2-10",
+    "composition": [
+      3,
+      0,
+      2,
+      1,
+      1
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "ore",
+      "color": "#66d4da"
+    },
+    "hardness": 12,
+    "vein": {
+      "min_y": 2,
+      "max_y": 10,
+      "attempts": 2,
+      "chance": 0.22,
+      "min_size": 2,
+      "max_size": 3
+    }
+  },
+  {
+    "id": "moonstone",
+    "name": "Moonstone",
+    "category": "Arcane",
+    "source": "natural",
+    "location": "Underground, Y 2-12",
+    "composition": [
+      1,
+      0,
+      3,
+      0,
+      3
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "crystal",
+      "color": "#c3c9f2"
+    },
+    "hardness": 9,
+    "vein": {
+      "min_y": 2,
+      "max_y": 12,
+      "attempts": 2,
+      "chance": 0.25,
+      "min_size": 2,
+      "max_size": 3
+    }
+  },
+  {
+    "id": "amber",
+    "name": "Amber",
+    "category": "Gems",
+    "source": "natural",
+    "location": "Underground, Y 8-28",
+    "composition": [
+      1,
+      1,
+      0,
+      3,
+      0
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "crystal",
+      "color": "#de9a37"
+    },
+    "hardness": 4,
+    "vein": {
+      "min_y": 8,
+      "max_y": 28,
+      "attempts": 3,
+      "chance": 0.35,
+      "min_size": 2,
+      "max_size": 4
+    }
+  },
+  {
+    "id": "peat",
+    "name": "Peat",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Wet ground near sea level",
+    "composition": [
+      1,
+      1,
+      1,
+      0,
+      2
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "earth",
+      "color": "#554432"
+    },
+    "hardness": 2
+  },
+  {
+    "id": "reeds",
+    "name": "Reeds",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Wet ground near sea level",
+    "composition": [
+      0,
+      0,
+      2,
+      2,
+      0
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "plant",
+      "color": "#a9b776"
+    },
+    "hardness": 1
+  },
+  {
+    "id": "flax",
+    "name": "Flax",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Open grassland",
+    "composition": [
+      0,
+      0,
+      1,
+      3,
+      0
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "plant",
+      "color": "#97a5d3"
+    },
+    "hardness": 1
+  },
+  {
+    "id": "wild_herbs",
+    "name": "Wild Herbs",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Open grassland",
+    "composition": [
+      0,
+      0,
+      1,
+      2,
+      1
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "plant",
+      "color": "#77b66d"
+    },
+    "hardness": 1
+  },
+  {
+    "id": "iron",
+    "name": "Iron",
+    "category": "Metals",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      3,
+      2,
+      0,
+      0,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 3
+      },
+      {
+        "element": "Fire",
+        "amount": 2
+      }
+    ],
+    "texture": {
+      "pattern": "metal",
+      "color": "#a7aeb5"
+    },
+    "hardness": 6
+  },
+  {
+    "id": "copper",
+    "name": "Copper",
+    "category": "Metals",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      2,
+      2,
+      0,
+      0,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 2
+      },
+      {
+        "element": "Fire",
+        "amount": 2
+      }
+    ],
+    "texture": {
+      "pattern": "metal",
+      "color": "#c98158"
+    },
+    "hardness": 5
+  },
+  {
+    "id": "tin",
+    "name": "Tin",
+    "category": "Metals",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      2,
+      1,
+      1,
+      0,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 2
+      },
+      {
+        "element": "Water",
+        "amount": 1
+      },
+      {
+        "element": "Fire",
+        "amount": 1
+      }
+    ],
+    "texture": {
+      "pattern": "metal",
+      "color": "#b4c4c9"
+    },
+    "hardness": 4
+  },
+  {
+    "id": "silver",
+    "name": "Silver",
+    "category": "Metals",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      2,
+      1,
+      2,
+      0,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 2
+      },
+      {
+        "element": "Water",
+        "amount": 2
+      },
+      {
+        "element": "Fire",
+        "amount": 1
+      }
+    ],
+    "texture": {
+      "pattern": "metal",
+      "color": "#dde2ee"
+    },
+    "hardness": 6
+  },
+  {
+    "id": "gold",
+    "name": "Gold",
+    "category": "Metals",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      3,
+      3,
+      0,
+      0,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 3
+      },
+      {
+        "element": "Fire",
+        "amount": 3
+      }
+    ],
+    "texture": {
+      "pattern": "metal",
+      "color": "#e5bd54"
+    },
+    "hardness": 5
+  },
+  {
+    "id": "steel",
+    "name": "Steel",
+    "category": "Metals",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      4,
+      3,
+      0,
+      0,
+      1
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 4
+      },
+      {
+        "element": "Fire",
+        "amount": 3
+      },
+      {
+        "element": "Death",
+        "amount": 1
+      }
+    ],
+    "texture": {
+      "pattern": "metal",
+      "color": "#747f90"
+    },
+    "hardness": 8
+  },
+  {
+    "id": "bronze",
+    "name": "Bronze",
+    "category": "Metals",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      3,
+      2,
+      1,
+      0,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 3
+      },
+      {
+        "element": "Fire",
+        "amount": 2
+      },
+      {
+        "element": "Water",
+        "amount": 1
+      }
+    ],
+    "texture": {
+      "pattern": "metal",
+      "color": "#ad8853"
+    },
+    "hardness": 7
+  },
+  {
+    "id": "mithril",
+    "name": "Mithril",
+    "category": "Arcane",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      4,
+      0,
+      3,
+      2,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 4
+      },
+      {
+        "element": "Water",
+        "amount": 3
+      },
+      {
+        "element": "Life",
+        "amount": 2
+      }
+    ],
+    "texture": {
+      "pattern": "metal",
+      "color": "#8ce3dc"
+    },
+    "hardness": 10
+  },
+  {
+    "id": "diamond",
+    "name": "Diamond",
+    "category": "Gems",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      4,
+      2,
+      3,
+      0,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 4
+      },
+      {
+        "element": "Water",
+        "amount": 3
+      },
+      {
+        "element": "Fire",
+        "amount": 2
+      }
+    ],
+    "texture": {
+      "pattern": "crystal",
+      "color": "#a6e4ee"
+    },
+    "hardness": 12
+  },
+  {
+    "id": "emerald",
+    "name": "Emerald",
+    "category": "Gems",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      3,
+      0,
+      2,
+      3,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 3
+      },
+      {
+        "element": "Life",
+        "amount": 3
+      },
+      {
+        "element": "Water",
+        "amount": 2
+      }
+    ],
+    "texture": {
+      "pattern": "crystal",
+      "color": "#54c185"
+    },
+    "hardness": 10
+  },
+  {
+    "id": "ruby",
+    "name": "Ruby",
+    "category": "Gems",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      3,
+      4,
+      0,
+      0,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 3
+      },
+      {
+        "element": "Fire",
+        "amount": 4
+      }
+    ],
+    "texture": {
+      "pattern": "crystal",
+      "color": "#e05671"
+    },
+    "hardness": 10
+  },
+  {
+    "id": "sapphire",
+    "name": "Sapphire",
+    "category": "Gems",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      3,
+      0,
+      4,
+      0,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 3
+      },
+      {
+        "element": "Water",
+        "amount": 4
+      }
+    ],
+    "texture": {
+      "pattern": "crystal",
+      "color": "#629ae9"
+    },
+    "hardness": 10
+  },
+  {
+    "id": "glass",
+    "name": "Glass",
+    "category": "Construction",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      1,
+      2,
+      0,
+      0,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 1
+      },
+      {
+        "element": "Fire",
+        "amount": 2
+      }
+    ],
+    "texture": {
+      "pattern": "glass",
+      "color": "#95c5ca"
+    },
+    "hardness": 2
+  },
+  {
+    "id": "charcoal",
+    "name": "Charcoal",
+    "category": "Plants",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      0,
+      1,
+      0,
+      2,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Life",
+        "amount": 2
+      },
+      {
+        "element": "Fire",
+        "amount": 1
+      }
+    ],
+    "texture": {
+      "pattern": "ore",
+      "color": "#3b3432"
+    },
+    "hardness": 2
+  },
+  {
+    "id": "ash",
+    "name": "Ash",
+    "category": "Minerals",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      0,
+      1,
+      0,
+      0,
+      1
+    ],
+    "formula": [
+      {
+        "element": "Fire",
+        "amount": 1
+      },
+      {
+        "element": "Death",
+        "amount": 1
+      }
+    ],
+    "texture": {
+      "pattern": "earth",
+      "color": "#99938c"
+    },
+    "hardness": 1
+  },
+  {
+    "id": "lime",
+    "name": "Lime",
+    "category": "Construction",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      2,
+      1,
+      1,
+      0,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 2
+      },
+      {
+        "element": "Fire",
+        "amount": 1
+      },
+      {
+        "element": "Water",
+        "amount": 1
+      }
+    ],
+    "texture": {
+      "pattern": "earth",
+      "color": "#e0dcbd"
+    },
+    "hardness": 2
+  },
+  {
+    "id": "mortar",
+    "name": "Mortar",
+    "category": "Construction",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      3,
+      0,
+      2,
+      0,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 3
+      },
+      {
+        "element": "Water",
+        "amount": 2
+      }
+    ],
+    "texture": {
+      "pattern": "earth",
+      "color": "#a9a49a"
+    },
+    "hardness": 3
+  },
+  {
+    "id": "ceramic",
+    "name": "Ceramic",
+    "category": "Construction",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      3,
+      2,
+      1,
+      0,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 3
+      },
+      {
+        "element": "Water",
+        "amount": 1
+      },
+      {
+        "element": "Fire",
+        "amount": 2
+      }
+    ],
+    "texture": {
+      "pattern": "ceramic",
+      "color": "#c89173"
+    },
+    "hardness": 4
+  },
+  {
+    "id": "planks",
+    "name": "Planks",
+    "category": "Construction",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      1,
+      0,
+      0,
+      2,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Life",
+        "amount": 2
+      },
+      {
+        "element": "Earth",
+        "amount": 1
+      }
+    ],
+    "texture": {
+      "pattern": "planks",
+      "color": "#b8915c"
+    },
+    "hardness": 3
+  },
+  {
+    "id": "wood_pulp",
+    "name": "Wood Pulp",
+    "category": "Plants",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      0,
+      0,
+      2,
+      1,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Life",
+        "amount": 1
+      },
+      {
+        "element": "Water",
+        "amount": 2
+      }
+    ],
+    "texture": {
+      "pattern": "earth",
+      "color": "#c4af82"
+    },
+    "hardness": 1
+  },
+  {
+    "id": "plant_fiber",
+    "name": "Plant Fiber",
+    "category": "Plants",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      0,
+      0,
+      1,
+      2,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Life",
+        "amount": 2
+      },
+      {
+        "element": "Water",
+        "amount": 1
+      }
+    ],
+    "texture": {
+      "pattern": "fiber",
+      "color": "#c6bc89"
+    },
+    "hardness": 1
+  },
+  {
+    "id": "cloth",
+    "name": "Cloth",
+    "category": "Construction",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      0,
+      0,
+      2,
+      3,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Life",
+        "amount": 3
+      },
+      {
+        "element": "Water",
+        "amount": 2
+      }
+    ],
+    "texture": {
+      "pattern": "cloth",
+      "color": "#d4c7aa"
+    },
+    "hardness": 1
+  },
+  {
+    "id": "resin",
+    "name": "Resin",
+    "category": "Plants",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      0,
+      1,
+      0,
+      3,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Life",
+        "amount": 3
+      },
+      {
+        "element": "Fire",
+        "amount": 1
+      }
+    ],
+    "texture": {
+      "pattern": "crystal",
+      "color": "#ce914c"
+    },
+    "hardness": 2
+  },
+  {
+    "id": "crystal_dust",
+    "name": "Crystal Dust",
+    "category": "Arcane",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      2,
+      0,
+      2,
+      0,
+      1
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 2
+      },
+      {
+        "element": "Water",
+        "amount": 2
+      },
+      {
+        "element": "Death",
+        "amount": 1
+      }
+    ],
+    "texture": {
+      "pattern": "earth",
+      "color": "#ba9cdf"
+    },
+    "hardness": 2
+  },
+  {
+    "id": "enchanted_glass",
+    "name": "Enchanted Glass",
+    "category": "Arcane",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      0,
+      2,
+      3,
+      2,
+      0
+    ],
+    "formula": [
+      {
+        "element": "Water",
+        "amount": 3
+      },
+      {
+        "element": "Fire",
+        "amount": 2
+      },
+      {
+        "element": "Life",
+        "amount": 2
+      }
+    ],
+    "texture": {
+      "pattern": "glass",
+      "color": "#87d5c3"
+    },
+    "hardness": 4
+  },
+  {
+    "id": "moon_silver",
+    "name": "Moon Silver",
+    "category": "Arcane",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      3,
+      0,
+      3,
+      0,
+      3
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 3
+      },
+      {
+        "element": "Water",
+        "amount": 3
+      },
+      {
+        "element": "Death",
+        "amount": 3
+      }
+    ],
+    "texture": {
+      "pattern": "metal",
+      "color": "#b4b8ea"
+    },
+    "hardness": 8
+  },
+  {
+    "id": "runestone",
+    "name": "Runestone",
+    "category": "Arcane",
+    "source": "crafted",
+    "location": "Elemental crafting only",
+    "composition": [
+      4,
+      0,
+      0,
+      2,
+      2
+    ],
+    "formula": [
+      {
+        "element": "Earth",
+        "amount": 4
+      },
+      {
+        "element": "Life",
+        "amount": 2
+      },
+      {
+        "element": "Death",
+        "amount": 2
+      }
+    ],
+    "texture": {
+      "pattern": "rune",
+      "color": "#77869a"
+    },
+    "hardness": 8
+  },
+  {
+    "id": "fern",
+    "name": "Fern",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Shaded ground beneath tree canopies",
+    "composition": [
+      0,
+      0,
+      1,
+      2,
+      0
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "fern",
+      "color": "#6da45f"
+    },
+    "hardness": 1,
+    "surface": {
+      "habitat": "shade",
+      "chance": 0.09
+    },
+    "emission": 0
+  },
+  {
+    "id": "clover",
+    "name": "Clover",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Open grassy meadows",
+    "composition": [
+      0,
+      0,
+      0,
+      2,
+      0
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "clover",
+      "color": "#89ba62"
+    },
+    "hardness": 1,
+    "surface": {
+      "habitat": "meadow",
+      "chance": 0.025
+    },
+    "emission": 0
+  },
+  {
+    "id": "lavender",
+    "name": "Lavender",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Open grassy meadows",
+    "composition": [
+      0,
+      0,
+      1,
+      2,
+      0
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "flower",
+      "color": "#ae87cf"
+    },
+    "hardness": 1,
+    "surface": {
+      "habitat": "meadow",
+      "chance": 0.015
+    },
+    "emission": 0
+  },
+  {
+    "id": "red_poppy",
+    "name": "Red Poppy",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Open grassy meadows",
+    "composition": [
+      0,
+      1,
+      0,
+      2,
+      0
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "flower",
+      "color": "#db625e"
+    },
+    "hardness": 1,
+    "surface": {
+      "habitat": "meadow",
+      "chance": 0.012
+    },
+    "emission": 0
+  },
+  {
+    "id": "bluebell",
+    "name": "Bluebell",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Shaded ground beneath tree canopies",
+    "composition": [
+      0,
+      0,
+      2,
+      1,
+      0
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "flower",
+      "color": "#759edc"
+    },
+    "hardness": 1,
+    "surface": {
+      "habitat": "shade",
+      "chance": 0.065
+    },
+    "emission": 0
+  },
+  {
+    "id": "cattail",
+    "name": "Cattail",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Wet ground near sea level",
+    "composition": [
+      0,
+      0,
+      2,
+      2,
+      0
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "cattail",
+      "color": "#a9834f"
+    },
+    "hardness": 1,
+    "surface": {
+      "habitat": "wet",
+      "chance": 0.055
+    },
+    "emission": 0
+  },
+  {
+    "id": "brown_mushroom",
+    "name": "Brown Mushroom",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Shaded ground beneath tree canopies",
+    "composition": [
+      0,
+      0,
+      1,
+      1,
+      1
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "mushroom",
+      "color": "#ad865f"
+    },
+    "hardness": 1,
+    "surface": {
+      "habitat": "shade",
+      "chance": 0.07
+    },
+    "emission": 0
+  },
+  {
+    "id": "glowcap",
+    "name": "Glowcap",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Shaded ground beneath tree canopies",
+    "composition": [
+      0,
+      0,
+      1,
+      1,
+      2
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "mushroom",
+      "color": "#74dbca"
+    },
+    "hardness": 1,
+    "surface": {
+      "habitat": "shade",
+      "chance": 0.025
+    },
+    "emission": 0.35
+  },
+  {
+    "id": "thorn_bush",
+    "name": "Thorn Bush",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Open grassy meadows",
+    "composition": [
+      1,
+      0,
+      0,
+      2,
+      0
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "bush",
+      "color": "#91a36a"
+    },
+    "hardness": 2,
+    "surface": {
+      "habitat": "meadow",
+      "chance": 0.014
+    },
+    "emission": 0
+  },
+  {
+    "id": "dry_shrub",
+    "name": "Dry Shrub",
+    "category": "Plants",
+    "source": "natural",
+    "location": "Dry upland grassland",
+    "composition": [
+      0,
+      1,
+      0,
+      1,
+      1
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "shrub",
+      "color": "#be9b64"
+    },
+    "hardness": 1,
+    "surface": {
+      "habitat": "dry",
+      "chance": 0.04
+    },
+    "emission": 0
+  }
+]

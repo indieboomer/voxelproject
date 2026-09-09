@@ -92,6 +92,8 @@ pub struct Ui {
     /// shown in the "Rule Source" viewer window, if any. Purely local UI
     /// state -- doesn't need to round-trip through `App`.
     viewing_index: Option<usize>,
+    resource_search: String,
+    owned_resources_only: bool,
 }
 
 impl Ui {
@@ -106,6 +108,8 @@ impl Ui {
             state,
             renderer,
             viewing_index: None,
+            resource_search: String::new(),
+            owned_resources_only: false,
         }
     }
 
@@ -297,10 +301,17 @@ impl Ui {
                 .resizable(false)
                 .collapsible(false)
                 .show(ctx, |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut self.resource_search).hint_text("Search resources or category"));
+                    ui.checkbox(&mut self.owned_resources_only, "Owned only");
+                    let query=self.resource_search.trim().to_lowercase();
                     for &block in COLLECTIBLE_BLOCKS.iter() {
                         let count = player.resource_count(block);
+                        let info=crate::voxel::resource_catalog::info(block);
+                        if self.owned_resources_only && count==0 {continue;}
+                        if !format!("{} {} {}",block.name(),block.id(),info.category).to_lowercase().contains(&query) {continue;}
                         let is_selected = selected_block == Some(block);
                         ui.horizontal(|ui| {
+                            crate::resource_ui::icon(ui,block);
                             let marker = if is_selected { "-> " } else { "" };
                             let color = if is_selected {
                                 egui::Color32::from_rgb(120, 200, 255)
@@ -309,7 +320,7 @@ impl Ui {
                             } else {
                                 egui::Color32::GRAY
                             };
-                            ui.colored_label(color, format!("{marker}{} x{count}", block.name()));
+                            ui.colored_label(color, format!("{marker}{} x{count}", block.name())).on_hover_text(crate::resource_ui::description(block));
                             if ui
                                 .add_enabled(count > 0, egui::Button::new("Select").small())
                                 .clicked()

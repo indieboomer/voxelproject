@@ -17,7 +17,7 @@ struct CameraUniform {
     light_params: vec4<f32>,
     // x = lightning_flash, 0..1 -- see shader.wgsl's copy of this struct
     // and App::update_lightning. y = cloud_coverage, 0..1 -- see
-    // Weather::cloud_coverage. z/w reserved, currently always 0.
+    // Weather::cloud_coverage. z = camera eye underwater, w = reserved.
     weather_fx: vec4<f32>,
 };
 
@@ -99,6 +99,10 @@ fn cloud_density(p: vec2<f32>) -> f32 {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    if camera.weather_fx.z > 0.5 {
+        return vec4<f32>(grade(vec3<f32>(0.025, 0.16, 0.28)), 1.0);
+    }
+
     // Unproject this pixel's far-plane point back into a world-space ray
     // direction through the camera -- the sky has no real geometry, so this
     // is the only way to know what direction a given screen pixel looks.

@@ -1,6 +1,6 @@
 # Elemental crafting
 
-Press **C** during gameplay to open crafting; press **C** or **Esc** to close. Mine blocks, use **Confirm extraction** to turn gathered resources into elements, then build a formula or select one from Starter formulas. Conversion to mana is always explicit. Balances start at zero. The existing mouse/keyboard and egui navigation are used; this project has no controller bindings.
+Press **C** during gameplay to open crafting; press **C** or **Esc** to close. Mine blocks, use **Confirm extraction** to turn gathered resources into elements, then build a formula or select one from the Formula book. Conversion to mana is always explicit. Balances start at zero. The existing mouse/keyboard and egui navigation are used; this project has no controller bindings.
 
 ## Architecture
 
@@ -22,46 +22,11 @@ Compositions are central `compositions` entries with `kind`, canonical `id`, and
 
 Extraction consumes existing stackable resources. Water and crystal compositions are queryable metadata, but those objects are not stackable in the existing inventory. Creature compositions are metadata; this change does not add creature harvesting or melee.
 
-## Starter recipes
+## Resource catalog
 
-| Ordered slots | Output (quantity 1) | Mana |
-|---|---|---|
-| Earth x1 | stone (block) | 0 |
-| Earth x2 -> Fire x1 | bricks (block) | 2 |
-| Fire x1 -> Earth x2 | basalt (block) | 2 |
-| Water x1 -> Death x1 | mud (resource) | 2 |
-| Death x1 -> Water x1 | redstone (item) | 2 |
-| Life x2 | sheep (creature) | 0 |
-| Earth x5 -> Life x2 -> Fire x1 | stone_golem (creature) | 4 |
-| Earth x1 -> Earth x1 | cobblestone (block) | 2 |
-| Earth x1 -> Water x1 -> Life x1 -> Fire x1 | pumpkin (item) | 16 |
-| Earth x1 -> Fire x1 -> Water x1 -> Life x1 -> Death x1 | sunscorch (creature) | 256 |
+The world has **82 stackable resources**, including 34 resource formulas with two or three ordered slots. See [the complete resource/formula/balance guide](RESOURCES.md). `data/resources.json` is the authoring catalog; `tools/build_resources.py` generates resource entries in `data/crafting.json` while preserving creature recipes. The Formula book is searchable and shows texture icons and mana costs.
 
-## Starter compositions
-
-Amounts below are `(Earth, Fire, Water, Life, Death)`. All unlisted types yield zero.
-
-| Type | IDs | Composition |
-|---|---|---|
-| block | grass, soil, sand, cobblestone | (2, 0, 0, 0, 0) |
-| block | stone | (1, 0, 0, 0, 0) |
-| block | bricks, basalt, copper_ore, gold_ore | (2, 1, 0, 0, 0) |
-| block | oak_wood, spruce_wood, cherry_wood, birch_wood | (1, 0, 0, 2, 0) |
-| block | oak_leaves, spruce_leaves, cherry_leaves, birch_leaves, short_grass | (0, 0, 1, 2, 0) |
-| block | pumpkin | (1, 1, 1, 1, 0) |
-| block | mud, redstone | (0, 0, 1, 0, 1) |
-| block | diamond_ore, emerald_ore, crystal | (1, 1, 1, 1, 1) |
-| block | water | (0, 0, 2, 0, 0) |
-| creature | sheep | (0, 0, 0, 2, 0) |
-| creature | chicken | (0, 0, 0, 1, 0) |
-| creature | cow | (1, 0, 0, 3, 0) |
-| creature | wolf | (0, 0, 0, 2, 1) |
-| creature | stinger | (0, 0, 0, 1, 1) |
-| creature | goblin | (1, 0, 0, 2, 1) |
-| creature | stone_golem | (5, 1, 0, 2, 0) |
-| creature | sunscorch | (0, 3, 0, 0, 3) |
-
-## New output handlers
+Resource outputs use `kind: resource`; no equipment or consumable item system was added. Existing creature formulas remain unchanged and may use one to five slots. Crafted output compositions must be present, and their recoverable elements multiplied by quantity must not exceed inputs in any element; invalid registries fail loading.
 
 Inventory `item`, `block`, and `resource` outputs all add to the current block-resource inventory and can be selected in Resources for placement. There is no separate consumable-item system or fixed slot capacity; `u32` stack overflow reports Inventory full. The poison/preservative/lava examples are therefore adapted to existing mud/redstone/basalt content.
 
@@ -73,7 +38,7 @@ To support another output category, extend `ObjectKind`, validate IDs and quanti
 
 Requests contain an action and the last observed account revision, never balances or a chosen output. The host resolves the sender from its connection and revalidates the transaction. Only the current revision can succeed; reliable-message deduplication and the pending UI lock provide additional protection. Absolute inventory snapshots ignore older revisions. Host mining/placement, client mining/placement, and remote Lua grants all use the host-owned resource balances. Existing client-reported movement and UDP transport remain; this does not add anti-cheat or account authentication.
 
-The MVP has no persistent player IDs. Guest saves are keyed by sanitized nickname; use the same nickname when rejoining. Simultaneously connected guests cannot share a nickname. Nicknames are not authenticated. Host inventory is stored separately. All five elemental balances, mana, resource stacks, and guest accounts survive save/load. Creature IDs, kind, position and health survive; transient animation/chase state resets. Legacy saves initialize missing inventories to zero and retain their existing natural creature generation behavior. No discovery system is introduced.
+Steam guest saves use authenticated Steam IDs; Direct guest saves use a separate sanitized-nickname namespace and migrate ordinary legacy nickname accounts. Direct nicknames are not authenticated and cannot be shared by simultaneously connected Direct guests. Host inventory is stored separately. All five elemental balances, mana, resource stacks, and guest accounts survive save/load. Creature IDs, kind, position and health survive; transient animation/chase state resets. Legacy saves initialize missing inventories to zero and retain their existing natural creature generation behavior. No discovery system is introduced.
 
 Saves use the `VOXEL_SAVE_2` envelope and are written to a temporary file then renamed, preserving the previous save if serialization/writing fails. Legacy `WorldSave` binary files still load. Old executables cannot read the new saves or use the new network protocol; multiplayer peers need the same build.
 

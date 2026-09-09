@@ -372,7 +372,7 @@ struct CameraUniform {
     /// storm's lightning strike whites out the whole scene, not just the
     /// sky or just the terrain). y = cloud_coverage (see
     /// `Weather::cloud_coverage` -- how much of sky.wgsl's procedural cloud
-    /// layer covers the sky dome). z/w reserved, currently always 0.
+    /// layer covers the sky dome). z = camera eye underwater; w is reserved.
     weather_fx: [f32; 4],
 }
 
@@ -3140,6 +3140,7 @@ impl App {
         let sky = lighting.sky_color;
         let zenith = lighting.zenith_color;
         let cam_pos = self.camera.eye_position();
+        let underwater = is_in_water(&self.world, cam_pos);
         let light_view_proj = light_view_proj(lighting.sun_dir, self.player.position);
         let view_proj = self.camera.view_proj();
         let fog_color = if self.weather.current == Weather::Mist {
@@ -3173,7 +3174,7 @@ impl App {
             weather_fx: [
                 self.lightning_flash,
                 self.weather.current.cloud_coverage(),
-                0.0,
+                if underwater {1.0} else {0.0},
                 0.0,
             ],
         };
@@ -3185,14 +3186,14 @@ impl App {
             bytemuck::bytes_of(&LightUniform { view_proj: light_view_proj.to_cols_array_2d() }),
         );
 
-        let raining = self.weather.current.has_rain_particles();
+        let raining = self.weather.current.has_rain_particles() && !underwater;
         let rain_vertex_count = if raining {
             self.write_rain_vertices(cam_pos);
             (self.rain_particles.len() * 2) as u32
         } else {
             0
         };
-        let bird_vertex_count = if let Some(flock) = &self.bird_flock {
+        let bird_vertex_count = if underwater { 0 } else if let Some(flock) = &self.bird_flock {
             let count = (flock.birds.len() * BIRD_VERTICES_PER_BIRD) as u32;
             self.write_bird_vertices();
             count
@@ -3845,5 +3846,37 @@ mod join_tests {
         assert_eq!(time,0.7);
         socket.send_to(&encode(&Packet::Reliable {id:999,msg:ReliableMsg::Goodbye}),peer).unwrap();
         server.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod underwater_tests {
+    use super::*;
+    #[test]
+    fn underwater_view_uses_eyes_and_clears_above_surface() {
+        let mut world=World::new(42);
+        let mut chunk=crate::voxel::chunk::Chunk::new(0,0);
+        chunk.set_local(2,18,2,BlockType::Water);
+        chunk.set_local(2,17,2,BlockType::Water);
+        world.chunks.insert((0,0),chunk);
+        let mut camera=Camera::new(Vec3::new(2.5,17.0,2.5),1.0);
+        assert!(is_in_water(&world,camera.eye_position()));
+        camera.position.y=17.5;
+        assert!(is_in_water(&world,camera.position));
+        assert!(!is_in_water(&world,camera.eye_position()),"wading must not tint the view");
+        camera.position.x=3.5;
+        assert!(!is_in_water(&world,camera.eye_position()));
+    }
+    #[test]
+    #[ignore = "requires a GPU adapter; validates terrain and underwater sky shaders"]
+    fn validate_underwater_shaders() {
+        let instance=wgpu::Instance::default();
+        let adapter=pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
+        let (device,_)=pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(),None)).unwrap();
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        for source in [include_str!("shader.wgsl"),include_str!("sky.wgsl")] {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {label:Some("underwater validation"),source:wgpu::ShaderSource::Wgsl(source.into())});
+        }
+        assert!(pollster::block_on(device.pop_error_scope()).is_none());
     }
 }

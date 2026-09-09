@@ -153,7 +153,7 @@ Every module's `source` may begin with a `-- api_version: X.Y.Z` comment line re
 ## Vocabularies
 
 - `creature_kinds`: sheep, chicken, stone_golem, wolf, stinger, cow, goblin, sunscorch
-- `block_kinds` (27, derived from `textures/blocks.csv` + ['air', 'mud', 'redstone', 'crystal']): `basalt`, `bedrock`, `birch_leaves`, `birch_wood`, `bricks`, `cherry_leaves`, `cherry_wood`, `cobblestone`, `copper_ore`, `diamond_ore`, `emerald_ore`, `gold_ore`, `grass`, `oak_leaves`, `oak_wood`, `pumpkin`, `sand`, `short_grass`, `soil`, `spruce_leaves`, `spruce_wood`, `stone`, `water`, `air`, `mud`, `redstone`, `crystal`
+- `block_kinds` (86, derived from `textures/blocks.csv` + ['air', 'mud', 'redstone', 'crystal']): `amber`, `amethyst`, `ash`, `basalt`, `bedrock`, `birch_leaves`, `birch_wood`, `bluebell`, `bricks`, `bronze`, `brown_mushroom`, `cattail`, `ceramic`, `charcoal`, `cherry_leaves`, `cherry_wood`, `clay`, `cloth`, `clover`, `coal`, `cobblestone`, `copper`, `copper_ore`, `crystal_dust`, `diamond`, `diamond_ore`, `dry_shrub`, `emerald`, `emerald_ore`, `enchanted_glass`, `fern`, `flax`, `glass`, `glowcap`, `gold`, `gold_ore`, `granite`, `grass`, `iron`, `iron_ore`, `lavender`, `lime`, `limestone`, `marble`, `mithril`, `mithril_ore`, `moon_silver`, `moonstone`, `mortar`, `oak_leaves`, `oak_wood`, `obsidian`, `peat`, `planks`, `plant_fiber`, `pumpkin`, `quartz`, `red_poppy`, `reeds`, `resin`, `rock_salt`, `ruby`, `ruby_ore`, `runestone`, `sand`, `sapphire`, `sapphire_ore`, `short_grass`, `silver`, `silver_ore`, `soil`, `spruce_leaves`, `spruce_wood`, `steel`, `stone`, `sulfur`, `thorn_bush`, `tin`, `tin_ore`, `water`, `wild_herbs`, `wood_pulp`, `air`, `mud`, `redstone`, `crystal`
 
 ## Types
 

@@ -4,6 +4,7 @@ mod camera;
 mod creature;
 mod crafting;
 mod crafting_ui;
+mod resource_ui;
 mod daynight;
 mod input;
 mod llm;

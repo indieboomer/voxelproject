@@ -16,6 +16,7 @@ pub struct CraftingUi {
     conversion_amount: i64,
     extraction_block: BlockType,
     extraction_amount: u32,
+    recipe_search: String,
 }
 impl Default for CraftingUi {
     fn default() -> Self {
@@ -29,6 +30,7 @@ impl Default for CraftingUi {
             conversion_amount: 1,
             extraction_block: BlockType::Stone,
             extraction_amount: 1,
+            recipe_search: String::new(),
         }
     }
 }
@@ -272,26 +274,53 @@ impl CraftingUi {
                     {
                         request = Some(action);
                     }
-                    ui.collapsing("Starter formulas", |ui| {
-                        for r in &registry.recipes {
-                            if ui
-                                .button(format!(
-                                    "{}: {}",
-                                    r.id,
-                                    r.inputs
-                                        .iter()
-                                        .map(|s| format!("{:?} x{}", s.element, s.amount))
-                                        .collect::<Vec<_>>()
-                                        .join(" → ")
-                                ))
-                                .clicked()
-                            {
-                                self.slots = [None; 5];
-                                for (i, s) in r.inputs.iter().enumerate() {
-                                    self.slots[i] = Some(*s);
+                    ui.collapsing("Formula book", |ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.recipe_search)
+                                .hint_text("Search formula or resource"),
+                        );
+                        let query = self.recipe_search.trim().to_lowercase();
+                        egui::ScrollArea::vertical()
+                            .id_source("formula_book")
+                            .max_height(250.0)
+                            .show(ui, |ui| {
+                                for r in &registry.recipes {
+                                    let block = BlockType::from_name(&r.output.id);
+                                    let name = block.map_or(r.output.id.as_str(), |b| b.name());
+                                    if !format!("{} {}", name, r.id).to_lowercase().contains(&query)
+                                    {
+                                        continue;
+                                    }
+                                    ui.horizontal(|ui| {
+                                        if let Some(block) = block {
+                                            crate::resource_ui::icon(ui, block);
+                                        }
+                                        let cost = registry.mana_costs[r.inputs.len() - 1];
+                                        let label = format!(
+                                            "{}: {} ({} mana)",
+                                            name,
+                                            r.inputs
+                                                .iter()
+                                                .map(|s| format!("{:?} x{}", s.element, s.amount))
+                                                .collect::<Vec<_>>()
+                                                .join(" + "),
+                                            cost
+                                        );
+                                        let response = ui.button(label);
+                                        if response.clicked() {
+                                            self.slots = [None; 5];
+                                            for (i, s) in r.inputs.iter().enumerate() {
+                                                self.slots[i] = Some(*s);
+                                            }
+                                        }
+                                        if let Some(block) = block {
+                                            response.on_hover_text(
+                                                crate::resource_ui::description(block),
+                                            );
+                                        }
+                                    });
                                 }
-                            }
-                        }
+                            });
                     });
                 });
                 if self.pending {

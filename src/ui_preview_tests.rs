@@ -12,9 +12,9 @@ fn render_ui_previews() {
         pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
             .unwrap();
     let width = 1280;
-    let height = 720;
     for (theme, name) in [(UiTheme::Generic, "generic"), (UiTheme::Fantasy, "fantasy")] {
-        for crafting in [false, true] {
+        for panel in ["settings", "crafting", "resources"] {
+            let height = if panel == "resources" { 1024 } else { 720 };
             let ctx = egui::Context::default();
             ui_theme::apply(&ctx, theme);
             let mut renderer =
@@ -73,7 +73,7 @@ fn render_ui_previews() {
                                 ui_theme::menu_backdrop(ui);
                             }
                         });
-                        if crafting {
+                        if panel == "crafting" {
                             craft.draw(
                                 ctx,
                                 &registry,
@@ -83,6 +83,27 @@ fn render_ui_previews() {
                                 glam::Vec3::ZERO,
                                 &[],
                             );
+                        } else if panel == "resources" {
+                            egui::Window::new("Resources - pixel atlas preview")
+                                .fixed_pos([40., 30.])
+                                .fixed_size([1180., 650.])
+                                .show(ctx, |ui| {
+                                    ui.columns(4, |columns| {
+                                        for (i, block) in
+                                            crate::voxel::COLLECTIBLE_BLOCKS.iter().enumerate()
+                                        {
+                                            columns[i / crate::voxel::COLLECTIBLE_BLOCKS
+                                                .len()
+                                                .div_ceil(4)]
+                                            .horizontal(|ui| {
+                                                crate::resource_ui::icon(ui, *block);
+                                                ui.label(block.name()).on_hover_text(
+                                                    crate::resource_ui::description(*block),
+                                                );
+                                            });
+                                        }
+                                    });
+                                });
                         } else {
                             settings.draw(ctx);
                         }
@@ -154,7 +175,6 @@ fn render_ui_previews() {
             device.poll(wgpu::Maintain::Wait);
             recv.recv().unwrap().unwrap();
             let bytes = buffer.slice(..).get_mapped_range();
-            let panel = if crafting { "crafting" } else { "settings" };
             image::save_buffer(
                 format!("target/ui-{name}-{panel}.png"),
                 &bytes,

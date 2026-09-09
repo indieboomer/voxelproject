@@ -15,8 +15,7 @@ This script collects every distinct texture name the CSV references, packs
 one 64x64 tile per name into a grid atlas, and emits:
   - atlas.png: the packed texture grid.
   - atlas_tiles.rs: a `TILE_<NAME>` constant per texture, plus
-    `TILE_PLACEHOLDER` (textures/placeholder.png, used by the non-CSV
-    extras) and `TILE_WHITE` (synthetic flat swatch, sampled by entities
+    tiles for the non-CSV gameplay extras and `TILE_WHITE` (synthetic flat swatch, sampled by entities
     that are tinted purely via per-vertex color).
   - block_defs.rs: a `BlockDef` literal per CSV row (`csv_def`) plus a
     snake_case id lookup (`csv_from_name`), both consumed by
@@ -72,7 +71,7 @@ def rust_bool(b: bool) -> str:
 def build_atlas(rows):
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    names = set()
+    names = {"mud", "redstone", "crystal"}
     for row in rows:
         for col in ("texture", "top", "side", "bottom"):
             val = row[col].strip()
@@ -83,8 +82,6 @@ def build_atlas(rows):
     tiles = [load_tile(n) for n in names]
     tile_names = list(names)
 
-    tiles.append(load_tile("placeholder"))
-    tile_names.append("placeholder")
 
     white = Image.new("RGBA", (TILE, TILE), (255, 255, 255, 255))
     tiles.append(white)

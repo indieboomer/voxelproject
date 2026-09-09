@@ -14,7 +14,7 @@ struct CameraUniform {
     light_params: vec4<f32>,
     // x = lightning_flash, 0..1 (see App::update_lightning) -- blended
     // toward white in fs_main below during a storm's lightning strike.
-    // y/z/w reserved, currently always 0.
+    // y = cloud coverage, z = camera eye underwater, w = reserved.
     weather_fx: vec4<f32>,
 };
 
@@ -227,11 +227,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let reflected = lit + sky_reflection + vec3<f32>(specular) + glow;
 
     let dist = distance(in.world_pos, camera.camera_pos.xyz);
-    let fog_start = 70.0;
-    let fog_end = 160.0;
+    let underwater = camera.weather_fx.z;
+    let fog_start = mix(70.0, 1.5, underwater);
+    let fog_end = mix(160.0, 26.0, underwater);
     let fog_amount = clamp((dist - fog_start) / (fog_end - fog_start), 0.0, 1.0);
 
-    let final_color = mix(reflected, camera.fog_color.rgb, fog_amount);
+    let fog_tint = mix(camera.fog_color.rgb, vec3<f32>(0.025, 0.16, 0.28), underwater);
+    let tinted = mix(reflected, reflected * vec3<f32>(0.50, 0.78, 0.95) + vec3<f32>(0.01, 0.04, 0.09), underwater);
+    let final_color = mix(tinted, fog_tint, fog_amount);
     // Lightning flash: a straight blend to white over the final graded
     // color, so a strike reads as a clean, even whiteout regardless of
     // what was underneath -- applied identically in sky.wgsl so the whole

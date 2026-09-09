@@ -9,92 +9,6 @@
   "conversion_rate": 1,
   "recipes": [
     {
-      "id": "stone",
-      "inputs": [
-        {
-          "element": "Earth",
-          "amount": 1
-        }
-      ],
-      "output": {
-        "kind": "block",
-        "id": "stone",
-        "quantity": 1
-      }
-    },
-    {
-      "id": "bricks",
-      "inputs": [
-        {
-          "element": "Earth",
-          "amount": 2
-        },
-        {
-          "element": "Fire",
-          "amount": 1
-        }
-      ],
-      "output": {
-        "kind": "block",
-        "id": "bricks",
-        "quantity": 1
-      }
-    },
-    {
-      "id": "basalt",
-      "inputs": [
-        {
-          "element": "Fire",
-          "amount": 1
-        },
-        {
-          "element": "Earth",
-          "amount": 2
-        }
-      ],
-      "output": {
-        "kind": "block",
-        "id": "basalt",
-        "quantity": 1
-      }
-    },
-    {
-      "id": "mud",
-      "inputs": [
-        {
-          "element": "Water",
-          "amount": 1
-        },
-        {
-          "element": "Death",
-          "amount": 1
-        }
-      ],
-      "output": {
-        "kind": "resource",
-        "id": "mud",
-        "quantity": 1
-      }
-    },
-    {
-      "id": "redstone",
-      "inputs": [
-        {
-          "element": "Death",
-          "amount": 1
-        },
-        {
-          "element": "Water",
-          "amount": 1
-        }
-      ],
-      "output": {
-        "kind": "item",
-        "id": "redstone",
-        "quantity": 1
-      }
-    },
-    {
       "id": "sheep",
       "inputs": [
         {
@@ -131,50 +45,6 @@
       }
     },
     {
-      "id": "layered_stone",
-      "inputs": [
-        {
-          "element": "Earth",
-          "amount": 1
-        },
-        {
-          "element": "Earth",
-          "amount": 1
-        }
-      ],
-      "output": {
-        "kind": "block",
-        "id": "cobblestone",
-        "quantity": 1
-      }
-    },
-    {
-      "id": "pumpkin",
-      "inputs": [
-        {
-          "element": "Earth",
-          "amount": 1
-        },
-        {
-          "element": "Water",
-          "amount": 1
-        },
-        {
-          "element": "Life",
-          "amount": 1
-        },
-        {
-          "element": "Fire",
-          "amount": 1
-        }
-      ],
-      "output": {
-        "kind": "item",
-        "id": "pumpkin",
-        "quantity": 1
-      }
-    },
-    {
       "id": "sunscorch",
       "inputs": [
         {
@@ -203,262 +73,677 @@
         "id": "sunscorch",
         "quantity": 1
       }
+    },
+    {
+      "id": "stone",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 1
+        },
+        {
+          "element": "Water",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "stone",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "cobblestone",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 1
+        },
+        {
+          "element": "Earth",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "cobblestone",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "bricks",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 2
+        },
+        {
+          "element": "Fire",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "bricks",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "basalt",
+      "inputs": [
+        {
+          "element": "Fire",
+          "amount": 1
+        },
+        {
+          "element": "Earth",
+          "amount": 2
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "basalt",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "pumpkin",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 1
+        },
+        {
+          "element": "Water",
+          "amount": 1
+        },
+        {
+          "element": "Life",
+          "amount": 2
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "pumpkin",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "mud",
+      "inputs": [
+        {
+          "element": "Water",
+          "amount": 1
+        },
+        {
+          "element": "Death",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "mud",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "redstone",
+      "inputs": [
+        {
+          "element": "Death",
+          "amount": 1
+        },
+        {
+          "element": "Water",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "redstone",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "iron",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 3
+        },
+        {
+          "element": "Fire",
+          "amount": 2
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "iron",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "copper",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 2
+        },
+        {
+          "element": "Fire",
+          "amount": 2
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "copper",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "tin",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 2
+        },
+        {
+          "element": "Water",
+          "amount": 1
+        },
+        {
+          "element": "Fire",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "tin",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "silver",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 2
+        },
+        {
+          "element": "Water",
+          "amount": 2
+        },
+        {
+          "element": "Fire",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "silver",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "gold",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 3
+        },
+        {
+          "element": "Fire",
+          "amount": 3
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "gold",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "steel",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 4
+        },
+        {
+          "element": "Fire",
+          "amount": 3
+        },
+        {
+          "element": "Death",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "steel",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "bronze",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 3
+        },
+        {
+          "element": "Fire",
+          "amount": 2
+        },
+        {
+          "element": "Water",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "bronze",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "mithril",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 4
+        },
+        {
+          "element": "Water",
+          "amount": 3
+        },
+        {
+          "element": "Life",
+          "amount": 2
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "mithril",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "diamond",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 4
+        },
+        {
+          "element": "Water",
+          "amount": 3
+        },
+        {
+          "element": "Fire",
+          "amount": 2
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "diamond",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "emerald",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 3
+        },
+        {
+          "element": "Life",
+          "amount": 3
+        },
+        {
+          "element": "Water",
+          "amount": 2
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "emerald",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "ruby",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 3
+        },
+        {
+          "element": "Fire",
+          "amount": 4
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "ruby",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "sapphire",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 3
+        },
+        {
+          "element": "Water",
+          "amount": 4
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "sapphire",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "glass",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 1
+        },
+        {
+          "element": "Fire",
+          "amount": 2
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "glass",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "charcoal",
+      "inputs": [
+        {
+          "element": "Life",
+          "amount": 2
+        },
+        {
+          "element": "Fire",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "charcoal",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "ash",
+      "inputs": [
+        {
+          "element": "Fire",
+          "amount": 1
+        },
+        {
+          "element": "Death",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "ash",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "lime",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 2
+        },
+        {
+          "element": "Fire",
+          "amount": 1
+        },
+        {
+          "element": "Water",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "lime",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "mortar",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 3
+        },
+        {
+          "element": "Water",
+          "amount": 2
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "mortar",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "ceramic",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 3
+        },
+        {
+          "element": "Water",
+          "amount": 1
+        },
+        {
+          "element": "Fire",
+          "amount": 2
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "ceramic",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "planks",
+      "inputs": [
+        {
+          "element": "Life",
+          "amount": 2
+        },
+        {
+          "element": "Earth",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "planks",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "wood_pulp",
+      "inputs": [
+        {
+          "element": "Life",
+          "amount": 1
+        },
+        {
+          "element": "Water",
+          "amount": 2
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "wood_pulp",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "plant_fiber",
+      "inputs": [
+        {
+          "element": "Life",
+          "amount": 2
+        },
+        {
+          "element": "Water",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "plant_fiber",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "cloth",
+      "inputs": [
+        {
+          "element": "Life",
+          "amount": 3
+        },
+        {
+          "element": "Water",
+          "amount": 2
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "cloth",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "resin",
+      "inputs": [
+        {
+          "element": "Life",
+          "amount": 3
+        },
+        {
+          "element": "Fire",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "resin",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "crystal_dust",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 2
+        },
+        {
+          "element": "Water",
+          "amount": 2
+        },
+        {
+          "element": "Death",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "crystal_dust",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "enchanted_glass",
+      "inputs": [
+        {
+          "element": "Water",
+          "amount": 3
+        },
+        {
+          "element": "Fire",
+          "amount": 2
+        },
+        {
+          "element": "Life",
+          "amount": 2
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "enchanted_glass",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "moon_silver",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 3
+        },
+        {
+          "element": "Water",
+          "amount": 3
+        },
+        {
+          "element": "Death",
+          "amount": 3
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "moon_silver",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "runestone",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 4
+        },
+        {
+          "element": "Life",
+          "amount": 2
+        },
+        {
+          "element": "Death",
+          "amount": 2
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "runestone",
+        "quantity": 1
+      }
     }
   ],
   "compositions": [
-    {
-      "kind": "block",
-      "id": "grass",
-      "elements": [
-        2,
-        0,
-        0,
-        0,
-        0
-      ]
-    },
-    {
-      "kind": "block",
-      "id": "soil",
-      "elements": [
-        2,
-        0,
-        0,
-        0,
-        0
-      ]
-    },
-    {
-      "kind": "block",
-      "id": "stone",
-      "elements": [
-        1,
-        0,
-        0,
-        0,
-        0
-      ]
-    },
-    {
-      "kind": "block",
-      "id": "sand",
-      "elements": [
-        2,
-        0,
-        0,
-        0,
-        0
-      ]
-    },
-    {
-      "kind": "block",
-      "id": "cobblestone",
-      "elements": [
-        2,
-        0,
-        0,
-        0,
-        0
-      ]
-    },
-    {
-      "kind": "block",
-      "id": "bricks",
-      "elements": [
-        2,
-        1,
-        0,
-        0,
-        0
-      ]
-    },
-    {
-      "kind": "block",
-      "id": "basalt",
-      "elements": [
-        2,
-        1,
-        0,
-        0,
-        0
-      ]
-    },
-    {
-      "kind": "block",
-      "id": "copper_ore",
-      "elements": [
-        2,
-        1,
-        0,
-        0,
-        0
-      ]
-    },
-    {
-      "kind": "block",
-      "id": "gold_ore",
-      "elements": [
-        2,
-        1,
-        0,
-        0,
-        0
-      ]
-    },
-    {
-      "kind": "block",
-      "id": "oak_wood",
-      "elements": [
-        1,
-        0,
-        0,
-        2,
-        0
-      ]
-    },
-    {
-      "kind": "block",
-      "id": "spruce_wood",
-      "elements": [
-        1,
-        0,
-        0,
-        2,
-        0
-      ]
-    },
-    {
-      "kind": "block",
-      "id": "cherry_wood",
-      "elements": [
-        1,
-        0,
-        0,
-        2,
-        0
-      ]
-    },
-    {
-      "kind": "block",
-      "id": "birch_wood",
-      "elements": [
-        1,
-        0,
-        0,
-        2,
-        0
-      ]
-    },
-    {
-      "kind": "block",
-      "id": "oak_leaves",
-      "elements": [
-        0,
-        0,
-        1,
-        2,
-        0
-      ]
-    },
-    {
-      "kind": "block",
-      "id": "spruce_leaves",
-      "elements": [
-        0,
-        0,
-        1,
-        2,
-        0
-      ]
-    },
-    {
-      "kind": "block",
-      "id": "cherry_leaves",
-      "elements": [
-        0,
-        0,
-        1,
-        2,
-        0
-      ]
-    },
-    {
-      "kind": "block",
-      "id": "birch_leaves",
-      "elements": [
-        0,
-        0,
-        1,
-        2,
-        0
-      ]
-    },
-    {
-      "kind": "block",
-      "id": "short_grass",
-      "elements": [
-        0,
-        0,
-        1,
-        2,
-        0
-      ]
-    },
-    {
-      "kind": "block",
-      "id": "pumpkin",
-      "elements": [
-        1,
-        1,
-        1,
-        1,
-        0
-      ]
-    },
-    {
-      "kind": "block",
-      "id": "mud",
-      "elements": [
-        0,
-        0,
-        1,
-        0,
-        1
-      ]
-    },
-    {
-      "kind": "block",
-      "id": "redstone",
-      "elements": [
-        0,
-        0,
-        1,
-        0,
-        1
-      ]
-    },
-    {
-      "kind": "block",
-      "id": "diamond_ore",
-      "elements": [
-        1,
-        1,
-        1,
-        1,
-        1
-      ]
-    },
-    {
-      "kind": "block",
-      "id": "emerald_ore",
-      "elements": [
-        1,
-        1,
-        1,
-        1,
-        1
-      ]
-    },
     {
       "kind": "block",
       "id": "crystal",
@@ -567,6 +852,908 @@
         0,
         0,
         3
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "grass",
+      "elements": [
+        1,
+        0,
+        0,
+        1,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "soil",
+      "elements": [
+        2,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "stone",
+      "elements": [
+        1,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "sand",
+      "elements": [
+        2,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "oak_wood",
+      "elements": [
+        1,
+        0,
+        0,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "oak_leaves",
+      "elements": [
+        0,
+        0,
+        1,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "cobblestone",
+      "elements": [
+        2,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "bricks",
+      "elements": [
+        2,
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "spruce_wood",
+      "elements": [
+        1,
+        0,
+        0,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "spruce_leaves",
+      "elements": [
+        0,
+        0,
+        1,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "cherry_wood",
+      "elements": [
+        1,
+        0,
+        0,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "cherry_leaves",
+      "elements": [
+        0,
+        0,
+        1,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "birch_wood",
+      "elements": [
+        1,
+        0,
+        0,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "birch_leaves",
+      "elements": [
+        0,
+        0,
+        1,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "basalt",
+      "elements": [
+        2,
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "gold_ore",
+      "elements": [
+        4,
+        2,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "diamond_ore",
+      "elements": [
+        4,
+        2,
+        3,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "emerald_ore",
+      "elements": [
+        3,
+        0,
+        2,
+        3,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "copper_ore",
+      "elements": [
+        2,
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "pumpkin",
+      "elements": [
+        1,
+        0,
+        1,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "short_grass",
+      "elements": [
+        0,
+        0,
+        1,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "mud",
+      "elements": [
+        0,
+        0,
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "redstone",
+      "elements": [
+        0,
+        0,
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "iron_ore",
+      "elements": [
+        3,
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "tin_ore",
+      "elements": [
+        2,
+        0,
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "silver_ore",
+      "elements": [
+        2,
+        0,
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "coal",
+      "elements": [
+        1,
+        3,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "sulfur",
+      "elements": [
+        1,
+        2,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "rock_salt",
+      "elements": [
+        1,
+        0,
+        3,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "clay",
+      "elements": [
+        2,
+        0,
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "limestone",
+      "elements": [
+        3,
+        0,
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "marble",
+      "elements": [
+        4,
+        0,
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "granite",
+      "elements": [
+        4,
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "obsidian",
+      "elements": [
+        2,
+        3,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "quartz",
+      "elements": [
+        2,
+        0,
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "amethyst",
+      "elements": [
+        2,
+        0,
+        1,
+        0,
+        2
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "sapphire_ore",
+      "elements": [
+        2,
+        0,
+        4,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "ruby_ore",
+      "elements": [
+        2,
+        4,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "mithril_ore",
+      "elements": [
+        3,
+        0,
+        2,
+        1,
+        1
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "moonstone",
+      "elements": [
+        1,
+        0,
+        3,
+        0,
+        3
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "amber",
+      "elements": [
+        1,
+        1,
+        0,
+        3,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "peat",
+      "elements": [
+        1,
+        1,
+        1,
+        0,
+        2
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "reeds",
+      "elements": [
+        0,
+        0,
+        2,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "flax",
+      "elements": [
+        0,
+        0,
+        1,
+        3,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "wild_herbs",
+      "elements": [
+        0,
+        0,
+        1,
+        2,
+        1
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "iron",
+      "elements": [
+        3,
+        2,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "copper",
+      "elements": [
+        2,
+        2,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "tin",
+      "elements": [
+        2,
+        1,
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "silver",
+      "elements": [
+        2,
+        1,
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "gold",
+      "elements": [
+        3,
+        3,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "steel",
+      "elements": [
+        4,
+        3,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "bronze",
+      "elements": [
+        3,
+        2,
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "mithril",
+      "elements": [
+        4,
+        0,
+        3,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "diamond",
+      "elements": [
+        4,
+        2,
+        3,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "emerald",
+      "elements": [
+        3,
+        0,
+        2,
+        3,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "ruby",
+      "elements": [
+        3,
+        4,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "sapphire",
+      "elements": [
+        3,
+        0,
+        4,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "glass",
+      "elements": [
+        1,
+        2,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "charcoal",
+      "elements": [
+        0,
+        1,
+        0,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "ash",
+      "elements": [
+        0,
+        1,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "lime",
+      "elements": [
+        2,
+        1,
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "mortar",
+      "elements": [
+        3,
+        0,
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "ceramic",
+      "elements": [
+        3,
+        2,
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "planks",
+      "elements": [
+        1,
+        0,
+        0,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "wood_pulp",
+      "elements": [
+        0,
+        0,
+        2,
+        1,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "plant_fiber",
+      "elements": [
+        0,
+        0,
+        1,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "cloth",
+      "elements": [
+        0,
+        0,
+        2,
+        3,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "resin",
+      "elements": [
+        0,
+        1,
+        0,
+        3,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "crystal_dust",
+      "elements": [
+        2,
+        0,
+        2,
+        0,
+        1
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "enchanted_glass",
+      "elements": [
+        0,
+        2,
+        3,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "moon_silver",
+      "elements": [
+        3,
+        0,
+        3,
+        0,
+        3
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "runestone",
+      "elements": [
+        4,
+        0,
+        0,
+        2,
+        2
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "fern",
+      "elements": [
+        0,
+        0,
+        1,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "clover",
+      "elements": [
+        0,
+        0,
+        0,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "lavender",
+      "elements": [
+        0,
+        0,
+        1,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "red_poppy",
+      "elements": [
+        0,
+        1,
+        0,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "bluebell",
+      "elements": [
+        0,
+        0,
+        2,
+        1,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "cattail",
+      "elements": [
+        0,
+        0,
+        2,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "brown_mushroom",
+      "elements": [
+        0,
+        0,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "glowcap",
+      "elements": [
+        0,
+        0,
+        1,
+        1,
+        2
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "thorn_bush",
+      "elements": [
+        1,
+        0,
+        0,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "dry_shrub",
+      "elements": [
+        0,
+        1,
+        0,
+        1,
+        1
       ]
     }
   ]

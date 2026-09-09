@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::block::BlockType;
 use super::chunk::{world_to_chunk, world_to_local, Chunk, CHUNK_X, CHUNK_Y, CHUNK_Z};
-use super::noise::{block_rand, block_rand_range, column_rand, fbm};
+use super::noise::{block_rand, block_rand_range, column_rand};
 
 pub const SEA_LEVEL: i32 = 18;
 
@@ -117,6 +117,11 @@ const VEINS: [VeinConfig; 6] = [
     },
 ];
 
+const RESOURCE_VEINS: &[VeinConfig] = include!("resource_veins.rs");
+
+struct SurfaceResource { block: BlockType, habitat: &'static str, chance: f32, salt: u32 }
+const SURFACE_RESOURCES: &[SurfaceResource] = include!("resource_surface.rs");
+
 pub struct World {
     pub seed: u32,
     pub chunks: HashMap<(i32, i32), Chunk>,
@@ -152,26 +157,7 @@ impl World {
     }
 
     pub fn terrain_height(&self, wx: i32, wz: i32) -> i32 {
-        // `fbm` returns [0, 1], not [-1, 1] -- recenter both octaves around 0
-        // so terrain actually varies both above *and* below the mean instead
-        // of only ever adding height. Without this, height never dropped
-        // below 14 and the world generated no water at all despite the
-        // sea-level logic below.
-        let base = fbm(wx as f32 * 0.01, wz as f32 * 0.01, self.seed, 4, 2.0, 0.5) * 2.0 - 1.0;
-        let hills = fbm(
-            wx as f32 * 0.04,
-            wz as f32 * 0.04,
-            self.seed ^ 0x51ed,
-            3,
-            2.0,
-            0.5,
-        ) * 2.0
-            - 1.0;
-        // Mean height sits a bit above SEA_LEVEL (18) so most land stays
-        // dry, but low-lying dips (large-scale `base` swings) fall below it
-        // and fill with water, forming lakes/ponds/coastline.
-        let h = 24.0 + base * 14.0 + hills * 5.0;
-        h.clamp(2.0, (CHUNK_Y - 6) as f32) as i32
+        super::terrain::height(wx,wz,self.seed)
     }
 
     fn generate_chunk(&self, cx: i32, cz: i32) -> Chunk {
@@ -196,9 +182,13 @@ impl World {
                     } else if ly == height {
                         if height <= SEA_LEVEL + 1 {
                             BlockType::Sand
+                        } else if height>=super::terrain::ROCK_LINE {
+                            BlockType::Stone
                         } else {
                             BlockType::Grass
                         }
+                    } else if height>=super::terrain::ROCK_LINE {
+                        BlockType::Stone
                     } else if ly > height - 4 {
                         BlockType::Soil
                     } else {
@@ -209,7 +199,7 @@ impl World {
 
                 // Simple tree scattering, away from the shoreline. Species
                 // is picked per-tree so all four wood types show up.
-                let on_dry_land = height > SEA_LEVEL + 2;
+                let on_dry_land = height > SEA_LEVEL + 2 && height < super::terrain::ROCK_LINE;
                 let mut placed_topper = false;
                 if on_dry_land && column_rand(wx, wz, self.seed, 0xA11CE) < 0.006 {
                     let species_roll = column_rand(wx, wz, self.seed, 0x5FEC1E5);
@@ -249,9 +239,51 @@ impl World {
 
         self.scatter_veins(&mut chunk, cx, cz);
         self.scatter_brick_ruins(&mut chunk, cx, cz);
+        self.scatter_surface_resources(&mut chunk);
 
         chunk.dirty = true;
         chunk
+    }
+
+    /// A second pass never overwrites tree trunks, leaves, existing decorations or water.
+    fn scatter_surface_resources(&self, chunk: &mut Chunk) {
+        let (ox,oz)=chunk.world_origin();
+        for lx in 0..CHUNK_X { for lz in 0..CHUNK_Z {
+            let (wx,wz)=(ox+lx,oz+lz);
+            let y=self.terrain_height(wx,wz);
+            let surface=chunk.get_local(lx,y,lz);
+            let wet=(SEA_LEVEL..=SEA_LEVEL+2).contains(&y);
+            if wet && matches!(surface,BlockType::Sand | BlockType::Grass | BlockType::Soil) {
+                let roll=column_rand(wx,wz,self.seed,0x7200A001);
+                let ground=if roll<0.12 {Some(BlockType::Clay)} else if roll<0.20 {Some(BlockType::Peat)} else if roll<0.28 {Some(BlockType::Mud)} else {None};
+                if let Some(block)=ground { chunk.set_local(lx,y,lz,block); }
+            }
+            if y<SEA_LEVEL || chunk.get_local(lx,y+1,lz)!=BlockType::Air {continue;}
+            let roll=column_rand(wx,wz,self.seed,0x7200A002);
+            let plant=if wet && roll<0.07 {Some(BlockType::Reeds)}
+                else if surface==BlockType::Grass && roll<0.012 {Some(BlockType::Flax)}
+                else if surface==BlockType::Grass && roll<0.028 {Some(BlockType::WildHerbs)} else {None};
+            if let Some(block)=plant {chunk.set_local(lx,y+1,lz,block);continue;}
+            if !chunk.get_local(lx,y,lz).is_solid() {continue;}
+            let shaded=(-2..=2).any(|dx|(-2..=2).any(|dz|(2..=6).any(|dy| {
+                let block=chunk.get_local(lx+dx,y+dy,lz+dz);
+                block.is_wood() || block.def().cutout
+            })));
+            for resource in SURFACE_RESOURCES {
+                let suitable=match resource.habitat {
+                    "shade"=>shaded,
+                    "wet"=>wet,
+                    "meadow"=>surface==BlockType::Grass && !shaded,
+                    "dry"=>surface==BlockType::Grass && y>=SEA_LEVEL+6,
+                    _=>false,
+                };
+                // Coarse patches plus independent local rolls give natural clumps, not a grid.
+                if suitable && column_rand(wx.div_euclid(5),wz.div_euclid(5),self.seed,resource.salt^0x99)<0.7
+                    && column_rand(wx,wz,self.seed,resource.salt)<resource.chance {
+                    chunk.set_local(lx,y+1,lz,resource.block);break;
+                }
+            }
+        }}
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -317,13 +349,17 @@ impl World {
     }
 
     /// Grows small underground deposits (ores, basalt, cobblestone) by
-    /// replacing `Stone` cells with `VEINS` entries. Each vein starts from a
+    /// replacing stone (and buried soil for ores) with deposit entries. Each vein starts from a
     /// deterministic per-chunk-attempt roll and grows via a short random
     /// walk, so results are reproducible from `(seed, cx, cz)` alone like
     /// the rest of chunk generation.
     fn scatter_veins(&self, chunk: &mut Chunk, cx: i32, cz: i32) {
-        for vein in VEINS.iter() {
-            for attempt in 0..vein.attempts_per_chunk as i32 {
+        let (ox,oz)=chunk.world_origin();
+        let heights: [[i32; CHUNK_Z as usize]; CHUNK_X as usize]=std::array::from_fn(|x|std::array::from_fn(|z|self.terrain_height(ox+x as i32,oz+z as i32)));
+        for vein in VEINS.iter().chain(RESOURCE_VEINS.iter()) {
+            let ore=vein.block.id().ends_with("_ore") || vein.block==BlockType::Coal;
+            let attempts=vein.attempts_per_chunk * if ore {2} else {1};
+            for attempt in 0..attempts as i32 {
                 if block_rand(cx, attempt, cz, self.seed, vein.salt) >= vein.spawn_chance {
                     continue;
                 }
@@ -339,11 +375,13 @@ impl World {
                 );
                 let lz = block_rand_range(cx, attempt, cz, self.seed, vein.salt ^ 0xC3, 0, CHUNK_Z - 1);
                 let size =
-                    block_rand_range(cx, attempt, cz, self.seed, vein.salt ^ 0xD4, vein.min_size, vein.max_size);
+                    block_rand_range(cx, attempt, cz, self.seed, vein.salt ^ 0xD4, vein.min_size, vein.max_size) + if ore {2} else {0};
 
                 let (mut x, mut y, mut z) = (lx, ly, lz);
                 for step in 0..size {
-                    if Chunk::in_bounds(x, y, z) && chunk.get_local(x, y, z) == BlockType::Stone {
+                    if Chunk::in_bounds(x, y, z) && (vein.min_y..=vein.max_y).contains(&y)
+                        && y < heights[x as usize][z as usize]
+                        && (chunk.get_local(x,y,z)==BlockType::Stone || (ore && chunk.get_local(x,y,z)==BlockType::Soil)) {
                         chunk.set_local(x, y, z, vein.block);
                     }
                     let dir = block_rand_range(x, y, z, self.seed, vein.salt ^ (step as u32), 0, 5) as usize;
@@ -618,5 +656,61 @@ mod tests {
             MAX_FLOOD_BLOCKS,
             "flood should stop at the cap instead of filling the whole cavity"
         );
+    }
+}
+
+#[cfg(test)]
+mod resource_generation_tests {
+    use super::*;
+    #[test]
+    fn resources_are_obtainable_and_refined_materials_never_spawn() {
+        let mut counts=vec![0u64;crate::voxel::COLLECTIBLE_BLOCKS.len()];
+        let mut blocks=0u64;
+        let mut soil_ores=0u64;
+        for seed in [7,42,2026] {
+            let world=World::new(seed);
+            for cx in -6..6 {for cz in -6..6 {
+                let chunk=world.generate_chunk(cx*7,cz*7);
+                for x in 0..CHUNK_X { for z in 0..CHUNK_Z {for y in 0..CHUNK_Y {
+                    let block=chunk.get_local(x,y,z);
+                    if block==BlockType::Air || block==BlockType::Water {continue;}
+                    blocks+=1;
+                    if block.id().ends_with("_ore") {
+                        let (ox,oz)=chunk.world_origin();
+                        let h=world.terrain_height(ox+x,oz+z);
+                        assert!(y<h,"ore broke the surface");
+                        if y>=h-3 {soil_ores+=1;}
+                    }
+                    if let Some(i)=crate::voxel::COLLECTIBLE_BLOCKS.iter().position(|&b|b==block) {counts[i]+=1;}
+                    if y<BEDROCK_DEPTH {assert_eq!(block,BlockType::Bedrock);}
+                    if block.def().cross {assert!(chunk.get_local(x,y-1,z).is_solid());}
+                }}}
+            }}
+        }
+        let mut report=String::from("resource,count_in_432_sampled_chunks\n");
+        for (i,info) in crate::voxel::resource_catalog::RESOURCES.iter().enumerate() {
+            report.push_str(&format!("{},{}\n",info.block.id(),counts[i]));
+            if info.source=="crafted" {assert_eq!(counts[i],0,"crafted-only {} spawned",info.block.id());}
+            else {assert!(counts[i]>0,"natural {} unavailable",info.block.id());}
+        }
+        let count=|block|counts[crate::voxel::COLLECTIBLE_BLOCKS.iter().position(|&b|b==block).unwrap()];
+        assert!(soil_ores>100,"ores never reached buried soil");
+        // Baseline for this identical 432-chunk survey was 4,025 iron / 4,492 coal.
+        assert!(count(BlockType::IronOre)>8_050);
+        assert!(count(BlockType::Coal)>8_984);
+        assert!(count(BlockType::IronOre)>count(BlockType::MithrilOre)*3);
+        assert!(count(BlockType::Coal)>count(BlockType::Moonstone)*3);
+        assert!(count(BlockType::Stone)>blocks/2,"deposits crowded out basic stone");
+        std::fs::create_dir_all("target").unwrap();
+        std::fs::write("target/resource-distribution.csv",report).unwrap();
+    }
+    #[test]
+    fn generated_resources_are_deterministic_across_load_order() {
+        let a=World::new(2026).generate_chunk(-3,5);
+        let mut other=World::new(2026); other.ensure_chunk_loaded(2,3);
+        let b=other.generate_chunk(-3,5);
+        for x in 0..CHUNK_X {for z in 0..CHUNK_Z {for y in 0..CHUNK_Y {
+            assert_eq!(a.get_local(x,y,z),b.get_local(x,y,z));
+        }}}
     }
 }
