@@ -2,6 +2,8 @@ mod app;
 mod audio;
 mod camera;
 mod creature;
+mod crafting;
+mod crafting_ui;
 mod daynight;
 mod input;
 mod llm;
@@ -9,10 +11,17 @@ mod llm_server;
 mod menu;
 mod model;
 mod net;
+mod transport;
+#[cfg(feature = "steam")]
+mod steam_transport;
 mod player;
 mod raycast;
 mod remote_player;
 mod save;
+mod settings;
+mod ui_theme;
+#[cfg(test)]
+mod ui_preview_tests;
 mod script_budget;
 mod scripting;
 mod ui;
@@ -46,6 +55,13 @@ enum Stage {
 fn main() {
     env_logger::init();
 
+    #[cfg(feature = "steam")]
+    {
+        let settings = settings::Settings::load(std::path::Path::new("settings.json")).unwrap_or_default();
+        if let Err(e) = steam_transport::initialize(settings.multiplayer.steam_app_id) {
+            log::warn!("{e}"); // Direct mode remains usable without a signed-in Steam client.
+        }
+    }
     let event_loop = EventLoop::new().expect("failed to create event loop");
     let window = Arc::new(
         WindowBuilder::new()

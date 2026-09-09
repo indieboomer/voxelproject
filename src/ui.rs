@@ -67,6 +67,8 @@ pub struct ChatEntry {
 /// state directly.
 #[derive(Default)]
 pub struct UiRequests {
+    pub invite_friends: bool,
+    pub crafting: Option<crate::crafting::Action>,
     pub toggle_index: Option<usize>,
     pub delete_index: Option<usize>,
     /// Set when the player clicks "Run" on an instant spell (`Module::is_instant`).
@@ -82,6 +84,7 @@ pub struct UiRequests {
 }
 
 pub struct Ui {
+    pub settings: crate::settings::SettingsPanel,
     ctx: egui::Context,
     state: State,
     renderer: Renderer,
@@ -94,9 +97,11 @@ pub struct Ui {
 impl Ui {
     pub fn new(device: &wgpu::Device, output_format: wgpu::TextureFormat, window: &Window) -> Self {
         let ctx = egui::Context::default();
+        let settings = crate::settings::SettingsPanel::new(&ctx);
         let state = State::new(ctx.clone(), egui::ViewportId::ROOT, window, None, None);
         let renderer = Renderer::new(device, output_format, None, 1);
         Self {
+            settings,
             ctx,
             state,
             renderer,
@@ -115,7 +120,18 @@ impl Ui {
     /// returned `FullOutput` to `render`.
     pub fn run(&mut self, window: &Window, contents: impl FnOnce(&egui::Context)) -> egui::FullOutput {
         let raw_input = self.state.take_egui_input(window);
-        self.ctx.run(raw_input, contents)
+        self.ctx.run(raw_input, |ctx| {
+            if self.settings.open {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    if self.settings.values.appearance.ui_theme == crate::settings::UiTheme::Fantasy {
+                        crate::ui_theme::menu_backdrop(ui);
+                    }
+                });
+                self.settings.draw(ctx);
+            } else {
+                contents(ctx);
+            }
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -136,12 +152,26 @@ impl Ui {
         chat_open: bool,
         chat_input: &mut String,
         chat_log: &[ChatEntry],
+        crafting_ui: &mut crate::crafting_ui::CraftingUi,
+        registry: &crate::crafting::Registry,
+        world: &crate::voxel::World,
+        creatures: &crate::creature::Creatures,
+        players: &[glam::Vec3],
+        lobby_code: Option<&str>,
     ) -> (egui::FullOutput, UiRequests) {
         let raw_input = self.state.take_egui_input(window);
         let mut requests = UiRequests::default();
         let mut viewing_index = self.viewing_index;
+        let mut open_settings = false;
+        let fantasy = self.settings.values.appearance.ui_theme == crate::settings::UiTheme::Fantasy;
 
         let full_output = self.ctx.run(raw_input, |ctx| {
+            if self.settings.open {
+                // No underlying controls run while the settings panel owns input.
+                self.settings.draw(ctx);
+                return;
+            }
+            requests.crafting = crafting_ui.draw(ctx, registry, &player.crafting, world, creatures, player.position, players);
             egui::Window::new("fps")
                 .title_bar(false)
                 .anchor(egui::Align2::RIGHT_TOP, [-8.0, 8.0])
@@ -149,12 +179,12 @@ impl Ui {
                 .collapsible(false)
                 .interactable(false)
                 .show(ctx, |ui| {
-                    ui.label(format!("{fps:.0} FPS"));
+                    ui.label(format!("{fps:.0} FPS | C: Crafting | F10: Settings"));
                 });
 
             egui::Window::new("health")
                 .title_bar(false)
-                .anchor(egui::Align2::RIGHT_TOP, [-8.0, 32.0])
+                .anchor(egui::Align2::RIGHT_TOP, [-8.0, if fantasy { 58.0 } else { 40.0 }])
                 .resizable(false)
                 .collapsible(false)
                 .interactable(false)
@@ -184,6 +214,10 @@ impl Ui {
                 });
 
             egui::Window::new("Rules")
+                .default_width(420.0)
+                .max_width(ctx.screen_rect().width() * 0.46)
+                .max_height(ctx.screen_rect().height() * 0.30)
+                .vscroll(true)
                 .anchor(egui::Align2::LEFT_TOP, [8.0, 8.0])
                 .resizable(false)
                 .collapsible(false)
@@ -203,7 +237,7 @@ impl Ui {
                         };
                         let is_recent = Some(i) == recent_index;
                         let marker = if is_recent { "-> " } else { "" };
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             ui.colored_label(status_color, format!("{marker}{} [{status}]", m.name));
                             let version_label = match m.api_version() {
                                 Some(v) => format!("api v{v}"),
@@ -255,6 +289,10 @@ impl Ui {
                 });
 
             egui::Window::new("Resources")
+                .default_width(300.0)
+                .max_width(380.0)
+                .max_height(ctx.screen_rect().height() * 0.44)
+                .vscroll(true)
                 .anchor(egui::Align2::RIGHT_BOTTOM, [-8.0, -8.0])
                 .resizable(false)
                 .collapsible(false)
@@ -405,6 +443,17 @@ impl Ui {
                     .resizable(false)
                     .collapsible(false)
                     .show(ctx, |ui| {
+                        if let Some(code) = lobby_code {
+                            ui.label("Steam lobby - share this code with your friends:");
+                            ui.label(code);
+                            ui.horizontal_wrapped(|ui| {
+                                if ui.button("Copy lobby code").clicked() { ui.output_mut(|output| output.copied_text = code.to_owned()); }
+                                if ui.button("Invite Steam friends").clicked() { requests.invite_friends = true; }
+                            });
+                            ui.separator();
+                        }
+                        if ui.button("Settings").clicked() { open_settings = true; }
+                        ui.separator();
                         ui.label("Quit to the main menu?");
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
@@ -419,6 +468,7 @@ impl Ui {
             }
         });
 
+        if open_settings { self.settings.open = true; }
         self.viewing_index = viewing_index;
         (full_output, requests)
     }

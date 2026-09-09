@@ -23,6 +23,13 @@ pub struct Vertex {
     /// decorations (see `push_cross`), where the top corners get 1.0 and
     /// the bottom corners 0.0 so the vertex shader bends just the top.
     pub wind: f32,
+    /// Which texture a fragment samples from: 0.0 means the shared terrain
+    /// `atlas_texture` (every voxel face, plus a creature's flat-colored
+    /// rigid parts); a skinned creature's real per-pixel texture instead
+    /// sets this to `CreatureKind::to_u8() + 1.0`, selecting that layer of
+    /// the `creature_texture` array (see `model.rs`'s `emit_skinned_mesh`
+    /// and `shader.wgsl`'s `fs_main`).
+    pub tex_layer: f32,
 }
 
 impl Vertex {
@@ -70,6 +77,11 @@ impl Vertex {
                 wgpu::VertexAttribute {
                     offset: size_of::<[f32; 14]>() as wgpu::BufferAddress,
                     shader_location: 7,
+                    format: wgpu::VertexFormat::Float32,
+                },
+                wgpu::VertexAttribute {
+                    offset: size_of::<[f32; 15]>() as wgpu::BufferAddress,
+                    shader_location: 8,
                     format: wgpu::VertexFormat::Float32,
                 },
             ],
@@ -287,6 +299,7 @@ fn push_cross(
                 reflectivity: 0.0,
                 emission,
                 wind: corner[1],
+                tex_layer: 0.0,
             });
         }
         indices.extend_from_slice(&[
@@ -421,6 +434,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                             reflectivity,
                             emission,
                             wind,
+                            tex_layer: 0.0,
                         });
                     }
                     indices.extend_from_slice(&[
@@ -474,6 +488,7 @@ pub fn push_cuboid(
                 reflectivity: 0.0,
                 emission: 0.0,
                 wind: 0.0,
+                tex_layer: 0.0,
             });
         }
         indices.extend_from_slice(&[

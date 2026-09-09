@@ -17,8 +17,7 @@ const MUD_SPEED_MULTIPLIER: f32 = 0.45;
 
 /// Every player starts here every session -- health is deliberately NOT
 /// saved with the world (see world_api/schema.yaml's
-/// `persistence.player_state_not_saved`), the same way the Resources
-/// inventory already wasn't before this existed.
+/// `persistence.player_state_not_saved`), the crafting inventory is saved separately.
 pub const MAX_HEALTH: f32 = 100.0;
 /// Clamp range for `speed_multiplier`/`jump_multiplier` -- see
 /// world_api/schema.yaml's `attribute_multiplier_min`/`_max`.
@@ -65,7 +64,7 @@ pub struct Player {
     /// Count of each `COLLECTIBLE_BLOCKS` type gathered so far, indexed the
     /// same way -- incremented on breaking, decremented on placing. Shown
     /// in the Resources HUD panel.
-    resources: [u32; COLLECTIBLE_BLOCKS.len()],
+    pub crafting: crate::crafting::Account,
     /// 0..=MAX_HEALTH. Set via `api.damage_player`/`api.heal_player`; there
     /// is no death/respawn system yet, so it just clamps at 0 and stays.
     pub health: f32,
@@ -98,7 +97,7 @@ impl Player {
             on_ground: false,
             carrying_crystal: false,
             sprinting: false,
-            resources: [0; COLLECTIBLE_BLOCKS.len()],
+            crafting: crate::crafting::Account::default(),
             health: MAX_HEALTH,
             poisoned: false,
             speed_multiplier: 1.0,
@@ -155,9 +154,9 @@ impl Player {
     /// A snapshot of every `COLLECTIBLE_BLOCKS` count, for the World API's
     /// `api.get_resource_count`/`api.take_item` -- see their host-only
     /// caveat in world_api/schema.yaml (only the host's own `Player` has
-    /// this; a remote player's counts live on their own machine).
+    /// this API; remote accounts are maintained by App for crafting).
     pub fn resources_snapshot(&self) -> [u32; COLLECTIBLE_BLOCKS.len()] {
-        self.resources
+        self.crafting.resources
     }
 
     /// Adds one to the gathered count for `block`, if it's collectible.
@@ -171,7 +170,8 @@ impl Player {
     /// uncollectible-kinds behavior.
     pub fn add_resources(&mut self, block: BlockType, amount: u32) {
         if let Some(i) = COLLECTIBLE_BLOCKS.iter().position(|&b| b == block) {
-            self.resources[i] = self.resources[i].saturating_add(amount);
+            self.crafting.resources[i] = self.crafting.resources[i].saturating_add(amount);
+            self.crafting.revision += 1;
         }
     }
 
@@ -179,7 +179,7 @@ impl Player {
         COLLECTIBLE_BLOCKS
             .iter()
             .position(|&b| b == block)
-            .map_or(0, |i| self.resources[i])
+            .map_or(0, |i| self.crafting.resources[i])
     }
 
     /// Consumes one gathered `block`, if any remain. Returns whether it
@@ -193,8 +193,9 @@ impl Player {
     /// or (not holding enough, or `block` isn't collectible) none of it is.
     pub fn take_resources(&mut self, block: BlockType, amount: u32) -> bool {
         match COLLECTIBLE_BLOCKS.iter().position(|&b| b == block) {
-            Some(i) if self.resources[i] >= amount => {
-                self.resources[i] -= amount;
+            Some(i) if self.crafting.resources[i] >= amount => {
+                self.crafting.resources[i] -= amount;
+                self.crafting.revision += 1;
                 true
             }
             _ => false,

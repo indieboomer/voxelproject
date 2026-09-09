@@ -1,5 +1,6 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
-use std::net::{SocketAddr, UdpSocket};
+use crate::transport::{Peer, Transport, JoinTarget};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -143,7 +144,7 @@ fn sanitize_nickname(raw: &str) -> String {
     if trimmed.is_empty() {
         "Player".to_string()
     } else {
-        trimmed.chars().take(MAX_NICKNAME_LEN).collect()
+        trimmed.chars().filter(|c| !c.is_control()).take(MAX_NICKNAME_LEN).collect()
     }
 }
 
@@ -303,8 +304,8 @@ const REACH: f32 = 6.0;
 const CREATURE_COUNT: usize = 9;
 
 struct HostNet {
-    socket: UdpSocket,
-    clients: HashMap<SocketAddr, PlayerId>,
+    socket: Transport,
+    clients: HashMap<Peer, PlayerId>,
     remote_players: HashMap<PlayerId, RemotePlayer>,
     next_player_id: PlayerId,
     reliable: ReliableChannel,
@@ -313,8 +314,8 @@ struct HostNet {
 }
 
 struct ClientNet {
-    socket: UdpSocket,
-    server_addr: SocketAddr,
+    socket: Transport,
+    server_addr: Peer,
     player_id: PlayerId,
     reliable: ReliableChannel,
     remote_players: HashMap<PlayerId, RemotePlayer>,
@@ -512,6 +513,11 @@ impl DynamicMesh {
 }
 
 pub struct App {
+    #[cfg(feature = "steam")]
+    notified_invite: Option<u64>,
+    crafting_registry: crate::crafting::Registry,
+    crafting_ui: crate::crafting_ui::CraftingUi,
+    guest_accounts: HashMap<String, crate::crafting::Account>,
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -643,6 +649,178 @@ pub struct App {
 }
 
 impl App {
+    fn crafting_save(&self) -> crate::save::CraftingSave {
+        crate::save::CraftingSave {
+            host: self.player.crafting.clone(),
+            guests: self.guest_accounts.clone(),
+            creatures: Some(self.creatures.snapshot_with_ids()),
+        }
+    }
+
+    fn submit_crafting(&mut self, action: crate::crafting::Action) {
+        let revision = self.player.crafting.revision;
+        if let NetRole::Joined(client) = &mut self.net {
+            client.reliable.send(
+                &client.socket,
+                client.server_addr,
+                ReliableMsg::CraftRequest { revision, action },
+            );
+            return;
+        }
+        let players: Vec<_> = self.host_player_positions().iter().map(|p| p.pos).collect();
+        let result = self.crafting_registry.execute(
+            &mut self.player.crafting,
+            revision,
+            &action,
+            &self.world,
+            &mut self.creatures,
+            self.player.position,
+            &players,
+        );
+        self.crafting_ui.feedback = result.unwrap_or_else(|e| e);
+        self.crafting_ui.pending = false;
+    }
+
+    fn handle_crafting_request(
+        &mut self,
+        from: Peer,
+        revision: u64,
+        action: crate::crafting::Action,
+    ) {
+        let players: Vec<_> = self.host_player_positions().iter().map(|p| p.pos).collect();
+        let NetRole::Host(host) = &mut self.net else {
+            return;
+        };
+        let Some(rp) = host
+            .clients
+            .get(&from)
+            .and_then(|id| host.remote_players.get(id))
+        else {
+            return;
+        };
+        crate::crafting::load_interaction_area(&mut self.world, rp.pos);
+        let account = self.guest_accounts.entry(from.account_key(&rp.nickname)).or_default();
+        let feedback = self
+            .crafting_registry
+            .execute(
+                account,
+                revision,
+                &action,
+                &self.world,
+                &mut self.creatures,
+                rp.pos,
+                &players,
+            )
+            .unwrap_or_else(|e| e);
+        host.reliable.send(
+            &host.socket,
+            from,
+            ReliableMsg::CraftState {
+                account: account.clone(),
+                feedback: Some(feedback),
+            },
+        );
+    }
+
+    /// Joined players send intentions. The host owns both harvested resources and placement costs.
+    fn handle_remote_block_edit(
+        &mut self,
+        from: Peer,
+        x: i32,
+        y: i32,
+        z: i32,
+        block: BlockType,
+    ) {
+        let NetRole::Host(host) = &mut self.net else {
+            return;
+        };
+        let Some(&player_id) = host.clients.get(&from) else {
+            return;
+        };
+        let Some(rp) = host.remote_players.get(&player_id) else {
+            return;
+        };
+        let center = Vec3::new(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5);
+        let reachable = rp.pos.is_finite()
+            && rp.pos.abs().max_element() < 1_000_000.0
+            && (0..crate::voxel::chunk::CHUNK_Y).contains(&y)
+            && rp.pos.distance(center) <= REACH + 2.0;
+        if !reachable { return; }
+        crate::crafting::load_interaction_area(&mut self.world, rp.pos);
+        let old = self.world.get_block(x, y, z);
+        let account = self.guest_accounts.entry(from.account_key(&rp.nickname)).or_default();
+        let mut accepted = false;
+        if reachable && block == BlockType::Air && old != BlockType::Air && !old.is_unbreakable() {
+            if let Some(i) = crate::voxel::COLLECTIBLE_BLOCKS
+                .iter()
+                .position(|b| *b == old)
+            {
+                if let Some(count) = account.resources[i].checked_add(1) {
+                    account.resources[i] = count;
+                    accepted = true;
+                }
+            } else if old == BlockType::Crystal {
+                accepted = true;
+            }
+        } else if reachable
+            && (old == BlockType::Air || old == BlockType::Water)
+            && center.distance(self.player.position + Vec3::Y) > 1.5
+            && host
+                .remote_players
+                .values()
+                .all(|p| center.distance(p.pos + Vec3::Y) > 1.5)
+        {
+            if let Some(i) = crate::voxel::COLLECTIBLE_BLOCKS
+                .iter()
+                .position(|b| *b == block)
+            {
+                if account.resources[i] > 0 {
+                    account.resources[i] -= 1;
+                    accepted = true;
+                }
+            }
+        }
+        if accepted {
+            account.revision += 1;
+            self.world.set_block(x, y, z, block);
+            if block == BlockType::Air {
+                self.pending_block_breaks.push(BlockBreakEvent {
+                    x,
+                    y,
+                    z,
+                    block: old,
+                    player_id,
+                });
+            }
+        }
+        host.reliable.send(
+            &host.socket,
+            from,
+            ReliableMsg::CraftState {
+                account: account.clone(),
+                feedback: None,
+            },
+        );
+        let authoritative = if accepted { block } else { old };
+        for &addr in host.clients.keys() {
+            if !accepted && addr != from { continue; }
+            host.reliable.send(
+                &host.socket,
+                addr,
+                ReliableMsg::BlockEdit {
+                    x,
+                    y,
+                    z,
+                    block: authoritative,
+                },
+            );
+        }
+        if accepted && block == BlockType::Air {
+            for pos in self.world.flood_from((x, y, z)) {
+                self.apply_block_edit(pos.0, pos.1, pos.2, BlockType::Water);
+            }
+        }
+    }
     pub async fn new(window: Arc<Window>, launch: LaunchConfig) -> Result<Self, String> {
         let size = window.inner_size();
 
@@ -733,7 +911,11 @@ impl App {
             }],
         });
 
-        let (texture_bgl, texture_bind_group) = create_atlas_bind_group(&device, &queue);
+        // Loaded here (rather than down by `creatures`, where it's used)
+        // because building the texture bind group below needs each
+        // skinned model's decoded creature texture up front.
+        let models = Models::load();
+        let (texture_bgl, texture_bind_group) = create_atlas_bind_group(&device, &queue, &models);
         let shadow = create_shadow_resources(&device);
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -941,6 +1123,7 @@ impl App {
             mapped_at_creation: false,
         });
 
+        let mut crafting_save = crate::save::CraftingSave::default();
         let (
             world,
             spawn_pos,
@@ -955,14 +1138,17 @@ impl App {
             None => {
                 let loaded = if launch.fresh { None } else { load_world() };
                 let (world, spawn_pos, yaw, pitch, time_of_day, scripting) = match loaded {
-                    Some(loaded) => (
-                        loaded.world,
-                        loaded.player_pos,
-                        loaded.yaw,
-                        loaded.pitch,
-                        loaded.time_of_day,
-                        ScriptHost::load_from_save(&loaded.modules),
-                    ),
+                    Some(loaded) => {
+                        crafting_save = loaded.crafting;
+                        (
+                            loaded.world,
+                            loaded.player_pos,
+                            loaded.yaw,
+                            loaded.pitch,
+                            loaded.time_of_day,
+                            ScriptHost::load_from_save(&loaded.modules),
+                        )
+                    },
                     None => {
                         let seed = random_world_seed();
                         let world = World::new(seed);
@@ -977,12 +1163,10 @@ impl App {
                         )
                     }
                 };
-                let socket = net::bind_nonblocking(&format!("0.0.0.0:{}", launch.port))
+                let network_settings = crate::settings::Settings::load(std::path::Path::new("settings.json")).unwrap_or_default().multiplayer;
+                let socket = Transport::host(network_settings.mode, launch.port, network_settings.steam_app_id)
                     .map_err(|e| {
-                        format!(
-                            "Failed to bind UDP port {}: {e}. Pick a different port.",
-                            launch.port
-                        )
+                        format!("Cannot host multiplayer session: {e}")
                     })?;
                 log::info!("Hosting on port {}", launch.port);
                 let host_net = HostNet {
@@ -1007,7 +1191,7 @@ impl App {
                 )
             }
             Some(server_addr) => {
-                let (socket, player_id, world, spawn_pos, time_of_day, reliable) =
+                let (socket, server_addr, player_id, world, spawn_pos, time_of_day, reliable) =
                     join_handshake(server_addr, &launch.nickname)?;
                 let client_net = ClientNet {
                     socket,
@@ -1037,13 +1221,15 @@ impl App {
         let mut camera = Camera::new(spawn_pos, config.width as f32 / config.height as f32);
         camera.yaw = yaw;
         camera.pitch = pitch;
-        let player = Player::new(spawn_pos);
+        let mut player = Player::new(spawn_pos);
+        player.crafting = crafting_save.host;
 
         let mut creatures = Creatures::new();
-        if spawn_creatures {
+        if let Some(saved) = crafting_save.creatures {
+            creatures.restore_saved(&saved, world.seed as u64);
+        } else if spawn_creatures {
             creatures.spawn_around(&world, spawn_pos, CREATURE_COUNT, world.seed);
         }
-        let models = Models::load();
         let weather = WeatherState::new(world.seed);
         let rain_particles = build_rain_particles(world.seed);
         let lightning_seed = world.seed;
@@ -1053,6 +1239,11 @@ impl App {
         let entity_mesh = DynamicMesh::new(&device);
 
         let mut app = Self {
+            #[cfg(feature = "steam")]
+            notified_invite: None,
+            crafting_registry: crate::crafting::Registry::load()?,
+            crafting_ui: crate::crafting_ui::CraftingUi::default(),
+            guest_accounts: crafting_save.guests,
             window,
             surface,
             device,
@@ -1178,6 +1369,31 @@ impl App {
                 let PhysicalKey::Code(code) = key_event.physical_key else {
                     return;
                 };
+                if code == KeyCode::F10 && !key_event.repeat {
+                    self.ui.settings.open = !self.ui.settings.open;
+                    self.sync_settings_input();
+                    return;
+                }
+                if self.ui.settings.open {
+                    if code == KeyCode::Escape {
+                        self.ui.settings.open = false;
+                        self.sync_settings_input();
+                    }
+                    return;
+                }
+                if code == KeyCode::KeyC && !key_event.repeat && !self.console_open && !self.chat_open && !self.quit_dialog_open {
+                    self.crafting_ui.open = !self.crafting_ui.open;
+                    self.input.release_all();
+                    self.grab_cursor(!self.crafting_ui.open);
+                    return;
+                }
+                if self.crafting_ui.open {
+                    if code == KeyCode::Escape {
+                        self.crafting_ui.open = false;
+                        self.grab_cursor(true);
+                    }
+                    return;
+                }
                 if code == KeyCode::Backquote && !self.quit_dialog_open && !self.chat_open {
                     self.toggle_console();
                     return;
@@ -1202,12 +1418,12 @@ impl App {
                     }
                     return;
                 }
-                if !self.console_open && !self.quit_dialog_open && !self.chat_open {
+                if !self.ui.settings.open && !self.crafting_ui.open && !self.console_open && !self.quit_dialog_open && !self.chat_open {
                     self.input.key_event(code, key_event.state);
                 }
             }
-            WindowEvent::MouseInput { state, button, .. } => {
-                if !self.console_open && !self.quit_dialog_open && !self.chat_open {
+            WindowEvent::MouseInput { state, button, .. }
+                if !self.ui.settings.open && !self.crafting_ui.open && !self.console_open && !self.quit_dialog_open && !self.chat_open => {
                     self.input.mouse_button_event(*button, *state);
                     if *state == ElementState::Pressed
                         && *button == MouseButton::Left
@@ -1215,10 +1431,15 @@ impl App {
                     {
                         self.grab_cursor(true);
                     }
-                }
             }
             _ => {}
         }
+    }
+
+    fn sync_settings_input(&mut self) {
+        self.input.release_all();
+        self.grab_cursor(!self.ui.settings.open && !self.console_open && !self.chat_open
+            && !self.crafting_ui.open && !self.quit_dialog_open);
     }
 
     fn toggle_console(&mut self) {
@@ -1441,10 +1662,7 @@ impl App {
     /// (including the sender) as a `Notify` -- so there's no separate local
     /// echo path to keep in sync with the relayed one.
     fn send_chat(&mut self, text: String) {
-        let text = text.trim().to_string();
-        if text.is_empty() {
-            return;
-        }
+        let Some(text) = net::chat_text(&text) else { return; };
         if matches!(self.net, NetRole::Host(_)) {
             self.broadcast_chat(format!("{}: {text}", self.local_nickname));
         } else if let NetRole::Joined(client) = &mut self.net {
@@ -1466,6 +1684,16 @@ impl App {
     }
 
     pub fn update(&mut self) {
+        #[cfg(feature = "steam")]
+        {
+            crate::steam_transport::poll_runtime();
+            if let Some(id) = crate::steam_transport::pending_invite() {
+                if self.notified_invite != Some(id) {
+                    self.notified_invite = Some(id);
+                    self.toasts.push(Toast::important("Steam invitation received. Return to the main menu to join it."));
+                }
+            }
+        }
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
@@ -1535,7 +1763,7 @@ impl App {
                             if broken == BlockType::Crystal {
                                 self.player.carrying_crystal = true;
                             }
-                            self.player.add_resource(broken);
+                            if matches!(self.net, NetRole::Host(_)) { self.player.add_resource(broken); }
                             // Only the host records this for the Lua tick --
                             // a joined client's own break is picked up on
                             // the host via the network-relayed
@@ -1556,14 +1784,15 @@ impl App {
                                 hit.target.2,
                                 BlockType::Air,
                             );
-                            for pos in self.world.flood_from(hit.target) {
+                            for pos in if matches!(self.net, NetRole::Host(_)) { self.world.flood_from(hit.target) } else { Vec::new() } {
                                 self.apply_block_edit(pos.0, pos.1, pos.2, BlockType::Water);
                             }
                         }
                     }
                 } else if !self.would_hit_player(hit.place) {
                     match self.selected_block {
-                        Some(block) if self.player.take_resource(block) => {
+                        Some(block) if self.player.resource_count(block) > 0 => {
+                            if matches!(self.net, NetRole::Host(_)) { self.player.take_resource(block); }
                             self.apply_block_edit(hit.place.0, hit.place.1, hit.place.2, block);
                         }
                         Some(block) => {
@@ -1624,6 +1853,7 @@ impl App {
                     &self.camera,
                     self.time_of_day,
                     self.scripting.save_entries(),
+                    &self.crafting_save(),
                 );
             } else {
                 log::warn!("Only the host can save the world.");
@@ -1735,6 +1965,17 @@ impl App {
             } => Some(format!("Generating a {}...", generation_noun(*kind))),
             GenerationState::Idle => None,
         };
+        let mut crafting_players: Vec<_> = self.host_player_positions().iter().map(|p| p.pos).collect();
+        if let NetRole::Joined(client) = &self.net {
+            crafting_players.push(self.player.position);
+            crafting_players.extend(client.remote_players.values().map(|p| p.pos));
+            crafting_players.extend(client.creature_snapshot.iter().map(|c| Vec3::from_array(c.0)));
+        }
+        let lobby_code = match &self.net {
+            NetRole::Host(host) => host.socket.lobby_code(),
+            NetRole::Joined(client) => client.socket.lobby_code(),
+        };
+        let settings_was_open = self.ui.settings.open;
         let (full_output, requests) = self.ui.draw(
             &self.window,
             self.console_open,
@@ -1751,9 +1992,22 @@ impl App {
             self.chat_open,
             &mut self.chat_input,
             &self.chat_log,
+            &mut self.crafting_ui,
+            &self.crafting_registry,
+            &self.world,
+            &self.creatures,
+            &crafting_players,
+            lobby_code.as_deref(),
         );
         self.pending_egui_output = Some(full_output);
+        if settings_was_open != self.ui.settings.open { self.sync_settings_input(); }
+        if let Some(action) = requests.crafting {
+            self.submit_crafting(action);
+        }
 
+        if requests.invite_friends {
+            match &self.net { NetRole::Host(host) => host.socket.invite_friends(), NetRole::Joined(client) => client.socket.invite_friends() }
+        }
         if let Some(block) = requests.select_block {
             self.selected_block = Some(block);
         }
@@ -1805,7 +2059,7 @@ impl App {
             let minute = ((self.time_of_day * 24.0 - hour as f32) * 60.0) as u32;
             let role_info = match &self.net {
                 NetRole::Host(host) => {
-                    format!("Hosting :{} ({} joined)", host.port, host.clients.len())
+                    format!("Hosting {} ({}/4 players)", host.socket.lobby_code().unwrap_or_else(||format!(":{}",host.port)), host.clients.len()+1)
                 }
                 NetRole::Joined(client) => format!(
                     "Connected to {} as P{}",
@@ -1842,7 +2096,7 @@ impl App {
     /// styling fits the message.
     fn broadcast_notify(&mut self, kind: NotifyKind, text: &str) {
         if let NetRole::Host(host) = &mut self.net {
-            let addrs: Vec<SocketAddr> = host.clients.keys().copied().collect();
+            let addrs: Vec<Peer> = host.clients.keys().copied().collect();
             for addr in addrs {
                 host.reliable.send(
                     &host.socket,
@@ -2094,10 +2348,10 @@ impl App {
     }
 
     fn apply_block_edit(&mut self, x: i32, y: i32, z: i32, block: BlockType) {
-        self.world.set_block(x, y, z, block);
         match &mut self.net {
             NetRole::Host(host) => {
-                let addrs: Vec<SocketAddr> = host.clients.keys().copied().collect();
+                self.world.set_block(x, y, z, block);
+                let addrs: Vec<Peer> = host.clients.keys().copied().collect();
                 for addr in addrs {
                     host.reliable.send(
                         &host.socket,
@@ -2172,8 +2426,14 @@ impl App {
                 else {
                     return;
                 };
-                host.reliable
-                    .send(&host.socket, addr, ReliableMsg::GrantItem { block, amount });
+                if let Some(rp) = host.remote_players.get(&player_id) {
+                    let account = self.guest_accounts.entry(addr.account_key(&rp.nickname)).or_default();
+                    if let Some(i) = crate::voxel::COLLECTIBLE_BLOCKS.iter().position(|b| *b == block) {
+                        account.resources[i] = account.resources[i].saturating_add(amount);
+                        account.revision += 1;
+                    }
+                    host.reliable.send(&host.socket, addr, ReliableMsg::CraftState { account: account.clone(), feedback: None });
+                }
             }
             PlayerEffect::TakeItem { player_id, block, amount } => {
                 // Only ever queued for HOST_PLAYER_ID -- see take_item's
@@ -2372,8 +2632,8 @@ impl App {
     }
 
     fn poll_host_network(&mut self, dt: f32) {
-        let mut buf = [0u8; 8192];
-        loop {
+        let mut buf = [0u8; crate::transport::MAX_PACKET_BYTES];
+        for _ in 0..256 {
             let (n, from) = {
                 let NetRole::Host(host) = &self.net else {
                     unreachable!()
@@ -2404,7 +2664,9 @@ impl App {
             .collect();
         for id in stale {
             host.remote_players.remove(&id);
-            host.clients.retain(|_, pid| *pid != id);
+            let peers: Vec<_> = host.clients.iter().filter(|(_,pid)| **pid==id).map(|(&peer,_)|peer).collect();
+            for peer in peers { host.clients.remove(&peer); host.reliable.forget_peer(peer); }
+            for &peer in host.clients.keys() { host.reliable.send(&host.socket,peer,ReliableMsg::PlayerLeft { player_id:id }); }
             log::info!("Player {id} timed out.");
         }
 
@@ -2448,7 +2710,7 @@ impl App {
         }
     }
 
-    fn handle_host_packet(&mut self, packet: Packet, from: SocketAddr) {
+    fn handle_host_packet(&mut self, packet: Packet, from: Peer) {
         let NetRole::Host(host) = &mut self.net else {
             unreachable!()
         };
@@ -2459,11 +2721,23 @@ impl App {
                     return;
                 }
                 match msg {
-                    ReliableMsg::Hello { nickname } => {
-                        if host.clients.contains_key(&from) {
+                    ReliableMsg::Hello { nickname, protocol } => {
+                        if host.clients.contains_key(&from) { return; }
+                        if let Some(reason) = net::join_rejection(protocol, host.clients.len()) {
+                            host.reliable.send(&host.socket, from, ReliableMsg::JoinRejected(reason.into()));
                             return;
                         }
-                        let nickname = sanitize_nickname(&nickname);
+                        let nickname = sanitize_nickname(&host.socket.peer_name(from).unwrap_or(nickname));
+                        if matches!(from, Peer::Direct(_)) && host.remote_players.values().any(|p| p.nickname == nickname) {
+                            host.reliable.send(&host.socket, from, ReliableMsg::JoinRejected("Nickname already connected".into()));
+                            return;
+                        }
+                        let edits: Vec<_> = self.world.edits.iter().map(|(k,v)|(*k,*v)).collect();
+                        let edit_chunks = edits.len().div_ceil(net::EDITS_PER_CHUNK) as u32;
+                        if edit_chunks > net::MAX_WORLD_CHUNKS {
+                            host.reliable.send(&host.socket, from, ReliableMsg::JoinRejected("World exceeds the supported multiplayer save size".into()));
+                            return;
+                        }
                         let player_id = host.next_player_id;
                         host.next_player_id += 1;
                         // Terrain-height-snapped, not just offset from the
@@ -2483,49 +2757,35 @@ impl App {
                             player_id,
                             RemotePlayer::new(spawn, 0.0, false, nickname.clone()),
                         );
-                        host.reliable.send(
-                            &host.socket,
-                            from,
-                            ReliableMsg::Welcome {
-                                player_id,
-                                seed: self.world.seed,
-                                time_of_day: self.time_of_day,
-                                spawn: spawn.to_array(),
-                                edits: self.world.edits.iter().map(|(k, v)| (*k, *v)).collect(),
-                            },
-                        );
+                        for msg in net::welcome_messages(player_id,self.world.seed,self.time_of_day,spawn.to_array(),edits)
+                            .expect("world size checked before admission") {
+                            host.reliable.send(&host.socket,from,msg);
+                        }
+                        let key = from.account_key(&nickname);
+                        // Migrate legacy nickname accounts without letting Direct users claim Steam balances.
+                        if matches!(from, Peer::Direct(_)) && !nickname.starts_with("steam:") && !nickname.starts_with("direct:") && !self.guest_accounts.contains_key(&key) {
+                            if let Some(old) = self.guest_accounts.remove(&nickname) { self.guest_accounts.insert(key.clone(), old); }
+                        }
+                        let account = self.guest_accounts.entry(key).or_default().clone();
+                        host.reliable.send(&host.socket, from, ReliableMsg::CraftRegistry(self.crafting_registry.clone()));
+                        host.reliable.send(&host.socket, from, ReliableMsg::CraftState { account, feedback: None });
                         log::info!("Player {player_id} ('{nickname}') joined from {from}");
                         self.notify_all(format!("{nickname} joined"));
                     }
+                    ReliableMsg::Goodbye => {
+                        if let Some(id) = host.clients.remove(&from) {
+                            host.remote_players.remove(&id);
+                            host.reliable.forget_peer(from);
+                            for &addr in host.clients.keys() {
+                                host.reliable.send(&host.socket, addr, ReliableMsg::PlayerLeft { player_id: id });
+                            }
+                        }
+                    }
+                    ReliableMsg::CraftRequest { revision, action } => {
+                        self.handle_crafting_request(from, revision, action);
+                    }
                     ReliableMsg::BlockEdit { x, y, z, block } => {
-                        let addrs: Vec<SocketAddr> = host.clients.keys().copied().collect();
-                        let breaker_id = host.clients.get(&from).copied();
-                        let old_block = self.world.get_block(x, y, z);
-                        self.world.set_block(x, y, z, block);
-                        if block == BlockType::Air && old_block != BlockType::Air {
-                            if let Some(player_id) = breaker_id {
-                                self.pending_block_breaks.push(BlockBreakEvent {
-                                    x,
-                                    y,
-                                    z,
-                                    block: old_block,
-                                    player_id,
-                                });
-                            }
-                        }
-                        let NetRole::Host(host) = &mut self.net else {
-                            unreachable!()
-                        };
-                        for addr in addrs {
-                            if addr == from {
-                                continue;
-                            }
-                            host.reliable.send(
-                                &host.socket,
-                                addr,
-                                ReliableMsg::BlockEdit { x, y, z, block },
-                            );
-                        }
+                        self.handle_remote_block_edit(from, x, y, z, block);
                     }
                     ReliableMsg::ChatMessage(text) => {
                         let sender = host
@@ -2533,7 +2793,7 @@ impl App {
                             .get(&from)
                             .and_then(|player_id| host.remote_players.get(player_id))
                             .map(|rp| rp.nickname.clone());
-                        if let Some(nickname) = sender {
+                        if let (Some(nickname), Some(text)) = (sender, net::chat_text(&text)) {
                             self.broadcast_chat(format!("{nickname}: {text}"));
                         }
                     }
@@ -2557,7 +2817,10 @@ impl App {
                     _ => {}
                 }
             }
-            Packet::Ack { id } => host.reliable.ack(id),
+            Packet::Ack { id } => {
+                if let Some(rp) = host.clients.get(&from).and_then(|id|host.remote_players.get_mut(id)) { rp.last_seen = Instant::now(); }
+                host.reliable.ack(id, from);
+            },
             Packet::Unreliable(UnreliableMsg::PlayerState {
                 pos,
                 yaw,
@@ -2580,8 +2843,8 @@ impl App {
     }
 
     fn poll_client_network(&mut self, dt: f32) {
-        let mut buf = [0u8; 8192];
-        loop {
+        let mut buf = [0u8; crate::transport::MAX_PACKET_BYTES];
+        for _ in 0..256 {
             let (n, from) = {
                 let NetRole::Joined(client) = &self.net else {
                     unreachable!()
@@ -2589,6 +2852,10 @@ impl App {
                 match client.socket.recv_from(&mut buf) {
                     Ok(v) => v,
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(e) if e.kind() == std::io::ErrorKind::ConnectionAborted => {
+                        self.return_to_menu = true;
+                        break;
+                    }
                     Err(_) => break,
                 }
             };
@@ -2613,6 +2880,8 @@ impl App {
         {
             log::warn!("Lost connection to host.");
             client.lost_connection_logged = true;
+            self.crafting_ui.feedback = "Connection to host lost. Rejoin to recover authoritative inventory.".into();
+            self.return_to_menu = true;
         }
 
         client.send_timer += dt;
@@ -2641,6 +2910,26 @@ impl App {
                     return;
                 }
                 match msg {
+                    ReliableMsg::Goodbye => {
+                        self.crafting_ui.feedback = "Host ended the session. Return to the menu to join another game.".into();
+                        self.toasts.push(Toast::important("Host ended the session"));
+                        self.return_to_menu = true;
+                        client.lost_connection_logged = true;
+                    }
+
+                    ReliableMsg::CraftRegistry(registry) => {
+                        if registry.validate().is_ok() { self.crafting_registry = registry; }
+                    }
+                    ReliableMsg::CraftState { account, feedback } => {
+                        if account.revision >= self.player.crafting.revision {
+                            self.player.crafting = account;
+                        }
+                        if let Some(text) = feedback {
+                            self.crafting_ui.feedback = text;
+                            self.crafting_ui.pending = false;
+                        }
+                    }
+
                     ReliableMsg::BlockEdit { x, y, z, block } => {
                         self.world.set_block(x, y, z, block);
                     }
@@ -2675,7 +2964,7 @@ impl App {
                     _ => {}
                 }
             }
-            Packet::Ack { id } => client.reliable.ack(id),
+            Packet::Ack { id } => client.reliable.ack(id, client.server_addr),
             Packet::Unreliable(UnreliableMsg::Snapshot {
                 time_of_day,
                 weather,
@@ -2794,11 +3083,17 @@ impl App {
         }
         let _ = rebuilt;
 
+        let remote_chunks: Vec<_> = match &self.net {
+            NetRole::Host(host) => host.remote_players.values().filter(|p| p.pos.is_finite() && p.pos.abs().max_element() < 1_000_000.0)
+                .map(|p| chunk_of(p.pos)).collect(),
+            NetRole::Joined(_) => Vec::new(),
+        };
         let unload: Vec<(i32, i32)> = self
             .world
             .chunks
             .keys()
-            .filter(|(cx, cz)| (cx - pcx).abs() > UNLOAD_RADIUS || (cz - pcz).abs() > UNLOAD_RADIUS)
+            .filter(|(cx, cz)| ((cx - pcx).abs() > UNLOAD_RADIUS || (cz - pcz).abs() > UNLOAD_RADIUS)
+                && !remote_chunks.iter().any(|(rx, rz)| (cx - rx).abs() <= 1 && (cz - rz).abs() <= 1))
             .copied()
             .collect();
         for key in unload {
@@ -3023,6 +3318,11 @@ impl App {
     }
 
     pub fn save(&self) {
+        let goodbye = encode(&Packet::Reliable { id: u64::MAX, msg: ReliableMsg::Goodbye });
+        match &self.net {
+            NetRole::Host(host) => for &peer in host.clients.keys() { let _ = host.socket.send_to(&goodbye,peer); },
+            NetRole::Joined(client) => { let _ = client.socket.send_to(&goodbye,client.server_addr); }
+        }
         if matches!(self.net, NetRole::Host(_)) {
             save_world(
                 &self.world,
@@ -3030,6 +3330,7 @@ impl App {
                 &self.camera,
                 self.time_of_day,
                 self.scripting.save_entries(),
+                &self.crafting_save(),
             );
         }
     }
@@ -3047,25 +3348,28 @@ impl App {
 /// process itself -- the caller decides how to handle a failed join (the
 /// main menu shows it and lets the user retry; a CLI `--connect` launch
 /// prints it and exits).
-fn join_handshake(
-    server_addr: SocketAddr,
-    nickname: &str,
-) -> Result<(UdpSocket, PlayerId, World, Vec3, f32, ReliableChannel), String> {
-    let socket = net::bind_nonblocking("0.0.0.0:0")
-        .map_err(|e| format!("Failed to open a local UDP socket: {e}"))?;
+type JoinedSession = (Transport, Peer, PlayerId, World, Vec3, f32, ReliableChannel);
 
+fn join_handshake(
+    target: JoinTarget,
+    nickname: &str,
+) -> Result<JoinedSession, String> {
+    let settings = crate::settings::Settings::load(std::path::Path::new("settings.json")).unwrap_or_default();
+    let (socket, server_addr) = Transport::join(target, settings.multiplayer.steam_app_id)?;
     let mut reliable = ReliableChannel::new();
     let hello_id = reliable.send(
         &socket,
         server_addr,
         ReliableMsg::Hello {
             nickname: nickname.to_string(),
+            protocol: net::PROTOCOL_VERSION,
         },
     );
     log::info!("Connecting to {server_addr}...");
 
-    let deadline = Instant::now() + Duration::from_secs(8);
-    let mut buf = [0u8; 8192];
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut transfer = net::WorldTransfer::default();
+    let mut buf = [0u8; crate::transport::MAX_PACKET_BYTES];
     loop {
         if Instant::now() > deadline {
             return Err(format!(
@@ -3076,34 +3380,21 @@ fn join_handshake(
         reliable.resend_due(&socket);
         match socket.recv_from(&mut buf) {
             Ok((n, from)) if from == server_addr => {
-                if let Some(Packet::Reliable {
-                    id,
-                    msg:
-                        ReliableMsg::Welcome {
-                            player_id,
-                            seed,
-                            time_of_day,
-                            spawn,
-                            edits,
-                        },
-                }) = decode(&buf[..n])
-                {
+                if let Some(Packet::Reliable { id, msg: ReliableMsg::JoinRejected(reason) }) = decode(&buf[..n]) {
                     ReliableChannel::ack_reply(&socket, server_addr, id);
-                    reliable.forget(hello_id);
-                    let mut world = World::new(seed);
-                    for (pos, block) in edits {
-                        world.edits.insert(pos, block);
+                    return Err(reason);
+                }
+                if let Some(Packet::Reliable { id, msg }) = decode(&buf[..n]) {
+                    if !matches!(msg, ReliableMsg::Welcome {..} | ReliableMsg::WorldEditsChunk {..}) { continue; }
+                    ReliableChannel::ack_reply(&socket, server_addr, id);
+                    if !reliable.mark_seen(server_addr,id) { continue; }
+                    if let Some(initial) = transfer.accept(msg)? {
+                        reliable.forget(hello_id);
+                        let mut world = World::new(initial.seed);
+                        world.edits.extend(initial.edits);
+                        world.rebuild_redstone_positions();
+                        return Ok((socket,server_addr,initial.player_id,world,Vec3::from_array(initial.spawn),initial.time_of_day,reliable));
                     }
-                    world.rebuild_redstone_positions();
-                    log::info!("Connected to {server_addr} as player {player_id}");
-                    return Ok((
-                        socket,
-                        player_id,
-                        world,
-                        Vec3::from_array(spawn),
-                        time_of_day,
-                        reliable,
-                    ));
                 }
             }
             Ok(_) => {}
@@ -3117,13 +3408,22 @@ fn join_handshake(
     }
 }
 
-/// Decodes the embedded texture atlas (see `voxel::atlas`) and uploads it,
-/// returning the bind group layout (needed once, for the pipeline) and the
-/// bind group itself (bound every frame). Nearest filtering keeps the
-/// pixel-art look sharp instead of blurring it like a photo texture would.
+/// Side length (in pixels) every layer of `creature_texture` is resized to
+/// -- matches every bundled skinned model's actual embedded texture (see
+/// `model.rs`), but resizing defensively means a future model with a
+/// differently-sized texture still loads instead of panicking.
+const CREATURE_TEXTURE_SIZE: u32 = 256;
+
+/// Decodes the embedded texture atlas (see `voxel::atlas`) plus every
+/// skinned creature model's own real texture (see `model.rs`'s
+/// `Models::creature_texture_layers`), uploading both, and returns the bind
+/// group layout (needed once, for the pipeline) and the bind group itself
+/// (bound every frame). Nearest filtering keeps the pixel-art look sharp
+/// instead of blurring it like a photo texture would.
 fn create_atlas_bind_group(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
+    models: &Models,
 ) -> (wgpu::BindGroupLayout, wgpu::BindGroup) {
     let image = image::load_from_memory(ATLAS_BYTES)
         .expect("embedded atlas.png should decode")
@@ -3172,6 +3472,61 @@ fn create_atlas_bind_group(
         ..Default::default()
     });
 
+    // One layer per `CreatureKind::to_u8()` slot -- Sheep/Chicken have no
+    // real texture (see `model.rs`'s rigid-vs-skinned doc comment) and get
+    // a blank white layer that `push_model` never actually indexes into,
+    // so every kind can still be laid out at its own fixed array index.
+    let layers = models.creature_texture_layers();
+    let layer_count = layers.len() as u32;
+    let creature_texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("creature texture array"),
+        size: wgpu::Extent3d {
+            width: CREATURE_TEXTURE_SIZE,
+            height: CREATURE_TEXTURE_SIZE,
+            depth_or_array_layers: layer_count,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let blank_layer = vec![255u8; (CREATURE_TEXTURE_SIZE * CREATURE_TEXTURE_SIZE * 4) as usize];
+    for (layer_idx, layer_image) in layers.iter().enumerate() {
+        let pixels: std::borrow::Cow<[u8]> = match layer_image {
+            Some(img) if img.dimensions() == (CREATURE_TEXTURE_SIZE, CREATURE_TEXTURE_SIZE) => {
+                Cow::Borrowed(img.as_raw())
+            }
+            Some(img) => Cow::Owned(
+                image::imageops::resize(
+                    *img,
+                    CREATURE_TEXTURE_SIZE,
+                    CREATURE_TEXTURE_SIZE,
+                    image::imageops::FilterType::Nearest,
+                )
+                .into_raw(),
+            ),
+            None => Cow::Borrowed(&blank_layer),
+        };
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &creature_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: 0, y: 0, z: layer_idx as u32 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            &pixels,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * CREATURE_TEXTURE_SIZE),
+                rows_per_image: Some(CREATURE_TEXTURE_SIZE),
+            },
+            wgpu::Extent3d { width: CREATURE_TEXTURE_SIZE, height: CREATURE_TEXTURE_SIZE, depth_or_array_layers: 1 },
+        );
+    }
+    let creature_view = creature_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
     let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("atlas bgl"),
         entries: &[
@@ -3191,6 +3546,16 @@ fn create_atlas_bind_group(
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    multisampled: false,
+                },
+                count: None,
+            },
         ],
     });
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -3204,6 +3569,10 @@ fn create_atlas_bind_group(
             wgpu::BindGroupEntry {
                 binding: 1,
                 resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(&creature_view),
             },
         ],
     });
@@ -3426,5 +3795,55 @@ mod tests {
             seeds.iter().any(|&s| s != first),
             "expected at least one different seed across 20 calls, got {seeds:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod join_tests {
+    use super::*;
+    #[test]
+    fn actual_join_handshake_loads_chunked_saved_world() {
+        let host = Transport::direct("127.0.0.1:0").unwrap();
+        let Peer::Direct(address) = host.local_peer() else { unreachable!() };
+        let server = std::thread::spawn(move || {
+            let mut reliable = ReliableChannel::new();
+            let mut admitted = false;
+            let mut bytes = [0; crate::transport::MAX_PACKET_BYTES];
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                if let Ok((n, peer)) = host.recv_from(&mut bytes) {
+                    match decode(&bytes[..n]) {
+                        Some(Packet::Reliable { id, msg: ReliableMsg::Hello { protocol, .. } }) => {
+                            assert_eq!(protocol,net::PROTOCOL_VERSION);
+                            ReliableChannel::ack_reply(&host,peer,id);
+                            if !admitted {
+                                admitted = true;
+                                let edits = (0..5000).map(|x| ((x,40,1), BlockType::Stone)).collect();
+                                for msg in net::welcome_messages(1,123,0.7,[2.,70.,2.],edits).unwrap() {
+                                    reliable.send(&host,peer,msg);
+                                }
+                            }
+                        }
+                        Some(Packet::Ack { id }) => reliable.ack(id,peer),
+                        Some(Packet::Reliable { msg: ReliableMsg::Goodbye, .. }) => return,
+                        _ => {}
+                    }
+                }
+                reliable.resend_due(&host);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            panic!("join did not finish");
+        });
+        let (socket,peer,id,mut world,spawn,time,_) = join_handshake(JoinTarget::Direct(address),"Test").unwrap();
+        assert_eq!(id,1);
+        assert_eq!(world.seed,123);
+        assert_eq!(world.edits.len(),5000);
+        let (cx,cz)=world_to_chunk(4999,1);
+        world.ensure_chunk_loaded(cx,cz);
+        assert_eq!(world.get_block(4999,40,1),BlockType::Stone);
+        assert_eq!(spawn,Vec3::new(2.,70.,2.));
+        assert_eq!(time,0.7);
+        socket.send_to(&encode(&Packet::Reliable {id:999,msg:ReliableMsg::Goodbye}),peer).unwrap();
+        server.join().unwrap();
     }
 }

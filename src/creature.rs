@@ -526,6 +526,8 @@ pub struct CreatureAudioEvents {
     pub ambient_calls: Vec<CreatureAudioEvent>,
 }
 
+pub type SavedCreature = (u32, u8, [f32; 3], f32, f32);
+
 pub struct Creatures {
     ecs: hecs::World,
     next_id: u32,
@@ -684,6 +686,29 @@ impl Creatures {
         self.spawn_with_rng(kind, pos, rng_seed)
     }
 
+    /// Restore world creatures, preserving rule-visible IDs and health.
+    /// Transient animation and chase state start idle after loading.
+    pub fn restore_saved(&mut self, entries: &[SavedCreature], seed: u64) {
+        let mut seen = std::collections::HashSet::new();
+        let mut next_id = self.next_id;
+        for &(id, kind, pos, health, _) in entries {
+            if id == u32::MAX
+                || kind > 7
+                || !seen.insert(id)
+                || !Vec3::from_array(pos).is_finite()
+                || !health.is_finite()
+                || health <= 0.0
+            {
+                continue;
+            }
+            self.next_id = id;
+            let kind = CreatureKind::from_u8(kind);
+            self.spawn_one(kind, Vec3::from_array(pos), seed ^ id as u64);
+            self.damage(id, (kind.max_health() - health).max(0.0));
+            next_id = next_id.max(id + 1);
+        }
+        self.next_id = next_id;
+    }
     /// Only the host runs creature AI; joined clients just render whatever
     /// positions the host's snapshot reports. `player_targets` (id +
     /// position) drives hostile-kind aggro (`CreatureKind::is_hostile`) --
@@ -889,6 +914,7 @@ impl Creatures {
                 &mut vertices,
                 &mut indices,
                 models.for_kind(kind.0),
+                kind.0,
                 anim.clip.model_name(),
                 anim.time,
                 pos.0,
@@ -1058,6 +1084,7 @@ pub fn mesh_for_snapshot(entries: &[([f32; 3], u8, f32, u8, f32)], models: &Mode
             &mut vertices,
             &mut indices,
             models.for_kind(kind),
+            kind,
             AnimClip::from_u8(clip).model_name(),
             time,
             Vec3::from_array(pos),

@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use crate::transport::JoinTarget;
 use std::sync::Arc;
 
 use winit::event::WindowEvent;
@@ -15,7 +15,7 @@ use crate::ui::Ui;
 pub enum MenuAction {
     NewWorld { nickname: String },
     LoadWorld { nickname: String },
-    Join { addr: SocketAddr, nickname: String },
+    Join { addr: JoinTarget, nickname: String },
     Quit,
 }
 
@@ -28,7 +28,7 @@ pub enum MenuAction {
 enum PendingAction {
     NewWorld,
     LoadWorld,
-    Join(SocketAddr),
+    Join(JoinTarget),
 }
 
 /// Which screen of the menu is showing. Both `Join` and `Nickname` are
@@ -136,6 +136,16 @@ impl MenuApp {
     }
 
     pub fn window_event(&mut self, event: &WindowEvent) {
+        if let WindowEvent::KeyboardInput { event: key, .. } = event {
+            if key.state == winit::event::ElementState::Pressed && !key.repeat {
+                use winit::keyboard::{PhysicalKey, KeyCode};
+                if key.physical_key == PhysicalKey::Code(KeyCode::F10) {
+                    self.ui.settings.open = !self.ui.settings.open;
+                } else if key.physical_key == PhysicalKey::Code(KeyCode::Escape) && self.ui.settings.open {
+                    self.ui.settings.open = false;
+                }
+            }
+        }
         self.ui.handle_event(&self.window, event);
     }
 
@@ -192,15 +202,29 @@ impl MenuApp {
             });
         }
 
+        #[cfg(feature = "steam")]
+        {
+            crate::steam_transport::poll_runtime();
+            if let Some(id) = crate::steam_transport::take_invite() {
+                self.join_input = format!("steam:{id}");
+                self.screen = Screen::Nickname(PendingAction::Join(JoinTarget::SteamLobby(id)));
+                self.error = None;
+            }
+        }
         let mut action = None;
         let mut error = self.error.clone();
         let mut screen = std::mem::replace(&mut self.screen, Screen::Main);
         let mut join_input = std::mem::take(&mut self.join_input);
         let mut nickname_input = std::mem::take(&mut self.nickname_input);
         let has_save = self.has_save;
+        let fantasy = self.ui.settings.values.appearance.ui_theme == crate::settings::UiTheme::Fantasy;
+        let button_size = if fantasy { [320.0, 44.0] } else { [260.0, 40.0] };
+        let mut open_settings = false;
+        let steam = self.ui.settings.values.multiplayer.mode == crate::settings::MultiplayerMode::Steam;
 
         let full_output = self.ui.run(&self.window, |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
+                if fantasy { crate::ui_theme::menu_backdrop(ui); }
                 ui.vertical_centered(|ui| {
                     ui.add_space(80.0);
                     ui.heading("Voxel Project");
@@ -214,7 +238,7 @@ impl MenuApp {
                     match &screen {
                         Screen::Main => {
                             if ui
-                                .add_sized([220.0, 36.0], egui::Button::new("New World"))
+                                .add_sized(button_size, egui::Button::new("New World"))
                                 .clicked()
                             {
                                 screen = Screen::Nickname(PendingAction::NewWorld);
@@ -223,7 +247,7 @@ impl MenuApp {
                             ui.add_space(8.0);
                             ui.add_enabled_ui(has_save, |ui| {
                                 if ui
-                                    .add_sized([220.0, 36.0], egui::Button::new("Load World"))
+                                    .add_sized(button_size, egui::Button::new("Load World"))
                                     .clicked()
                                 {
                                     screen = Screen::Nickname(PendingAction::LoadWorld);
@@ -233,8 +257,8 @@ impl MenuApp {
                             ui.add_space(8.0);
                             if ui
                                 .add_sized(
-                                    [220.0, 36.0],
-                                    egui::Button::new("Join Multiplayer Game"),
+                                    button_size,
+                                    egui::Button::new(if steam { "Join Steam Lobby" } else { "Join Multiplayer Game" }),
                                 )
                                 .clicked()
                             {
@@ -242,15 +266,19 @@ impl MenuApp {
                                 error = None;
                             }
                             ui.add_space(8.0);
+                            if ui.add_sized(button_size, egui::Button::new("Settings")).clicked() {
+                                open_settings = true;
+                            }
+                            ui.add_space(8.0);
                             if ui
-                                .add_sized([220.0, 36.0], egui::Button::new("Quit"))
+                                .add_sized(button_size, egui::Button::new("Quit"))
                                 .clicked()
                             {
                                 action = Some(MenuAction::Quit);
                             }
                         }
                         Screen::Join => {
-                            ui.label("Host address (ip:port):");
+                            ui.label(if steam { "Steam lobby code (steam:ID):" } else { "Host address (ip:port):" });
                             let resp = ui.text_edit_singleline(&mut join_input);
                             if !resp.has_focus() && !resp.lost_focus() {
                                 resp.request_focus();
@@ -258,18 +286,21 @@ impl MenuApp {
                             let submitted = ui.input(|i| i.key_pressed(egui::Key::Enter));
                             ui.add_space(10.0);
                             if ui
-                                .add_sized([220.0, 36.0], egui::Button::new("Continue"))
+                                .add_sized(button_size, egui::Button::new("Continue"))
                                 .clicked()
                                 || submitted
                             {
-                                match join_input.trim().parse::<SocketAddr>() {
+                                let target = if steam && !join_input.trim().starts_with("steam:") {
+                                    format!("steam:{}", join_input.trim())
+                                } else { join_input.trim().to_string() };
+                                match target.parse::<JoinTarget>() {
                                     Ok(addr) => {
                                         screen = Screen::Nickname(PendingAction::Join(addr));
                                         error = None;
                                     }
                                     Err(_) => {
                                         error = Some(
-                                            "Invalid address -- expected ip:port, e.g. 192.168.1.5:7878"
+                                            "Invalid destination: use ip:port or steam:lobby_id"
                                                 .to_string(),
                                         )
                                     }
@@ -277,7 +308,7 @@ impl MenuApp {
                             }
                             ui.add_space(8.0);
                             if ui
-                                .add_sized([220.0, 36.0], egui::Button::new("Back"))
+                                .add_sized(button_size, egui::Button::new("Back"))
                                 .clicked()
                             {
                                 screen = Screen::Main;
@@ -311,7 +342,7 @@ impl MenuApp {
                             let submitted = ui.input(|i| i.key_pressed(egui::Key::Enter));
                             ui.add_space(10.0);
                             if ui
-                                .add_sized([220.0, 36.0], egui::Button::new("Continue"))
+                                .add_sized(button_size, egui::Button::new("Continue"))
                                 .clicked()
                                 || submitted
                             {
@@ -334,7 +365,7 @@ impl MenuApp {
                             }
                             ui.add_space(8.0);
                             if ui
-                                .add_sized([220.0, 36.0], egui::Button::new("Back"))
+                                .add_sized(button_size, egui::Button::new("Back"))
                                 .clicked()
                             {
                                 screen = Screen::Main;
@@ -346,6 +377,7 @@ impl MenuApp {
             });
         });
 
+        if open_settings { self.ui.settings.open = true; }
         self.error = error;
         self.screen = screen;
         self.join_input = join_input;

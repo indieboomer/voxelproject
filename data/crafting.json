@@ -1,0 +1,573 @@
+{
+  "mana_costs": [
+    0,
+    2,
+    4,
+    16,
+    256
+  ],
+  "conversion_rate": 1,
+  "recipes": [
+    {
+      "id": "stone",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "block",
+        "id": "stone",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "bricks",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 2
+        },
+        {
+          "element": "Fire",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "block",
+        "id": "bricks",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "basalt",
+      "inputs": [
+        {
+          "element": "Fire",
+          "amount": 1
+        },
+        {
+          "element": "Earth",
+          "amount": 2
+        }
+      ],
+      "output": {
+        "kind": "block",
+        "id": "basalt",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "mud",
+      "inputs": [
+        {
+          "element": "Water",
+          "amount": 1
+        },
+        {
+          "element": "Death",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "resource",
+        "id": "mud",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "redstone",
+      "inputs": [
+        {
+          "element": "Death",
+          "amount": 1
+        },
+        {
+          "element": "Water",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "item",
+        "id": "redstone",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "sheep",
+      "inputs": [
+        {
+          "element": "Life",
+          "amount": 2
+        }
+      ],
+      "output": {
+        "kind": "creature",
+        "id": "sheep",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "golem",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 5
+        },
+        {
+          "element": "Life",
+          "amount": 2
+        },
+        {
+          "element": "Fire",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "creature",
+        "id": "stone_golem",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "layered_stone",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 1
+        },
+        {
+          "element": "Earth",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "block",
+        "id": "cobblestone",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "pumpkin",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 1
+        },
+        {
+          "element": "Water",
+          "amount": 1
+        },
+        {
+          "element": "Life",
+          "amount": 1
+        },
+        {
+          "element": "Fire",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "item",
+        "id": "pumpkin",
+        "quantity": 1
+      }
+    },
+    {
+      "id": "sunscorch",
+      "inputs": [
+        {
+          "element": "Earth",
+          "amount": 1
+        },
+        {
+          "element": "Fire",
+          "amount": 1
+        },
+        {
+          "element": "Water",
+          "amount": 1
+        },
+        {
+          "element": "Life",
+          "amount": 1
+        },
+        {
+          "element": "Death",
+          "amount": 1
+        }
+      ],
+      "output": {
+        "kind": "creature",
+        "id": "sunscorch",
+        "quantity": 1
+      }
+    }
+  ],
+  "compositions": [
+    {
+      "kind": "block",
+      "id": "grass",
+      "elements": [
+        2,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "soil",
+      "elements": [
+        2,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "stone",
+      "elements": [
+        1,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "sand",
+      "elements": [
+        2,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "cobblestone",
+      "elements": [
+        2,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "bricks",
+      "elements": [
+        2,
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "basalt",
+      "elements": [
+        2,
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "copper_ore",
+      "elements": [
+        2,
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "gold_ore",
+      "elements": [
+        2,
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "oak_wood",
+      "elements": [
+        1,
+        0,
+        0,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "spruce_wood",
+      "elements": [
+        1,
+        0,
+        0,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "cherry_wood",
+      "elements": [
+        1,
+        0,
+        0,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "birch_wood",
+      "elements": [
+        1,
+        0,
+        0,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "oak_leaves",
+      "elements": [
+        0,
+        0,
+        1,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "spruce_leaves",
+      "elements": [
+        0,
+        0,
+        1,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "cherry_leaves",
+      "elements": [
+        0,
+        0,
+        1,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "birch_leaves",
+      "elements": [
+        0,
+        0,
+        1,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "short_grass",
+      "elements": [
+        0,
+        0,
+        1,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "pumpkin",
+      "elements": [
+        1,
+        1,
+        1,
+        1,
+        0
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "mud",
+      "elements": [
+        0,
+        0,
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "redstone",
+      "elements": [
+        0,
+        0,
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "diamond_ore",
+      "elements": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "emerald_ore",
+      "elements": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "crystal",
+      "elements": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "kind": "block",
+      "id": "water",
+      "elements": [
+        0,
+        0,
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "kind": "creature",
+      "id": "sheep",
+      "elements": [
+        0,
+        0,
+        0,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "creature",
+      "id": "chicken",
+      "elements": [
+        0,
+        0,
+        0,
+        1,
+        0
+      ]
+    },
+    {
+      "kind": "creature",
+      "id": "cow",
+      "elements": [
+        1,
+        0,
+        0,
+        3,
+        0
+      ]
+    },
+    {
+      "kind": "creature",
+      "id": "wolf",
+      "elements": [
+        0,
+        0,
+        0,
+        2,
+        1
+      ]
+    },
+    {
+      "kind": "creature",
+      "id": "stinger",
+      "elements": [
+        0,
+        0,
+        0,
+        1,
+        1
+      ]
+    },
+    {
+      "kind": "creature",
+      "id": "goblin",
+      "elements": [
+        1,
+        0,
+        0,
+        2,
+        1
+      ]
+    },
+    {
+      "kind": "creature",
+      "id": "stone_golem",
+      "elements": [
+        5,
+        1,
+        0,
+        2,
+        0
+      ]
+    },
+    {
+      "kind": "creature",
+      "id": "sunscorch",
+      "elements": [
+        0,
+        3,
+        0,
+        0,
+        3
+      ]
+    }
+  ]
+}

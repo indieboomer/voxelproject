@@ -8,12 +8,15 @@
 //!   scale, with flat `baseColorFactor` materials (no images).
 //! - **Skinned** (every other creature): the glTF-standard shape -- one
 //!   mesh, one skin, per-vertex `JOINTS_0`/`WEIGHTS_0` blending against an
-//!   animated joint hierarchy, with a real `baseColorTexture`. Since this
-//!   engine has no per-model texture/bind-group plumbing, that texture is
-//!   baked into per-vertex colors once at load time (sampled at each
-//!   vertex's UV) rather than sampled at draw time -- the posed mesh still
-//!   renders through the exact same flat-vertex-color pipeline (and the
-//!   same shared `entity_mesh` buffer/draw call) every other creature does.
+//!   animated joint hierarchy, with a real `baseColorTexture` sampled at
+//!   draw time. Every skinned model's decoded texture is uploaded once (at
+//!   startup, see `Models::creature_texture_layers` and `app.rs`'s
+//!   `create_atlas_bind_group`) into one shared `texture_2d_array`, one
+//!   layer per `CreatureKind`; a posed vertex just carries its real glTF UV
+//!   plus a `tex_layer` selecting that layer (see `emit_skinned_mesh`), so
+//!   the posed mesh still renders through the same shared `entity_mesh`
+//!   buffer/draw call and pipeline every other creature does -- only the
+//!   fragment shader's texture lookup branches on `tex_layer`.
 //!
 //! Both shapes share the same animation-channel/keyframe-sampling code
 //! (`local_trs`/`sample`) and the same clip-driven node-hierarchy walk
@@ -100,8 +103,10 @@ struct SkinnedMesh {
     joint_indices: Vec<[u16; 4]>,
     /// Blend weights matching `joint_indices`, summing to ~1.0 per vertex.
     joint_weights: Vec<[f32; 4]>,
-    /// Baked per-vertex color -- see this module's doc comment.
-    colors: Vec<[f32; 3]>,
+    /// glTF `TEXCOORD_0`, sampled at draw time against this model's own
+    /// layer of the shared `creature_texture` array (see `emit_skinned_mesh`
+    /// and `shader.wgsl`) rather than baked into a per-vertex color.
+    uvs: Vec<[f32; 2]>,
     indices: Vec<u32>,
 }
 
@@ -114,6 +119,11 @@ pub struct AnimatedModel {
     roots: Vec<usize>,
     animations: HashMap<String, AnimationClip>,
     skin: Option<Skin>,
+    /// The skin's decoded `baseColorTexture`, if it has one -- `None` for a
+    /// rigid model (sheep/chicken). Kept around (rather than only used at
+    /// load time) so `Models::creature_texture_layers` can hand every
+    /// model's texture to `app.rs` for the shared GPU texture array.
+    texture: Option<image::RgbaImage>,
 }
 
 /// The eight creature models, loaded once at startup and shared by every
@@ -154,6 +164,24 @@ impl Models {
             CreatureKind::Goblin => &self.goblin,
             CreatureKind::Sunscorch => &self.sunscorch,
         }
+    }
+
+    /// Each kind's decoded `baseColorTexture`, indexed by `CreatureKind::
+    /// to_u8()` -- `None` for Sheep/Chicken, which have no real texture
+    /// (see this module's doc comment). `app.rs`'s `create_atlas_bind_group`
+    /// uploads these once at startup into the `tex_layer`-indexed
+    /// `creature_texture` array `emit_skinned_mesh`'s vertices sample from.
+    pub fn creature_texture_layers(&self) -> [Option<&image::RgbaImage>; 8] {
+        [
+            self.sheep.texture.as_ref(),
+            self.chicken.texture.as_ref(),
+            self.stone_golem.texture.as_ref(),
+            self.wolf.texture.as_ref(),
+            self.stinger.texture.as_ref(),
+            self.cow.texture.as_ref(),
+            self.goblin.texture.as_ref(),
+            self.sunscorch.texture.as_ref(),
+        ]
     }
 }
 
@@ -351,23 +379,6 @@ fn material_base_color_image(json: &Value, bin: &[u8], material_idx: Option<usiz
     )
 }
 
-/// Samples `texture` at each of `uvs`, baking a per-vertex color -- see this
-/// module's doc comment for why creatures bake textures into vertex colors
-/// instead of sampling them at draw time. glTF's UV origin is the image's
-/// top-left corner (unlike Wavefront OBJ's bottom-left), so no vertical
-/// flip is needed here.
-fn bake_uv_colors(texture: &image::RgbaImage, uvs: &[[f32; 2]]) -> Vec<[f32; 3]> {
-    let (w, h) = texture.dimensions();
-    uvs.iter()
-        .map(|uv| {
-            let x = ((uv[0].rem_euclid(1.0)) * w as f32) as u32;
-            let y = ((uv[1].rem_euclid(1.0)) * h as f32) as u32;
-            let p = texture.get_pixel(x.min(w - 1), y.min(h - 1));
-            [p[0] as f32 / 255.0, p[1] as f32 / 255.0, p[2] as f32 / 255.0]
-        })
-        .collect()
-}
-
 fn load_glb(bytes: &[u8]) -> AnimatedModel {
     let (json, bin) = parse_glb(bytes);
     let empty = Vec::new();
@@ -511,7 +522,7 @@ fn load_glb(bytes: &[u8]) -> AnimatedModel {
 
     // A skinned model has exactly one skin, referenced by exactly one node
     // (its mesh-holding node) -- see this module's doc comment.
-    let skin = json["skins"].as_array().and_then(|skins| skins.first()).map(|skin_json| {
+    let skin_and_texture = json["skins"].as_array().and_then(|skins| skins.first()).map(|skin_json| {
         let joints: Vec<usize> = skin_json["joints"]
             .as_array()
             .unwrap()
@@ -554,12 +565,9 @@ fn load_glb(bytes: &[u8]) -> AnimatedModel {
         }
 
         let material_idx = prim.get("material").and_then(Value::as_u64).map(|v| v as usize);
-        let colors = match material_base_color_image(&json, bin, material_idx) {
-            Some(texture) => bake_uv_colors(&texture, &uvs),
-            None => vec![[1.0, 1.0, 1.0]; positions.len()],
-        };
+        let texture = material_base_color_image(&json, bin, material_idx);
 
-        Skin {
+        let skin = Skin {
             joints,
             inverse_bind,
             mesh: SkinnedMesh {
@@ -567,13 +575,18 @@ fn load_glb(bytes: &[u8]) -> AnimatedModel {
                 normals,
                 joint_indices,
                 joint_weights,
-                colors,
+                uvs,
                 indices: mesh_indices,
             },
-        }
+        };
+        (skin, texture)
     });
+    let (skin, texture) = match skin_and_texture {
+        Some((skin, texture)) => (Some(skin), texture),
+        None => (None, None),
+    };
 
-    AnimatedModel { nodes, roots, animations, skin }
+    AnimatedModel { nodes, roots, animations, skin, texture }
 }
 
 // ---------------------------------------------------------------------------
@@ -718,6 +731,7 @@ fn emit_rigid_parts(
                     reflectivity: 0.0,
                     emission: 0.0,
                     wind: 0.0,
+                    tex_layer: 0.0,
                 });
             }
             for &idx in &prim.indices {
@@ -735,7 +749,7 @@ fn emit_skinned_mesh(
     indices: &mut Vec<u32>,
     origin: Vec3,
     yaw_rotate: &dyn Fn(f32, f32) -> (f32, f32),
-    uv: [f32; 4],
+    tex_layer: f32,
 ) {
     // Per glTF's skinning formula, simplified for the case (true for every
     // bundled skinned model) where the mesh-holding node itself has an
@@ -769,13 +783,14 @@ fn emit_skinned_mesh(
         let (nx, nz) = yaw_rotate(world_normal.x, world_normal.z);
         vertices.push(Vertex {
             position: [origin.x + wx, origin.y + world_pos.y, origin.z + wz],
-            color: mesh.colors[i],
+            color: [1.0, 1.0, 1.0],
             normal: [nx, world_normal.y, nz],
-            uv: [uv[0], uv[1]],
+            uv: mesh.uvs[i],
             ao: 1.0,
             reflectivity: 0.0,
             emission: 0.0,
             wind: 0.0,
+            tex_layer,
         });
     }
     for &idx in &mesh.indices {
@@ -795,6 +810,7 @@ pub fn push_model(
     vertices: &mut Vec<Vertex>,
     indices: &mut Vec<u32>,
     model: &AnimatedModel,
+    kind: CreatureKind,
     clip_name: &str,
     clip_time: f32,
     origin: Vec3,
@@ -818,7 +834,11 @@ pub fn push_model(
     let world_matrices = compute_world_matrices(model, clip, t);
     emit_rigid_parts(model, &world_matrices, vertices, indices, origin, &yaw_rotate, uv);
     if let Some(skin) = &model.skin {
-        emit_skinned_mesh(skin, &world_matrices, vertices, indices, origin, &yaw_rotate, uv);
+        // See `shader.wgsl`'s `fs_main` and `voxel::mesher::Vertex::tex_layer`
+        // -- 0.0 is reserved for "sample the terrain atlas", so a real
+        // creature layer is offset by one.
+        let tex_layer = kind.to_u8() as f32 + 1.0;
+        emit_skinned_mesh(skin, &world_matrices, vertices, indices, origin, &yaw_rotate, tex_layer);
     }
 }
 
@@ -827,22 +847,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn creature_faces_sample_white_away_from_atlas_boundaries() {
+    fn creature_rigid_faces_sample_white_away_from_atlas_boundaries() {
         let atlas = image::load_from_memory(crate::voxel::atlas::ATLAS_BYTES)
             .unwrap()
             .to_rgba8();
         let models = Models::load();
         for kind in 0..=7 {
-            let model = models.for_kind(CreatureKind::from_u8(kind));
+            let kind = CreatureKind::from_u8(kind);
+            let model = models.for_kind(kind);
             for clip in model.animations.keys() {
                 let mut vertices = Vec::new();
                 let mut indices = Vec::new();
                 push_model(
-                    &mut vertices, &mut indices, model, clip, 0.37,
+                    &mut vertices, &mut indices, model, kind, clip, 0.37,
                     Vec3::new(37.0, 5.0, -12.0), 0.73,
                 );
                 assert!(!vertices.is_empty());
-                for vertex in vertices {
+                // Only a rigid part's vertices (tex_layer == 0.0) sample the
+                // terrain atlas -- a skinned mesh's vertices carry a real
+                // glTF UV into its own `creature_texture` layer instead (see
+                // `emit_skinned_mesh`), which isn't atlas-space at all.
+                for vertex in vertices.iter().filter(|v| v.tex_layer == 0.0) {
                     // Model nearest sampling on both sides of the UV to
                     // catch a constant coordinate placed on a tile edge.
                     for dx in [-0.25, 0.0, 0.25] {
@@ -851,7 +876,7 @@ mod tests {
                             let y = (vertex.uv[1] * atlas.height() as f32 + dy).floor() as u32;
                             assert_eq!(
                                 atlas.get_pixel(x, y).0, [255, 255, 255, 255],
-                                "creature {kind}, clip {clip}: UV {:?} samples outside white swatch",
+                                "creature {kind:?}, clip {clip}: UV {:?} samples outside white swatch",
                                 vertex.uv,
                             );
                         }
@@ -941,6 +966,7 @@ mod tests {
             &mut vertices,
             &mut indices,
             &models.sheep,
+            CreatureKind::Sheep,
             "idle",
             0.0,
             Vec3::ZERO,
@@ -962,17 +988,17 @@ mod tests {
     #[test]
     fn every_bundled_model_loads_and_poses_its_documented_clips() {
         let models = Models::load();
-        let cases: &[(&AnimatedModel, &[&str])] = &[
-            (&models.sheep, &["idle", "walk"]),
-            (&models.chicken, &["idle", "walk"]),
-            (&models.stone_golem, &["idle", "walk", "attack", "die"]),
-            (&models.wolf, &["idle", "walk", "run", "attack", "die"]),
-            (&models.stinger, &["idle", "walk", "run", "attack", "die"]),
-            (&models.cow, &["idle", "walk", "die"]),
-            (&models.goblin, &["idle", "walk", "run", "attack", "die"]),
-            (&models.sunscorch, &["idle", "walk", "attack", "die"]),
+        let cases: &[(&AnimatedModel, CreatureKind, &[&str])] = &[
+            (&models.sheep, CreatureKind::Sheep, &["idle", "walk"]),
+            (&models.chicken, CreatureKind::Chicken, &["idle", "walk"]),
+            (&models.stone_golem, CreatureKind::StoneGolem, &["idle", "walk", "attack", "die"]),
+            (&models.wolf, CreatureKind::Wolf, &["idle", "walk", "run", "attack", "die"]),
+            (&models.stinger, CreatureKind::Stinger, &["idle", "walk", "run", "attack", "die"]),
+            (&models.cow, CreatureKind::Cow, &["idle", "walk", "die"]),
+            (&models.goblin, CreatureKind::Goblin, &["idle", "walk", "run", "attack", "die"]),
+            (&models.sunscorch, CreatureKind::Sunscorch, &["idle", "walk", "attack", "die"]),
         ];
-        for (model, clips) in cases {
+        for (model, kind, clips) in cases {
             assert!(
                 !model.nodes.is_empty(),
                 "expected the loaded model to have at least one node"
@@ -984,6 +1010,7 @@ mod tests {
                     &mut vertices,
                     &mut indices,
                     model,
+                    *kind,
                     clip,
                     0.0,
                     Vec3::ZERO,
@@ -1009,6 +1036,7 @@ mod tests {
             &mut vertices,
             &mut indices,
             &models.sheep,
+            CreatureKind::Sheep,
             "does_not_exist",
             1.23,
             Vec3::ZERO,
@@ -1025,13 +1053,13 @@ mod tests {
     #[test]
     fn a_walk_clip_pose_actually_changes_over_time() {
         let models = Models::load();
-        for model in [&models.sheep, &models.wolf] {
+        for (model, kind) in [(&models.sheep, CreatureKind::Sheep), (&models.wolf, CreatureKind::Wolf)] {
             let mut early = Vec::new();
             let mut early_i = Vec::new();
-            push_model(&mut early, &mut early_i, model, "walk", 0.0, Vec3::ZERO, 0.0);
+            push_model(&mut early, &mut early_i, model, kind, "walk", 0.0, Vec3::ZERO, 0.0);
             let mut later = Vec::new();
             let mut later_i = Vec::new();
-            push_model(&mut later, &mut later_i, model, "walk", 0.35, Vec3::ZERO, 0.0);
+            push_model(&mut later, &mut later_i, model, kind, "walk", 0.35, Vec3::ZERO, 0.0);
 
             assert_eq!(early.len(), later.len(), "same clip should yield the same vertex count");
             let moved = early
@@ -1058,6 +1086,7 @@ mod tests {
             &mut facing_plus_x,
             &mut indices,
             &models.wolf,
+            CreatureKind::Wolf,
             "idle",
             0.0,
             Vec3::ZERO,
@@ -1076,6 +1105,7 @@ mod tests {
             &mut facing_plus_z,
             &mut indices,
             &models.wolf,
+            CreatureKind::Wolf,
             "idle",
             0.0,
             Vec3::ZERO,
@@ -1103,6 +1133,7 @@ mod tests {
             &mut vertices,
             &mut indices,
             &models.sheep,
+            CreatureKind::Sheep,
             "idle",
             0.0,
             origin,
@@ -1143,24 +1174,24 @@ mod tests {
         // without simplifying geometry means keeping it, not silently
         // dropping it, so this pins the known counts down instead of
         // asserting a blanket zero.
-        let cases: &[(&str, &AnimatedModel, &str, f32, usize, usize)] = &[
-            ("sheep", &models.sheep, "idle", 0.0, 0, 0),
-            ("sheep", &models.sheep, "walk", 0.3, 0, 0),
-            ("chicken", &models.chicken, "idle", 0.0, 0, 0),
-            ("wolf", &models.wolf, "idle", 0.0, 0, 0),
-            ("wolf", &models.wolf, "walk", 0.3, 0, 0),
-            ("wolf", &models.wolf, "run", 0.3, 0, 0),
-            ("stone_golem", &models.stone_golem, "idle", 0.0, 0, 0),
-            ("stinger", &models.stinger, "idle", 0.0, 0, 0),
-            ("cow", &models.cow, "idle", 0.0, 0, 0),
-            ("goblin", &models.goblin, "idle", 0.0, 0, 0),
-            ("sunscorch", &models.sunscorch, "idle", 0.0, 64, 12),
+        let cases: &[(&str, &AnimatedModel, CreatureKind, &str, f32, usize, usize)] = &[
+            ("sheep", &models.sheep, CreatureKind::Sheep, "idle", 0.0, 0, 0),
+            ("sheep", &models.sheep, CreatureKind::Sheep, "walk", 0.3, 0, 0),
+            ("chicken", &models.chicken, CreatureKind::Chicken, "idle", 0.0, 0, 0),
+            ("wolf", &models.wolf, CreatureKind::Wolf, "idle", 0.0, 0, 0),
+            ("wolf", &models.wolf, CreatureKind::Wolf, "walk", 0.3, 0, 0),
+            ("wolf", &models.wolf, CreatureKind::Wolf, "run", 0.3, 0, 0),
+            ("stone_golem", &models.stone_golem, CreatureKind::StoneGolem, "idle", 0.0, 0, 0),
+            ("stinger", &models.stinger, CreatureKind::Stinger, "idle", 0.0, 0, 0),
+            ("cow", &models.cow, CreatureKind::Cow, "idle", 0.0, 0, 0),
+            ("goblin", &models.goblin, CreatureKind::Goblin, "idle", 0.0, 0, 0),
+            ("sunscorch", &models.sunscorch, CreatureKind::Sunscorch, "idle", 0.0, 64, 12),
         ];
 
-        for (name, model, clip, time, expected_exact_dupes, expected_sub_mm_pairs) in cases {
+        for (name, model, kind, clip, time, expected_exact_dupes, expected_sub_mm_pairs) in cases {
             let mut vertices = Vec::new();
             let mut indices = Vec::new();
-            push_model(&mut vertices, &mut indices, model, clip, *time, Vec3::ZERO, 0.0);
+            push_model(&mut vertices, &mut indices, model, *kind, clip, *time, Vec3::ZERO, 0.0);
 
             let mut seen: HashMap<[[i32; 3]; 3], usize> = HashMap::new();
             for tri in indices.chunks_exact(3) {
@@ -1232,13 +1263,21 @@ mod tests {
     #[test]
     fn posed_mesh_is_bit_for_bit_deterministic_across_repeated_calls() {
         let models = Models::load();
-        for model in [&models.sheep, &models.wolf, &models.stone_golem, &models.goblin, &models.sunscorch] {
+        let cases = [
+            (&models.sheep, CreatureKind::Sheep),
+            (&models.wolf, CreatureKind::Wolf),
+            (&models.stone_golem, CreatureKind::StoneGolem),
+            (&models.goblin, CreatureKind::Goblin),
+            (&models.sunscorch, CreatureKind::Sunscorch),
+        ];
+        for (model, kind) in cases {
             let mut a_vertices = Vec::new();
             let mut a_indices = Vec::new();
             push_model(
                 &mut a_vertices,
                 &mut a_indices,
                 model,
+                kind,
                 "idle",
                 1.7,
                 Vec3::new(3.0, 4.0, 5.0),
@@ -1250,6 +1289,7 @@ mod tests {
                 &mut b_vertices,
                 &mut b_indices,
                 model,
+                kind,
                 "idle",
                 1.7,
                 Vec3::new(3.0, 4.0, 5.0),
@@ -1287,40 +1327,71 @@ mod tests {
         );
     }
 
-    /// A skinned model's real `baseColorTexture` should be baked into real,
-    /// varied per-vertex colors -- not a single uniform value a broken
-    /// sampler (e.g. one that silently fell back to white on every lookup)
-    /// would produce. The bar is deliberately low (>5, not some larger
-    /// number): these are small, deliberately palette-limited hand-painted
-    /// textures (stone_golem's whole 256x256 texture has only 63 distinct
-    /// colors in it), so "many" distinct baked colors isn't the right
-    /// signal -- "more than a small handful" is enough to rule out a flat
-    /// fallback while still passing for a genuinely limited palette.
+    /// A skinned model's real `baseColorTexture` should decode to real,
+    /// varied pixel colors -- not a single uniform value a broken decode
+    /// (e.g. one that silently fell back to a blank image) would produce.
+    /// The bar is deliberately low (>5, not some larger number): these are
+    /// small, deliberately palette-limited hand-painted textures
+    /// (stone_golem's whole 256x256 texture has only 63 distinct colors in
+    /// it), so "many" distinct colors isn't the right signal -- "more than
+    /// a small handful" is enough to rule out a flat fallback while still
+    /// passing for a genuinely limited palette.
     #[test]
-    fn skinned_models_bake_real_per_vertex_texture_colors_not_a_flat_fallback() {
+    fn skinned_models_decode_a_real_varied_texture_not_a_flat_fallback() {
         let models = Models::load();
         for (name, model) in [
             ("stone_golem", &models.stone_golem),
             ("wolf", &models.wolf),
             ("sunscorch", &models.sunscorch),
         ] {
-            let mut vertices = Vec::new();
-            let mut indices = Vec::new();
-            push_model(&mut vertices, &mut indices, model, "idle", 0.0, Vec3::ZERO, 0.0);
-            assert!(!vertices.is_empty(), "expected {name} to produce a non-empty mesh");
-
+            let texture = model.texture.as_ref().unwrap_or_else(|| panic!("expected {name} to have a decoded baseColorTexture"));
             let mut distinct = std::collections::HashSet::new();
-            for v in &vertices {
-                distinct.insert(v.color.map(|c| (c * 255.0).round() as i32));
+            for pixel in texture.pixels() {
+                distinct.insert(pixel.0);
             }
             assert!(
                 distinct.len() > 5,
-                "{name}: expected several distinct baked vertex colors from a real texture sample, got only {}",
+                "{name}: expected several distinct colors in the decoded texture, got only {}",
                 distinct.len()
             );
+        }
+    }
+
+    /// A skinned mesh's vertices must carry their *real* glTF UV (varied
+    /// across the mesh, since the model actually unwraps to many distinct
+    /// swatches of its texture -- see `emit_skinned_mesh`) rather than a
+    /// degenerate constant value, and every one must point at this kind's
+    /// own layer of the shared `creature_texture` array (`CreatureKind::
+    /// to_u8() + 1.0`, see `push_model`) so it never accidentally samples a
+    /// different creature's texture.
+    #[test]
+    fn skinned_mesh_vertices_carry_real_varied_uvs_and_the_right_texture_layer() {
+        let models = Models::load();
+        for (name, model, kind) in [
+            ("stone_golem", &models.stone_golem, CreatureKind::StoneGolem),
+            ("wolf", &models.wolf, CreatureKind::Wolf),
+            ("sunscorch", &models.sunscorch, CreatureKind::Sunscorch),
+        ] {
+            let mut vertices = Vec::new();
+            let mut indices = Vec::new();
+            push_model(&mut vertices, &mut indices, model, kind, "idle", 0.0, Vec3::ZERO, 0.0);
+            let skin_vertices: Vec<_> = vertices.iter().filter(|v| v.tex_layer != 0.0).collect();
+            assert!(!skin_vertices.is_empty(), "expected {name} to have skinned-mesh vertices");
+
+            let expected_layer = kind.to_u8() as f32 + 1.0;
             assert!(
-                !vertices.iter().all(|v| v.color == [1.0, 1.0, 1.0]),
-                "{name}: every vertex baked to pure white -- texture sampling likely fell back silently"
+                skin_vertices.iter().all(|v| v.tex_layer == expected_layer),
+                "{name}: expected every skinned vertex to use layer {expected_layer}"
+            );
+
+            let mut distinct_uvs = std::collections::HashSet::new();
+            for v in &skin_vertices {
+                distinct_uvs.insert(v.uv.map(|c| (c * 4096.0).round() as i32));
+            }
+            assert!(
+                distinct_uvs.len() > 5,
+                "{name}: expected several distinct real UVs, got only {}",
+                distinct_uvs.len()
             );
         }
     }

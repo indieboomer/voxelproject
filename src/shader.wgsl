@@ -25,6 +25,11 @@ var<uniform> camera: CameraUniform;
 var atlas_texture: texture_2d<f32>;
 @group(1) @binding(1)
 var atlas_sampler: sampler;
+// One 256x256 layer per `CreatureKind` (see `model.rs`'s `push_model`) --
+// Sheep/Chicken have no real texture and keep an unused blank layer, so
+// every kind can index this array directly by its own `to_u8()`.
+@group(1) @binding(2)
+var creature_texture: texture_2d_array<f32>;
 
 @group(2) @binding(0)
 var shadow_map: texture_depth_2d;
@@ -40,6 +45,7 @@ struct VertexInput {
     @location(5) reflectivity: f32,
     @location(6) emission: f32,
     @location(7) wind: f32,
+    @location(8) tex_layer: f32,
 };
 
 struct VertexOutput {
@@ -51,6 +57,7 @@ struct VertexOutput {
     @location(4) ao: f32,
     @location(5) reflectivity: f32,
     @location(6) emission: f32,
+    @location(7) tex_layer: f32,
 };
 
 @vertex
@@ -76,6 +83,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.ao = in.ao;
     out.reflectivity = in.reflectivity;
     out.emission = in.emission;
+    out.tex_layer = in.tex_layer;
     return out;
 }
 
@@ -167,7 +175,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         );
     }
 
-    let tex = textureSample(atlas_texture, atlas_sampler, in.uv);
+    // A skinned creature's real texture lives in its own array layer
+    // (`tex_layer` is `CreatureKind::to_u8() + 1.0`, see `model.rs`); every
+    // other vertex (terrain, and a creature's flat-colored rigid parts)
+    // keeps sampling the shared terrain atlas as before.
+    var tex: vec4<f32>;
+    if in.tex_layer > 0.5 {
+        tex = textureSample(creature_texture, atlas_sampler, in.uv, i32(in.tex_layer - 0.5));
+    } else {
+        tex = textureSample(atlas_texture, atlas_sampler, in.uv);
+    }
     if tex.a < 0.5 {
         discard;
     }

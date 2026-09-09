@@ -119,3 +119,15 @@ Build the smallest playable vertical slice that tests the complete loop:
 **enter world → play → describe a rule → generate code → validate → activate → observe multiplayer consequences → revise or revert**
 
 Avoid general engine features unless they directly support this loop.
+
+## Elemental crafting
+
+Press **C** in game. See [CRAFTING.md](CRAFTING.md) for controls, starter formulas, compositions, configuration, multiplayer, and save behavior.
+
+## UI appearance
+
+Open **Settings** in the main menu or press **F10** in game to switch between **Generic** and **Fantasy**. Both use larger text. See [UI_SETTINGS.md](UI_SETTINGS.md) for the UI audit, controls, persistence, and extension guide.
+
+## Steam multiplayer (development)
+
+Optional Steam friends sessions use test App ID **480**. Direct / LAN remains available in Settings. See [Steam build, implementation plan and validation checklist](STEAM_MULTIPLAYER.md).

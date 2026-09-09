@@ -2,3 +2,6 @@
 /saves
 /llm-runtime
 Cargo.lock.bak
+
+/settings.json
+/settings.json.tmp
