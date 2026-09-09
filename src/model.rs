@@ -732,6 +732,7 @@ fn emit_rigid_parts(
                     emission: 0.0,
                     wind: 0.0,
                     tex_layer: 0.0,
+                glimmer: 0.0,
                 });
             }
             for &idx in &prim.indices {
@@ -791,6 +792,7 @@ fn emit_skinned_mesh(
             emission: 0.0,
             wind: 0.0,
             tex_layer,
+            glimmer: 0.0,
         });
     }
     for &idx in &mesh.indices {

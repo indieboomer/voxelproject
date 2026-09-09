@@ -241,6 +241,98 @@ fn populate_api<'lua, 'scope>(
         })?,
     )?;
 
+    api.set("protect_player", scope.create_function(move |_, (player_id, kind): (PlayerId, String)| {
+        if tx.policy_owner.is_none() { return Err(mlua::Error::RuntimeError("protect_player requires on_tick".into())); }
+        let Some(species) = creature_kind_filter(&kind) else { return Ok(false); };
+        if !tx.players().iter().any(|p| p.id == player_id) { return Ok(false); }
+        let policy = crate::creature::AttackPolicy::ProtectPlayer(player_id, species);
+        let mut policies = tx.attack_policies.borrow_mut();
+        if !policies.contains(&policy) { policies.push(policy); }
+        Ok(true)
+    })?)?;
+    api.set("suppress_creature_attacks", scope.create_function(move |_, id: u32| {
+        if tx.policy_owner.is_none() { return Err(mlua::Error::RuntimeError("suppress_creature_attacks requires on_tick".into())); }
+        if creatures_cell.borrow().behavior(id).is_none() { return Ok(false); }
+        let policy = crate::creature::AttackPolicy::SuppressCreature(id);
+        let mut policies = tx.attack_policies.borrow_mut();
+        if !policies.contains(&policy) { policies.push(policy); }
+        Ok(true)
+    })?)?;
+
+    api.set("get_behavior", scope.create_function(move |lua, id: u32| {
+        use crate::creature::{BehaviorMode, BehaviorTarget};
+        let Some(state) = creatures_cell.borrow().behavior(id) else { return Ok(None); };
+        let t = lua.create_table()?;
+        t.set("aggressive", state.aggressive)?;
+        t.set("mode", match state.mode { BehaviorMode::Auto => "auto", BehaviorMode::Chase => "chase", BehaviorMode::Attack => "attack", BehaviorMode::Ignore => "ignore" })?;
+        if let Some(target) = state.target {
+            let (kind, id) = match target { BehaviorTarget::Player(id) => ("player", id), BehaviorTarget::Creature(id) => ("creature", id) };
+            t.set("target_type", kind)?; t.set("target_id", id)?;
+        }
+        Ok(Some(t))
+    })?)?;
+    api.set("set_aggressive", scope.create_function(move |_, (id, aggressive): (u32, bool)| {
+        use crate::creature::BehaviorMode;
+        let mut creatures = creatures_cell.borrow_mut();
+        let Some(mut state) = creatures.behavior(id) else { return Ok(false); };
+        state.aggressive = aggressive;
+        state.mode = BehaviorMode::Auto;
+        state.target = None;
+        Ok(creatures.set_behavior(id, state))
+    })?)?;
+    for (name, mode) in [("attack", crate::creature::BehaviorMode::Attack),
+        ("chase_target", crate::creature::BehaviorMode::Chase), ("ignore", crate::creature::BehaviorMode::Ignore)] {
+        api.set(name, scope.create_function(move |_, id: u32| {
+            use crate::creature::BehaviorMode;
+            let mut creatures = creatures_cell.borrow_mut();
+            let Some(mut state) = creatures.behavior(id) else { return Ok(false); };
+            if mode != BehaviorMode::Ignore && state.target.is_none() { return Ok(false); }
+            state.mode = mode;
+            if mode == BehaviorMode::Ignore { state.target = None; state.aggressive = false; }
+            if mode == BehaviorMode::Attack { state.aggressive = true; }
+            Ok(creatures.set_behavior(id, state))
+        })?)?;
+    }
+    api.set("set_target", scope.create_function(move |_, (id, kind, target_id): (u32, String, u32)| {
+        use crate::creature::BehaviorTarget;
+        let mut creatures = creatures_cell.borrow_mut();
+        let Some(mut state) = creatures.behavior(id) else { return Ok(false); };
+        let target = match kind.as_str() {
+            "creature" if id != target_id && creatures.behavior(target_id).is_some() => BehaviorTarget::Creature(target_id),
+            "player" if tx.players().iter().any(|p| p.id == target_id) => BehaviorTarget::Player(target_id),
+            _ => return Ok(false),
+        };
+        state.target = Some(target);
+        Ok(creatures.set_behavior(id, state))
+    })?)?;
+    api.set("select_target", scope.create_function(move |_, (id, kind, radius): (u32, String, f32)| {
+        use crate::creature::BehaviorTarget;
+        let mut creatures = creatures_cell.borrow_mut();
+        let Some(mut state) = creatures.behavior(id) else { return Ok(None); };
+        let origin = Vec3::from_array(creatures.snapshot.iter().find(|c| c.0 == id).unwrap().2);
+        let radius = radius.clamp(0.0, MAX_FIND_RADIUS);
+        let mut candidates = Vec::new();
+        if kind == "player" {
+            for p in tx.players() { candidates.push((p.id, p.pos)); }
+        } else {
+            let Some(filter) = creature_kind_filter(&kind) else { return Ok(None); };
+            for c in &creatures.snapshot {
+                if c.0 != id && c.1 == filter { candidates.push((c.0, Vec3::from_array(c.2))); }
+            }
+        }
+        let chosen = candidates.into_iter().map(|(id, pos)| (id, origin.distance(pos)))
+            .filter(|c| c.1 <= radius).min_by(|a,b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0))).map(|c| c.0);
+        state.target = chosen.map(|id| if kind == "player" { BehaviorTarget::Player(id) } else { BehaviorTarget::Creature(id) });
+        creatures.set_behavior(id, state);
+        Ok(chosen)
+    })?)?;
+    api.set("die", scope.create_function(move |_, id: u32| {
+        if let Some(event) = creatures_cell.borrow_mut().destroy(id) {
+            death_events_cell.borrow_mut().push(event);
+            Ok(true)
+        } else { Ok(false) }
+    })?)?;
+
     api.set(
         "damage",
         scope.create_function(move |_, (id, amount): (u32, f32)| {
@@ -477,8 +569,8 @@ fn populate_api<'lua, 'scope>(
             move |_, (player_id, kind, amount): (PlayerId, String, u32)| {
                 // The transaction includes prior accepted give/take
                 // commands, so two removals cannot spend the same funds.
-                // Remote inventories are still not tracked on the host.
-                if player_id != HOST_PLAYER_ID {
+                // All inventories come from authoritative account snapshots.
+                if !tx.players().iter().any(|p| p.id == player_id) {
                     return Ok(false);
                 }
                 let Some(block) = BlockType::from_name(&kind) else {
@@ -487,7 +579,7 @@ fn populate_api<'lua, 'scope>(
                 let Some(i) = COLLECTIBLE_BLOCKS.iter().position(|&b| b == block) else {
                     return Ok(false);
                 };
-                if tx.resource_count(i) < amount {
+                if tx.resource_count(player_id, i).map_or(true, |count| count < amount) {
                     return Ok(false);
                 }
                 player_effects_cell
@@ -505,7 +597,7 @@ fn populate_api<'lua, 'scope>(
     api.set(
         "get_resource_count",
         scope.create_function(move |_, (player_id, kind): (PlayerId, String)| {
-            if player_id != HOST_PLAYER_ID {
+            if !tx.players().iter().any(|p| p.id == player_id) {
                 return Ok(None);
             }
             let Some(block) = BlockType::from_name(&kind) else {
@@ -514,9 +606,27 @@ fn populate_api<'lua, 'scope>(
             let Some(i) = COLLECTIBLE_BLOCKS.iter().position(|&b| b == block) else {
                 return Ok(None);
             };
-            Ok(Some(tx.resource_count(i)))
+            Ok(tx.resource_count(player_id, i))
         })?,
     )?;
+
+    api.set("get_inventory", scope.create_function(move |lua, player_id: PlayerId| {
+        if tx.resource_count(player_id, 0).is_none() { return Ok(None); }
+        let inventory = lua.create_table()?;
+        for (i, block) in COLLECTIBLE_BLOCKS.iter().enumerate() {
+            inventory.set(block.id(), tx.resource_count(player_id, i).unwrap())?;
+        }
+        Ok(Some(inventory))
+    })?)?;
+    for name in ["has_resource", "has_item"] {
+        api.set(name, scope.create_function(move |_, (player_id, kind, amount): (PlayerId, String, Option<u32>)| {
+            let amount = amount.unwrap_or(1);
+            if amount == 0 { return Ok(None); }
+            let Some(block) = BlockType::from_name(&kind) else { return Ok(None); };
+            let Some(i) = COLLECTIBLE_BLOCKS.iter().position(|b| *b == block) else { return Ok(None); };
+            Ok(tx.resource_count(player_id, i).map(|count| count >= amount))
+        })?)?;
+    }
 
     api.set(
         "damage_player",
@@ -661,7 +771,7 @@ fn populate_api<'lua, 'scope>(
             } else {
                 // Conservative charge covers creature/player scans and staged
                 // effect lookups, including methods with constant-time fast paths.
-                tx.native_scan_cost()
+                tx.native_scan_cost().saturating_mul(if method_name == "get_inventory" { COLLECTIBLE_BLOCKS.len() as u32 } else { 1 })
             };
             budget.charge_native_work(native_work);
             let result = function.call::<_, MultiValue>(args);

@@ -1,3 +1,5 @@
+#[path = "intent.rs"]
+pub mod intent;
 use std::sync::mpsc::{channel, Receiver};
 use std::time::Duration;
 
@@ -108,53 +110,30 @@ impl LlmClient {
     /// natural-language description. Poll the returned handle once per
     /// frame; never blocks the caller.
     pub fn generate(&self, user_request: &str, kind: PromptKind) -> PendingGeneration {
-        let messages = vec![
-            ChatMessage::system(Self::system_prompt()),
-            ChatMessage::user(Self::build_user_turn(user_request, kind)),
-        ];
-        self.spawn_request(messages)
+        self.spawn_pipeline(user_request, kind, None)
     }
 
-    /// Kicks off a background retry: gives the model its previous (invalid,
-    /// or wrong-contract) output plus an error/correction message so it can
-    /// fix itself. Used for exactly one retry -- see `App::poll_generation`.
-    pub fn retry(
-        &self,
-        user_request: &str,
-        kind: PromptKind,
-        broken_code: &str,
-        error: &str,
-    ) -> PendingGeneration {
-        let messages = vec![
-            ChatMessage::system(Self::system_prompt()),
-            ChatMessage::user(Self::build_user_turn(user_request, kind)),
-            ChatMessage::assistant(broken_code.to_string()),
-            ChatMessage::user(format!(
-                "That code failed validation with this error:\n{error}\n\nFix it and output only the corrected Lua source, no explanation."
-            )),
-        ];
-        self.spawn_request(messages)
+    pub fn retry(&self, user_request: &str, kind: PromptKind, broken_code: &str, error: &str) -> PendingGeneration {
+        self.spawn_pipeline(user_request, kind, Some((broken_code.to_string(),error.to_string())))
     }
-
-    fn spawn_request(&self, messages: Vec<ChatMessage>) -> PendingGeneration {
-        let url = format!(
-            "{}/v1/chat/completions",
-            self.base_url.trim_end_matches('/')
-        );
-        let (tx, rx) = channel();
+    fn spawn_pipeline(&self, prompt: &str, kind: PromptKind, correction: Option<(String,String)>) -> PendingGeneration {
+        let url=format!("{}/v1/chat/completions",self.base_url.trim_end_matches('/'));
+        let prompt=prompt.to_string();
+        let (tx,rx)=channel();
         std::thread::spawn(move || {
-            let result = request_completion(&url, messages);
-            let _ = tx.send(result);
+            let result=intent::generate(&url,&prompt,kind,correction.as_ref().map(|(a,b)|(a.as_str(),b.as_str())));
+            let _=tx.send(result);
         });
-        PendingGeneration { receiver: rx }
+        PendingGeneration {receiver:rx}
     }
+
 }
 
 /// A generation request in flight on a background thread. `ureq` is
 /// blocking and `mlua`'s types aren't `Send`, so the HTTP call happens on
 /// its own thread and only the resulting Lua source text (or error string)
-/// crosses back over the channel; validation still happens on the main
-/// thread, where the Lua VM actually gets created.
+/// crosses back over the channel. Isolated validation VMs run on the worker;
+/// the live game module is still loaded on the main thread.
 pub struct PendingGeneration {
     receiver: Receiver<Result<String, String>>,
 }
@@ -166,7 +145,14 @@ impl PendingGeneration {
 }
 
 fn request_completion(url: &str, messages: Vec<ChatMessage>) -> Result<String, String> {
-    let body = serde_json::json!({
+    request_text(url, messages, None)
+}
+fn request_json(url: &str, messages: Vec<ChatMessage>, schema: serde_json::Value) -> Result<serde_json::Value,String> {
+    let text=request_text(url,messages,Some(schema))?;
+    serde_json::from_str(&text).map_err(|e|format!("Invalid structured model output: {e}"))
+}
+fn request_text(url: &str, messages: Vec<ChatMessage>, schema: Option<serde_json::Value>) -> Result<String,String> {
+    let mut body = serde_json::json!({
         "messages": messages
             .iter()
             .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
@@ -175,6 +161,7 @@ fn request_completion(url: &str, messages: Vec<ChatMessage>) -> Result<String, S
         "max_tokens": 800,
     });
 
+    if let Some(schema)=schema { body["temperature"]=serde_json::json!(0.0); body["response_format"]=serde_json::json!({"type":"json_object","schema":schema}); }
     let response = ureq::post(url)
         .timeout(Duration::from_secs(120))
         .send_json(body)
@@ -184,6 +171,7 @@ fn request_completion(url: &str, messages: Vec<ChatMessage>) -> Result<String, S
         .into_json()
         .map_err(|e| format!("couldn't parse response as JSON: {e}"))?;
 
+    if json["choices"][0]["finish_reason"] == "length" { return Err("Model output exceeded the response budget".into()); }
     let content = json["choices"][0]["message"]["content"]
         .as_str()
         .ok_or_else(|| format!("unexpected response shape: {json}"))?;
@@ -196,7 +184,7 @@ fn request_completion(url: &str, messages: Vec<ChatMessage>) -> Result<String, S
 fn extract_lua(text: &str) -> String {
     if let Some(start) = text.find("```") {
         let after = &text[start + 3..];
-        let after = after.strip_prefix("lua").unwrap_or(after);
+        let after = after.strip_prefix("lua").or_else(|| after.strip_prefix("json")).unwrap_or(after);
         let after = after.strip_prefix('\n').unwrap_or(after);
         if let Some(end) = after.find("```") {
             return after[..end].trim().to_string();
@@ -225,7 +213,8 @@ pub enum PromptKind {
 const RULE_PHRASES: &[&str] = &[
     "when ", "whenever ", " if ", " while ", " during ", "every time",
     "each time", "as long as", "at night", "at day", "at dawn", "at dusk",
-    "at sunset", "at sunrise",
+    "at sunset", "at sunrise", "every ", "each ", "always ", "forever",
+    "keep ", "continuously", "repeatedly",
 ];
 
 /// Imperative verbs that open a one-shot command ("add 100 stone", "spawn
@@ -236,23 +225,23 @@ const INSTANT_FIRST_WORDS: &[&str] = &[
     "add", "give", "grant", "spawn", "summon", "heal", "clear", "remove",
     "delete", "kill", "fill", "place", "drop", "make", "set", "teleport",
     "cast", "poison", "cure", "damage", "boost",
+    "start", "stop", "begin", "end", "move", "advance", "skip", "change",
+    "turn", "reset", "restore", "switch",
 ];
 
-/// Cheap, deterministic heuristic guessing whether `prompt` describes an
-/// ongoing RULE or a one-time INSTANT SPELL -- the same kind of
-/// keyword-based approach `derive_rule_name` already uses, not real
-/// language understanding. Used only to bias which contract the model is
-/// asked to write (see `LlmClient::directive_for`); a wrong guess isn't
-/// fatal, since `App::poll_generation` accepts whatever contract the model
-/// actually produces after at most one corrective retry. Defaults to
-/// `Rule` for anything ambiguous, matching this project's behavior before
-/// instant spells existed (every prompt used to become a rule).
+/// Deterministic intent hint; generated code must honor the selected contract.
+/// Conditional/recurring behavior wins over imperative verbs; ambiguous prose
+/// defaults to a rule. No game effects are hard-coded by this classifier.
 pub fn classify_prompt(prompt: &str) -> PromptKind {
     let lower = format!(" {} ", prompt.trim().to_ascii_lowercase());
     if RULE_PHRASES.iter().any(|p| lower.contains(p)) {
         return PromptKind::Rule;
     }
-    let first_word = lower
+    let command = lower.trim();
+    let command = ["please ", "can you ", "could you ", "would you "]
+        .iter().find_map(|prefix| command.strip_prefix(prefix)).unwrap_or(command);
+    let command = command.strip_prefix("please ").unwrap_or(command);
+    let first_word = command
         .split_whitespace()
         .next()
         .unwrap_or("")
@@ -464,6 +453,19 @@ mod tests {
             classify_prompt("make it rain whenever a player jumps"),
             PromptKind::Rule
         );
+    }
+
+    #[test]
+    fn time_and_weather_commands_are_once_but_triggers_remain_rules() {
+        for prompt in ["start day", "move time do next day", "move time to next day",
+            "start rain", "advance to tomorrow", "skip to dawn", "stop rain",
+            "Please start day", "Could you please start rain?"] {
+            assert_eq!(classify_prompt(prompt), PromptKind::Instant, "{prompt}");
+        }
+        for prompt in ["start rain every day", "start day when I jump",
+            "keep it daytime", "always make it rain", "start rain at night"] {
+            assert_eq!(classify_prompt(prompt), PromptKind::Rule, "{prompt}");
+        }
     }
 
     #[test]

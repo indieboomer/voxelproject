@@ -46,6 +46,7 @@ struct VertexInput {
     @location(6) emission: f32,
     @location(7) wind: f32,
     @location(8) tex_layer: f32,
+    @location(9) glimmer: f32,
 };
 
 struct VertexOutput {
@@ -58,6 +59,7 @@ struct VertexOutput {
     @location(5) reflectivity: f32,
     @location(6) emission: f32,
     @location(7) tex_layer: f32,
+    @location(8) glimmer: f32,
 };
 
 @vertex
@@ -84,6 +86,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.reflectivity = in.reflectivity;
     out.emission = in.emission;
     out.tex_layer = in.tex_layer;
+    out.glimmer = in.glimmer;
     return out;
 }
 
@@ -224,7 +227,34 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // gives the boosted highlight a soft rolloff instead of just clipping.
     let pulse = 0.85 + 0.15 * sin(camera.light_params.z * 2.2 + in.world_pos.x * 0.3 + in.world_pos.z * 0.3);
     let glow = tex.rgb * in.emission * 1.6 * pulse;
-    let reflected = lit + sky_reflection + vec3<f32>(specular) + glow;
+    // Sparse world-anchored pixel facets catch light as the camera moves.
+    // Derivatives fade subpixel detail before it can shimmer at a distance.
+    let face_uv = vec2<f32>(
+        dot(in.world_pos, vec3<f32>(abs(in.normal.z), abs(in.normal.x), abs(in.normal.y))),
+        dot(in.world_pos, vec3<f32>(abs(in.normal.y), abs(in.normal.z), abs(in.normal.x)))
+    ) * 16.0;
+    let footprint = max(length(dpdx(face_uv)), length(dpdy(face_uv)));
+    var glimmer = vec3<f32>(0.0);
+    if in.glimmer > 0.0 {
+        let cell = floor(face_uv);
+        let seed = fract(sin(dot(cell, vec2<f32>(127.1, 311.7))
+            + dot(floor(in.world_pos - in.normal * 0.01), vec3<f32>(17.3, 43.1, 91.7))) * 43758.5453);
+        let phase = seed * 6.283185;
+        let facet = normalize(shading_normal + vec3<f32>(sin(phase), cos(phase * 1.7), sin(phase * 2.3)) * 0.65);
+        let catch_light = pow(max(dot(facet, half_dir), 0.0), 36.0);
+        let twinkle = pow(0.5 + 0.5 * sin(camera.light_params.z * 1.4 + phase), 8.0);
+        let bright = max(tex.r, max(tex.g, tex.b));
+        let chroma = bright - min(tex.r, min(tex.g, tex.b));
+        // Ores: favor colored mineral flecks and bright inclusions over dull host rock.
+        let inclusion = select(1.0, smoothstep(0.05, 0.22, chroma) + smoothstep(0.45, 0.8, bright) * 0.5, in.glimmer < 0.6);
+        let visibility = (1.0 - smoothstep(0.6, 1.8, footprint)) * in.ao;
+        let illumination = sun_intensity * shadow * ndotl + ambient * 0.18 + in.emission * 0.3;
+        let sparkle = step(0.82, seed) * (catch_light * 2.5 + twinkle * 0.55);
+        let sheen = pow(spec_angle, 40.0) * sun_intensity * shadow * ndotl * 0.65;
+        glimmer = mix(vec3<f32>(1.0), tex.rgb, 0.25) * in.glimmer
+            * clamp(inclusion, 0.0, 1.0) * (sparkle * visibility * illumination + sheen);
+    }
+    let reflected = lit + sky_reflection + vec3<f32>(specular) + glow + glimmer;
 
     let dist = distance(in.world_pos, camera.camera_pos.xyz);
     let underwater = camera.weather_fx.z;

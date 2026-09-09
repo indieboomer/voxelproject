@@ -350,6 +350,9 @@ impl Ui {
                             .open(&mut open)
                             .show(ctx, |ui| {
                                 ui.label(format!("Prompt: {}", m.prompt));
+                                if let Some(meaning) = m.source.lines().find_map(|line| line.strip_prefix(crate::llm::intent::SUMMARY_PREFIX)) {
+                                    ui.label(format!("Interpretation: {meaning}"));
+                                }
                                 if let Some(err) = &m.error {
                                     ui.colored_label(egui::Color32::from_rgb(220, 90, 90), err);
                                 }

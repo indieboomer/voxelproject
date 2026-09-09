@@ -1,0 +1,194 @@
+[
+  {
+    "prompt": "players are protected during rain from wolf attack",
+    "condition": "rain",
+    "actor_kind": "wolf",
+    "effect": "protect_players"
+  },
+  {
+    "prompt": "During rain wolves cannot hurt players",
+    "condition": "rain",
+    "actor_kind": "wolf",
+    "effect": "protect_players"
+  },
+  {
+    "prompt": "Rain protects players from wolves",
+    "condition": "rain",
+    "actor_kind": "wolf",
+    "effect": "protect_players"
+  },
+  {
+    "prompt": "Wolves cannot harm players while it rains",
+    "condition": "rain",
+    "actor_kind": "wolf",
+    "effect": "protect_players"
+  },
+  {
+    "prompt": "Players are safe from wolf attacks during rain",
+    "condition": "rain",
+    "actor_kind": "wolf",
+    "effect": "protect_players"
+  },
+  {
+    "prompt": "Whenever it rains, protect players from wolves",
+    "condition": "rain",
+    "actor_kind": "wolf",
+    "effect": "protect_players"
+  },
+  {
+    "prompt": "While rain falls, wolves cannot damage players",
+    "condition": "rain",
+    "actor_kind": "wolf",
+    "effect": "protect_players"
+  },
+  {
+    "prompt": "Rain makes wolves leave adventurers alone",
+    "condition": "rain",
+    "actor_kind": "wolf",
+    "effect": "protect_players"
+  },
+  {
+    "prompt": "if it rains then wolf doesnt attack",
+    "condition": "rain",
+    "actor_kind": "wolf",
+    "effect": "suppress_attacks"
+  },
+  {
+    "prompt": "Wolves stop attacking during rain",
+    "condition": "rain",
+    "actor_kind": "wolf",
+    "effect": "suppress_attacks"
+  },
+  {
+    "prompt": "While it rains, wolves cannot attack anyone",
+    "condition": "rain",
+    "actor_kind": "wolf",
+    "effect": "suppress_attacks"
+  },
+  {
+    "prompt": "Rain stops all wolf attacks",
+    "condition": "rain",
+    "actor_kind": "wolf",
+    "effect": "suppress_attacks"
+  },
+  {
+    "prompt": "Players are protected from goblin attacks during rain",
+    "condition": "rain",
+    "actor_kind": "goblin",
+    "effect": "protect_players"
+  },
+  {
+    "prompt": "Players are protected from stinger attacks during rain",
+    "condition": "rain",
+    "actor_kind": "stinger",
+    "effect": "protect_players"
+  },
+  {
+    "prompt": "Players are protected from stone golem attacks during rain",
+    "condition": "rain",
+    "actor_kind": "stone_golem",
+    "effect": "protect_players"
+  },
+  {
+    "prompt": "Players are protected from sunscorch attacks during rain",
+    "condition": "rain",
+    "actor_kind": "sunscorch",
+    "effect": "protect_players"
+  },
+  {
+    "prompt": "During the night, players are safe from wolf attacks",
+    "condition": "night",
+    "actor_kind": "wolf",
+    "effect": "protect_players"
+  },
+  {
+    "prompt": "During the night, players are safe from goblin attacks",
+    "condition": "night",
+    "actor_kind": "goblin",
+    "effect": "protect_players"
+  },
+  {
+    "prompt": "During the day, players are safe from wolf attacks",
+    "condition": "day",
+    "actor_kind": "wolf",
+    "effect": "protect_players"
+  },
+  {
+    "prompt": "During the day, players are safe from goblin attacks",
+    "condition": "day",
+    "actor_kind": "goblin",
+    "effect": "protect_players"
+  },
+  {
+    "prompt": "When the weather is storm, prevent wolf attacks against players",
+    "condition": "storm",
+    "actor_kind": "wolf",
+    "effect": "protect_players"
+  },
+  {
+    "prompt": "When the weather is mist, prevent wolf attacks against players",
+    "condition": "mist",
+    "actor_kind": "wolf",
+    "effect": "protect_players"
+  },
+  {
+    "prompt": "start day",
+    "condition": "custom",
+    "actor_kind": "none",
+    "effect": "custom"
+  },
+  {
+    "prompt": "start rain",
+    "condition": "custom",
+    "actor_kind": "none",
+    "effect": "custom"
+  },
+  {
+    "prompt": "stop rain",
+    "condition": "custom",
+    "actor_kind": "none",
+    "effect": "custom"
+  },
+  {
+    "prompt": "give me 3 iron in my inventory",
+    "condition": "custom",
+    "actor_kind": "none",
+    "effect": "custom"
+  },
+  {
+    "prompt": "heal me",
+    "condition": "custom",
+    "actor_kind": "none",
+    "effect": "custom"
+  },
+  {
+    "prompt": "spawn 2 chickens",
+    "condition": "custom",
+    "actor_kind": "none",
+    "effect": "custom"
+  },
+  {
+    "prompt": "make it night",
+    "condition": "custom",
+    "actor_kind": "none",
+    "effect": "custom"
+  },
+  {
+    "prompt": "give me 1 crystal in my inventory",
+    "condition": "custom",
+    "actor_kind": "none",
+    "effect": "custom"
+  },
+  {
+    "prompt": "when a player jumps make it rain",
+    "condition": "custom",
+    "actor_kind": "none",
+    "effect": "custom"
+  },
+  {
+    "prompt": "at night sheep hunt players carrying a crystal",
+    "condition": "custom",
+    "actor_kind": "none",
+    "effect": "custom"
+  }
+]

@@ -1,6 +1,6 @@
 # Resources and elemental balance
 
-The catalog contains **82 stackable, placeable resources**: **54 obtainable naturally** (six also craftable), and **28 crafting-only**. This adds 59 resources to the original 23. Air, water, bedrock and the special carried crystal are not counted. No equipment, tools, consumable items, stations or animal harvesting were added.
+The catalog contains **83 stackable, placeable resources**: **55 obtainable naturally** (six also craftable), and **28 crafting-only**. This adds 60 resources to the original 23. Air, water and bedrock are not counted. Surface blue crystals now stack in inventory; harvesting still sets the legacy crystal rule flag. No equipment, tools, consumable items, stations or animal harvesting were added.
 
 ## Play and progression
 
@@ -109,19 +109,20 @@ The automated survey samples **432 chunks across seeds 7, 42 and 2026**, spannin
 
 Legacy enum values and the first 23 inventory positions are unchanged. Old 23-slot and 72-slot JSON inventory arrays are padded with zeroes for the new slots; host and guest accounts retain their counts. Existing saved block edits remain. Unedited terrain is regenerated from the seed, so loading an older world exposes the new deposits and plants even in previously visited terrain. Back up an old save if its exact unedited landscape matters. Network protocol is now **5**: all Steam/Direct participants need the new build.
 
-Gold, diamond and emerald ore extraction yields were increased to better reward their rarity and hardness. Grass now yields Earth and Life; grass tufts and grass terrain have distinct display names. Stone now uses Earth 1 -> Water 1; pumpkin uses Earth 1 -> Water 1 -> Life 2. Redstone and pumpkin are classified as resources, with no new item system. Water and the special carried crystal remain nonstackable; use leaves, reeds or rock salt for extractable Water.
+Gold, diamond and emerald ore extraction yields were increased to better reward their rarity and hardness. Grass now yields Earth and Life; grass tufts and grass terrain have distinct display names. Stone now uses Earth 1 -> Water 1; pumpkin uses Earth 1 -> Water 1 -> Life 2. Redstone and pumpkin are classified as resources, with no new item system. Water remains nonstackable; use leaves, reeds or rock salt for extractable Water.
 
 ## Textures and rebuilding
 
-**62 original procedural pixel textures** were created: 59 expansion resources plus mud, redstone and the special crystal, replacing their old placeholders. These are crisp 16x16 designs upscaled to the existing 64x64 atlas tile size with nearest filtering. Ore flecks, metal bars, woven fibers, plants, stone veins, gems and rune markings distinguish families. Existing texture art is preserved. The same atlas supplies world faces and inventory/formula icons. No required texture is missing. Glass is currently an opaque patterned material block, not a transparent window pane; plants use alpha-cutout crossed quads.
+All **94 resource source PNGs** are now drawn by local procedural generators, including the unused placeholder. The live atlas contains **93 resource face tiles plus the synthetic white tile**. The provenance audit identified 62 previously generated active tiles and 30 legacy active tiles; the legacy art was replaced from scratch, and all locally generated art was regenerated too. Separate log bark/end-grain, basalt faces, grass sides/soil bottom and pumpkin top/side/underside are preserved or corrected. Leaves and plants retain cutout transparency. No external image files are inputs to the generators. Glass remains an opaque patterned material block rather than a window pane.
 
 See [texture inventory](textures/RESOURCE_TEXTURES.md). `target/resource-textures.png` is the generated contact sheet. All new texture art is generated locally from deterministic drawing code; it has no external asset dependency.
 
-The authoring source is `data/resources.json`. Resource edits generate crafting entries while preserving existing creature entries:
+Resource authoring uses `data/resources.json`; base terrain and multi-face texture specifications use `data/base_textures.json`. Resource edits generate crafting entries while preserving existing creature entries:
 
 ```powershell
 python tools/build_resources.py
 python tools/build_atlas.py
+python tools/audit_resource_textures.py
 python tools/gen_world_api.py
 cargo test --offline
 cargo test --offline --features steam

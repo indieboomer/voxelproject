@@ -320,6 +320,10 @@ impl DispatchBudget {
 }
 
 impl ScriptHost {
+    pub(super) fn enqueue_combat_death(&mut self, death: DeathEvent) {
+        self.scheduler.fanout(&self.modules, Event::Death(death));
+    }
+
     pub(super) fn enqueue_tick_events(
         &mut self,
         breaks: &[BlockBreakEvent],

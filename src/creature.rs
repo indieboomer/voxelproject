@@ -528,10 +528,35 @@ pub struct CreatureAudioEvents {
 
 pub type SavedCreature = (u32, u8, [f32; 3], f32, f32);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum BehaviorMode { Auto, Chase, Attack, Ignore }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum BehaviorTarget { Creature(u32), Player(u32) }
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub struct CreatureBehavior {
+    pub aggressive: bool,
+    pub mode: BehaviorMode,
+    pub target: Option<BehaviorTarget>,
+}
+impl CreatureBehavior {
+    fn natural(kind: CreatureKind) -> Self {
+        Self { aggressive: kind.is_hostile(), mode: BehaviorMode::Auto, target: None }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttackPolicy {
+    ProtectPlayer(u32, u8),
+    SuppressCreature(u32),
+}
+
 pub struct Creatures {
     ecs: hecs::World,
     next_id: u32,
     pending_audio: CreatureAudioEvents,
+    pub behaviors: std::collections::BTreeMap<u32, CreatureBehavior>,
+    pub combat_deaths: Vec<DeathEvent>,
+    pub attack_policies: std::collections::BTreeMap<(u64, u64), Vec<AttackPolicy>>,
 }
 
 /// A callback's private creature view and ordered commands. No live ECS
@@ -541,11 +566,13 @@ pub(crate) struct CreatureDraft {
     pub snapshot: Vec<(u32, u8, [f32; 3], f32, f32)>,
     next_id: u32,
     commands: Vec<CreatureCommand>,
+    pub behaviors: std::collections::BTreeMap<u32, CreatureBehavior>,
 }
 
 enum CreatureCommand {
     Spawn(u32, CreatureKind, Vec3, u64),
     Chase(u32, Vec3),
+    Behavior(u32, CreatureBehavior),
     Damage(u32, f32),
     Destroy(u32),
 }
@@ -554,7 +581,7 @@ impl CreatureDraft {
     pub fn new(creatures: &Creatures) -> Self {
         let mut snapshot = creatures.snapshot_with_ids();
         snapshot.sort_by_key(|entry| entry.0);
-        Self { snapshot, next_id: creatures.next_id, commands: Vec::new() }
+        Self { snapshot, next_id: creatures.next_id, commands: Vec::new(), behaviors: creatures.behaviors.clone() }
     }
 
     pub fn spawn(&mut self, kind: CreatureKind, pos: Vec3, seed: u64) -> Option<u32> {
@@ -564,12 +591,26 @@ impl CreatureDraft {
         let id = self.next_id;
         self.next_id = id.checked_add(1)?;
         self.snapshot.push((id, kind.to_u8(), pos.to_array(), kind.max_health(), kind.max_health()));
+        self.behaviors.insert(id, CreatureBehavior::natural(kind));
         self.commands.push(CreatureCommand::Spawn(id, kind, pos, seed));
         Some(id)
     }
 
+    pub fn behavior(&self, id: u32) -> Option<CreatureBehavior> {
+        self.snapshot.iter().find(|c| c.0 == id)?;
+        self.behaviors.get(&id).copied()
+    }
+    pub fn set_behavior(&mut self, id: u32, state: CreatureBehavior) -> bool {
+        if self.behavior(id).is_none() { return false; }
+        self.behaviors.insert(id, state);
+        self.commands.push(CreatureCommand::Behavior(id, state));
+        true
+    }
     pub fn chase(&mut self, id: u32, target: Vec3) {
-        if self.snapshot.iter().any(|entry| entry.0 == id) {
+        if let Some(mut state) = self.behavior(id) {
+            state.mode = BehaviorMode::Auto;
+            state.target = None;
+            self.set_behavior(id, state);
             self.commands.push(CreatureCommand::Chase(id, target));
         }
     }
@@ -600,6 +641,15 @@ impl CreatureDraft {
                     let actual = creatures.spawn_one(kind, pos, seed);
                     debug_assert_eq!(actual, id, "callbacks commit before simulation advances");
                 }
+                CreatureCommand::Behavior(id, state) => {
+                    let previous = creatures.behaviors.insert(id, state);
+                    let changed = previous.map_or(true, |old| old.mode != state.mode || old.aggressive != state.aggressive);
+                    if matches!(state.mode, BehaviorMode::Ignore | BehaviorMode::Auto) {
+                        for (_, (cid, wander, animation)) in creatures.ecs.query_mut::<(&CreatureId, &mut Wander, &mut AttackAnimTimer)>() {
+                            if cid.0 == id && (changed || wander.hunting) { wander.hunting = false; wander.timer = 0.0; animation.0 = 0.0; }
+                        }
+                    }
+                }
                 CreatureCommand::Chase(id, target) => { creatures.set_chase_target(id, target); }
                 CreatureCommand::Damage(id, amount) => { creatures.damage(id, amount); }
                 CreatureCommand::Destroy(id) => { creatures.destroy(id); }
@@ -614,6 +664,9 @@ impl Creatures {
             ecs: hecs::World::new(),
             next_id: 1,
             pending_audio: CreatureAudioEvents::default(),
+            behaviors: Default::default(),
+            combat_deaths: Vec::new(),
+            attack_policies: Default::default(),
         }
     }
 
@@ -653,6 +706,7 @@ impl Creatures {
         } else {
             f32::INFINITY
         });
+        self.behaviors.insert(id, CreatureBehavior::natural(kind));
         self.ecs.spawn((
             Pos(pos),
             Wander {
@@ -728,10 +782,12 @@ impl Creatures {
         // loop, rather than pushed to it directly, since the loop already
         // holds `self.ecs` borrowed via `query_mut`.
         let mut step_events = Vec::new();
+        let mut creature_hits = Vec::new();
+        let targets = self.snapshot_with_ids();
         let mut attack_sound_events = Vec::new();
         let mut ambient_events = Vec::new();
 
-        for (_, (pos, wander, kind, rng, facing, cooldown, atk_anim, anim, chase, steps, ambient_call)) in
+        for (_, (pos, wander, kind, rng, facing, cooldown, atk_anim, anim, chase, steps, ambient_call, cid)) in
             self.ecs.query_mut::<(
                 &mut Pos,
                 &mut Wander,
@@ -744,6 +800,7 @@ impl Creatures {
                 &mut ChaseState,
                 &mut Steps,
                 &mut AmbientCall,
+                &CreatureId,
             )>()
         {
             cooldown.0 = (cooldown.0 - dt).max(0.0);
@@ -760,11 +817,21 @@ impl Creatures {
                     + rng.next_f32() * (AMBIENT_CALL_INTERVAL_MAX - AMBIENT_CALL_INTERVAL_MIN);
             }
 
-            let mut aggro = if kind.0.is_hostile() && chase.giveup_cooldown <= 0.0 {
+            let state = self.behaviors.get_mut(&cid.0).unwrap();
+            let detection_range = if kind.0.is_hostile() { kind.0.aggro_radius() } else { 16.0 };
+            let attack_range = if kind.0.is_hostile() { kind.0.attack_range() } else { 1.5 };
+            let explicit = state.target.and_then(|target| match target {
+                BehaviorTarget::Creature(id) => targets.iter().find(|c| c.0 == id && id != cid.0)
+                    .map(|c| (target, Vec3::from_array(c.2))),
+                BehaviorTarget::Player(id) => player_targets.iter().find(|p| p.0 == id).map(|p| (target, p.1)),
+            });
+            if state.target.is_some() && explicit.is_none() { state.target = None; }
+            let mut aggro = if state.mode == BehaviorMode::Auto && state.aggressive
+                && !wander.hunting && chase.giveup_cooldown <= 0.0 {
                 player_targets
                     .iter()
-                    .map(|&(id, p)| (id, p, pos.0.distance(p)))
-                    .filter(|&(_, _, dist)| dist <= kind.0.aggro_radius())
+                    .map(|&(id, p)| (BehaviorTarget::Player(id), p, pos.0.distance(p)))
+                    .filter(|&(_, _, dist)| dist <= detection_range)
                     .min_by(|a, b| a.2.total_cmp(&b.2))
             } else {
                 None
@@ -787,6 +854,13 @@ impl Creatures {
                 }
             }
 
+            if matches!(state.mode, BehaviorMode::Attack | BehaviorMode::Chase) {
+                aggro = explicit.map(|(target, p)| (target, p, pos.0.distance(p)));
+            }
+            if state.mode == BehaviorMode::Ignore && wander.hunting {
+                wander.hunting = false;
+                wander.timer = 0.0;
+            }
             let mut moving = false;
             // Whether this tick's movement should read as the elevated
             // "run" pace -- either built-in aggro-chasing, or Lua-`chase()`d
@@ -812,10 +886,18 @@ impl Creatures {
                     fast = true;
                     moved = step;
                 }
-                if dist <= kind.0.attack_range() && cooldown.0 <= 0.0 {
-                    attacks.push((player_id, kind.0.attack_damage()));
+                let protected = self.attack_policies.values().flatten().any(|policy| match *policy {
+                    AttackPolicy::SuppressCreature(id) => id == cid.0,
+                    AttackPolicy::ProtectPlayer(id, species) => player_id == BehaviorTarget::Player(id) && kind.0.to_u8() == species,
+                });
+                if !protected && state.mode != BehaviorMode::Chase && dist <= attack_range && cooldown.0 <= 0.0 {
+                    let damage = kind.0.attack_damage().max(2.0);
+                    match player_id {
+                        BehaviorTarget::Player(id) => attacks.push((id, damage)),
+                        BehaviorTarget::Creature(id) => creature_hits.push((id, damage)),
+                    }
                     attack_sound_events.push((kind.0, pos.0));
-                    cooldown.0 = kind.0.attack_cooldown();
+                    cooldown.0 = if kind.0.is_hostile() { kind.0.attack_cooldown() } else { 2.0 };
                     atk_anim.0 = ATTACK_ANIM_DURATION.min(kind.0.attack_cooldown());
                 }
                 // Force an immediate retarget (see the `timer <= 0.0` check
@@ -888,6 +970,9 @@ impl Creatures {
             }
         }
 
+        for (id, amount) in creature_hits {
+            if let Some(death) = self.damage(id, amount) { self.combat_deaths.push(death); }
+        }
         self.pending_audio.attacks.extend(attack_sound_events);
         self.pending_audio.steps.extend(step_events);
         self.pending_audio.ambient_calls.extend(ambient_events);
@@ -999,6 +1084,7 @@ impl Creatures {
         }
         if let Some((entity, event)) = target {
             let _ = self.ecs.despawn(entity);
+            self.behaviors.remove(&id);
             self.pending_audio.deaths.push((event.kind, event.pos));
             return Some(event);
         }
@@ -1023,6 +1109,7 @@ impl Creatures {
         }
         if let Some((entity, event)) = target {
             let _ = self.ecs.despawn(entity);
+            self.behaviors.remove(&id);
             self.pending_audio.deaths.push((event.kind, event.pos));
             return Some(event);
         }

@@ -76,6 +76,7 @@ impl Fixture {
             time: 0.25,
             resources,
             players: vec![PlayerSnapshot {
+                resources: [0; COLLECTIBLE_BLOCKS.len()],
                 id: HOST_PLAYER_ID,
                 pos: Vec3::ZERO,
                 carrying_crystal: false,
@@ -428,4 +429,45 @@ fn a_failed_instant_spell_does_not_dispatch_phantom_deaths() {
     assert_eq!(outcome.crashes.len(), 1);
     assert!(outcome.broadcasts.is_empty());
     assert_eq!(fixture.creatures.snapshot_with_ids().len(), 3);
+}
+
+#[test]
+fn guest_inventory_queries_are_transactional_and_distinguish_absence_from_invalid() {
+    let mut f = Fixture::new();
+    let mut guest = f.players[0];
+    guest.id = 7;
+    let crystal = COLLECTIBLE_BLOCKS.iter().position(|b| *b == BlockType::Crystal).unwrap();
+    guest.resources[crystal] = 2;
+    f.players.push(guest);
+    let mut m = module("on_cast", r#"
+        assert(api.get_resource_count(7, 'crystal') == 2)
+        assert(api.has_resource(7, 'crystal'))
+        assert(api.has_item(7, 'crystal', 3) == false)
+        assert(api.has_resource(7, 'iron') == false)
+        assert(api.has_resource(99, 'crystal') == nil)
+        assert(api.has_item(7, 'water') == nil)
+        assert(api.has_item(7, 'crystal', 0) == nil)
+        local inv = api.get_inventory(7)
+        assert(inv.crystal == 2 and inv.iron == 0)
+        inv.crystal = 1000
+        assert(api.get_resource_count(7, 'crystal') == 2)
+        assert(api.take_item(7, 'crystal', 2))
+        assert(api.has_resource(7, 'crystal') == false)
+        assert(not api.take_item(7, 'crystal', 1))
+        assert(api.give_item(7, 'crystal', 4))
+        assert(api.has_item(7, 'crystal', 4))
+        assert(api.get_inventory(7).crystal == 4)
+        assert(api.get_resource_count(0, 'crystal') == 0)
+    "#);
+    let (out, _) = f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_none(), "{:?}", m.error);
+    assert_eq!(out.player_effects, [
+        PlayerEffect::TakeItem { player_id: 7, block: BlockType::Crystal, amount: 2 },
+        PlayerEffect::GiveItem { player_id: 7, block: BlockType::Crystal, amount: 4 },
+    ]);
+    let mut failed=module("on_cast", "api.take_item(7, 'crystal', 2); error('rollback')");
+    let (out, _) = f.invoke(&mut failed, "on_cast");
+    assert!(failed.error.is_some());
+    assert!(out.player_effects.is_empty());
+    assert_eq!(f.players[1].resources[crystal], 2);
 }

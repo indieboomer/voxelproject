@@ -1,0 +1,130 @@
+{
+  "grass": {
+    "pattern": "grass",
+    "color": "#5d8d38"
+  },
+  "grass_block_side": {
+    "pattern": "grass_side",
+    "color": "#5d8d38"
+  },
+  "soil": {
+    "pattern": "soil",
+    "color": "#694c31"
+  },
+  "sand": {
+    "pattern": "sand",
+    "color": "#d3bd81"
+  },
+  "stone": {
+    "pattern": "stone",
+    "color": "#8d918b"
+  },
+  "cobblestone": {
+    "pattern": "cobble",
+    "color": "#737c75"
+  },
+  "bedrock": {
+    "pattern": "bedrock",
+    "color": "#45474c"
+  },
+  "basalt_top": {
+    "pattern": "basalt_top",
+    "color": "#454452"
+  },
+  "basalt_side": {
+    "pattern": "basalt_side",
+    "color": "#454452"
+  },
+  "bricks": {
+    "pattern": "bricks",
+    "color": "#b7785b"
+  },
+  "water": {
+    "pattern": "water",
+    "color": "#4b8b9e"
+  },
+  "short_grass": {
+    "pattern": "short_grass",
+    "color": "#82a954"
+  },
+  "pumpkin_side": {
+    "pattern": "pumpkin_side",
+    "color": "#c8893d"
+  },
+  "pumpkin_top": {
+    "pattern": "pumpkin_top",
+    "color": "#c8893d"
+  },
+  "pumpkin_bottom": {
+    "pattern": "pumpkin_bottom",
+    "color": "#c8893d"
+  },
+  "placeholder": {
+    "pattern": "placeholder",
+    "color": "#82769a"
+  },
+  "oak_log": {
+    "pattern": "bark",
+    "color": "#806340"
+  },
+  "oak_log_top": {
+    "pattern": "rings",
+    "color": "#ba9661"
+  },
+  "oak_leaves": {
+    "pattern": "leaves",
+    "color": "#639048"
+  },
+  "spruce_log": {
+    "pattern": "bark",
+    "color": "#594c3c"
+  },
+  "spruce_log_top": {
+    "pattern": "rings",
+    "color": "#a4885b"
+  },
+  "spruce_leaves": {
+    "pattern": "leaves",
+    "color": "#3e7559"
+  },
+  "birch_log": {
+    "pattern": "bark",
+    "color": "#d1cbbb"
+  },
+  "birch_log_top": {
+    "pattern": "rings",
+    "color": "#cfb480"
+  },
+  "birch_leaves": {
+    "pattern": "leaves",
+    "color": "#80a75a"
+  },
+  "cherry_log": {
+    "pattern": "bark",
+    "color": "#79565b"
+  },
+  "cherry_log_top": {
+    "pattern": "rings",
+    "color": "#c58c7f"
+  },
+  "cherry_leaves": {
+    "pattern": "leaves",
+    "color": "#c78eaa"
+  },
+  "gold_ore": {
+    "pattern": "ore",
+    "color": "#e3bc55"
+  },
+  "copper_ore": {
+    "pattern": "ore",
+    "color": "#c48760"
+  },
+  "diamond_ore": {
+    "pattern": "ore",
+    "color": "#9bdcdd"
+  },
+  "emerald_ore": {
+    "pattern": "ore",
+    "color": "#5dc580"
+  }
+}

@@ -16,6 +16,7 @@ pub struct CraftingSave {
     // Nicknames are the existing session identity; there are no accounts in the MVP.
     pub guests: std::collections::HashMap<String, crate::crafting::Account>,
     pub creatures: Option<Vec<crate::creature::SavedCreature>>,
+    pub behaviors: std::collections::BTreeMap<u32, crate::creature::CreatureBehavior>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SaveV2 {

@@ -746,17 +746,6 @@
   "compositions": [
     {
       "kind": "block",
-      "id": "crystal",
-      "elements": [
-        1,
-        1,
-        1,
-        1,
-        1
-      ]
-    },
-    {
-      "kind": "block",
       "id": "water",
       "elements": [
         0,
@@ -1753,6 +1742,17 @@
         1,
         0,
         1,
+        1
+      ]
+    },
+    {
+      "kind": "resource",
+      "id": "crystal",
+      "elements": [
+        1,
+        0,
+        2,
+        0,
         1
       ]
     }

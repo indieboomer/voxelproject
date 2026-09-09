@@ -35,8 +35,7 @@ pub enum BlockType {
     // (see player.rs's mud slow-down, creature.rs/scripting.rs's redstone
     // heal-near-creatures, and the crystal carry/storm-summoner rules).
     // Their pixel tiles are generated alongside the expanded resource set.
-    /// Pickup-able: breaking it sets the player's `carrying_crystal` flag
-    /// instead of going to the hotbar. Rare natural spawn + host-placeable.
+    /// Stackable surface resource; harvesting also sets the legacy rule flag.
     Crystal,
     /// Passive effect (see `player.rs`): standing on mud slows movement.
     /// Placed by rules via `api.replace_block`, e.g. "rain turns soil to
@@ -156,11 +155,8 @@ pub struct BlockDef {
 
 /// Block types the player can gather (by breaking) and place again, shown
 /// in the Resources HUD panel; hotbar keys 1-8 select the first eight.
-/// Air, Water, Bedrock, and Crystal are deliberately excluded: the first
-/// three can't be broken into a carryable resource, and Crystal is a
-/// special one-shot pickup tracked via `Player::carrying_crystal` instead
-/// of a stackable material.
-pub const COLLECTIBLE_BLOCKS: [BlockType; 82] = [
+/// Air, Water, and Bedrock cannot be gathered. Keep slots append-only for saves.
+pub const COLLECTIBLE_BLOCKS: [BlockType; 83] = [
     BlockType::Grass,
     BlockType::Soil,
     BlockType::Stone,
@@ -243,6 +239,7 @@ pub const COLLECTIBLE_BLOCKS: [BlockType; 82] = [
     BlockType::Glowcap,
     BlockType::ThornBush,
     BlockType::DryShrub,
+    BlockType::Crystal,
 ];
 
 impl BlockType {
@@ -337,6 +334,21 @@ impl BlockType {
     /// like water and air.
     pub fn is_solid(self) -> bool {
         !matches!(self, BlockType::Air | BlockType::Water) && !self.def().only_on_top
+    }
+
+    /// Pixel glimmer: gems are strongest; ore flecks use the masked low range.
+    pub fn glimmer(self) -> f32 {
+        use BlockType::*;
+        match self {
+            Crystal | Diamond | Emerald | Ruby | Sapphire | Quartz | Amethyst
+            | Moonstone | EnchantedGlass | Runestone => 1.0,
+            IronOre | CopperOre | TinOre | SilverOre | GoldOre | DiamondOre
+            | EmeraldOre | RubyOre | SapphireOre | MithrilOre => 0.45,
+            Iron | Copper | Tin | Silver | Gold | Steel | Bronze | Mithril
+            | MoonSilver => 0.75,
+            Glass | Obsidian | Amber | RockSalt => 0.65,
+            _ => 0.0,
+        }
     }
 
     /// How strongly a surface picks up sky reflections and a sun specular

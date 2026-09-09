@@ -5,3 +5,5 @@ Cargo.lock.bak
 
 /settings.json
 /settings.json.tmp
+
+/tools/__pycache__/

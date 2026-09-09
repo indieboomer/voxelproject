@@ -1,0 +1,389 @@
+{
+  "version": 1,
+  "generators": {
+    "tools/build_resources.py": "8ba3d38ea926bfdc259f12a9cf0349d5296690e33d35e42ecf17d60c664a1058",
+    "tools/build_base_textures.py": "c7b4190779d3df7fa5828a7487124bcf311d73e8587249edce2af7e84e9782f9",
+    "tools/build_atlas.py": "13d7c1d012cea778e090f5e035709582d1e627c8110cac56ef9bf1e5372119d4",
+    "tools/audit_resource_textures.py": "be3be6eedbf9b4e463804fbcb454f22ab2443f895511f5b836ce852313098814",
+    "data/resources.json": "640f4f176fb06590ddb54e9d4f50b14b87577a3c4b72764ca0a5adca728276d0",
+    "data/base_textures.json": "96986e670461497606204f98c8e109b4c5f169409feb8c29e1fca11769277cb4"
+  },
+  "files": {
+    "textures/amber.png": {
+      "sha256": "5efe4fabd4b4d133ba189ecc548514a5d78ea5f7906b6ba338fc75e5de4fce6b",
+      "origin": "local_procedural_generation"
+    },
+    "textures/amethyst.png": {
+      "sha256": "a4dd6f4de0c2173cc6e29c64f2013de58f9baf0317c8afcfc4f915fc2b68f94a",
+      "origin": "local_procedural_generation"
+    },
+    "textures/ash.png": {
+      "sha256": "4b7156c5a36ce7b228f66865c75cf64040b611d54cdba6aaf6efde01cf6d8192",
+      "origin": "local_procedural_generation"
+    },
+    "textures/basalt_side.png": {
+      "sha256": "744a702b8054fdd4a01dd4502ff97e30826a7d66cc84f52e61fa49a3144c4494",
+      "origin": "local_procedural_generation"
+    },
+    "textures/basalt_top.png": {
+      "sha256": "2cebd67cf4f932bbd3fb10f17fc4912e7a572eb0e4928a599834d8a7f137d973",
+      "origin": "local_procedural_generation"
+    },
+    "textures/bedrock.png": {
+      "sha256": "c3a4ef16eaf0dabe3a2c65613283dfbae681626d5bbf1c819a18669becff317c",
+      "origin": "local_procedural_generation"
+    },
+    "textures/birch_leaves.png": {
+      "sha256": "b48e69aa7f502f13b3fa1eba7367ea4902ee68b346ec4fd67f4c41f9b2d99d2b",
+      "origin": "local_procedural_generation"
+    },
+    "textures/birch_log.png": {
+      "sha256": "17cac04e19f700b0ed06cc49eb52301d78e850d8deb8874b32bcbb7ed6e7f17f",
+      "origin": "local_procedural_generation"
+    },
+    "textures/birch_log_top.png": {
+      "sha256": "136b1418d1bb7b963ba0683dac0d3ee54fd8fdb669f137795925ddcd114e9675",
+      "origin": "local_procedural_generation"
+    },
+    "textures/bluebell.png": {
+      "sha256": "10c42689885d3d0d3559a4cf90f3cc8473cebee1b02ff12f70e24be500d872e3",
+      "origin": "local_procedural_generation"
+    },
+    "textures/bricks.png": {
+      "sha256": "30e37b57f0d402e1826b187ebc5d95824922ef4a029c31910b141c3055f93bed",
+      "origin": "local_procedural_generation"
+    },
+    "textures/bronze.png": {
+      "sha256": "1e3cb8bd0c86a1fdf42eb7b6723712320e66881beb4824b58b28b31dd2dcfa0c",
+      "origin": "local_procedural_generation"
+    },
+    "textures/brown_mushroom.png": {
+      "sha256": "0d0a91cbbca5186b814235f3318a8480a6f6768131c951eb3924d19f3b9764b7",
+      "origin": "local_procedural_generation"
+    },
+    "textures/cattail.png": {
+      "sha256": "1cee73b7a93bb4dd8da691d5ac11ec7d3617918e6f645f7b59e7f8bafe9cb3a5",
+      "origin": "local_procedural_generation"
+    },
+    "textures/ceramic.png": {
+      "sha256": "801cd5715bf87e78a15155f9596b53f129cb2135db3b7f349f88e1685623548b",
+      "origin": "local_procedural_generation"
+    },
+    "textures/charcoal.png": {
+      "sha256": "feb7fe04c3e8f30bb2fae44dcf5f931ca41791132f0a25146b4ca66a8dc549d3",
+      "origin": "local_procedural_generation"
+    },
+    "textures/cherry_leaves.png": {
+      "sha256": "51f45185b6621a7a2725a717d030fc1cb57df40366bdf18dd42a191cf35dd4dc",
+      "origin": "local_procedural_generation"
+    },
+    "textures/cherry_log.png": {
+      "sha256": "ad6e1e352c6b5093e9bd21e9655cab7060334e4dc93ef4dc5d9c8e396ea6d26f",
+      "origin": "local_procedural_generation"
+    },
+    "textures/cherry_log_top.png": {
+      "sha256": "25a78386422450065411246bb3012cb5107a983804f129cb1e297ae17a87da31",
+      "origin": "local_procedural_generation"
+    },
+    "textures/clay.png": {
+      "sha256": "556ab7cddaaa14e98e47cc162328ecf347133c855068722b32ed6df0cb6eb330",
+      "origin": "local_procedural_generation"
+    },
+    "textures/cloth.png": {
+      "sha256": "dbfcb261e79b0571b874da287cc4cc8324fc17d4152cc76039079640a09e3de9",
+      "origin": "local_procedural_generation"
+    },
+    "textures/clover.png": {
+      "sha256": "8e85f7982f3dc4f94258e2b8e2398c9428fe4c0fb57692221c0bed8821e6399b",
+      "origin": "local_procedural_generation"
+    },
+    "textures/coal.png": {
+      "sha256": "d415afb8ecfdf417b46a79dae9a1c8b86e1d4dcd4eb6f381df9da4599abc9ca5",
+      "origin": "local_procedural_generation"
+    },
+    "textures/cobblestone.png": {
+      "sha256": "458109d24f10ff8f0d732eb16824c32d56a08ec050804cfe190c16e6789ccb1b",
+      "origin": "local_procedural_generation"
+    },
+    "textures/copper.png": {
+      "sha256": "379ed774d0cd664d5b282ee7bd7ee769dc103a83a9fdc264f2d303fa3c9cbcd9",
+      "origin": "local_procedural_generation"
+    },
+    "textures/copper_ore.png": {
+      "sha256": "9543ba25c3166c5f7621c432d81c8a64e18015d11907f27a73c9a9aa3a775d61",
+      "origin": "local_procedural_generation"
+    },
+    "textures/crystal.png": {
+      "sha256": "f0fdd114a1f0c27c43afeebbef6edac0ab4bf00e8932aed52417a30058d1ea7a",
+      "origin": "local_procedural_generation"
+    },
+    "textures/crystal_dust.png": {
+      "sha256": "ad627c5e2a57bdec1bb69c17fa8e852efa9fc92a8e91eb1a1750160e852fa4bb",
+      "origin": "local_procedural_generation"
+    },
+    "textures/diamond.png": {
+      "sha256": "f4de2686f48aee08af0f05ef20325fb284efe8082b60ec91fa2c55305a7547a4",
+      "origin": "local_procedural_generation"
+    },
+    "textures/diamond_ore.png": {
+      "sha256": "d330930edf01744f923ea92de2a058f82f9781083c2ceeadd2521c67b0b2fea0",
+      "origin": "local_procedural_generation"
+    },
+    "textures/dry_shrub.png": {
+      "sha256": "5c22cc6292040e8f2a869ecfcf89f98fa65870fe1e7d81b74310967423aae039",
+      "origin": "local_procedural_generation"
+    },
+    "textures/emerald.png": {
+      "sha256": "a76e498360fab37fd2e06cde14fafecb2fe591c241cbae37b5719e8447521616",
+      "origin": "local_procedural_generation"
+    },
+    "textures/emerald_ore.png": {
+      "sha256": "d2f95813885c51149b300b46f78ddca75ca5a458d90ff4514b1b903bf0cc043f",
+      "origin": "local_procedural_generation"
+    },
+    "textures/enchanted_glass.png": {
+      "sha256": "0649956dcef036c2f35e303b780804a029cf70fc46b8a1bfc2ad2c48f75e764d",
+      "origin": "local_procedural_generation"
+    },
+    "textures/fern.png": {
+      "sha256": "a2bb68ce930e624168f60849f5ce73eb5ad341d1bcbb1a1998da6c34094f125a",
+      "origin": "local_procedural_generation"
+    },
+    "textures/flax.png": {
+      "sha256": "53575c18e5e1351415bc2832a393db690a46b9e6aead525fd1fe646926474406",
+      "origin": "local_procedural_generation"
+    },
+    "textures/glass.png": {
+      "sha256": "b62a9017eaa80bcfef43821dc1e02f75d124a104b6b37619055eb3e9f0ebcf31",
+      "origin": "local_procedural_generation"
+    },
+    "textures/glowcap.png": {
+      "sha256": "91e442d4bf21871fcfa97bbe8f33ddf41e5ed2dfce6e9059db4d55dc8b413026",
+      "origin": "local_procedural_generation"
+    },
+    "textures/gold.png": {
+      "sha256": "46f61568cc9163ec720bb014479a89ed55afd68f42ca71ca3be864b3baeb1f8e",
+      "origin": "local_procedural_generation"
+    },
+    "textures/gold_ore.png": {
+      "sha256": "946e977baf38744c63d6459af0407f4263bf81c7f5de6b33cbdcf4da33d24782",
+      "origin": "local_procedural_generation"
+    },
+    "textures/granite.png": {
+      "sha256": "4a1c650e076a902b2d3ce478b16fad4f09832282f3a8a1bfef173441e7ec4c19",
+      "origin": "local_procedural_generation"
+    },
+    "textures/grass.png": {
+      "sha256": "190d7dd35466816906fca897b24b1c5cfdc0280f0d19d59a9e8e925150d9df77",
+      "origin": "local_procedural_generation"
+    },
+    "textures/grass_block_side.png": {
+      "sha256": "0acf2107b8c77bfed3906943e8c683bf8fd4976e56723c6b47935591fdb29024",
+      "origin": "local_procedural_generation"
+    },
+    "textures/iron.png": {
+      "sha256": "0126e3e10ccc2fb71d9c0d6ab12068136106ebc3ec0dbb243cc23d5c6aee1359",
+      "origin": "local_procedural_generation"
+    },
+    "textures/iron_ore.png": {
+      "sha256": "c743105fd7d6cd27774ddb7ae5bb57ac83d03588fe08298d57b860b276e76862",
+      "origin": "local_procedural_generation"
+    },
+    "textures/lavender.png": {
+      "sha256": "97f10cc73b7969d62d564ab67caf203b1b358a6af78790e36bf792d5d0c3fd7e",
+      "origin": "local_procedural_generation"
+    },
+    "textures/lime.png": {
+      "sha256": "727bfdf5d0f77fb40cba87a855bf851463458146e10a96754b041cc284e9c4a9",
+      "origin": "local_procedural_generation"
+    },
+    "textures/limestone.png": {
+      "sha256": "1063133fdbc3fe48f673e462147ed81bacde09d6c2f5a1aaaede5b4ae96531d1",
+      "origin": "local_procedural_generation"
+    },
+    "textures/marble.png": {
+      "sha256": "29884190daa29c5ac2191a8348b7b2cef8d867ab26f3360059a9dddb552095fe",
+      "origin": "local_procedural_generation"
+    },
+    "textures/mithril.png": {
+      "sha256": "adaedc58d94dfcc7f87809cc1364b1320f5a65bad1258e7c8d3f02d331abbc51",
+      "origin": "local_procedural_generation"
+    },
+    "textures/mithril_ore.png": {
+      "sha256": "7face61871a77329ddcc16a2dfb3eb03e35c8b6766c4461efae10002bfe7d1fc",
+      "origin": "local_procedural_generation"
+    },
+    "textures/moon_silver.png": {
+      "sha256": "84544869efa5f6328bcd449d85ffdec74463beb7ecb33f5c3d7c66f99bd1fb95",
+      "origin": "local_procedural_generation"
+    },
+    "textures/moonstone.png": {
+      "sha256": "e012fa4ed45abd986fc9b9fe1889057bc110b51b6d386e07c62594e63728eed2",
+      "origin": "local_procedural_generation"
+    },
+    "textures/mortar.png": {
+      "sha256": "9da976975fcc86c0be109bd83bc89861d1085e8e838ab35137d6585bc8036da0",
+      "origin": "local_procedural_generation"
+    },
+    "textures/mud.png": {
+      "sha256": "8c52862d26447ec2a3d3cc997714c37f422a090a95384087a94c086e6f996216",
+      "origin": "local_procedural_generation"
+    },
+    "textures/oak_leaves.png": {
+      "sha256": "e46cde78a6e939ca9f6547dd4664fdcafd56f9284cac071cb09edfa283402f10",
+      "origin": "local_procedural_generation"
+    },
+    "textures/oak_log.png": {
+      "sha256": "1a1af78a1d54edc92c50470f629689cf738aebd3f89a7ef6a7e47547bfab19d2",
+      "origin": "local_procedural_generation"
+    },
+    "textures/oak_log_top.png": {
+      "sha256": "12e854136432ab992e2765aa43215257e8613d76e05793978344af38bba8f747",
+      "origin": "local_procedural_generation"
+    },
+    "textures/obsidian.png": {
+      "sha256": "bfad773a9ef3c882edaee0fac42a51467281c155cc253c1d1e9cd18918d722cc",
+      "origin": "local_procedural_generation"
+    },
+    "textures/peat.png": {
+      "sha256": "617003554ac9770e1e57131a8fc9aca366497c4e32eabee2c307d39eb445306b",
+      "origin": "local_procedural_generation"
+    },
+    "textures/placeholder.png": {
+      "sha256": "d216b604a6ae69ecd8df79bccec8bd4ad8f8a3b80267fd813474a98673b3686b",
+      "origin": "local_procedural_generation"
+    },
+    "textures/planks.png": {
+      "sha256": "434360614c9c3206da52766a73cdae67f3f516854f1d92a00fa8623f5037de3f",
+      "origin": "local_procedural_generation"
+    },
+    "textures/plant_fiber.png": {
+      "sha256": "d083774e12a63f421296eccaf6f4943fcbe11590afb0e6c7e1b20978a56e4c1e",
+      "origin": "local_procedural_generation"
+    },
+    "textures/pumpkin_bottom.png": {
+      "sha256": "552908da03621a8065dd63d43d63f08962cf80cc97fca07a1d9422395ffa6cf8",
+      "origin": "local_procedural_generation"
+    },
+    "textures/pumpkin_side.png": {
+      "sha256": "64b25788e7800fb0a24e15589e2240fad7536039299a75f24224a9290060a114",
+      "origin": "local_procedural_generation"
+    },
+    "textures/pumpkin_top.png": {
+      "sha256": "74f2d15b20f3649d091a4feadc550e70dbdd9773ada2a3b76cbebde7449e3ba5",
+      "origin": "local_procedural_generation"
+    },
+    "textures/quartz.png": {
+      "sha256": "93a4fd0c802e15ccd19934c4b3f061071032951d4b0c0e925e51e89ef4067841",
+      "origin": "local_procedural_generation"
+    },
+    "textures/red_poppy.png": {
+      "sha256": "29472e8454e26bbd6ed82c12a4b21fa0d653d5c7066c03ebcdfeaa3f7be5f336",
+      "origin": "local_procedural_generation"
+    },
+    "textures/redstone.png": {
+      "sha256": "6cfd8932f621725bd68a6b351bb4e52d844cd52353b6a8e09727069dac37d706",
+      "origin": "local_procedural_generation"
+    },
+    "textures/reeds.png": {
+      "sha256": "6d542975d730ee21e22cebbff34caa5351a6e0896e51a5ef58860bd134ac6fbd",
+      "origin": "local_procedural_generation"
+    },
+    "textures/resin.png": {
+      "sha256": "2f6a6ebbdc9086e165f92dcf949b88e05dce8524f5ad4abbe7b5de4ff86bf41d",
+      "origin": "local_procedural_generation"
+    },
+    "textures/rock_salt.png": {
+      "sha256": "733b5bf1ae873a90be196f71d1d26b036f3098e804a684825aa01f1c329825f6",
+      "origin": "local_procedural_generation"
+    },
+    "textures/ruby.png": {
+      "sha256": "fa06ed6dd09603f56fe965e6498ba4c4191fb5e0101994955c03135c2a37385b",
+      "origin": "local_procedural_generation"
+    },
+    "textures/ruby_ore.png": {
+      "sha256": "210e5347e6428a3bd021ed22026f374380e4469f6503945b53470372fdfa9774",
+      "origin": "local_procedural_generation"
+    },
+    "textures/runestone.png": {
+      "sha256": "fa404484bd19df31f0c135716230e3d6774c47a1bea842b0bc7e01ef89a328b4",
+      "origin": "local_procedural_generation"
+    },
+    "textures/sand.png": {
+      "sha256": "05e365e9cf345b40b63d62c7183dc2bdb37bb9725b9eead412fa6442aa32c99c",
+      "origin": "local_procedural_generation"
+    },
+    "textures/sapphire.png": {
+      "sha256": "254934007e4437632027da904ff1dc60ca98c6f91d90ad5b2029275ae1e5e881",
+      "origin": "local_procedural_generation"
+    },
+    "textures/sapphire_ore.png": {
+      "sha256": "a51780623e1b045254bd72920ba809f118e5fca1ad603c9e9f944eed150a9f11",
+      "origin": "local_procedural_generation"
+    },
+    "textures/short_grass.png": {
+      "sha256": "e5b79855eb0d15bf5f90121224d8d335c17d1f92f17302d9e748cc719d7f3676",
+      "origin": "local_procedural_generation"
+    },
+    "textures/silver.png": {
+      "sha256": "c8e77e277d80c4c8e509d0500bb986527a357e14b39e74215f9527d7f0a5a22f",
+      "origin": "local_procedural_generation"
+    },
+    "textures/silver_ore.png": {
+      "sha256": "abf53da39d7eb72aa589ab82b0a924246cba400be85972f38b685440b1be33bc",
+      "origin": "local_procedural_generation"
+    },
+    "textures/soil.png": {
+      "sha256": "5d3b90c8fd26881e7bac583d01c8d1aa0a0d88f3b0c10c3cb0e42138f866793e",
+      "origin": "local_procedural_generation"
+    },
+    "textures/spruce_leaves.png": {
+      "sha256": "6ef7851d7d8838216f46330e05146e69e2b1b3fbdb565171a9ed0665459cfd69",
+      "origin": "local_procedural_generation"
+    },
+    "textures/spruce_log.png": {
+      "sha256": "1d474528749c9b0db2296d7e7e3ba7d7b96b8d8c95f6ededbfc7c45195db4617",
+      "origin": "local_procedural_generation"
+    },
+    "textures/spruce_log_top.png": {
+      "sha256": "1ebc4c522d256e65b284a177f99ce10157d93f6752a55efb5e40f60c61047441",
+      "origin": "local_procedural_generation"
+    },
+    "textures/steel.png": {
+      "sha256": "86ab43cd4135e6e49f349c03d1dd0ce250fb3661596c0f3841701c992f609ee8",
+      "origin": "local_procedural_generation"
+    },
+    "textures/stone.png": {
+      "sha256": "8a45b90865ef731ae04333653d0bffee9b22d5db06077d18f647f050e5478d44",
+      "origin": "local_procedural_generation"
+    },
+    "textures/sulfur.png": {
+      "sha256": "62f9f07ff8cb7f1afda32060657af72a47dc53f3115bc143efa90137004bf917",
+      "origin": "local_procedural_generation"
+    },
+    "textures/thorn_bush.png": {
+      "sha256": "05f36cd77aedde29dff52e02248bfa395722c9b201aa2490fef543487d7a670a",
+      "origin": "local_procedural_generation"
+    },
+    "textures/tin.png": {
+      "sha256": "aadde5059259e96dca17f141b78d3a85d6ca5580a6c99f79decd857372f30bd5",
+      "origin": "local_procedural_generation"
+    },
+    "textures/tin_ore.png": {
+      "sha256": "773052ff2f8e78e8cc04e0be2184ba879aa757323f51660b6bad3cf442027ab8",
+      "origin": "local_procedural_generation"
+    },
+    "textures/water.png": {
+      "sha256": "a26445658005de693b6a84893b7d21df45baecf5bdc7d6202e2cd9d90576400a",
+      "origin": "local_procedural_generation"
+    },
+    "textures/wild_herbs.png": {
+      "sha256": "5e0325f0fc6fd650038c513cbe8c4d65773497bfc3638a521581ba5f3533fe0b",
+      "origin": "local_procedural_generation"
+    },
+    "textures/wood_pulp.png": {
+      "sha256": "cebfe9ccb08cd8fcf47169015fd0eab1549bb367422a7aaa7ea5614f3d5d798d",
+      "origin": "local_procedural_generation"
+    }
+  }
+}

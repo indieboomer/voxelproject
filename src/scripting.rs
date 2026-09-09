@@ -66,6 +66,7 @@ const MAX_ITEM_GRANT_AMOUNT: u32 = 500;
 /// see `App::host_player_positions`.
 #[derive(Clone, Copy)]
 pub struct PlayerSnapshot {
+    pub resources: [u32; COLLECTIBLE_BLOCKS.len()],
     pub id: PlayerId,
     pub pos: Vec3,
     pub carrying_crystal: bool,
@@ -324,7 +325,8 @@ impl Module {
             *self = replacement;
         }
         let result = self.budget.run(|| {
-            let tx = CallbackTransaction::new(input, self.spawn_seed.get());
+            let mut tx = CallbackTransaction::new(input, self.spawn_seed.get());
+            if matches!(event, Callback::Tick) { tx.policy_owner = Some((self.runtime_id, self.activation_epoch)); }
             api::call(&self.lua, &tx, event)?;
             Ok(tx)
         });
@@ -340,6 +342,7 @@ impl Module {
                 Ok(())
             }
             Err(error) => {
+                input.creatures.attack_policies.remove(&(self.runtime_id, self.activation_epoch));
                 self.needs_reload = true;
                 Err(error)
             }
@@ -704,6 +707,11 @@ impl ScriptHost {
         Some(m.name)
     }
 
+    pub fn sync_attack_policies(&self, creatures: &mut Creatures) {
+        creatures.attack_policies.retain(|&(id, epoch), _| self.modules.iter().any(|m|
+            m.enabled && !m.is_instant && m.runtime_id == id && m.activation_epoch == epoch));
+    }
+
     /// Enqueues ticks and player events, then fairly dispatches bounded work.
     /// Unstarted callbacks remain queued for subsequent host dispatches.
     /// Time/weather/creatures commit in place; queued effects are returned
@@ -720,6 +728,10 @@ impl ScriptHost {
         interacts: &[InteractEvent],
         host_resources: [u32; COLLECTIBLE_BLOCKS.len()],
     ) -> TickOutcome {
+        self.sync_attack_policies(creatures);
+        for death in creatures.combat_deaths.drain(..) {
+            self.enqueue_combat_death(death);
+        }
         self.enqueue_tick_events(block_breaks, interacts);
         self.dispatch_world(
             world,
@@ -818,6 +830,7 @@ mod tests {
     /// id/pos/carrying_crystal, matching the old 3-tuple's shape.
     fn snapshot(id: PlayerId, pos: Vec3, carrying_crystal: bool) -> PlayerSnapshot {
         PlayerSnapshot {
+                resources: [0; COLLECTIBLE_BLOCKS.len()],
             id,
             pos,
             carrying_crystal,
@@ -1617,6 +1630,7 @@ mod tests {
         let world = World::new(1);
         let mut creatures = Creatures::new();
         let players = vec![PlayerSnapshot {
+                resources: [0; COLLECTIBLE_BLOCKS.len()],
             id: 3,
             pos: Vec3::new(0.0, 0.0, 0.0),
             carrying_crystal: false,
@@ -1842,6 +1856,7 @@ mod tests {
         let mut creatures = Creatures::new();
         let target_pos = Vec3::new(4.0, 5.0, 4.0);
         let players = vec![PlayerSnapshot {
+                resources: [0; COLLECTIBLE_BLOCKS.len()],
             id: 9,
             pos: target_pos,
             carrying_crystal: false,
@@ -1906,6 +1921,7 @@ mod tests {
         let world = World::new(1);
         let mut creatures = Creatures::new();
         let players = vec![PlayerSnapshot {
+                resources: [0; COLLECTIBLE_BLOCKS.len()],
             id: 9,
             pos: Vec3::new(4.0, 5.0, 4.0),
             carrying_crystal: false,
@@ -1971,6 +1987,7 @@ mod tests {
         module.enabled = true;
 
         let grounded = PlayerSnapshot {
+                resources: [0; COLLECTIBLE_BLOCKS.len()],
             id: 0,
             pos: Vec3::new(0.0, 0.0, 0.0),
             carrying_crystal: false,
@@ -2004,6 +2021,7 @@ mod tests {
         );
 
         let jumping = PlayerSnapshot {
+                resources: [0; COLLECTIBLE_BLOCKS.len()],
             id: 0,
             pos: Vec3::new(0.0, 1.0, 0.0),
             carrying_crystal: false,
@@ -2051,6 +2069,7 @@ mod tests {
         module.enabled = true;
 
         let already_airborne = PlayerSnapshot {
+                resources: [0; COLLECTIBLE_BLOCKS.len()],
             id: 0,
             pos: Vec3::new(0.0, 3.0, 0.0),
             carrying_crystal: false,
@@ -2688,7 +2707,7 @@ mod tests {
         let source = r#"
             function on_cast(api, event)
                 local clamped = api.give_item(event.player_id, "stone", 999999)
-                local rejected = api.give_item(event.player_id, "crystal", 10)
+                local rejected = api.give_item(event.player_id, "water", 10)
                 if clamped and not rejected then
                     api.replace_block(0, 0, 0, "redstone")
                 end
@@ -2711,7 +2730,7 @@ mod tests {
         );
         assert!(
             outcome.block_edits.iter().any(|(_, _, _, b)| *b == BlockType::RedStone),
-            "expected the excessive amount to clamp (still true) and crystal to be rejected (false): {:?}",
+            "expected the excessive amount to clamp (still true) and water to be rejected (false): {:?}",
             outcome.block_edits
         );
         assert_eq!(
@@ -2721,7 +2740,7 @@ mod tests {
                 block: BlockType::Stone,
                 amount: MAX_ITEM_GRANT_AMOUNT
             }],
-            "expected only the clamped stone grant, not the rejected crystal one"
+            "expected only the clamped stone grant, not the rejected water one"
         );
     }
 
@@ -2953,7 +2972,7 @@ mod tests {
     }
 
     #[test]
-    fn get_resource_count_and_take_item_only_answer_for_the_host_player() {
+    fn resource_queries_distinguish_host_stock_from_empty_guest_stock() {
         let world = World::new(1);
         let mut creatures = Creatures::new();
         let players = vec![
@@ -2976,7 +2995,7 @@ mod tests {
                 local remote_count = api.get_resource_count(9, "stone")
                 local host_take_ok = api.take_item({HOST_PLAYER_ID}, "stone", 5)
                 local remote_take_ok = api.take_item(9, "stone", 1)
-                if host_count == 5 and remote_count == nil
+                if host_count == 5 and remote_count == 0
                     and host_take_ok and not remote_take_ok
                 then
                     api.replace_block(0, 0, 0, "redstone")
@@ -3003,7 +3022,7 @@ mod tests {
                 .block_edits
                 .iter()
                 .any(|(_, _, _, b)| *b == BlockType::RedStone),
-            "expected host-only queries/takes to succeed and remote ones to fail: {:?}",
+            "expected host count/removal and an empty guest inventory: {:?}",
             outcome.block_edits
         );
         assert_eq!(
@@ -3505,5 +3524,154 @@ mod tests {
             edits.iter().any(|(_, _, _, b)| *b == BlockType::RedStone),
             "expected find_creatures/nearest_creature to report kind \"sunscorch\" and the right max_health: {edits:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod behavior_api_tests {
+    use super::*;
+    use crate::creature::{BehaviorMode, BehaviorTarget};
+
+    fn cast(creatures: &mut Creatures, code: &str) -> TickOutcome {
+        let mut host = ScriptHost::new();
+        host.modules.push(Module::load("behavior_test".into(), String::new(),
+            format!("function on_cast(api, event) {code} end")).unwrap());
+        host.run_cast(0, &World::new(1), creatures, &[], &mut 0.5,
+            &mut WeatherState::new(1), 0, [0; COLLECTIBLE_BLOCKS.len()])
+    }
+    fn pair() -> (World, Creatures, u32, u32, Vec3) {
+        let world = World::new(1);
+        let pos = Vec3::new(0.5, world.terrain_height(0,0) as f32 + 1.0, 0.5);
+        let mut creatures = Creatures::new();
+        let a = creatures.spawn_one(CreatureKind::Sheep, pos, 1);
+        let b = creatures.spawn_one(CreatureKind::Chicken, pos, 2);
+        (world, creatures, a, b, pos)
+    }
+    #[test]
+    fn selected_species_receives_real_damage_on_cooldown_and_death_event() {
+        let (world, mut creatures, a, b, _) = pair();
+        let result = cast(&mut creatures, &format!(
+            "assert(api.select_target({a}, 'chicken', 32) == {b}); assert(api.attack({a})); local s=api.get_behavior({a}); assert(s.mode=='attack' and s.target_id=={b} and s.target_type=='creature')"));
+        assert!(result.crashes.is_empty(), "{:?}", result.crashes);
+        assert!(creatures.update(&world, 0.0, &[]).is_empty());
+        assert_eq!(creatures.snapshot_with_ids().iter().find(|c| c.0==b).unwrap().3, 4.0);
+        creatures.update(&world, 0.0, &[]);
+        assert_eq!(creatures.snapshot_with_ids().iter().find(|c| c.0==b).unwrap().3, 4.0);
+        creatures.update(&world, 2.0, &[]);
+        creatures.update(&world, 2.0, &[]);
+        assert!(!creatures.snapshot_with_ids().iter().any(|c| c.0==b));
+        let mut host = ScriptHost::new();
+        let mut rule=Module::load("death_observer".into(), String::new(),
+            "function on_tick(api) end function on_death(api,e) api.broadcast(e.kind) end".into()).unwrap();
+        rule.enabled=true; host.modules.push(rule);
+        let out=host.run_tick(&world, &mut creatures, &[], &mut 0.5, &mut WeatherState::new(1), &[], &[], [0; COLLECTIBLE_BLOCKS.len()]);
+        assert_eq!(out.broadcasts, ["chicken"]);
+    }
+    #[test]
+    fn chase_does_not_attack_and_ignore_overrides_hostile_ai() {
+        let (world, mut creatures, _, b, pos) = pair();
+        let wolf = creatures.spawn_one(CreatureKind::Wolf, pos, 3);
+        let out=cast(&mut creatures, &format!("assert(api.set_target({wolf}, 'creature', {b})); assert(api.chase_target({wolf}))"));
+        assert!(out.crashes.is_empty());
+        assert!(creatures.update(&world, 0.0, &[(7,pos)]).is_empty());
+        assert_eq!(creatures.snapshot_with_ids().iter().find(|c| c.0==b).unwrap().3, 6.0);
+        assert!(cast(&mut creatures, &format!("api.ignore({wolf})")).crashes.is_empty());
+        assert!(creatures.update(&world, 0.0, &[(7,pos)]).is_empty());
+        // Existing coordinate chase can still be used after ignore.
+        cast(&mut creatures, &format!("api.chase({wolf}, 5, {}, 5)",pos.y));
+        assert!(creatures.any_hunting());
+        cast(&mut creatures, &format!("api.set_aggressive({wolf}, true)"));
+        assert!(!creatures.update(&world, 0.0, &[(7,pos)]).is_empty());
+    }
+    #[test]
+    fn behavior_drafts_rollback_and_validate_targets() {
+        let (_, mut creatures, a, b, _) = pair();
+        let out=cast(&mut creatures, &format!("api.set_target({a}, 'creature', {b}); api.attack({a}); api.die({b}); error('rollback')"));
+        assert!(!out.crashes.is_empty());
+        assert_eq!(creatures.behaviors[&a].mode, BehaviorMode::Auto);
+        assert!(creatures.snapshot_with_ids().iter().any(|c| c.0==b));
+        let out=cast(&mut creatures, &format!("assert(not api.set_target({a}, 'creature', {a})); assert(not api.attack({a})); assert(api.select_target({a}, 'wolf', 32)==nil); assert(api.get_behavior(99999)==nil); assert(api.die({b})); assert(not api.die({b}))"));
+        assert!(out.crashes.is_empty(), "{:?}", out.crashes);
+        assert!(!creatures.snapshot_with_ids().iter().any(|c| c.0==b));
+    }
+    #[test]
+    fn explicit_player_target_damages_selected_guest_and_stale_targets_clear() {
+        let (world, mut creatures, a, _, pos) = pair();
+        let mut host=ScriptHost::new();
+        host.modules.push(Module::load("guest_target".into(), String::new(), format!(
+            "function on_cast(api,e) assert(api.set_target({a}, 'player', 7)); assert(api.attack({a})) end"
+        )).unwrap());
+        let players=[PlayerSnapshot {
+                resources: [0; COLLECTIBLE_BLOCKS.len()], id: 7, pos, carrying_crystal: false, health: 20.0,
+            sprinting: false, on_ground: true, velocity: Vec3::ZERO, in_water: false, poisoned: false,
+            speed_multiplier: 1.0, jump_multiplier: 1.0, oxygen: 100.0 }];
+        let out=host.run_cast(0,&world,&mut creatures,&players,&mut 0.5,&mut WeatherState::new(1),0,[0;COLLECTIBLE_BLOCKS.len()]);
+        assert!(out.crashes.is_empty(), "{:?}", out.crashes);
+        assert_eq!(creatures.update(&world,0.0,&[(0,pos),(7,pos)]),[(7,2.0)]);
+        creatures.update(&world,0.0,&[(0,pos)]);
+        assert_eq!(creatures.behaviors[&a].target,None);
+        assert!(creatures.update(&world,3.0,&[(0,pos)]).is_empty());
+    }
+
+    #[test]
+    fn temporary_policies_compose_and_release_without_mutating_behavior() {
+        let (world, mut creatures, _, prey, pos)=pair();
+        let wolf=creatures.spawn_one(CreatureKind::Wolf,pos,3);
+        let mut host=ScriptHost::new();
+        for n in 0..2 {
+            let mut m=Module::load(format!("protection{n}"),String::new(),
+                "function on_tick(api) if api.weather=='rain' then api.protect_player(7,'wolf') end end".into()).unwrap();
+            m.enabled=true;host.modules.push(m);
+        }
+        let players=[PlayerSnapshot { resources:[0;COLLECTIBLE_BLOCKS.len()], id:7,pos,carrying_crystal:false,velocity:Vec3::ZERO,
+            on_ground:true,sprinting:false,in_water:false,health:20.0,poisoned:false,speed_multiplier:1.0,jump_multiplier:1.0,oxygen:100.0 }];
+        let mut weather=WeatherState::new(1);weather.set(Weather::Rain);
+        let out=host.run_tick(&world,&mut creatures,&players,&mut 0.25,&mut weather,&[],&[],[0;COLLECTIBLE_BLOCKS.len()]);
+        assert!(out.crashes.is_empty());assert_eq!(creatures.attack_policies.len(),2);
+        assert!(creatures.update(&world,0.0,&[(7,pos)]).is_empty());
+        assert!(creatures.behaviors[&wolf].aggressive);
+        host.toggle_at(0);host.sync_attack_policies(&mut creatures);
+        assert_eq!(creatures.attack_policies.len(),1);
+        assert!(creatures.update(&world,0.0,&[(7,pos)]).is_empty());
+        // Protection of a player must not pacify attacks against other creatures.
+        creatures.behaviors.get_mut(&wolf).unwrap().mode=BehaviorMode::Attack;
+        creatures.behaviors.get_mut(&wolf).unwrap().target=Some(BehaviorTarget::Creature(prey));
+        creatures.update(&world,0.0,&[(7,pos)]);
+        assert!(creatures.snapshot_with_ids().iter().find(|c|c.0==prey).map_or(true,|c|c.3<6.0));
+        weather.set(Weather::Sunny);
+        host.run_tick(&world,&mut creatures,&players,&mut 0.25,&mut weather,&[],&[],[0;COLLECTIBLE_BLOCKS.len()]);
+        assert!(creatures.attack_policies.is_empty());
+        assert_eq!(creatures.behaviors[&wolf].mode,BehaviorMode::Attack);
+        assert_eq!(creatures.behaviors[&wolf].target,Some(BehaviorTarget::Creature(prey)));
+    }
+
+    #[test]
+    fn failed_policy_callback_releases_previous_protection() {
+        let (world,mut creatures,_,_,pos)=pair();
+        let mut host=ScriptHost::new();
+        let mut m=Module::load("fails".into(),String::new(),
+            "local n=0 function on_tick(api) n=n+1 api.protect_player(7,'wolf') if n>1 then error('failed') end end".into()).unwrap();
+        m.enabled=true;host.modules.push(m);
+        let players=[PlayerSnapshot { resources:[0;COLLECTIBLE_BLOCKS.len()],id:7,pos,carrying_crystal:false,velocity:Vec3::ZERO,
+            on_ground:true,sprinting:false,in_water:false,health:20.0,poisoned:false,speed_multiplier:1.0,jump_multiplier:1.0,oxygen:100.0 }];
+        for n in 0..2 {
+            host.run_tick(&world,&mut creatures,&players,&mut 0.25,&mut WeatherState::new(1),&[],&[],[0;COLLECTIBLE_BLOCKS.len()]);
+            assert_eq!(creatures.attack_policies.is_empty(),n==1);
+        }
+    }
+
+    #[test]
+    fn behavior_save_roundtrip_preserves_selected_target_and_mode() {
+        let (_, mut creatures, a, b, _) = pair();
+        cast(&mut creatures, &format!("api.set_target({a}, 'creature', {b}); api.attack({a})"));
+        let save=crate::save::CraftingSave { creatures: Some(creatures.snapshot_with_ids()), behaviors: creatures.behaviors.clone(), ..Default::default() };
+        let saved: crate::save::CraftingSave=serde_json::from_slice(&serde_json::to_vec(&save).unwrap()).unwrap();
+        let mut restored=Creatures::new();
+        restored.restore_saved(saved.creatures.as_ref().unwrap(), 1);
+        restored.behaviors=saved.behaviors;
+        assert_eq!(restored.behaviors[&a].mode, BehaviorMode::Attack);
+        assert_eq!(restored.behaviors[&a].target, Some(BehaviorTarget::Creature(b)));
+        let old: crate::save::CraftingSave=serde_json::from_str("{}").unwrap();
+        assert!(old.behaviors.is_empty());
     }
 }

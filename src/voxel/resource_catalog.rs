@@ -84,5 +84,6 @@ pub const RESOURCES: &[ResourceInfo] = &[
     ResourceInfo { block: BlockType::Glowcap, category: "Plants", source: "natural", location: "Shaded ground beneath tree canopies" },
     ResourceInfo { block: BlockType::ThornBush, category: "Plants", source: "natural", location: "Open grassy meadows" },
     ResourceInfo { block: BlockType::DryShrub, category: "Plants", source: "natural", location: "Dry upland grassland" },
+    ResourceInfo { block: BlockType::Crystal, category: "Arcane", source: "natural", location: "Rare blue outcrops on dry land surfaces" },
 ];
 pub fn info(block: BlockType) -> &'static ResourceInfo { RESOURCES.iter().find(|r| r.block == block).expect("collectible resource metadata") }

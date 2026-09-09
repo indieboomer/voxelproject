@@ -17,6 +17,7 @@ mod transport;
 mod steam_transport;
 mod player;
 mod raycast;
+mod block_target;
 mod remote_player;
 mod save;
 mod settings;

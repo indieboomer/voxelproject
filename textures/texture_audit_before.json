@@ -1,0 +1,560 @@
+[
+  {
+    "path": "textures/amber.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "5efe4fabd4b4d133ba189ecc548514a5d78ea5f7906b6ba338fc75e5de4fce6b"
+  },
+  {
+    "path": "textures/amethyst.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "a4dd6f4de0c2173cc6e29c64f2013de58f9baf0317c8afcfc4f915fc2b68f94a"
+  },
+  {
+    "path": "textures/ash.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "4b7156c5a36ce7b228f66865c75cf64040b611d54cdba6aaf6efde01cf6d8192"
+  },
+  {
+    "path": "textures/basalt_side.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "fc0ac5d7e3aac164536b9d3c994cbc5f4c981494dbdc1c18d436d5deec71539d"
+  },
+  {
+    "path": "textures/basalt_top.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "ec7a08acd895f4499ca05ec34994f2784068d976dea1b03f841cfdb64f997a2e"
+  },
+  {
+    "path": "textures/bedrock.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "2f7ba9ef423b170c7745a6b2753cbd67c4644e4a418a782d6bde08fbfecae2ab"
+  },
+  {
+    "path": "textures/birch_leaves.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "49d384c49d00ce060cc4d78e222f2d6ee6cabbe79c74e2215eec5968b4496c69"
+  },
+  {
+    "path": "textures/birch_log.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "26dc8f70b3b943447e5472ec04efed0e5eb68e017c17bf6d9cf103dc93884654"
+  },
+  {
+    "path": "textures/birch_log_top.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "4139ae0c45c776d6ae34132d1e43a654a3e8785b5ee4cf3eca0a0e0cf29aab21"
+  },
+  {
+    "path": "textures/bluebell.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "10c42689885d3d0d3559a4cf90f3cc8473cebee1b02ff12f70e24be500d872e3"
+  },
+  {
+    "path": "textures/bricks.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "83880b2e48b3ec652bbf53f3dbacad97f3af7214ad766b429efe41ab3e71858a"
+  },
+  {
+    "path": "textures/bronze.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "1e3cb8bd0c86a1fdf42eb7b6723712320e66881beb4824b58b28b31dd2dcfa0c"
+  },
+  {
+    "path": "textures/brown_mushroom.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "0d0a91cbbca5186b814235f3318a8480a6f6768131c951eb3924d19f3b9764b7"
+  },
+  {
+    "path": "textures/cattail.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "1cee73b7a93bb4dd8da691d5ac11ec7d3617918e6f645f7b59e7f8bafe9cb3a5"
+  },
+  {
+    "path": "textures/ceramic.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "801cd5715bf87e78a15155f9596b53f129cb2135db3b7f349f88e1685623548b"
+  },
+  {
+    "path": "textures/charcoal.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "feb7fe04c3e8f30bb2fae44dcf5f931ca41791132f0a25146b4ca66a8dc549d3"
+  },
+  {
+    "path": "textures/cherry_leaves.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "8459e5255a1d643ac748413588c9a0330ec38813774dfa98a7f6f61f0ddc49af"
+  },
+  {
+    "path": "textures/cherry_log.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "1654a51a23e5fa5fb8d2ce1e415d0960e20d26b0bcfa6181d50895df0b18e2c9"
+  },
+  {
+    "path": "textures/cherry_log_top.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "964825e2d899299f3398ae37ad306ef5f6335af82f5af8fafd8b58c261f31e22"
+  },
+  {
+    "path": "textures/clay.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "556ab7cddaaa14e98e47cc162328ecf347133c855068722b32ed6df0cb6eb330"
+  },
+  {
+    "path": "textures/cloth.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "dbfcb261e79b0571b874da287cc4cc8324fc17d4152cc76039079640a09e3de9"
+  },
+  {
+    "path": "textures/clover.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "8e85f7982f3dc4f94258e2b8e2398c9428fe4c0fb57692221c0bed8821e6399b"
+  },
+  {
+    "path": "textures/coal.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "d415afb8ecfdf417b46a79dae9a1c8b86e1d4dcd4eb6f381df9da4599abc9ca5"
+  },
+  {
+    "path": "textures/cobblestone.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "57896b39ead9ac4d8c4bdc2b199c64bf32f5e75d5e4619074250df690baafd04"
+  },
+  {
+    "path": "textures/copper.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "379ed774d0cd664d5b282ee7bd7ee769dc103a83a9fdc264f2d303fa3c9cbcd9"
+  },
+  {
+    "path": "textures/copper_ore.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "20da684f978d6734f90f6be2d1bd1d2118a59dc5bb5c0c7fd6acf1ca9b102aa7"
+  },
+  {
+    "path": "textures/crystal.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "f0fdd114a1f0c27c43afeebbef6edac0ab4bf00e8932aed52417a30058d1ea7a"
+  },
+  {
+    "path": "textures/crystal_dust.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "ad627c5e2a57bdec1bb69c17fa8e852efa9fc92a8e91eb1a1750160e852fa4bb"
+  },
+  {
+    "path": "textures/diamond.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "f4de2686f48aee08af0f05ef20325fb284efe8082b60ec91fa2c55305a7547a4"
+  },
+  {
+    "path": "textures/diamond_ore.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "9d5ea9d0ec61b8772634d1a2d6d747b8e070a94e4653d67d5e2158d6a976c9c2"
+  },
+  {
+    "path": "textures/dry_shrub.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "5c22cc6292040e8f2a869ecfcf89f98fa65870fe1e7d81b74310967423aae039"
+  },
+  {
+    "path": "textures/emerald.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "a76e498360fab37fd2e06cde14fafecb2fe591c241cbae37b5719e8447521616"
+  },
+  {
+    "path": "textures/emerald_ore.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "7ff36de22cd83da2a600a6d2dac777e046cf61bf951e1249d29685c23d139c14"
+  },
+  {
+    "path": "textures/enchanted_glass.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "0649956dcef036c2f35e303b780804a029cf70fc46b8a1bfc2ad2c48f75e764d"
+  },
+  {
+    "path": "textures/fern.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "a2bb68ce930e624168f60849f5ce73eb5ad341d1bcbb1a1998da6c34094f125a"
+  },
+  {
+    "path": "textures/flax.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "53575c18e5e1351415bc2832a393db690a46b9e6aead525fd1fe646926474406"
+  },
+  {
+    "path": "textures/glass.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "b62a9017eaa80bcfef43821dc1e02f75d124a104b6b37619055eb3e9f0ebcf31"
+  },
+  {
+    "path": "textures/glowcap.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "91e442d4bf21871fcfa97bbe8f33ddf41e5ed2dfce6e9059db4d55dc8b413026"
+  },
+  {
+    "path": "textures/gold.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "46f61568cc9163ec720bb014479a89ed55afd68f42ca71ca3be864b3baeb1f8e"
+  },
+  {
+    "path": "textures/gold_ore.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "0091c57fd8d34f98d05201488cf38ef9093b0c0fc396620b7a0c30fa6b9d51ba"
+  },
+  {
+    "path": "textures/granite.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "4a1c650e076a902b2d3ce478b16fad4f09832282f3a8a1bfef173441e7ec4c19"
+  },
+  {
+    "path": "textures/grass.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "d6a9043fe4a7fd5b34ed43bca87b80ae7c80994c267b6b88e981ccef6c9313ad"
+  },
+  {
+    "path": "textures/grass_block_side.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "8f8efc78040193400c3f4211f0a9c9343cd4f9ddda76129f9ef95acb1a50dfbb"
+  },
+  {
+    "path": "textures/iron.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "0126e3e10ccc2fb71d9c0d6ab12068136106ebc3ec0dbb243cc23d5c6aee1359"
+  },
+  {
+    "path": "textures/iron_ore.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "c743105fd7d6cd27774ddb7ae5bb57ac83d03588fe08298d57b860b276e76862"
+  },
+  {
+    "path": "textures/lavender.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "97f10cc73b7969d62d564ab67caf203b1b358a6af78790e36bf792d5d0c3fd7e"
+  },
+  {
+    "path": "textures/lime.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "727bfdf5d0f77fb40cba87a855bf851463458146e10a96754b041cc284e9c4a9"
+  },
+  {
+    "path": "textures/limestone.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "1063133fdbc3fe48f673e462147ed81bacde09d6c2f5a1aaaede5b4ae96531d1"
+  },
+  {
+    "path": "textures/marble.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "29884190daa29c5ac2191a8348b7b2cef8d867ab26f3360059a9dddb552095fe"
+  },
+  {
+    "path": "textures/mithril.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "adaedc58d94dfcc7f87809cc1364b1320f5a65bad1258e7c8d3f02d331abbc51"
+  },
+  {
+    "path": "textures/mithril_ore.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "7face61871a77329ddcc16a2dfb3eb03e35c8b6766c4461efae10002bfe7d1fc"
+  },
+  {
+    "path": "textures/moon_silver.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "84544869efa5f6328bcd449d85ffdec74463beb7ecb33f5c3d7c66f99bd1fb95"
+  },
+  {
+    "path": "textures/moonstone.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "e012fa4ed45abd986fc9b9fe1889057bc110b51b6d386e07c62594e63728eed2"
+  },
+  {
+    "path": "textures/mortar.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "9da976975fcc86c0be109bd83bc89861d1085e8e838ab35137d6585bc8036da0"
+  },
+  {
+    "path": "textures/mud.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "8c52862d26447ec2a3d3cc997714c37f422a090a95384087a94c086e6f996216"
+  },
+  {
+    "path": "textures/oak_leaves.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "9b9a0aeb8be838de4b4561251c4d1283695ad8c2b83b6e62339354c154bcbcd6"
+  },
+  {
+    "path": "textures/oak_log.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "43173758455e90bdc83fa76e69d60d1ec6d7c5841eb55345db0f9aa60112bca6"
+  },
+  {
+    "path": "textures/oak_log_top.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "84572dc1f12a2d7b9a4522368b310d18a4fdc2eff12887d3f5225b8832a1cecb"
+  },
+  {
+    "path": "textures/obsidian.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "bfad773a9ef3c882edaee0fac42a51467281c155cc253c1d1e9cd18918d722cc"
+  },
+  {
+    "path": "textures/peat.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "617003554ac9770e1e57131a8fc9aca366497c4e32eabee2c307d39eb445306b"
+  },
+  {
+    "path": "textures/placeholder.png",
+    "active": false,
+    "classification": "legacy_unverified",
+    "sha256": "3c2e2fb8806925aaca95c9b7ecbe30e592ec999b065c57af90f26e8bf33e5a95"
+  },
+  {
+    "path": "textures/planks.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "434360614c9c3206da52766a73cdae67f3f516854f1d92a00fa8623f5037de3f"
+  },
+  {
+    "path": "textures/plant_fiber.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "d083774e12a63f421296eccaf6f4943fcbe11590afb0e6c7e1b20978a56e4c1e"
+  },
+  {
+    "path": "textures/pumpkin_side.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "61f8aaf5e6d7804f3ea8f1eeeacaea4bb0f53423f14b0f71a38ae78d2cbde48c"
+  },
+  {
+    "path": "textures/pumpkin_top.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "6d82bc707cb8370ac24b25e93a72693c5140955686a84fd1c01400a852dae6d7"
+  },
+  {
+    "path": "textures/quartz.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "93a4fd0c802e15ccd19934c4b3f061071032951d4b0c0e925e51e89ef4067841"
+  },
+  {
+    "path": "textures/red_poppy.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "29472e8454e26bbd6ed82c12a4b21fa0d653d5c7066c03ebcdfeaa3f7be5f336"
+  },
+  {
+    "path": "textures/redstone.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "6cfd8932f621725bd68a6b351bb4e52d844cd52353b6a8e09727069dac37d706"
+  },
+  {
+    "path": "textures/reeds.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "6d542975d730ee21e22cebbff34caa5351a6e0896e51a5ef58860bd134ac6fbd"
+  },
+  {
+    "path": "textures/resin.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "2f6a6ebbdc9086e165f92dcf949b88e05dce8524f5ad4abbe7b5de4ff86bf41d"
+  },
+  {
+    "path": "textures/rock_salt.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "733b5bf1ae873a90be196f71d1d26b036f3098e804a684825aa01f1c329825f6"
+  },
+  {
+    "path": "textures/ruby.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "fa06ed6dd09603f56fe965e6498ba4c4191fb5e0101994955c03135c2a37385b"
+  },
+  {
+    "path": "textures/ruby_ore.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "210e5347e6428a3bd021ed22026f374380e4469f6503945b53470372fdfa9774"
+  },
+  {
+    "path": "textures/runestone.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "fa404484bd19df31f0c135716230e3d6774c47a1bea842b0bc7e01ef89a328b4"
+  },
+  {
+    "path": "textures/sand.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "7765d6d7bd07d771d1db41a52fb55d0ae2f54a41624ae81f6ecc1ba7497e6927"
+  },
+  {
+    "path": "textures/sapphire.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "254934007e4437632027da904ff1dc60ca98c6f91d90ad5b2029275ae1e5e881"
+  },
+  {
+    "path": "textures/sapphire_ore.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "a51780623e1b045254bd72920ba809f118e5fca1ad603c9e9f944eed150a9f11"
+  },
+  {
+    "path": "textures/short_grass.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "2e7a4bcc98ceb65b318a25b33a611c92988248c64f9ac8501444fc58a5e19c39"
+  },
+  {
+    "path": "textures/silver.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "c8e77e277d80c4c8e509d0500bb986527a357e14b39e74215f9527d7f0a5a22f"
+  },
+  {
+    "path": "textures/silver_ore.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "abf53da39d7eb72aa589ab82b0a924246cba400be85972f38b685440b1be33bc"
+  },
+  {
+    "path": "textures/soil.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "c7f88cfd0a1dfcaac418e7c7ebcb4207019ecd64c03722f161cab84ab1584b17"
+  },
+  {
+    "path": "textures/spruce_leaves.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "5d7497801b5dead45794427108ac7d4f87c8f3c511d782d577f5f56730fd4370"
+  },
+  {
+    "path": "textures/spruce_log.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "063eec13badc9fd27fe21a1cf91fbe184ced08e7db90104b9add017ded528e88"
+  },
+  {
+    "path": "textures/spruce_log_top.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "84572dc1f12a2d7b9a4522368b310d18a4fdc2eff12887d3f5225b8832a1cecb"
+  },
+  {
+    "path": "textures/steel.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "86ab43cd4135e6e49f349c03d1dd0ce250fb3661596c0f3841701c992f609ee8"
+  },
+  {
+    "path": "textures/stone.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "d09c440228f92f42d93c00455ba0cd399d96d4648a984d2e07085314e892188c"
+  },
+  {
+    "path": "textures/sulfur.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "62f9f07ff8cb7f1afda32060657af72a47dc53f3115bc143efa90137004bf917"
+  },
+  {
+    "path": "textures/thorn_bush.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "05f36cd77aedde29dff52e02248bfa395722c9b201aa2490fef543487d7a670a"
+  },
+  {
+    "path": "textures/tin.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "aadde5059259e96dca17f141b78d3a85d6ca5580a6c99f79decd857372f30bd5"
+  },
+  {
+    "path": "textures/tin_ore.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "773052ff2f8e78e8cc04e0be2184ba879aa757323f51660b6bad3cf442027ab8"
+  },
+  {
+    "path": "textures/water.png",
+    "active": true,
+    "classification": "legacy_unverified",
+    "sha256": "2f97f0bcb524bf6afdc2253249a4787fbebab8b430163e822856c337a4ad2dec"
+  },
+  {
+    "path": "textures/wild_herbs.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "5e0325f0fc6fd650038c513cbe8c4d65773497bfc3638a521581ba5f3533fe0b"
+  },
+  {
+    "path": "textures/wood_pulp.png",
+    "active": true,
+    "classification": "matches_local_generator",
+    "sha256": "cebfe9ccb08cd8fcf47169015fd0eab1549bb367422a7aaa7ea5614f3d5d798d"
+  }
+]

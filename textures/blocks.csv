@@ -1,5 +1,5 @@
 id,display name,resource type,opacity,emission,roughness,hardness,texture,top,side,bottom,only on top,single items
-grass,Grass,biomass,1,0,1,1,grass,grass,grass_block_side,,,
+grass,Grass,biomass,1,0,1,1,grass,grass,grass_block_side,soil,,
 sand,Sand,sand,1,0,1,2,sand,,,,,
 spruce_wood,Spruce Wood,wood,1,0,1,4,spruce_log,spruce_log_top,spruce_log,spruce_log_top,,
 stone,Stone,stone,1,0,1,6,stone,stone,,,,
@@ -19,7 +19,7 @@ emerald_ore,Emerald Ore,emerald_ore,1,0.3,0.5,18,emerald_ore,,,,,
 copper_ore,Copper Ore,copper_ore,1,0,0.7,6,copper_ore,,,,,
 oak_wood,Oak Wood,wood,1,0,1,4,oak_log,oak_log_top,oak_log,oak_log_top,,
 spruce_leaves,Spruce Leaves,biomass,1,0,0.8,1,spruce_leaves,,,,,
-pumpkin,Pumpkin,food,1,0,0.8,2,pumpkin_side,pumpkin_top,pumpkin_side,pumpkin_side,,
+pumpkin,Pumpkin,food,1,0,0.8,2,pumpkin_side,pumpkin_top,pumpkin_side,pumpkin_bottom,,
 bricks,Bricks,stone,1,0,1,6,bricks,,,,,1
 short grass,Short Grass,biomass,1,0,1,1,short_grass,,,,1,1
 iron_ore,Iron Ore,metals,1,0,0.9,6,iron_ore,,,,,

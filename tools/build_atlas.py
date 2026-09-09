@@ -29,6 +29,7 @@ breaks, e.g. "short grass" / "short_wood" -> ShortGrass) -- block.rs's
 """
 
 import csv
+import shutil
 from pathlib import Path
 from PIL import Image
 
@@ -93,6 +94,10 @@ def build_atlas(rows):
         col, row = i % COLS, i // COLS
         atlas.paste(t, (col * TILE, row * TILE))
     atlas.save(ATLAS_OUT)
+    # Do not retain a legacy resource atlas under the old backup filename.
+    backup = OUT_DIR / 'atlas \u2014 kopia.png'
+    if backup.exists():
+        shutil.copyfile(ATLAS_OUT, backup)
     print(f"wrote {ATLAS_OUT} ({atlas.size[0]}x{atlas.size[1]}, {len(tiles)} tiles)")
 
     lines = [
@@ -197,6 +202,8 @@ def build_block_defs(rows):
 
 
 def main():
+    from audit_resource_textures import verify_sources
+    verify_sources()
     with open(CSV_PATH, newline="") as f:
         rows = list(csv.DictReader(f))
 

@@ -30,6 +30,8 @@ pub struct Vertex {
     /// the `creature_texture` array (see `model.rs`'s `emit_skinned_mesh`
     /// and `shader.wgsl`'s `fs_main`).
     pub tex_layer: f32,
+    /// Resource sparkle strength, independent of water reflectivity.
+    pub glimmer: f32,
 }
 
 impl Vertex {
@@ -39,6 +41,7 @@ impl Vertex {
             array_stride: size_of::<Vertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
+                wgpu::VertexAttribute { offset: size_of::<[f32; 16]>() as wgpu::BufferAddress, shader_location: 9, format: wgpu::VertexFormat::Float32 },
                 wgpu::VertexAttribute {
                     offset: 0,
                     shader_location: 0,
@@ -300,6 +303,7 @@ fn push_cross(
                 emission,
                 wind: corner[1],
                 tex_layer: 0.0,
+                glimmer: 0.0,
             });
         }
         indices.extend_from_slice(&[
@@ -435,6 +439,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                             emission,
                             wind,
                             tex_layer: 0.0,
+                            glimmer: block.glimmer(),
                         });
                     }
                     indices.extend_from_slice(&[
@@ -489,6 +494,7 @@ pub fn push_cuboid(
                 emission: 0.0,
                 wind: 0.0,
                 tex_layer: 0.0,
+                glimmer: 0.0,
             });
         }
         indices.extend_from_slice(&[
@@ -506,6 +512,23 @@ pub fn push_cuboid(
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn shiny_material_reaches_all_faces_without_affecting_matte_or_water() {
+        for (block, shiny) in [(BlockType::Crystal, true), (BlockType::IronOre, true),
+            (BlockType::Gold, true), (BlockType::Grass, false), (BlockType::Water, false)] {
+            let mut world = World::new(1);
+            let mut chunk = Chunk::new(0, 0);
+            chunk.set_local(5, 10, 5, block);
+            world.chunks.insert((0, 0), chunk);
+            let mesh = build_chunk_mesh(&world, &world.chunks[&(0, 0)]);
+            assert_eq!(mesh.vertices.len(), 24);
+            assert!(mesh.vertices.iter().all(|v| (v.glimmer > 0.0) == shiny));
+        }
+        let attribute = Vertex::layout().attributes.iter().find(|a| a.shader_location == 9).unwrap();
+        assert_eq!(attribute.offset as usize, std::mem::offset_of!(Vertex, glimmer));
+    }
+
 
     /// The AO_OFFSETS table was derived by hand from FACE_VERTS -- exactly
     /// the kind of thing that's easy to get subtly wrong (a flipped sign

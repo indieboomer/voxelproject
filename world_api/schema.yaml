@@ -18,7 +18,7 @@
 # (air, mud, redstone, crystal), so it can't drift out of sync with the
 # actual block system the way a third hand-copied list would.
 
-version: "1.13.0"
+version: "1.16.0"
 title: World API
 description: >
   The Lua API exposed to sandboxed rule modules as the `api` table passed
@@ -127,7 +127,7 @@ replication:
   creature_state: "Best-effort, ~20 Hz (UnreliableMsg::Snapshot) -- a dropped snapshot is superseded by the next; no guaranteed delivery, but self-healing within one snapshot interval."
   weather_and_time_of_day: "Carried in the same best-effort Snapshot as creature state -- see creature_state."
   broadcast_messages: "One reliable Notify message per api.broadcast call, the same path used for host system notifications (rule enabled/disabled, player joined, etc.)."
-  item_grants: "One reliable, targeted ReliableMsg::GrantItem per give_item call, sent only to the named player_id (not broadcast to everyone like Notify) -- the host applies its own grant locally instead of round-tripping through the network."
+  item_grants: "The host owns inventories for all players. Guest give_item/take_item changes are sent through reliable targeted CraftState updates; the host applies its own changes locally."
   player_attributes: "health, poisoned, speed_multiplier, jump_multiplier, and oxygen all ride the same best-effort Snapshot creature_state already uses (~20Hz, self-healing) -- broadcast to every connected player, not just the one they belong to, the same way carrying_crystal already is. A player's own client also applies its own speed_multiplier/jump_multiplier from this to its local movement physics, since movement itself is simulated client-side."
   player_teleport: "One reliable, targeted ReliableMsg::Teleport per teleport_player call, sent only to the named player_id, same targeted pattern as item_grants -- the host applies its own teleport locally instead of round-tripping through the network. A joined client's own interact-key press is reported the other direction, host-ward, as a reliable ReliableMsg::Interact carrying only the target position; the host reads the block there itself (its world state is authoritative) rather than trusting anything the client says about it."
 
@@ -150,15 +150,8 @@ persistence:
     it keeps the two kinds fully interchangeable in the save format and
     means this feature needed zero changes to WorldSave's bincode layout.
   player_state_not_saved: >
-    health, poisoned, speed_multiplier, jump_multiplier, oxygen, and
-    Resources inventory counts are NOT saved with the world, the same way a
-    module's Lua runtime state isn't (see not_saved above) -- every player
-    starts every session at full health (100), unpoisoned, with 1.0
-    multipliers, full oxygen (100), and an empty inventory, regardless of
-    how the previous session ended. This was already true for the inventory
-    before this API version; health/poisoned/multipliers/oxygen are newer
-    state introduced alongside it and follow the same precedent rather than
-    becoming the first per-player state that does persist.
+    Health, poison, movement multipliers and oxygen reset on load.
+    Resource inventories are saved in host/guest crafting accounts and restored on reload.
   api_version_tagging: >
     Every module's `source` may begin with a `-- api_version: X.Y.Z` comment
     line recording which World API version it was written/generated
@@ -490,7 +483,7 @@ methods:
   - name: chase
     namespace: world
     category: action
-    summary: "Makes a creature move toward a point at increased speed. Call it again every tick to keep it chasing -- stop calling it and the creature reverts to normal wandering within about a third of a second (there is no separate \"stop chasing\" call)."
+    summary: "Makes a creature move toward a point at increased speed, overriding explicit targeting and suppressing automatic attacks while the chase lease is active. Call it again every tick to keep it chasing -- stop calling it and the creature reverts to normal wandering within about a third of a second (use ignore to stop chasing)."
     params:
       - {name: creature_id, type: integer}
       - {name: x, type: number}
@@ -499,6 +492,112 @@ methods:
     returns: {type: nil, desc: "Always nil, even if creature_id doesn't exist -- there is no way to tell from Lua whether the call actually found the creature."}
     errors: []
     since: "1.0.0"
+
+  - name: protect_player
+    namespace: world
+    category: action
+    summary: "On_tick only: prevent melee damage/attack animation from creature kind against this player without changing creature aggression or creature-to-creature combat. Rule-owned temporary policy: refresh every tick while condition holds; an empty next tick removes it. Disable/delete/error releases it; other rules' protections remain. Saved rules recompute policies after reload."
+    params:
+      - {name: player_id, type: integer}
+      - {name: kind, type: string, enum_ref: creature_kinds}
+    returns: {type: boolean, desc: "False for unknown player/species, true otherwise."}
+    errors: ["Requires on_tick."]
+    since: "1.16.0"
+
+  - name: suppress_creature_attacks
+    namespace: world
+    category: action
+    summary: "On_tick only: temporarily prevent this creature's melee attacks against all targets. Same rule-owned cleanup as protect_player. Does not change underlying aggression, target or movement. Refresh only while the condition holds."
+    params:
+      - {name: creature_id, type: integer}
+    returns: {type: boolean, desc: "False for missing creature."}
+    errors: ["Requires on_tick."]
+    since: "1.16.0"
+
+  - name: get_behavior
+    namespace: world
+    category: query
+    summary: "Overrides persist until changed and survive save/reload; disabling a rule does not undo them. Read current behavior settings: aggressive boolean, mode (auto/chase/attack/ignore), optional target_type (player/creature) and target_id. Nil for missing creature. Target fields describe explicit selection, not automatic aggro. Attack mode is intent, not proof an attack landed."
+    params:
+      - {name: creature_id, type: integer}
+    returns: {type: table|nil, desc: "Behavior settings or nil."}
+    errors: []
+    since: "1.14.0"
+
+  - name: set_aggressive
+    namespace: world
+    category: action
+    summary: "Set automatic player aggression, cancel explicit targeting and restore normal wandering/automatic AI. False makes even hostile species peaceful. True lets passive species attack too (2 damage, 1.5 reach, 2 second cooldown, 16 block detection)."
+    params:
+      - {name: creature_id, type: integer}
+      - {name: aggressive, type: boolean}
+    returns: {type: boolean, desc: "False for missing IDs or invalid targets."}
+    errors: []
+    since: "1.14.0"
+
+  - name: set_target
+    namespace: world
+    category: action
+    summary: "Select a specific live target without starting an action. target_type must be player or creature. Self-targets are rejected. Follow with attack or chase_target."
+    params:
+      - {name: creature_id, type: integer}
+      - {name: target_type, type: string}
+      - {name: target_id, type: integer}
+    returns: {type: boolean, desc: "False for missing IDs or invalid targets."}
+    errors: []
+    since: "1.14.0"
+
+  - name: select_target
+    namespace: world
+    category: action
+    summary: "Select nearest live target of kind player, sheep, chicken, cow, wolf, stone_golem, stinger, goblin, or sunscorch within radius (clamped to query limit). Excludes self. Returns target ID or nil; no match clears selection. Does not start an action; follow with attack or chase_target."
+    params:
+      - {name: creature_id, type: integer}
+      - {name: kind, type: string}
+      - {name: radius, type: number}
+    returns: {type: integer|nil, desc: "Selected ID or nil."}
+    errors: []
+    since: "1.14.0"
+
+  - name: chase_target
+    namespace: world
+    category: action
+    summary: "Follow selected live target as it moves, without attacking; overrides built-in hostility. Returns false without a target."
+    params:
+      - {name: creature_id, type: integer}
+    returns: {type: boolean, desc: "False for missing IDs or invalid targets."}
+    errors: []
+    since: "1.14.0"
+
+  - name: attack
+    namespace: world
+    category: action
+    summary: "Pursue selected live target and deal damage in melee range on species cooldown, including creature versus creature. Passive species can attack. Does not deal instant damage; use damage for that. Returns false without target."
+    params:
+      - {name: creature_id, type: integer}
+    returns: {type: boolean, desc: "False for missing IDs or invalid targets."}
+    errors: []
+    since: "1.14.0"
+
+  - name: ignore
+    namespace: world
+    category: action
+    summary: "Cancel target, chase and aggression; resume peaceful wandering. Overrides built-in hostile AI. Use set_aggressive to restore automatic behavior."
+    params:
+      - {name: creature_id, type: integer}
+    returns: {type: boolean, desc: "False for missing IDs or invalid targets."}
+    errors: []
+    since: "1.14.0"
+
+  - name: die
+    namespace: world
+    category: action
+    summary: "Kill creature immediately with normal death sound, despawn and on_death event, like destroy. Returns false if already dead or missing."
+    params:
+      - {name: creature_id, type: integer}
+    returns: {type: boolean, desc: "False for missing IDs or invalid targets."}
+    errors: []
+    since: "1.14.0"
 
   - name: damage
     namespace: world
@@ -524,7 +623,7 @@ methods:
   - name: spawn_creature
     namespace: world
     category: action
-    summary: "Spawns a new creature at a position. sheep/chicken/cow are passive (only ever move under a rule's chase, never attack). stone_golem, wolf, stinger, goblin, and sunscorch are different: all five hostile entirely on their own, with no Lua involved -- each closes on and periodically damages the nearest player within its own aggro radius. stone_golem is large, slow, and hits hardest on the longest cooldown; sunscorch is a rare, tanky ghost that never gives up a chase and (like stone_golem) never speeds up while chasing -- no run animation, mechanically identical pace whether wandering or aggroed; goblin is a mid-weight melee bruiser (moderate speed/damage/cooldown, tankier than wolf); wolf is faster and lighter; stinger is fastest to attack (shortest cooldown) but hits lightest and is the most fragile. Only spawn a hostile one when a hostile/dangerous creature is actually what the request wants."
+    summary: "Spawns a new creature at a position. sheep/chicken/cow are passive by default; set_aggressive or attack can enable combat. stone_golem, wolf, stinger, goblin, and sunscorch are different: all five hostile entirely on their own, with no Lua involved -- each closes on and periodically damages the nearest player within its own aggro radius. stone_golem is large, slow, and hits hardest on the longest cooldown; sunscorch is a rare, tanky ghost that never gives up a chase and (like stone_golem) never speeds up while chasing -- no run animation, mechanically identical pace whether wandering or aggroed; goblin is a mid-weight melee bruiser (moderate speed/damage/cooldown, tankier than wolf); wolf is faster and lighter; stinger is fastest to attack (shortest cooldown) but hits lightest and is the most fragile. Only spawn a hostile one when a hostile/dangerous creature is actually what the request wants."
     params:
       - {name: kind, type: string, enum_ref: creature_kinds, desc: "\"sheep\", \"chicken\", \"stone_golem\", \"wolf\", \"stinger\", \"cow\", \"goblin\", or \"sunscorch\"; anything else (including a typo) silently becomes \"sheep\" -- not an error."}
       - {name: x, type: number}
@@ -644,25 +743,59 @@ methods:
   - name: take_item
     namespace: world
     category: action
-    summary: "Removes items from a player's Resources inventory -- the reverse of give_item. ONLY works for the host's own player right now: a remote player's inventory isn't tracked host-side (nothing reports it up), so this is a no-op for any other player_id. Prefer give_item for a remote player (granting doesn't need to know what they already have)."
+    summary: "Atomically remove resources from any connected player's authoritative inventory, including guests. Staged grants/removals and earlier committed callbacks are included; failed callbacks roll back."
     params:
-      - {name: player_id, type: integer, desc: "Must be the host's own id (see summary) or this always fails."}
-      - {name: kind, type: string, desc: "A block id from block_kinds; only a gatherable resource can be held at all."}
-      - {name: amount, type: integer, desc: "How many to remove."}
-    returns: {type: boolean, desc: "true only if player_id is the host AND the transaction balance holds at least amount of kind. The whole amount is reserved immediately, including against repeated calls and later modules. Removal is applied only if the callback commits. false for wrong player, unknown/ungrantable kind, or insufficient funds."}
+      - {name: player_id, type: integer}
+      - {name: kind, type: string}
+      - {name: amount, type: integer}
+    returns: {type: boolean, desc: "False for missing player, invalid resource or insufficient count. True reserves the full amount."}
     errors: []
     since: "1.2.0"
 
   - name: get_resource_count
     namespace: world
     category: query
-    summary: "How much of one resource a player's inventory currently holds, including staged give/take operations and earlier committed callbacks in this dispatch. Same host-only limitation as take_item -- a remote player's inventory isn't tracked host-side yet."
+    summary: "Read a resource count for any connected player, including guests. Includes staged inventory changes and earlier accepted callbacks."
     params:
-      - {name: player_id, type: integer, desc: "Must be the host's own id or this returns nil."}
-      - {name: kind, type: string, desc: "A block id from block_kinds."}
-    returns: {type: "integer | nil", desc: "nil if player_id isn't the host or kind isn't a real gatherable resource -- indistinguishable from Lua. Otherwise the count, which can legitimately be 0 (holds none, as opposed to nil meaning 'can't tell')."}
+      - {name: player_id, type: integer}
+      - {name: kind, type: string}
+    returns: {type: "integer | nil", desc: "0 means none held; nil means unknown player or invalid/noncollectible resource."}
     errors: []
     since: "1.2.0"
+
+  - name: get_inventory
+    namespace: world
+    category: query
+    summary: "Return a detached table mapping all collectible resource IDs to counts, including zeros, for any connected player. Includes staged changes. Editing this table does not modify inventory. Equipment/items outside the resource catalog are not implemented."
+    params:
+      - {name: player_id, type: integer}
+    returns: {type: "table | nil", desc: "Resource ID to count table, or nil for a missing player."}
+    errors: []
+    since: "1.15.0"
+
+  - name: has_resource
+    namespace: world
+    category: query
+    summary: "Whether a connected player holds at least amount of a collectible resource. Amount defaults to 1 when omitted. To check absence use api.has_resource(id, kind) == false; nil means invalid input, not absence."
+    params:
+      - {name: player_id, type: integer}
+      - {name: kind, type: string}
+      - {name: amount, type: integer, optional: true, desc: "Positive minimum count; default 1."}
+    returns: {type: "boolean | nil", desc: "True if sufficient, false if insufficient, nil for unknown player/resource or zero amount. Negative/nonfinite amounts fail validation."}
+    errors: []
+    since: "1.15.0"
+
+  - name: has_item
+    namespace: world
+    category: query
+    summary: "Alias of has_resource for the current resource inventory. No separate equipment-item system exists. Omitted amount defaults to 1; compare result to false to check absence without confusing nil with empty inventory."
+    params:
+      - {name: player_id, type: integer}
+      - {name: kind, type: string}
+      - {name: amount, type: integer, optional: true}
+    returns: {type: "boolean | nil", desc: "Same semantics as has_resource."}
+    errors: []
+    since: "1.15.0"
 
   - name: damage_player
     namespace: world

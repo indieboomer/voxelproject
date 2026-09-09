@@ -1,6 +1,6 @@
 """Build resource recipes, metadata, deposits and original pixel tiles from data/resources.json.
 
-Existing texture art is preserved. New tiles are deterministic 16px pixel designs
+All resource art is drawn locally. Tiles are deterministic 16px pixel designs
 upscaled with nearest-neighbor sampling to the game's 64px tile size.
 Run build_atlas.py and gen_world_api.py after this script.
 """
@@ -14,13 +14,20 @@ from PIL import Image, ImageDraw, ImageColor
 ROOT = Path(__file__).resolve().parent.parent
 DATA = json.loads((ROOT / 'data/resources.json').read_text())
 ELEMENTS = ['Earth', 'Fire', 'Water', 'Life', 'Death']
+BASE_TEXTURES = json.loads((ROOT / 'data/base_textures.json').read_text())
+EXTRA_TEXTURES = {'mud':{'pattern':'earth','color':'#625445'},
+                  'redstone':{'pattern':'rune','color':'#903c46'},
+                  'crystal':{'pattern':'crystal','color':'#97d4e6'}}
+PROVENANCE_INPUTS = ['tools/build_resources.py', 'tools/build_base_textures.py',
+                     'tools/build_atlas.py', 'tools/audit_resource_textures.py',
+                     'data/resources.json', 'data/base_textures.json']
 
 
 def variant(identifier):
     return ''.join(w.title() for w in identifier.split('_')) if identifier != 'redstone' else 'RedStone'
 
 
-def tile(identifier, spec):
+def tile(identifier, spec, write=True):
     rng = random.Random(int.from_bytes(hashlib.sha256(identifier.encode()).digest()[:8], 'little'))
     base = ImageColor.getrgb(spec['color'])
     pattern = spec['pattern']
@@ -128,13 +135,46 @@ def tile(identifier, spec):
         draw.line((5,12,5,3,10,6,5,8,10,12),fill=(138,220,218,255),width=1)
         draw.point((10,3),fill=(204,239,215,255))
     im = im.resize((64,64), Image.Resampling.NEAREST)
-    im.save(ROOT / 'textures' / f'{identifier}.png')
+    if write:
+        im.save(ROOT / 'textures' / f'{identifier}.png')
     return im
+
+
+def expected_images():
+    from build_base_textures import render
+    specs = {r['id']:r['texture'] for r in DATA if r['texture']}
+    specs.update(EXTRA_TEXTURES)
+    result = {name:tile(name,spec,write=False) for name,spec in specs.items()}
+    for name,spec in BASE_TEXTURES.items():
+        assert name not in result, f'Duplicate texture authoring source: {name}'
+        result[name] = tile(name,spec,write=False) if spec['pattern']=='ore' else render(name,spec)
+    return dict(sorted(result.items()))
+
+
+def write_provenance(textures, rows):
+    files = {f'textures/{name}.png':dict(sha256=hashlib.sha256((ROOT/'textures'/f'{name}.png').read_bytes()).hexdigest(),
+             origin='local_procedural_generation') for name,_ in textures}
+    manifest = dict(version=1, generators={p:hashlib.sha256((ROOT/p).read_bytes()).hexdigest() for p in PROVENANCE_INPUTS}, files=files)
+    (ROOT/'textures/texture_provenance.json').write_text(json.dumps(manifest,indent=2)+'\n')
+    lines=['# Resource texture provenance and face map', '',
+           'Every resource texture is generated from drawing primitives in `tools/build_resources.py` and `tools/build_base_textures.py`. No external image is read by either renderer. Rebuild all source tiles with `python tools/build_resources.py`, then pack them with `python tools/build_atlas.py`.', '',
+           'The initial audit found 62 active tiles matching our local generator, 30 active legacy tiles of unverified origin, and one unused legacy placeholder. All legacy tiles were replaced from scratch; every previously generated tile was regenerated too. A dedicated pumpkin underside was added and grass now uses soil on its bottom face. Logs retain distinct bark sides and species-specific end grain on both cut faces. Basalt retains separate side and top tiles.', '',
+           '`texture_audit_before.json` records original hashes and classifications without retaining old images. `texture_provenance.json` records current hashes and generator inputs. `python tools/audit_resource_textures.py` checks exact reproducibility, all face fallbacks, source coverage and atlas pixels. The atlas builder refuses unverified or modified inputs.', '',
+           'The unused legacy atlas backup is overwritten with the new atlas when present. `assets/textures/shadow_zoom.png` is a diagnostic screenshot, not a resource texture or runtime asset; creature/model art is outside this resource-texture audit.', '',
+           '## Resolved faces', '', '| Block | Top | Side | Bottom |', '|---|---|---|---|']
+    for row in rows:
+        faces=[row[col].strip() or row['texture'].strip() for col in ('top','side','bottom')]
+        lines.append('| '+row['id'].replace(' ','_')+' | '+' | '.join(f'[{name}.png]({name}.png)' for name in faces)+' |')
+    for name in EXTRA_TEXTURES: lines.append(f'| {name} | {name}.png | {name}.png | {name}.png |')
+    lines += ['', f'All {len(files)} source PNGs have local generation provenance, including the unused placeholder. Air/entities use the synthetic white atlas tile. No required resource texture is missing.', '',
+              '## Source tiles', '', '| Texture | Origin |', '|---|---|']
+    for name,_ in textures: lines.append(f'| [{name}.png]({name}.png) | Local procedural generation |')
+    (ROOT/'textures/RESOURCE_TEXTURES.md').write_text('\n'.join(lines)+'\n')
 
 
 def main():
     ids = [r['id'] for r in DATA]
-    assert len(ids) == len(set(ids)) == 82
+    assert len(ids) == len(set(ids)) == 83
     crafting_path = ROOT / 'data/crafting.json'
     crafting = json.loads(crafting_path.read_text())
     # Preserve creature rules; the catalog owns all stackable resource definitions.
@@ -174,7 +214,6 @@ def main():
             veins.append('    VeinConfig { block: BlockType::%s, salt: %s, attempts_per_chunk: %s, spawn_chance: %s, min_y: %s, max_y: %s, min_size: %s, max_size: %s },' %
                          (variant(r['id']),hex(0x72000000+index*193),v['attempts'],v['chance'],v['min_y'],v['max_y'],v['min_size'],v['max_size']))
         if r['texture']:
-            textures.append((r['id'],tile(r['id'],r['texture'])))
             row=known.get(r['id'])
             if row is None:
                 row={field:'' for field in fields}; rows.append(row)
@@ -184,10 +223,6 @@ def main():
                         'roughness':'0.35' if r['texture']['pattern'] in ['metal','glass','crystal'] else '0.9',
                         'hardness':str(r['hardness']),'texture':r['id'],'only on top':'1' if plant else '',
                         'single items':'1' if plant else ''})
-    for name,spec in {'mud':{'pattern':'earth','color':'#625445'},
-                      'redstone':{'pattern':'rune','color':'#903c46'},
-                      'crystal':{'pattern':'crystal','color':'#97d4e6'}}.items():
-        textures.append((name,tile(name,spec)))
     metadata += ['];', 'pub fn info(block: BlockType) -> &\'static ResourceInfo { RESOURCES.iter().find(|r| r.block == block).expect("collectible resource metadata") }']
     veins += [']']
     surface += [']']
@@ -196,14 +231,32 @@ def main():
     (ROOT/'src/voxel/resource_veins.rs').write_text('\n'.join(veins)+'\n')
     crafting['recipes']=recipes; crafting['compositions']=compositions
     crafting_path.write_text(json.dumps(crafting,indent=2)+'\n')
+    known['grass']['bottom']='soil'
+    known['pumpkin']['bottom']='pumpkin_bottom'
     with csv_path.open('w',newline='') as f:
         writer=csv.DictWriter(f,fieldnames=fields); writer.writeheader(); writer.writerows(rows)
+    textures=list(expected_images().items())
+    for name,im in textures: im.save(ROOT/'textures'/f'{name}.png')
+    write_provenance(textures,rows)
     # Contact sheet is a build artifact for visual review, with the asset names attached.
     sheet=Image.new('RGB',(8*132,((len(textures)+7)//8)*92),(27,29,34)); d=ImageDraw.Draw(sheet)
     for i,(name,im) in enumerate(textures):
         x,y=(i%8)*132,(i//8)*92; sheet.paste(im,(x+34,y),im); d.text((x+2,y+68),name,fill=(225,220,205))
     (ROOT/'target').mkdir(exist_ok=True)
     sheet.save(ROOT/'target/resource-textures.png')
+    # Resolve multi-face blocks exactly as the runtime does; review all three faces.
+    multi=[r for r in rows if len({r[c].strip() or r['texture'].strip() for c in ('top','side','bottom')})>1]
+    faces=Image.new('RGB',(550,40+len(multi)*94),(27,29,34)); painter=ImageDraw.Draw(faces)
+    by_name=dict(textures)
+    for col,title in enumerate(('TOP','SIDE','BOTTOM')): painter.text((175+col*122,8),title,fill=(225,220,205))
+    for index,row in enumerate(multi):
+        y=40+index*94
+        painter.text((8,y+26),row['id'],fill=(225,220,205))
+        for col,face in enumerate(('top','side','bottom')):
+            name=row[face].strip() or row['texture'].strip()
+            faces.paste(by_name[name],(175+col*122,y),by_name[name])
+            painter.text((158+col*122,y+69),name,fill=(225,220,205))
+    faces.save(ROOT/'target/resource-faces.png')
     print(f'Built {len(DATA)} resources, {len(recipes)} total formulas, {len(textures)} original pixel tiles.')
 
 

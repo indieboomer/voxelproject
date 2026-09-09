@@ -13,9 +13,11 @@ pub(super) struct CallbackTransaction<'a> {
     pub broadcasts: RefCell<Vec<String>>,
     pub effects: RefCell<Vec<PlayerEffect>>,
     pub spawn_seed: Cell<u64>,
+    pub attack_policies: RefCell<Vec<crate::creature::AttackPolicy>>,
+    pub policy_owner: Option<(u64, u64)>,
     prior_blocks: HashMap<(i32, i32, i32), BlockType>,
     base_players: Vec<PlayerSnapshot>,
-    resources: [u32; COLLECTIBLE_BLOCKS.len()],
+    resources: HashMap<PlayerId, [u32; COLLECTIBLE_BLOCKS.len()]>,
 }
 
 impl<'a> CallbackTransaction<'a> {
@@ -24,9 +26,13 @@ impl<'a> CallbackTransaction<'a> {
         for effect in input.player_effects.iter() {
             apply_player_preview(&mut players, effect);
         }
-        let mut resources = input.host_resources;
-        for (i, block) in COLLECTIBLE_BLOCKS.iter().enumerate() {
-            resources[i] = resource_balance(resources[i], *block, input.player_effects);
+        let mut resources = HashMap::new();
+        for player in input.players {
+            let mut counts = if player.id == HOST_PLAYER_ID { input.host_resources } else { player.resources };
+            for (i, block) in COLLECTIBLE_BLOCKS.iter().enumerate() {
+                counts[i] = resource_balance(counts[i], player.id, *block, input.player_effects);
+            }
+            resources.insert(player.id, counts);
         }
         Self {
             world: input.world,
@@ -38,6 +44,8 @@ impl<'a> CallbackTransaction<'a> {
             broadcasts: RefCell::new(Vec::new()),
             effects: RefCell::new(Vec::new()),
             spawn_seed: Cell::new(spawn_seed),
+            attack_policies: RefCell::new(Vec::new()),
+            policy_owner: None,
             prior_blocks: input
                 .block_edits
                 .iter()
@@ -64,6 +72,7 @@ impl<'a> CallbackTransaction<'a> {
             + self.base_players.len() as u32
             + self.effects.borrow().len() as u32
             + self.blocks.borrow().len() as u32
+            + self.attack_policies.borrow().len() as u32
     }
 
     pub fn players(&self) -> Vec<PlayerSnapshot> {
@@ -74,15 +83,17 @@ impl<'a> CallbackTransaction<'a> {
         players
     }
 
-    pub fn resource_count(&self, index: usize) -> u32 {
-        resource_balance(
-            self.resources[index],
-            COLLECTIBLE_BLOCKS[index],
-            &self.effects.borrow(),
-        )
+    pub fn resource_count(&self, player_id: PlayerId, index: usize) -> Option<u32> {
+        Some(resource_balance(self.resources.get(&player_id)?[index], player_id,
+            COLLECTIBLE_BLOCKS[index], &self.effects.borrow()))
     }
 
     pub fn commit(self, input: &mut TickInput, spawn_seed: &Cell<u64>, emit_deaths: bool) {
+        if let Some(owner) = self.policy_owner {
+            let policies = self.attack_policies.into_inner();
+            if policies.is_empty() { input.creatures.attack_policies.remove(&owner); }
+            else { input.creatures.attack_policies.insert(owner, policies); }
+        }
         self.creatures.into_inner().commit(input.creatures);
         *input.weather = self.weather.into_inner();
         *input.time_of_day = self.time.into_inner();
@@ -99,21 +110,21 @@ impl<'a> CallbackTransaction<'a> {
     }
 }
 
-fn resource_balance(mut balance: u32, block: BlockType, effects: &[PlayerEffect]) -> u32 {
+fn resource_balance(mut balance: u32, owner: PlayerId, block: BlockType, effects: &[PlayerEffect]) -> u32 {
     for effect in effects {
         match *effect {
             PlayerEffect::GiveItem {
-                player_id: HOST_PLAYER_ID,
+                player_id,
                 block: b,
                 amount,
-            } if b == block => {
+            } if b == block && player_id == owner => {
                 balance = balance.saturating_add(amount);
             }
             PlayerEffect::TakeItem {
-                player_id: HOST_PLAYER_ID,
+                player_id,
                 block: b,
                 amount,
-            } if b == block => {
+            } if b == block && player_id == owner => {
                 balance = balance.saturating_sub(amount);
             }
             _ => {}

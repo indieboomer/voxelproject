@@ -525,6 +525,7 @@ pub struct App {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
 
+    block_target: crate::block_target::BlockTarget,
     render_pipeline: wgpu::RenderPipeline,
     depth_view: wgpu::TextureView,
 
@@ -654,6 +655,7 @@ impl App {
             host: self.player.crafting.clone(),
             guests: self.guest_accounts.clone(),
             creatures: Some(self.creatures.snapshot_with_ids()),
+            behaviors: self.creatures.behaviors.clone(),
         }
     }
 
@@ -759,8 +761,6 @@ impl App {
                     account.resources[i] = count;
                     accepted = true;
                 }
-            } else if old == BlockType::Crystal {
-                accepted = true;
             }
         } else if reachable
             && (old == BlockType::Air || old == BlockType::Water)
@@ -1227,6 +1227,9 @@ impl App {
         let mut creatures = Creatures::new();
         if let Some(saved) = crafting_save.creatures {
             creatures.restore_saved(&saved, world.seed as u64);
+            for (id, state) in crafting_save.behaviors {
+                if creatures.behaviors.contains_key(&id) { creatures.behaviors.insert(id, state); }
+            }
         } else if spawn_creatures {
             creatures.spawn_around(&world, spawn_pos, CREATURE_COUNT, world.seed);
         }
@@ -1235,6 +1238,7 @@ impl App {
         let lightning_seed = world.seed;
 
         let llm = LlmClient::new(launch.llm_url.clone());
+        let block_target = crate::block_target::BlockTarget::new(&device, &camera_bgl, config.format);
         let ui = Ui::new(&device, config.format, &window);
         let entity_mesh = DynamicMesh::new(&device);
 
@@ -1250,6 +1254,7 @@ impl App {
             queue,
             config,
             size,
+            block_target,
             render_pipeline,
             depth_view,
             sky_pipeline,
@@ -1873,6 +1878,7 @@ impl App {
                 .iter()
                 .map(|p| (p.id, p.pos))
                 .collect();
+            self.scripting.sync_attack_policies(&mut self.creatures);
             let golem_attacks = self.creatures.update(&self.world, dt, &player_targets);
             for (player_id, damage) in golem_attacks {
                 self.apply_player_effect(PlayerEffect::Health {
@@ -1962,7 +1968,7 @@ impl App {
                 kind,
                 is_retry: false,
                 ..
-            } => Some(format!("Generating a {}...", generation_noun(*kind))),
+            } => Some(format!("Interpreting, generating and checking a {}...", generation_noun(*kind))),
             GenerationState::Idle => None,
         };
         let mut crafting_players: Vec<_> = self.host_player_positions().iter().map(|p| p.pos).collect();
@@ -2151,6 +2157,7 @@ impl App {
             return Vec::new();
         };
         let mut players = vec![PlayerSnapshot {
+                resources: self.player.resources_snapshot(),
             id: HOST_PLAYER_ID,
             pos: self.player.position,
             carrying_crystal: self.player.carrying_crystal,
@@ -2166,6 +2173,9 @@ impl App {
         }];
         for (&id, rp) in host.remote_players.iter() {
             players.push(PlayerSnapshot {
+                resources: host.clients.iter().find(|(_, pid)| **pid == id)
+                    .and_then(|(peer, _)| self.guest_accounts.get(&peer.account_key(&rp.nickname)))
+                    .map(|a| a.resources).unwrap_or([0; crate::voxel::COLLECTIBLE_BLOCKS.len()]),
                 id,
                 pos: rp.pos,
                 carrying_crystal: rp.carrying_crystal,
@@ -2189,7 +2199,7 @@ impl App {
     fn start_generation(&mut self, user_request: String) {
         // A cheap deterministic heuristic (see llm::classify_prompt), not a
         // hard requirement -- it just tells the model which contract to
-        // write; `poll_generation` accepts whatever it actually produces
+        // write; `poll_generation` validates the generated contract
         // after at most one corrective retry.
         let kind = classify_prompt(&user_request);
         let noun = generation_noun(kind);
@@ -2277,13 +2287,15 @@ impl App {
         };
         match load_result {
             Ok(module) => {
-                // classify_prompt is a hint, not a hard requirement -- if
-                // the model wrote the other contract, give it exactly one
-                // chance to redo it (reusing the same retry pipeline a
-                // validation failure uses), but if it *still* doesn't match
-                // afterward, accept the module as whatever kind it actually
-                // turned out to be rather than failing outright.
+                // Never silently turn a one-time command into a repeating rule
+                // (or vice versa), even if the corrective retry ignores intent.
                 let kind_matches = module.is_instant == matches!(kind, PromptKind::Instant);
+                if !kind_matches && is_retry {
+                    self.notify_important(format!(
+                        "{noun} generation failed: the model returned the wrong execution type after retry. Nothing was added."
+                    ));
+                    return;
+                }
                 if !kind_matches && !is_retry {
                     log::warn!(
                         "Generated module's contract didn't match the expected kind, asking \
@@ -2436,13 +2448,20 @@ impl App {
                 }
             }
             PlayerEffect::TakeItem { player_id, block, amount } => {
-                // Only ever queued for HOST_PLAYER_ID -- see take_item's
-                // doc in world_api/schema.yaml. The Lua-visible success
-                // bool already reflected the transaction balance after
-                // earlier accepted inventory effects. Applying commands
-                // in the same order honors those reservations.
                 if player_id == HOST_PLAYER_ID {
                     self.player.take_resources(block, amount);
+                    return;
+                }
+                let NetRole::Host(host) = &mut self.net else { return; };
+                let Some((&peer, _)) = host.clients.iter().find(|(_, id)| **id == player_id) else { return; };
+                let Some(rp) = host.remote_players.get(&player_id) else { return; };
+                let account = self.guest_accounts.entry(peer.account_key(&rp.nickname)).or_default();
+                if let Some(i) = crate::voxel::COLLECTIBLE_BLOCKS.iter().position(|b| *b == block) {
+                    if account.resources[i] >= amount {
+                        account.resources[i] -= amount;
+                        account.revision += 1;
+                        host.reliable.send(&host.socket, peer, ReliableMsg::CraftState { account: account.clone(), feedback: None });
+                    }
                 }
             }
             PlayerEffect::Health { player_id, delta } => {
@@ -3186,6 +3205,16 @@ impl App {
             bytemuck::bytes_of(&LightUniform { view_proj: light_view_proj.to_cols_array_2d() }),
         );
 
+        let target = if self.cursor_grabbed && self.ui.settings.values.gameplay.show_block_target {
+            raycast(&self.world, cam_pos, self.camera.forward(), REACH).map(|hit| {
+                let breakable = !self.world.get_block(hit.target.0, hit.target.1, hit.target.2).is_unbreakable();
+                let placeable = !self.would_hit_player(hit.place)
+                    && self.selected_block.is_some_and(|block| self.player.resource_count(block) > 0);
+                (hit, breakable, placeable)
+            })
+        } else { None };
+        self.block_target.update(&self.queue, target);
+
         let raining = self.weather.current.has_rain_particles() && !underwater;
         let rain_vertex_count = if raining {
             self.write_rain_vertices(cam_pos);
@@ -3299,6 +3328,7 @@ impl App {
                 rpass.set_vertex_buffer(0, self.bird_vertex_buffer.slice(..));
                 rpass.draw(0..bird_vertex_count, 0..1);
             }
+            self.block_target.draw(&mut rpass, &self.camera_bind_group);
         }
 
         if let Some(full_output) = self.pending_egui_output.take() {

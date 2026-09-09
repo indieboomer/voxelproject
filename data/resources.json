@@ -2102,5 +2102,22 @@
       "chance": 0.04
     },
     "emission": 0
+  },
+  {
+    "id": "crystal",
+    "name": "Crystal",
+    "category": "Arcane",
+    "source": "natural",
+    "location": "Rare blue outcrops on dry land surfaces",
+    "composition": [
+      1,
+      0,
+      2,
+      0,
+      1
+    ],
+    "formula": null,
+    "texture": null,
+    "hardness": 1
   }
 ]

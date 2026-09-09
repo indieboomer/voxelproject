@@ -152,15 +152,13 @@ impl Player {
     }
 
     /// A snapshot of every `COLLECTIBLE_BLOCKS` count, for the World API's
-    /// `api.get_resource_count`/`api.take_item` -- see their host-only
-    /// caveat in world_api/schema.yaml (only the host's own `Player` has
-    /// this API; remote accounts are maintained by App for crafting).
+    /// inventory API. App snapshots guest accounts separately for the same queries.
     pub fn resources_snapshot(&self) -> [u32; COLLECTIBLE_BLOCKS.len()] {
         self.crafting.resources
     }
 
     /// Adds one to the gathered count for `block`, if it's collectible.
-    /// A no-op for anything not in `COLLECTIBLE_BLOCKS` (e.g. Crystal).
+    /// A no-op for anything not in `COLLECTIBLE_BLOCKS` (e.g. Water).
     pub fn add_resource(&mut self, block: BlockType) {
         self.add_resources(block, 1);
     }
@@ -442,17 +440,19 @@ mod tests {
     #[test]
     fn add_resources_is_a_no_op_for_an_uncollectible_kind() {
         let mut player = Player::new(Vec3::ZERO);
-        player.add_resources(BlockType::Crystal, 50);
-        assert_eq!(player.resource_count(BlockType::Crystal), 0);
+        player.add_resources(BlockType::Water, 50);
+        assert_eq!(player.resource_count(BlockType::Water), 0);
     }
 
     #[test]
-    fn crystal_is_not_a_stackable_resource() {
-        // Crystal is deliberately excluded from COLLECTIBLE_BLOCKS -- it's
-        // tracked separately via `carrying_crystal`.
+    fn surface_crystal_stacks_and_can_be_placed() {
         let mut player = Player::new(Vec3::ZERO);
         player.add_resource(BlockType::Crystal);
-        assert_eq!(player.resource_count(BlockType::Crystal), 0);
+        player.add_resource(BlockType::Crystal);
+        assert_eq!(player.resource_count(BlockType::Crystal), 2);
+        assert!(player.take_resource(BlockType::Crystal));
+        assert_eq!(player.resource_count(BlockType::Crystal), 1);
+        assert!(player.take_resource(BlockType::Crystal));
         assert!(!player.take_resource(BlockType::Crystal));
     }
 

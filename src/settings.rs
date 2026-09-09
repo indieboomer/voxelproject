@@ -13,8 +13,22 @@ pub enum UiTheme {
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub gameplay: Gameplay,
     pub appearance: Appearance,
     pub multiplayer: Multiplayer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Gameplay {
+    pub show_block_target: bool,
+}
+impl Default for Gameplay {
+    fn default() -> Self {
+        Self {
+            show_block_target: true,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +130,11 @@ impl SettingsPanel {
                 }
                 ui.label("Applies to your next session. One host and up to three guests.");
                 ui.separator();
+                ui.heading("Gameplay");
+                ui.checkbox(&mut self.values.gameplay.show_block_target, "Show block targeting outlines");
+                ui.small("Gold: break (left click). Green: build (right click). Red: unbreakable.");
+                ui.small("Build preview appears when you have the selected resource and the space is clear of you.");
+                ui.separator();
                 ui.heading("Appearance");
                 ui.label("UI style");
                 ui.horizontal_wrapped(|ui| {
@@ -184,6 +203,14 @@ mod tests {
     fn missing_fields_and_future_sections_are_compatible() {
         let values: Settings = serde_json::from_str(r#"{"audio":{"volume":42}}"#).unwrap();
         assert_eq!(values.appearance.ui_theme, UiTheme::Generic);
+        assert!(values.gameplay.show_block_target);
+        let disabled: Settings =
+            serde_json::from_str(r#"{"gameplay":{"show_block_target":false}}"#).unwrap();
+        assert!(!disabled.gameplay.show_block_target);
+        assert_eq!(
+            serde_json::from_str::<Settings>(&serde_json::to_string(&disabled).unwrap()).unwrap(),
+            disabled
+        );
         assert!(
             serde_json::from_str::<Settings>(r#"{"appearance":{"ui_theme":"invalid"}}"#).is_err()
         );
