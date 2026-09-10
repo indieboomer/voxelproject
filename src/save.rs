@@ -20,27 +20,45 @@ pub struct CraftingSave {
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SaveV2 {
+    #[serde(default)]
+    generation: crate::worldgen::WorldGeneration,
     world: WorldSave,
     #[serde(default)]
     crafting: CraftingSave,
 }
 const MAGIC: &[u8] = b"VOXEL_SAVE_2\n";
-fn encode_save(world: WorldSave, crafting: &CraftingSave) -> Result<Vec<u8>, serde_json::Error> {
+fn encode_save(
+    world: WorldSave,
+    crafting: &CraftingSave,
+    generation: &crate::worldgen::WorldGeneration,
+) -> Result<Vec<u8>, serde_json::Error> {
     #[derive(serde::Serialize)]
     struct SaveRef<'a> {
+        generation: &'a crate::worldgen::WorldGeneration,
         world: WorldSave,
         crafting: &'a CraftingSave,
     }
     let mut bytes = MAGIC.to_vec();
-    bytes.extend(serde_json::to_vec(&SaveRef { world, crafting })?);
+    bytes.extend(serde_json::to_vec(&SaveRef {
+        world,
+        crafting,
+        generation,
+    })?);
     Ok(bytes)
 }
-fn decode_save(bytes: &[u8]) -> Option<(WorldSave, CraftingSave)> {
+fn decode_save(
+    bytes: &[u8],
+) -> Option<(WorldSave, CraftingSave, crate::worldgen::WorldGeneration)> {
     if let Some(json) = bytes.strip_prefix(MAGIC) {
         let save: SaveV2 = serde_json::from_slice(json).ok()?;
-        Some((save.world, save.crafting))
+        save.generation.validate().ok()?;
+        Some((save.world, save.crafting, save.generation))
     } else {
-        Some((bincode::deserialize(bytes).ok()?, CraftingSave::default()))
+        Some((
+            bincode::deserialize(bytes).ok()?,
+            CraftingSave::default(),
+            Default::default(),
+        ))
     }
 }
 
@@ -82,7 +100,7 @@ pub fn save_world(
     }
 
     let edit_count = save.edits.len();
-    match encode_save(save, crafting) {
+    match encode_save(save, crafting, &world.generation) {
         Ok(bytes) => {
             if let Err(e) = fs::write("saves/world.bin.tmp", bytes)
                 .and_then(|()| fs::rename("saves/world.bin.tmp", SAVE_PATH))
@@ -104,8 +122,9 @@ pub fn save_exists() -> bool {
 
 pub fn load_world() -> Option<LoadedWorld> {
     let bytes = fs::read(SAVE_PATH).ok()?;
-    let (save, crafting) = decode_save(&bytes)?;
+    let (save, crafting, generation) = decode_save(&bytes)?;
     let mut world = World::new(save.seed);
+    world.generation = generation;
     for (pos, block) in save.edits {
         world.edits.insert(pos, block);
     }
@@ -143,7 +162,7 @@ mod tests {
     #[test]
     fn old_binary_saves_load_with_empty_elemental_inventory() {
         let bytes = bincode::serialize(&world_save()).unwrap();
-        let (world, crafting) = decode_save(&bytes).unwrap();
+        let (world, crafting, _) = decode_save(&bytes).unwrap();
         assert_eq!(world.seed, 42);
         assert_eq!(crafting.host, crate::crafting::Account::default());
         assert!(crafting.creatures.is_none());
@@ -158,8 +177,8 @@ mod tests {
             .guests
             .insert("guest".into(), crafting.host.clone());
         crafting.creatures = Some(vec![(73, 0, [1.0, 10.0, 3.0], 7.0, 12.0)]);
-        let bytes = encode_save(world_save(), &crafting).unwrap();
-        let (world, loaded) = decode_save(&bytes).unwrap();
+        let bytes = encode_save(world_save(), &crafting, &Default::default()).unwrap();
+        let (world, loaded, _) = decode_save(&bytes).unwrap();
         assert_eq!(loaded.host, crafting.host);
         assert_eq!(loaded.guests, crafting.guests);
         assert_eq!(loaded.creatures, crafting.creatures);
@@ -176,6 +195,32 @@ mod tests {
         let mut bytes = MAGIC.to_vec();
         bytes.extend(serde_json::to_vec(&serde_json::json!({"world":world_save()})).unwrap());
         assert_eq!(decode_save(&bytes).unwrap().1.host, account);
+        assert_eq!(decode_save(&bytes).unwrap().2, Default::default());
         assert!(decode_save(b"not a save").is_none());
+    }
+
+    #[test]
+    fn prompted_terrain_survives_save_and_invalid_settings_are_rejected() {
+        let config = crate::worldgen::WorldGeneration {
+            description: "Sandy islands".into(),
+            shape: crate::worldgen::Shape::Islands,
+            surface: crate::worldgen::Surface::Sand,
+            trees: 0,
+            ..Default::default()
+        };
+        let bytes = encode_save(world_save(), &CraftingSave::default(), &config).unwrap();
+        let (_, _, loaded) = decode_save(&bytes).unwrap();
+        assert_eq!(loaded, config);
+        for x in -40..40 {
+            assert_eq!(loaded.height(x, 19, 42), config.height(x, 19, 42));
+        }
+        let invalid = crate::worldgen::WorldGeneration {
+            relief: 201,
+            ..config
+        };
+        assert!(decode_save(
+            &encode_save(world_save(), &CraftingSave::default(), &invalid).unwrap()
+        )
+        .is_none());
     }
 }

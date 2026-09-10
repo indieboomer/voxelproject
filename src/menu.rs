@@ -13,9 +13,17 @@ use crate::ui::Ui;
 /// that actually launches a game carries the nickname entered on the
 /// nickname screen.
 pub enum MenuAction {
-    NewWorld { nickname: String },
-    LoadWorld { nickname: String },
-    Join { addr: JoinTarget, nickname: String },
+    NewWorld {
+        nickname: String,
+        generation: crate::worldgen::WorldGeneration,
+    },
+    LoadWorld {
+        nickname: String,
+    },
+    Join {
+        addr: JoinTarget,
+        nickname: String,
+    },
     Quit,
 }
 
@@ -57,6 +65,11 @@ pub struct MenuApp {
     screen: Screen,
     join_input: String,
     nickname_input: String,
+    world_description: String,
+    world_job: Option<(
+        Option<String>,
+        std::sync::mpsc::Receiver<Result<crate::worldgen::WorldGeneration, String>>,
+    )>,
     error: Option<String>,
 
     /// Carried through to whatever `LaunchConfig` a menu selection builds,
@@ -129,6 +142,8 @@ impl MenuApp {
             screen: Screen::Main,
             join_input: String::new(),
             nickname_input: String::new(),
+            world_description: String::new(),
+            world_job: None,
             error: None,
             port: launch.port,
             llm_url: launch.llm_url,
@@ -138,10 +153,12 @@ impl MenuApp {
     pub fn window_event(&mut self, event: &WindowEvent) {
         if let WindowEvent::KeyboardInput { event: key, .. } = event {
             if key.state == winit::event::ElementState::Pressed && !key.repeat {
-                use winit::keyboard::{PhysicalKey, KeyCode};
+                use winit::keyboard::{KeyCode, PhysicalKey};
                 if key.physical_key == PhysicalKey::Code(KeyCode::F10) {
                     self.ui.settings.open = !self.ui.settings.open;
-                } else if key.physical_key == PhysicalKey::Code(KeyCode::Escape) && self.ui.settings.open {
+                } else if key.physical_key == PhysicalKey::Code(KeyCode::Escape)
+                    && self.ui.settings.open
+                {
                     self.ui.settings.open = false;
                 }
             }
@@ -216,11 +233,43 @@ impl MenuApp {
         let mut screen = std::mem::replace(&mut self.screen, Screen::Main);
         let mut join_input = std::mem::take(&mut self.join_input);
         let mut nickname_input = std::mem::take(&mut self.nickname_input);
+        let mut world_description = std::mem::take(&mut self.world_description);
+        let mut world_job = self.world_job.take();
+        let llm_url = self.llm_url.clone();
+        if let Some((nickname, receiver)) = &world_job {
+            let result = match receiver.try_recv() {
+                Ok(result) => Some(result),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Some(Err("World generation worker stopped. Please retry.".into()))
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            };
+            if let Some(result) = result {
+                if let Some(nickname) = nickname {
+                    match result {
+                        Ok(generation) => {
+                            action = Some(MenuAction::NewWorld {
+                                nickname: nickname.clone(),
+                                generation,
+                            })
+                        }
+                        Err(message) => error = Some(message),
+                    }
+                }
+                world_job = None;
+            }
+        }
         let has_save = self.has_save;
-        let fantasy = self.ui.settings.values.appearance.ui_theme == crate::settings::UiTheme::Fantasy;
-        let button_size = if fantasy { [320.0, 44.0] } else { [260.0, 40.0] };
+        let fantasy =
+            self.ui.settings.values.appearance.ui_theme == crate::settings::UiTheme::Fantasy;
+        let button_size = if fantasy {
+            [320.0, 44.0]
+        } else {
+            [260.0, 40.0]
+        };
         let mut open_settings = false;
-        let steam = self.ui.settings.values.multiplayer.mode == crate::settings::MultiplayerMode::Steam;
+        let steam =
+            self.ui.settings.values.multiplayer.mode == crate::settings::MultiplayerMode::Steam;
 
         let full_output = self.ui.run(&self.window, |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
@@ -235,7 +284,16 @@ impl MenuApp {
                         ui.add_space(10.0);
                     }
 
-                    match &screen {
+                    if world_job.as_ref().is_some_and(|(name, _)| name.is_some()) {
+                        ui.spinner();
+                        ui.label("Interpreting your world description...");
+                        ui.label("Starting the local model can take a minute or two.");
+                        if ui.button("Cancel").clicked() {
+                            if let Some((name, _)) = &mut world_job { *name = None; }
+                            screen = Screen::Main;
+                        }
+                        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+                    } else { match &screen {
                         Screen::Main => {
                             if ui
                                 .add_sized(button_size, egui::Button::new("New World"))
@@ -280,10 +338,10 @@ impl MenuApp {
                         Screen::Join => {
                             ui.label(if steam { "Steam lobby code (steam:ID):" } else { "Host address (ip:port):" });
                             let resp = ui.text_edit_singleline(&mut join_input);
-                            if !resp.has_focus() && !resp.lost_focus() {
+                            if !resp.has_focus() && !resp.lost_focus() && !ctx.wants_keyboard_input() {
                                 resp.request_focus();
                             }
-                            let submitted = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            let submitted = (resp.has_focus() || resp.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
                             ui.add_space(10.0);
                             if ui
                                 .add_sized(button_size, egui::Button::new("Continue"))
@@ -336,10 +394,21 @@ impl MenuApp {
                                 egui::TextEdit::singleline(&mut nickname_input)
                                     .char_limit(MAX_NICKNAME_LEN),
                             );
-                            if !resp.has_focus() && !resp.lost_focus() {
+                            if !resp.has_focus() && !resp.lost_focus() && !ctx.wants_keyboard_input() {
                                 resp.request_focus();
                             }
-                            let submitted = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            let submitted = (resp.has_focus() || resp.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            if matches!(pending, PendingAction::NewWorld) {
+                                ui.add_space(10.0);
+                                ui.label("World description (optional)");
+                                ui.add(egui::TextEdit::multiline(&mut world_description)
+                                    .desired_rows(3).desired_width(360.0).char_limit(512)
+                                    .hint_text("A sandy desert, small tropical islands, snowy mountains..."));
+                                ui.label("Leave empty for normal terrain. Descriptions use the local AI.");
+                                ui.label("Shapes, sand/snow/rock, relief and trees; no buildings or new assets.");
+                                if world_job.is_some() { ui.label("Waiting for the cancelled AI request to finish..."); }
+                            }
+
                             ui.add_space(10.0);
                             if ui
                                 .add_sized(button_size, egui::Button::new("Continue"))
@@ -349,10 +418,19 @@ impl MenuApp {
                                 let nickname = nickname_input.trim().to_string();
                                 if nickname.is_empty() {
                                     error = Some("Enter a nickname".to_string());
+                                } else if matches!(pending, PendingAction::NewWorld) && !world_description.trim().is_empty() {
+                                    if world_job.is_none() {
+                                        let (sender, receiver) = std::sync::mpsc::channel();
+                                        let description = world_description.clone();
+                                        let url = llm_url.clone();
+                                        std::thread::spawn(move || { let _ = sender.send(crate::worldgen::resolve(&description, &url)); });
+                                        world_job = Some((Some(nickname), receiver));
+                                        error = None;
+                                    }
                                 } else {
                                     action = Some(match pending {
                                         PendingAction::NewWorld => {
-                                            MenuAction::NewWorld { nickname }
+                                            MenuAction::NewWorld { nickname, generation: Default::default() }
                                         }
                                         PendingAction::LoadWorld => {
                                             MenuAction::LoadWorld { nickname }
@@ -372,16 +450,20 @@ impl MenuApp {
                                 error = None;
                             }
                         }
-                    }
+                    }}
                 });
             });
         });
 
-        if open_settings { self.ui.settings.open = true; }
+        if open_settings {
+            self.ui.settings.open = true;
+        }
         self.error = error;
         self.screen = screen;
         self.join_input = join_input;
         self.nickname_input = nickname_input;
+        self.world_description = world_description;
+        self.world_job = world_job;
 
         self.ui.render(
             &self.device,

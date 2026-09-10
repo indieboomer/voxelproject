@@ -9,7 +9,7 @@ use crate::voxel::block::BlockType;
 pub type PlayerId = u32;
 pub type WorldEdit = ((i32, i32, i32), BlockType);
 pub const MAX_PLAYERS: usize = 4;
-pub const PROTOCOL_VERSION: u32 = 11;
+pub const PROTOCOL_VERSION: u32 = 13;
 pub const HOST_PLAYER_ID: PlayerId = 0;
 pub const DEFAULT_PORT: u16 = 7878;
 pub const RELIABLE_RESEND_INTERVAL: Duration = Duration::from_millis(200);
@@ -57,6 +57,7 @@ pub enum ReliableMsg {
     },
     JoinRejected(String),
     Welcome {
+        generation: crate::worldgen::WorldGeneration,
         player_id: PlayerId,
         seed: u32,
         time_of_day: f32,
@@ -120,6 +121,9 @@ pub enum ReliableMsg {
     Teleport {
         pos: [f32; 3],
     },
+    // Append variants so older Hello messages still reach protocol-version rejection.
+    RuleProposal { prompt: String, source: String },
+    RuleProposalResult { accepted: bool, message: String },
 }
 
 /// One player's position/status as carried in a `Snapshot` -- see
@@ -154,6 +158,7 @@ pub enum UnreliableMsg {
         carrying_crystal: bool,
     },
     Snapshot {
+        allow_guest_prompting: bool,
         time_of_day: f32,
         weather: u8,
         players: Vec<SnapshotPlayer>,
@@ -270,6 +275,7 @@ pub const MAX_WORLD_CHUNKS: u32 = 4096;
 pub fn welcome_messages(
     player_id: PlayerId,
     seed: u32,
+    generation: crate::worldgen::WorldGeneration,
     time_of_day: f32,
     spawn: [f32; 3],
     edits: Vec<((i32, i32, i32), BlockType)>,
@@ -279,6 +285,7 @@ pub fn welcome_messages(
         return Err("World exceeds the supported multiplayer save size");
     }
     let mut messages = vec![ReliableMsg::Welcome {
+        generation,
         player_id,
         seed,
         time_of_day,
@@ -317,6 +324,7 @@ pub fn chat_text(text: &str) -> Option<String> {
     }
 }
 pub struct InitialWorld {
+    pub generation: crate::worldgen::WorldGeneration,
     pub player_id: PlayerId,
     pub seed: u32,
     pub time_of_day: f32,
@@ -342,6 +350,7 @@ impl WorldTransfer {
         self.count = Some(count);
         match msg {
             ReliableMsg::Welcome {
+                generation,
                 player_id,
                 seed,
                 time_of_day,
@@ -349,10 +358,12 @@ impl WorldTransfer {
                 edits,
                 ..
             } => {
+                generation.validate()?;
                 if !edits.is_empty() {
                     return Err("World edits must use bounded chunks".into());
                 }
                 self.header = Some(InitialWorld {
+                    generation,
                     player_id,
                     seed,
                     time_of_day,
@@ -437,6 +448,7 @@ mod tests {
             oxygen: 42.0,
         };
         let packet = Packet::Unreliable(UnreliableMsg::Snapshot {
+            allow_guest_prompting: true,
             time_of_day: 0.42,
             weather: Weather::Rain.to_u8(),
             players: vec![player],
@@ -452,11 +464,13 @@ mod tests {
         let decoded = decode(&bytes).expect("a just-encoded packet must decode");
         match decoded {
             Packet::Unreliable(UnreliableMsg::Snapshot {
+                allow_guest_prompting,
                 time_of_day,
                 weather,
                 players,
                 creatures,
             }) => {
+                assert!(allow_guest_prompting);
                 assert_eq!(time_of_day, 0.42);
                 assert_eq!(weather, Weather::Rain.to_u8());
                 assert_eq!(players, vec![player]);
@@ -588,6 +602,7 @@ mod tests {
 pub const DEFAULT_LLM_URL: &str = "http://127.0.0.1:8090";
 
 pub struct LaunchConfig {
+    pub generation: crate::worldgen::WorldGeneration,
     /// Join this host instead of hosting our own game.
     pub connect: Option<JoinTarget>,
     /// Port to listen on when hosting.
@@ -667,6 +682,7 @@ pub fn parse_args() -> LaunchConfig {
         port,
         llm_url,
         fresh: false,
+        generation: Default::default(),
         nickname,
     }
 }
@@ -827,8 +843,15 @@ mod multiplayer_tests {
         let edits: Vec<_> = (0..20_000)
             .map(|x| ((x, 50, 0), BlockType::Stone))
             .collect();
-        let mut messages = welcome_messages(3, 42, 0.5, [1., 2., 3.], edits.clone()).unwrap();
+        let generation = crate::worldgen::WorldGeneration {
+            description: "Sandy islands".into(), shape: crate::worldgen::Shape::Islands,
+            surface: crate::worldgen::Surface::Sand, trees: 0, ..Default::default()
+        };
+        let mut messages = welcome_messages(3, 42, generation.clone(), 0.5, [1., 2., 3.], edits.clone()).unwrap();
         let header = messages.remove(0);
+        let header = match decode(&encode(&Packet::Reliable { id: 2, msg: header })).unwrap() {
+            Packet::Reliable { msg, .. } => msg, _ => unreachable!(),
+        };
         let mut transfer = WorldTransfer::default();
         for msg in messages.into_iter().rev() {
             let bytes = encode(&Packet::Reliable {
@@ -844,6 +867,7 @@ mod multiplayer_tests {
         assert_eq!(world.edits, edits);
         assert_eq!(world.player_id, 3);
         assert_eq!(world.seed, 42);
+        assert_eq!(world.generation, generation);
     }
     #[test]
     fn malformed_transfers_and_packets_are_rejected() {

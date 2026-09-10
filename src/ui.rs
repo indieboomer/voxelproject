@@ -154,6 +154,7 @@ impl Ui {
         console_open: bool,
         prompt_input: &mut String,
         is_host: bool,
+        can_prompt: bool,
         scripting: &ScriptHost,
         recent_index: Option<usize>,
         generation_status: Option<&str>,
@@ -446,8 +447,9 @@ impl Ui {
                     .collapsible(false)
                     .show(ctx, |ui| {
                         ui.set_min_width(420.0);
-                        if is_host {
+                        if can_prompt {
                             ui.label("Describe a rule, or an instant action, then press Enter:");
+                            if !is_host { ui.small("Generated on this device; sent to the host for review and activation."); }
                             let response = ui.text_edit_singleline(prompt_input);
                             if !response.has_focus() && !response.lost_focus() {
                                 response.request_focus();
@@ -460,7 +462,7 @@ impl Ui {
                                 ui.label(status);
                             }
                         } else {
-                            ui.label("Only the host can generate rules.");
+                            ui.label("Guest prompting is disabled by the host.");
                         }
                         ui.label("Esc to close");
                     });

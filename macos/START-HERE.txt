@@ -1,0 +1,31 @@
+VOXEL PROJECT FOR MAC
+
+Open the DMG, drag Voxel Project into Applications, then launch it from Applications.
+Eject the DMG after copying. Install a build matching your Mac: arm64 for Apple
+Silicon, x86_64 for Intel. This package targets macOS 13 or later.
+
+Steam edition: open Steam and sign in before hosting. Host with New World or Load
+World, then press Escape to share the lobby code. Friends use Join Steam Lobby.
+Every player needs the same game protocol/build, but Windows and Mac binaries differ.
+For LAN play, choose Settings > Multiplayer > Direct / LAN and join the host's IP:7878.
+Allow local network access if macOS requests it.
+
+The full edition contains the Qwen 7B GGUF model and a native llama server with Metal
+support. Hosts prewarm AI; guests load it on their first prompt if the host enables
+guest prompting in Settings. Guest proposals require host review and activation.
+The first model load may take time. Hosting AI needs more memory than joining;
+memory use includes the model, context cache and the game's graphics.
+
+Your saves, preferences and logs are stored here:
+~/Library/Application Support/Voxel Project/
+Replacing the app does not replace those files. AI log: logs/server.log.
+The AI server currently remains running after the game quits. Close llama-server
+in Activity Monitor before updating the app, or to release its memory.
+
+Development packages are ad-hoc signed and are not notarized. A downloaded test
+build may require approval in System Settings > Privacy & Security after your
+first launch attempt. Only approve a build you trust. Normal distribution packages
+should be Developer ID signed and notarized by the builder.
+
+Steam uses test App ID 480 for development. The Steam overlay and cross-platform
+multiplayer still require testing on the actual Macs in use.

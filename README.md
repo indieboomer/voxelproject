@@ -2,6 +2,15 @@
 
 > A lightweight multiplayer voxel sandbox whose rules can be rewritten from inside the game using natural language.
 
+To create a shareable Windows build with the AI model, llama server and installer,
+run `make_package.bat`. See [PACKAGING.md](PACKAGING.md) for options and installation steps.
+
+Separate Mac setup and `.app`/DMG packaging tools are in [macos/](macos/README.md).
+
+New World accepts an optional AI terrain description, such as a sandy desert or
+an island world. Blank descriptions keep the original terrain. See
+[WORLD_GENERATION.md](WORLD_GENERATION.md) for supported options and behavior.
+
 ## MVP Goal
 
 Build a small but playable first-person voxel game that proves one idea: a local LLM can translate a player's prompt into sandboxed game code, activate it at runtime, and change the same authoritative world for every connected player.
@@ -12,7 +21,8 @@ This is a side project and technical experiment. Prioritize a working end-to-end
 
 - Start a new procedural world and enter it immediately, similar to Minecraft or Valheim.
 - Play alone or host a session for up to four players.
-- Multiplayer players receive a random model from `models/player/player1..4.glb` and a random hat from `hat1..4.glb` or no hat. The host assigns unique model/hat combinations among connected players and replicates them to everyone; appearances stay fixed until disconnect. Assets are embedded in the executable. All peers must use the same build (protocol 11).
+- Multiplayer players receive a random model from `models/player/player1..4.glb` and a random hat from `hat1..4.glb` or no hat. The host assigns unique model/hat combinations among connected players and replicates them to everyone; appearances stay fixed until disconnect. Assets are embedded in the executable. All peers must use the same build (protocol 13).
+- Hosts can enable guest prompting in Settings. Guests generate locally and submit disabled proposals for host review; only the host activates world rules.
 - Move in first person, run, jump, collide with terrain, and respawn.
 - Break, collect, select, and place voxel blocks.
 - Explore one biome with terrain, water, trees, a day/night cycle, and 2–3 simple creatures.
@@ -71,7 +81,7 @@ Add API functions only when required by a concrete playable rule.
 - Single-player uses the same local authoritative server as multiplayer.
 - One player hosts; up to three friends join by direct address or simple session code.
 - The host owns the save and is initially the only player allowed to generate or activate rules.
-- The LLM runs only on the host. Clients do not need a model.
+- The host uses local AI. When guest prompting is enabled, guests use their own local AI to submit proposals. Joining without prompting does not require a model.
 - The session ends when the host leaves.
 
 No dedicated servers, host migration, accounts, matchmaking, public server browser, or anti-cheat in the MVP.

@@ -1,4 +1,5 @@
 /target
+/dist
 /saves
 /llm-runtime
 Cargo.lock.bak

@@ -123,6 +123,7 @@ struct SurfaceResource { block: BlockType, habitat: &'static str, chance: f32, s
 const SURFACE_RESOURCES: &[SurfaceResource] = include!("resource_surface.rs");
 
 pub struct World {
+    pub generation: crate::worldgen::WorldGeneration,
     pub seed: u32,
     pub chunks: HashMap<(i32, i32), Chunk>,
     /// Blocks that differ from the procedurally generated terrain. Kept
@@ -138,6 +139,7 @@ impl World {
     pub fn new(seed: u32) -> Self {
         Self {
             seed,
+            generation: Default::default(),
             chunks: HashMap::new(),
             edits: HashMap::new(),
             redstone_positions: Vec::new(),
@@ -157,7 +159,7 @@ impl World {
     }
 
     pub fn terrain_height(&self, wx: i32, wz: i32) -> i32 {
-        super::terrain::height(wx,wz,self.seed)
+        self.generation.height(wx,wz,self.seed)
     }
 
     fn generate_chunk(&self, cx: i32, cz: i32) -> Chunk {
@@ -187,13 +189,21 @@ impl World {
                             BlockType::Air
                         }
                     } else if ly == height {
-                        if height <= SEA_LEVEL + 1 {
+                        if self.generation.surface != crate::worldgen::Surface::Natural {
+                            match self.generation.surface {
+                                crate::worldgen::Surface::Sand => BlockType::Sand,
+                                crate::worldgen::Surface::Snow => BlockType::Snow,
+                                _ => BlockType::Stone,
+                            }
+                        } else if height <= SEA_LEVEL + 1 {
                             BlockType::Sand
                         } else if height>=super::terrain::ALPINE_LINE {
                             mountain_surface
                         } else {
                             BlockType::Grass
                         }
+                    } else if self.generation.surface == crate::worldgen::Surface::Sand && ly > height - 5 {
+                        BlockType::Sand
                     } else if height>=super::terrain::ALPINE_LINE {
                         BlockType::Stone
                     } else if ly > height - 4 {
@@ -206,9 +216,15 @@ impl World {
 
                 // Simple tree scattering, away from the shoreline. Species
                 // is picked per-tree so all four wood types show up.
-                let on_dry_land = height > SEA_LEVEL + 2 && height < super::terrain::ALPINE_LINE;
+                let on_dry_land = self.generation.surface == crate::worldgen::Surface::Natural && height > SEA_LEVEL + 2 && height < super::terrain::ALPINE_LINE;
                 let mut placed_topper = false;
-                if on_dry_land && column_rand(wx, wz, self.seed, 0xA11CE) < 0.006 {
+                let tree_land = if self.generation.surface == crate::worldgen::Surface::Natural {
+                    on_dry_land
+                } else {
+                    height > SEA_LEVEL + 2 && height < CHUNK_Y - 12
+                        && self.generation.surface != crate::worldgen::Surface::Stone
+                };
+                if tree_land && column_rand(wx, wz, self.seed, 0xA11CE) < 0.006 * self.generation.trees as f32 / 100. {
                     let species_roll = column_rand(wx, wz, self.seed, 0x5FEC1E5);
                     let idx = ((species_roll * TREE_SPECIES.len() as f32) as usize)
                         .min(TREE_SPECIES.len() - 1);
@@ -572,6 +588,25 @@ pub struct WorldSave {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prompted_surfaces_and_chunk_order_are_consistent() {
+        use crate::worldgen::{Shape, Surface, WorldGeneration};
+        for (surface, block) in [(Surface::Sand, BlockType::Sand), (Surface::Snow, BlockType::Snow), (Surface::Stone, BlockType::Stone)] {
+            let mut world = World::new(42);
+            world.generation = WorldGeneration { shape: Shape::Flat, surface, trees: 0, relief: 0, ..Default::default() };
+            let first = world.generate_chunk(-1, 0);
+            let _neighbor = world.generate_chunk(0, 0);
+            let again = world.generate_chunk(-1, 0);
+            for x in 0..CHUNK_X { for z in 0..CHUNK_Z {
+                assert_eq!(first.get_local(x,25,z), block);
+                for y in 0..CHUNK_Y {
+                    assert_eq!(first.get_local(x,y,z), again.get_local(x,y,z));
+                    assert!(!first.get_local(x,y,z).is_wood());
+                }
+            }}
+        }
+    }
 
     #[test]
     fn flood_from_fills_an_isolated_air_pocket_touching_water() {

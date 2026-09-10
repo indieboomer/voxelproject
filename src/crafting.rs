@@ -209,7 +209,7 @@ fn resource_index(id: &str) -> Option<usize> {
 impl Registry {
     pub fn load() -> Result<Self, String> {
         // Embedded fallback keeps packaged builds independent of the working directory.
-        let text = match std::fs::read_to_string("data/crafting.json") {
+        let text = match std::fs::read_to_string(crate::runtime_paths::resource("data/crafting.json")) {
             Ok(s) => s,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 include_str!("../data/crafting.json").into()

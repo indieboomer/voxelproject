@@ -1,0 +1,42 @@
+VOXEL PROJECT - WINDOWS X64
+
+1. Extract the entire ZIP to a writable folder. Do not launch inside the ZIP.
+2. Run Install.bat. It installs to %LOCALAPPDATA%\Programs\Voxel Project and
+   creates desktop and Start menu shortcuts. No administrator access is needed.
+   Or just run Play.bat from this folder for portable play.
+3. In a Steam edition, start Steam and sign in. Host: New World / Load World.
+   Use Escape to copy the lobby code; friends use Join Steam Lobby.
+   Every friend needs the same game build and a distinct signed-in Steam account.
+4. For LAN, choose Settings > Multiplayer > Direct / LAN before hosting, then
+   join the host's IP:7878. Allow the game through Windows Firewall if prompted.
+   Direct connections across the internet may need UDP port forwarding.
+
+The full edition includes the 7B AI model and llama server. Hosting starts it
+automatically in the background. If the host allows guest prompting in Settings,
+guests start their local AI on their first prompt and submit rules for host review.
+Joining without prompting does not load local AI. The first model
+load takes time. Joining needs no model download and no developer tools.
+The client edition can also host normal gameplay, but has no bundled AI generation.
+
+Use current graphics drivers. The game needs a compatible 3D GPU; inference has
+CPU backends and a Vulkan backend. The bundled model alone is about 4.7 GB; actual
+memory use is higher and depends on context and server configuration. CPU-only
+generation can be slow. No internet AI service or subscription is required.
+
+Worlds and preferences live in saves/ and settings.json beside the installed game.
+Install.bat preserves them on updates. Close the game before updating. The AI
+server currently stays running after the game exits; close llama-server.exe in
+Task Manager before updating/removing its files, or to release its memory.
+
+To remove the game: close the game/server, back up saves/ if desired, then delete
+the install folder and its desktop/Start menu shortcuts. There is no registry
+entry or system service to remove.
+
+Troubleshooting: launch Play.bat to see startup errors. AI server logs are in
+llm-runtime/server/server.log. Extract/install on NTFS or exFAT; FAT32 cannot hold
+the included model. Keep enough disk space for the ZIP, extraction and installation.
+Steam builds currently use the development test App ID 480 (Spacewar).
+
+Component sources: https://github.com/ggml-org/llama.cpp
+Model: https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF
+Runtime-supplied license/notice files are included beside the runtime files.

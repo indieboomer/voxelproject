@@ -1,5 +1,8 @@
 # Steam multiplayer development
 
+For a distributable release with Steam, the AI runtime and a per-user installer,
+run `make_package.bat`; see [PACKAGING.md](PACKAGING.md).
+
 Steam support uses **test App ID 480 (Spacewar)** by default. Up to four players share one host-owned world. The default transport remains Direct / LAN; select Steam friends in Settings before hosting a new session. The setting persists and applies to the next session.
 
 ## Implementation plan and status

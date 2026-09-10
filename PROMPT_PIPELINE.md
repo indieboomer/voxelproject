@@ -14,7 +14,7 @@ The game continues to use the configured Qwen2.5-Coder 7B model and local llama.
 
 `protect_player(player_id, creature_kind)` prevents the named species from landing melee attacks on that player. It preserves creatures' underlying aggression, targeting and attacks against other creatures. `suppress_creature_attacks(creature_id)` prevents that creature from landing attacks on any target. Neither stops chasing or movement.
 
-Both methods are for on_tick only. Each successful tick replaces that rule's policies with the policies requested by that callback. If a condition is false, the callback adds none and its previous policies are removed. Disable, deletion, failed callbacks and reactivation remove the old activation's policies. Independent rules compose: removing one cannot cancel another's protection. Policies are transient; saved enabled rules recompute them after load, avoiding stale saved aggression changes. Changes take effect through the existing host simulation and damage/animation replication; clients do not run a second AI.
+Both methods are for on_tick only. Each successful tick replaces that rule's policies with the policies requested by that callback. If a condition is false, the callback adds none and its previous policies are removed. Disable, deletion, failed callbacks and reactivation remove the old activation's policies. Independent rules compose: removing one cannot cancel another's protection. Policies are transient; saved enabled rules recompute them after load, avoiding stale saved aggression changes. Changes take effect through the existing host simulation and damage/animation replication; clients do not execute a second authoritative copy of the rules.
 
 Rules already generated using set_aggressive/ignore retain their original persistent behavior. Disable and regenerate those rules to get temporary protection; manually undo persistent aggression changes if an older rule has already made them.
 
@@ -36,7 +36,7 @@ Structured interpretation/scope replies use greedy decoding (temperature 0); Lua
 
 ## Preflight latency
 
-The client retains its last successfully validated interpretation and independently checked target scope for five minutes. Repeating the exact prompt or repairing its code can reuse that result. A different prompt, execution type, client/server configuration, or expired entry requires fresh interpretation. Failures are not cached. This cache is in memory only; generated Lua, sandbox/scenario checks, and code review are never cached or skipped.
+The client retains its last successfully validated interpretation and independently checked target scope for five minutes. Corrective retries can reuse that interpretation. It also retains up to eight successfully reviewed code results for five minutes, keyed by the exact prompt and execution kind within one client/endpoint. Repeating an exact request reuses that code after fresh API lint and isolated sandbox/scenario checks. A cache miss follows the complete interpretation/generation/review pipeline. Failed generations are not cached, and corrective retries bypass the completed-code cache. These caches are in memory only and never activate a rule.
 
 The bundled server now starts with `--ctx-size 32768 --parallel 1`. Only one host pipeline runs at a time, so reserving multiple large contexts is unnecessary. The previously running server reported four slots and `n_ctx=111616`. The new limits apply only when the game starts a server; an already-running server or a manually managed endpoint is left alone. Exit the game, stop its bundled `llama-server.exe`, then launch the game to apply these startup defaults. The model is unchanged.
 
@@ -50,3 +50,55 @@ cargo test --features steam profile_preflight_cache -- --ignored --nocapture
 On the existing server, the cache benchmark generated the same player-protection rule in 2.179 seconds initially and 0.006 seconds on repetition, including executable policy validation both times. This is a repeat-request result, not a claim about new prompts. Initial four-prompt measurements took 1.5–4.2 seconds for interpretation, with an additional roughly 0.7–0.8 seconds for policy scope extraction; server load and prompt-cache state affect timings. The reduced server allocation has not yet been benchmarked against that running instance. Shorter semantic plans were tried and rejected after live tests found interpretation regressions; the original interpretation instructions, schema, examples, and validation remain intact.
 
 Final verification: 303 offline tests passed (19 opt-in tests ignored), all seven live pipeline prompts passed, the live cache benchmark passed, and the Steam build completed.
+
+## Guest prompting and current latency work
+
+Settings > Multiplayer > **When hosting: allow guests to prompt** is off by default.
+Changing it while hosting applies to the current session; snapshots advertise the
+host's setting. A guest's own hosting preference cannot grant permission in someone
+else's session. Host prompting is always available.
+
+With permission, guests use their own local AI and submit the original prompt plus
+generated Lua to the host. Full Windows and macOS packages already include the model;
+client-only packages need a separately configured local server to generate code.
+Guests start inference on their first prompt, while hosts still prewarm it. Startup
+waits for model readiness on a worker instead of immediately failing on a cold model.
+
+The host checks membership, permission, input size (2 KiB prompt / 32 KiB code), a
+10-second per-player submission interval, and one validation worker at a time.
+Untrusted guest code receives fresh API lint and isolated sandbox checks on that
+worker. Permission and identity are checked again before adding a disabled module.
+Only the host can Enable/Run/Delete rules in the authoritative world. Guest copies
+are read-only previews. The original prompt and escaped author/account attribution
+persist with the saved source. Guest instant spells run with the requesting player's
+caster identity when approved; they cannot be cast while that account is disconnected.
+Direct identities retain the existing nickname-based limitations.
+
+Protocol is now 12; all players need the updated build. Proposal delivery uses the
+existing reliable channel, shared by Steam and Direct. Nothing executes merely from
+receiving a proposal. Host-generated and guest-generated effects use the same existing
+authoritative simulation and replication.
+
+New-prompt checks were retained: most latency is inference, and earlier attempts to
+shorten interpretation regressed accuracy. Requests explicitly enable llama prompt
+caching. The largest improvement is exact-repeat custom prompts, which now avoid all
+model calls while repeating sandbox validation. Generation-worker disconnection now
+reports an error instead of leaving the UI waiting forever.
+
+```powershell
+cargo test --offline profile_reviewed_code_cache -- --ignored --nocapture
+```
+
+This benchmark compares a new `heal me` generation with validated reuse in the same
+client. Cold model loading is additional latency; timings are machine-specific.
+
+Measured on 2026-09-10 with the existing 7B Q4_K_M model: with the server already
+loaded, a fresh client generated/reviewed `heal me` in **2.356 s**, and the identical
+request reused reviewed code with fresh sandbox checks in **0.003 s**. An earlier
+cold-start pass took **48.802 s** including startup, followed by **0.003 s** reuse.
+This does not establish a first-time speedup versus the previous implementation.
+
+Verification for this update: 312 tests passed in both Direct and Steam configurations
+(19 and 20 opt-in tests ignored respectively), the live custom-cache benchmark passed,
+and the Windows installer and Mac bundle-layout checks passed. A live multi-PC guest
+proposal/approval session still needs testing.

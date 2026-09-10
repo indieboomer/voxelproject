@@ -455,6 +455,14 @@ pub(super) fn generate_prepared(
 }
 
 /// Exercise general Lua in isolated fixtures; catches runtime/API mistakes, not arbitrary semantic mismatches.
+pub(crate) fn validate_candidate(code: &str, kind: PromptKind) -> Result<(), String> {
+    let issues = crate::world_api_validate::validate_source(code);
+    if !issues.is_empty() {
+        return Err(issues.iter().map(|i| i.message.as_str()).collect::<Vec<_>>().join("; "));
+    }
+    smoke_code(code, kind)
+}
+
 fn smoke_code(code: &str, kind: PromptKind) -> Result<(), String> {
     use crate::{
         creature::{CreatureKind, Creatures},

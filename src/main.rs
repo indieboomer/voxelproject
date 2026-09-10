@@ -13,7 +13,10 @@ mod held_item;
 mod llm;
 mod llm_server;
 mod menu;
+mod worldgen;
 mod model;
+mod runtime_paths;
+mod rule_sharing;
 mod net;
 mod transport;
 #[cfg(feature = "steam")]
@@ -61,6 +64,10 @@ enum Stage {
 
 fn main() {
     env_logger::init();
+    if let Err(e) = runtime_paths::initialize() {
+        eprintln!("Cannot initialize game data: {e}");
+        std::process::exit(1);
+    }
 
     #[cfg(feature = "steam")]
     {
@@ -79,14 +86,6 @@ fn main() {
     );
 
     let launch_config = net::parse_args();
-
-    // Checked/started on a background thread so a forgotten-after-reboot
-    // llama-server doesn't block the window from opening -- rule generation
-    // just stays unavailable until it finishes coming up.
-    {
-        let llm_url = launch_config.llm_url.clone();
-        std::thread::spawn(move || llm_server::ensure_running(&llm_url));
-    }
 
     // `--connect` on the command line bypasses the menu entirely (used for
     // scripted/automated testing); any other launch starts at the main menu
@@ -140,11 +139,12 @@ fn main() {
                                             let port = menu.port;
                                             let llm_url = menu.llm_url.clone();
                                             let cfg = match action {
-                                                MenuAction::NewWorld { nickname } => LaunchConfig {
+                                                MenuAction::NewWorld { nickname, generation } => LaunchConfig {
                                                     connect: None,
                                                     port,
                                                     llm_url: llm_url.clone(),
                                                     fresh: true,
+                                                    generation,
                                                     nickname,
                                                 },
                                                 MenuAction::LoadWorld { nickname } => LaunchConfig {
@@ -152,6 +152,7 @@ fn main() {
                                                     port,
                                                     llm_url: llm_url.clone(),
                                                     fresh: false,
+                                                    generation: Default::default(),
                                                     nickname,
                                                 },
                                                 MenuAction::Join { addr, nickname } => LaunchConfig {
@@ -159,6 +160,7 @@ fn main() {
                                                     port,
                                                     llm_url: llm_url.clone(),
                                                     fresh: false,
+                                                    generation: Default::default(),
                                                     nickname,
                                                 },
                                                 MenuAction::Quit => unreachable!(),
@@ -178,6 +180,7 @@ fn main() {
                                                         port,
                                                         llm_url,
                                                         fresh: false,
+                                                    generation: Default::default(),
                                                         // MenuApp doesn't read this --
                                                         // it re-prompts for a nickname
                                                         // before any launch.
@@ -225,6 +228,7 @@ fn main() {
                                                 port: net::DEFAULT_PORT,
                                                 llm_url: net::DEFAULT_LLM_URL.to_string(),
                                                 fresh: false,
+                                                generation: Default::default(),
                                                 // MenuApp doesn't read this --
                                                 // it re-prompts for a nickname
                                                 // before any launch.

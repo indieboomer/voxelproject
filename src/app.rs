@@ -317,6 +317,7 @@ struct HostNet {
 }
 
 struct ClientNet {
+    allow_guest_prompting: bool,
     socket: Transport,
     server_addr: Peer,
     player_id: PlayerId,
@@ -610,6 +611,8 @@ pub struct App {
     poison_tick_timer: f32,
     llm: LlmClient,
     generation: GenerationState,
+    proposal_inbox: crate::rule_sharing::Inbox,
+    proposal_waiting: Option<Instant>,
     next_rule_id: u32,
     last_generated_index: Option<usize>,
 
@@ -1109,7 +1112,8 @@ impl App {
                     },
                     None => {
                         let seed = random_world_seed();
-                        let world = World::new(seed);
+                        let mut world = World::new(seed);
+                        world.generation = launch.generation.clone();
                         let h = world.terrain_height(0, 0) as f32 + 2.0;
                         (
                             world,
@@ -1117,7 +1121,7 @@ impl App {
                             -90f32.to_radians(),
                             0.0,
                             0.28,
-                            ScriptHost::scan_dir("modules"),
+                            ScriptHost::scan_dir(&crate::runtime_paths::resource("modules").to_string_lossy()),
                         )
                     }
                 };
@@ -1127,6 +1131,9 @@ impl App {
                         format!("Cannot host multiplayer session: {e}")
                     })?;
                 log::info!("Hosting on port {}", launch.port);
+                // Guests never need local inference. Start it only after hosting succeeds.
+                let llm_url = launch.llm_url.clone();
+                std::thread::spawn(move || { if let Err(e) = crate::llm_server::ensure_ready(&llm_url) { log::warn!("{e}"); } });
                 let host_net = HostNet {
                     appearance: remote_player::Appearance::choose(random_world_seed(), []),
                     socket,
@@ -1153,6 +1160,7 @@ impl App {
                 let (socket, server_addr, player_id, world, spawn_pos, time_of_day, reliable) =
                     join_handshake(server_addr, &launch.nickname)?;
                 let client_net = ClientNet {
+                    allow_guest_prompting: false,
                     socket,
                     server_addr,
                     player_id,
@@ -1260,6 +1268,8 @@ impl App {
             poison_tick_timer: 0.0,
             llm,
             generation: GenerationState::Idle,
+            proposal_inbox: crate::rule_sharing::Inbox::default(),
+            proposal_waiting: None,
             next_rule_id: 0,
             last_generated_index: None,
             ui,
@@ -1781,6 +1791,7 @@ impl App {
         self.update_chunks();
         self.poll_network(dt);
         self.poll_generation();
+        self.poll_proposals();
 
         if matches!(self.net, NetRole::Host(_)) {
             self.time_of_day = (self.time_of_day + dt / DAY_LENGTH_SECS).rem_euclid(1.0);
@@ -1882,6 +1893,7 @@ impl App {
 
         self.toasts.retain(|t| !t.is_expired());
         let is_host = matches!(self.net, NetRole::Host(_));
+        let can_prompt = self.can_prompt();
         let generation_status: Option<String> = match &self.generation {
             GenerationState::Waiting {
                 kind, is_retry: true, ..
@@ -1894,7 +1906,9 @@ impl App {
                 is_retry: false,
                 ..
             } => Some(format!("Interpreting, generating and checking a {}...", generation_noun(*kind))),
-            GenerationState::Idle => None,
+            GenerationState::Idle => self.proposal_waiting.map(|sent| if sent.elapsed() > Duration::from_secs(30) {
+                "Host response is delayed; you can keep playing while waiting.".into()
+            } else { "Waiting for host validation...".into() }),
         };
         let mut crafting_players: Vec<_> = self.host_player_positions().iter().map(|p| p.pos).collect();
         if let NetRole::Joined(client) = &self.net {
@@ -1912,6 +1926,7 @@ impl App {
             self.console_open,
             &mut self.prompt_input,
             is_host,
+            can_prompt,
             &self.scripting,
             self.last_generated_index,
             generation_status.as_deref(),
@@ -1978,7 +1993,7 @@ impl App {
             }
         }
         if let Some(prompt) = requests.submit_prompt {
-            if matches!(self.generation, GenerationState::Idle) {
+            if self.can_prompt() && self.proposal_waiting.is_none() && matches!(self.generation, GenerationState::Idle) {
                 self.prompt_input.clear();
                 self.start_generation(prompt);
             }
@@ -2122,6 +2137,11 @@ impl App {
     /// the in-game console), and it goes to the LLM along with the World
     /// API doc and an example module.
     fn start_generation(&mut self, user_request: String) {
+        if !self.can_prompt() { return; }
+        if user_request.trim().is_empty() || user_request.len() > crate::rule_sharing::MAX_PROMPT_BYTES {
+            self.notify_important("Use a nonempty prompt of at most 2048 bytes.".into());
+            return;
+        }
         // A cheap deterministic heuristic (see llm::classify_prompt), not a
         // hard requirement -- it just tells the model which contract to
         // write; `poll_generation` validates the generated contract
@@ -2129,7 +2149,11 @@ impl App {
         let kind = classify_prompt(&user_request);
         let noun = generation_noun(kind);
         log::info!("Generating a {noun} from: {user_request}");
-        self.notify_all(format!("Host is generating a {noun}: \"{user_request}\""));
+        if matches!(self.net, NetRole::Host(_)) {
+            self.notify_all(format!("Host is generating a {noun}: \"{user_request}\""));
+        } else {
+            self.notify_important(format!("Generating a {noun} locally for host review..."));
+        }
         let pending = self.llm.generate(&user_request, kind);
         self.generation = GenerationState::Waiting {
             user_request,
@@ -2137,6 +2161,45 @@ impl App {
             pending,
             is_retry: false,
         };
+    }
+
+    fn can_prompt(&self) -> bool {
+        match &self.net {
+            NetRole::Host(_) => true,
+            NetRole::Joined(client) => client.allow_guest_prompting && !client.lost_connection_logged,
+        }
+    }
+
+    fn poll_proposals(&mut self) {
+        let NetRole::Host(host) = &self.net else { return; };
+        self.proposal_inbox.retain_peers(|peer| host.clients.contains_key(peer));
+        let Some((peer, result)) = self.proposal_inbox.poll() else { return; };
+        if !host.clients.contains_key(&peer) { return; }
+        let result = if self.ui.settings.values.multiplayer.allow_guest_prompting {
+            result
+        } else { Err("Guest prompting was disabled before validation finished.".into()) };
+        let result = result.and_then(|proposal| {
+            let NetRole::Host(host) = &self.net else { return Err("Session ended.".into()); };
+            let connected_account = host.clients.get(&peer).and_then(|id| host.remote_players.get(id))
+                .map(|player| peer.account_key(&player.nickname));
+            if connected_account != crate::rule_sharing::caster_account(&proposal.source) {
+                return Err("The submitting player disconnected.".into());
+            }
+            let name = self.make_rule_name(&proposal.prompt);
+            let module = Module::load(name.clone(), proposal.prompt,
+                world_api_validate::tag_with_api_version(&proposal.source))?;
+            let index = self.scripting.add_generated(module)?;
+            self.next_rule_id += 1;
+            self.last_generated_index = Some(index);
+            Ok(format!("'{}' from {} is ready for host review. Nothing has been activated.", name, proposal.nickname))
+        });
+        let accepted = result.is_ok();
+        // Lua error strings are untrusted too; keep feedback within a network packet/UI row.
+        let message: String = result.unwrap_or_else(|error| error).chars().take(1024).collect();
+        if let NetRole::Host(host) = &mut self.net {
+            host.reliable.send(&host.socket, peer, ReliableMsg::RuleProposalResult { accepted, message: message.clone() });
+        }
+        if accepted { self.notify_all_important(message); } else { self.notify_important(format!("Guest proposal rejected: {message}")); }
     }
 
     /// Picks a short, meaningful name for a newly generated rule (e.g.
@@ -2247,6 +2310,24 @@ impl App {
                     return;
                 }
 
+                if let NetRole::Joined(client) = &mut self.net {
+                    if !client.allow_guest_prompting {
+                        self.notify_important("The host disabled guest prompting. Nothing was submitted.".into());
+                        return;
+                    }
+                    if let Err(error) = crate::rule_sharing::validate_sizes(&user_request, &code) {
+                        self.notify_important(error);
+                        return;
+                    }
+                    client.reliable.send(&client.socket, client.server_addr, ReliableMsg::RuleProposal {
+                        prompt: user_request, source: code,
+                    });
+                    self.proposal_waiting = Some(Instant::now());
+                    // Keep a local read-only copy so the author can inspect what was submitted.
+                    if let Ok(index) = self.scripting.add_generated(module) { self.last_generated_index = Some(index); }
+                    self.notify_important("Proposal sent. The host must review and activate it.".into());
+                    return;
+                }
                 let is_instant = module.is_instant;
                 self.next_rule_id += 1;
                 let idx = match self.scripting.add_generated(module) {
@@ -2545,7 +2626,19 @@ impl App {
             return;
         }
         let name = module.name.clone();
+        let caster_account = crate::rule_sharing::caster_account(&module.source);
         let players = self.host_player_positions();
+        let caster_id = if let Some(account) = caster_account {
+            let NetRole::Host(host) = &self.net else { return; };
+            let Some(id) = host.clients.iter().find_map(|(peer, id)| host.remote_players.get(id)
+                .filter(|p| peer.account_key(&p.nickname) == account).map(|_| *id)) else {
+                self.notify_important("The player who requested this spell is not connected.".into());
+                return;
+            };
+            id
+        } else { HOST_PLAYER_ID };
+        let Some(caster) = players.iter().find(|player| player.id == caster_id) else { return; };
+        let caster_resources = caster.resources;
         let outcome = self.scripting.run_cast(
             index,
             &self.world,
@@ -2553,8 +2646,8 @@ impl App {
             &players,
             &mut self.time_of_day,
             &mut self.weather,
-            HOST_PLAYER_ID,
-            self.player.resources_snapshot(),
+            caster_id,
+            caster_resources,
         );
         let had_crash = !outcome.crashes.is_empty();
         self.apply_tick_outcome(outcome);
@@ -2644,6 +2737,7 @@ impl App {
                 });
             }
             let snapshot = UnreliableMsg::Snapshot {
+                allow_guest_prompting: self.ui.settings.values.multiplayer.allow_guest_prompting,
                 time_of_day: self.time_of_day,
                 weather: self.weather.current.to_u8(),
                 players,
@@ -2667,6 +2761,15 @@ impl App {
                     return;
                 }
                 match msg {
+                    ReliableMsg::RuleProposal { prompt, source } => {
+                        let Some(player) = host.clients.get(&from).and_then(|id| host.remote_players.get(id)) else { return; };
+                        let result = self.proposal_inbox.submit(from,
+                            self.ui.settings.values.multiplayer.allow_guest_prompting,
+                            player.nickname.clone(), from.account_key(&player.nickname), prompt, source);
+                        if let Err(message) = result {
+                            host.reliable.send(&host.socket, from, ReliableMsg::RuleProposalResult { accepted: false, message });
+                        }
+                    }
                     ReliableMsg::Hello { nickname, protocol } => {
                         if host.clients.contains_key(&from) { return; }
                         if let Some(reason) = net::join_rejection(protocol, host.clients.len()) {
@@ -2707,7 +2810,7 @@ impl App {
                             player_id,
                             remote,
                         );
-                        for msg in net::welcome_messages(player_id,self.world.seed,self.time_of_day,spawn.to_array(),edits)
+                        for msg in net::welcome_messages(player_id,self.world.seed,self.world.generation.clone(),self.time_of_day,spawn.to_array(),edits)
                             .expect("world size checked before admission") {
                             host.reliable.send(&host.socket,from,msg);
                         }
@@ -2861,6 +2964,10 @@ impl App {
                     return;
                 }
                 match msg {
+                    ReliableMsg::RuleProposalResult { accepted, message } => {
+                        self.proposal_waiting = None;
+                        self.notify_important(format!("{}: {message}", if accepted { "Host accepted proposal for review" } else { "Proposal rejected" }));
+                    }
                     ReliableMsg::Goodbye => {
                         self.crafting_ui.feedback = "Host ended the session. Return to the menu to join another game.".into();
                         self.toasts.push(Toast::important("Host ended the session"));
@@ -2923,6 +3030,7 @@ impl App {
             }
             Packet::Ack { id } => client.reliable.ack(id, client.server_addr),
             Packet::Unreliable(UnreliableMsg::Snapshot {
+                allow_guest_prompting,
                 time_of_day,
                 weather,
                 players,
@@ -2934,6 +3042,7 @@ impl App {
                     unreachable!()
                 };
                 client.creature_snapshot = creatures;
+                client.allow_guest_prompting = allow_guest_prompting;
                 let local_player_id = self.local_player_id;
                 let now = Instant::now();
                 for sp in players {
@@ -3380,6 +3489,7 @@ fn join_handshake(
                     if let Some(initial) = transfer.accept(msg)? {
                         reliable.forget(hello_id);
                         let mut world = World::new(initial.seed);
+                        world.generation = initial.generation;
                         world.edits.extend(initial.edits);
                         world.rebuild_redstone_positions();
                         return Ok((socket,server_addr,initial.player_id,world,Vec3::from_array(initial.spawn),initial.time_of_day,reliable));
@@ -3808,7 +3918,7 @@ mod join_tests {
                             if !admitted {
                                 admitted = true;
                                 let edits = (0..5000).map(|x| ((x,40,1), BlockType::Stone)).collect();
-                                for msg in net::welcome_messages(1,123,0.7,[2.,70.,2.],edits).unwrap() {
+                                for msg in net::welcome_messages(1,123,Default::default(),0.7,[2.,70.,2.],edits).unwrap() {
                                     reliable.send(&host,peer,msg);
                                 }
                             }

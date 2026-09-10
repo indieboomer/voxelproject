@@ -49,12 +49,14 @@ pub enum MultiplayerMode {
 pub struct Multiplayer {
     pub mode: MultiplayerMode,
     pub steam_app_id: u32,
+    pub allow_guest_prompting: bool,
 }
 impl Default for Multiplayer {
     fn default() -> Self {
         Self {
             mode: MultiplayerMode::Direct,
             steam_app_id: 480,
+            allow_guest_prompting: false,
         }
     }
 }
@@ -129,6 +131,8 @@ impl SettingsPanel {
                     ui.small("Steam support is not included in this build. Build with build.bat steam, then restart the game.");
                 }
                 ui.label("Applies to your next session. One host and up to three guests.");
+                ui.checkbox(&mut self.values.multiplayer.allow_guest_prompting, "When hosting: allow guests to prompt");
+                ui.small("Applies immediately while hosting. Guests use their local AI; you review and activate their proposals.");
                 ui.separator();
                 ui.heading("Gameplay");
                 ui.checkbox(&mut self.values.gameplay.show_block_target, "Show block targeting outlines");
@@ -204,6 +208,10 @@ mod tests {
         let values: Settings = serde_json::from_str(r#"{"audio":{"volume":42}}"#).unwrap();
         assert_eq!(values.appearance.ui_theme, UiTheme::Generic);
         assert!(values.gameplay.show_block_target);
+        assert!(!values.multiplayer.allow_guest_prompting);
+        let shared: Settings = serde_json::from_str(r#"{"multiplayer":{"allow_guest_prompting":true}}"#).unwrap();
+        assert!(shared.multiplayer.allow_guest_prompting);
+        assert_eq!(serde_json::from_str::<Settings>(&serde_json::to_string(&shared).unwrap()).unwrap(), shared);
         let disabled: Settings =
             serde_json::from_str(r#"{"gameplay":{"show_block_target":false}}"#).unwrap();
         assert!(!disabled.gameplay.show_block_target);
