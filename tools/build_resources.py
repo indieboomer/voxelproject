@@ -38,7 +38,18 @@ def tile(identifier, spec, write=True):
     for y in range(16):
         for x in range(16):
             draw.point((x, y), fill=shade(rng.choice([-15, -8, 0, 0, 7, 12])))
-    if pattern == 'ore':
+    if pattern == 'snow':
+        # Low-contrast powder, with periodic drift highlights. Matching edge
+        # texels keep the tile seamless across large snow fields on every face.
+        import math
+        for y in range(16):
+            for x in range(16):
+                xx, yy = x % 15, y % 15
+                local = random.Random(xx + yy * 15 + 9107)
+                drift = 4 * math.cos(2 * math.pi * xx / 15) * math.cos(2 * math.pi * yy / 15)
+                delta = round(drift) + local.choice([-3, -1, 0, 1, 3])
+                draw.point((x, y), fill=shade(delta))
+    elif pattern == 'ore':
         for y in range(16):
             for x in range(16):
                 v = rng.randrange(62, 86)
@@ -174,7 +185,7 @@ def write_provenance(textures, rows):
 
 def main():
     ids = [r['id'] for r in DATA]
-    assert len(ids) == len(set(ids)) == 83
+    assert len(ids) == len(set(ids)) == 84
     crafting_path = ROOT / 'data/crafting.json'
     crafting = json.loads(crafting_path.read_text())
     # Preserve creature rules; the catalog owns all stackable resource definitions.

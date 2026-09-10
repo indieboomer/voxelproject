@@ -1,11 +1,11 @@
 {
   "version": 1,
   "generators": {
-    "tools/build_resources.py": "8ba3d38ea926bfdc259f12a9cf0349d5296690e33d35e42ecf17d60c664a1058",
+    "tools/build_resources.py": "2a9a26e794591e3cbbd2ba219bd660c50b4451458b4a750439ad7324de8ab539",
     "tools/build_base_textures.py": "c7b4190779d3df7fa5828a7487124bcf311d73e8587249edce2af7e84e9782f9",
     "tools/build_atlas.py": "13d7c1d012cea778e090f5e035709582d1e627c8110cac56ef9bf1e5372119d4",
     "tools/audit_resource_textures.py": "be3be6eedbf9b4e463804fbcb454f22ab2443f895511f5b836ce852313098814",
-    "data/resources.json": "640f4f176fb06590ddb54e9d4f50b14b87577a3c4b72764ca0a5adca728276d0",
+    "data/resources.json": "b4ce6d50db349e881dcda1054e91eabeb219fad94fcd2d54e419c6621a2d9c79",
     "data/base_textures.json": "96986e670461497606204f98c8e109b4c5f169409feb8c29e1fca11769277cb4"
   },
   "files": {
@@ -331,6 +331,10 @@
     },
     "textures/silver_ore.png": {
       "sha256": "abf53da39d7eb72aa589ab82b0a924246cba400be85972f38b685440b1be33bc",
+      "origin": "local_procedural_generation"
+    },
+    "textures/snow.png": {
+      "sha256": "712d225095734fdb94432f3c6b722cf14c7414a1aae3d1549fc2e3be4d5e69dd",
       "origin": "local_procedural_generation"
     },
     "textures/soil.png": {

@@ -12,6 +12,7 @@ This is a side project and technical experiment. Prioritize a working end-to-end
 
 - Start a new procedural world and enter it immediately, similar to Minecraft or Valheim.
 - Play alone or host a session for up to four players.
+- Multiplayer players receive a random model from `models/player/player1..4.glb` and a random hat from `hat1..4.glb` or no hat. The host assigns unique model/hat combinations among connected players and replicates them to everyone; appearances stay fixed until disconnect. Assets are embedded in the executable. All peers must use the same build (protocol 11).
 - Move in first person, run, jump, collide with terrain, and respawn.
 - Break, collect, select, and place voxel blocks.
 - Explore one biome with terrain, water, trees, a day/night cycle, and 2–3 simple creatures.

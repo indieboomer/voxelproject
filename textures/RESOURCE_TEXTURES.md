@@ -94,11 +94,12 @@ The unused legacy atlas backup is overwritten with the new atlas when present. `
 | glowcap | [glowcap.png](glowcap.png) | [glowcap.png](glowcap.png) | [glowcap.png](glowcap.png) |
 | thorn_bush | [thorn_bush.png](thorn_bush.png) | [thorn_bush.png](thorn_bush.png) | [thorn_bush.png](thorn_bush.png) |
 | dry_shrub | [dry_shrub.png](dry_shrub.png) | [dry_shrub.png](dry_shrub.png) | [dry_shrub.png](dry_shrub.png) |
+| snow | [snow.png](snow.png) | [snow.png](snow.png) | [snow.png](snow.png) |
 | mud | mud.png | mud.png | mud.png |
 | redstone | redstone.png | redstone.png | redstone.png |
 | crystal | crystal.png | crystal.png | crystal.png |
 
-All 94 source PNGs have local generation provenance, including the unused placeholder. Air/entities use the synthetic white atlas tile. No required resource texture is missing.
+All 95 source PNGs have local generation provenance, including the unused placeholder. Air/entities use the synthetic white atlas tile. No required resource texture is missing.
 
 ## Source tiles
 
@@ -185,6 +186,7 @@ All 94 source PNGs have local generation provenance, including the unused placeh
 | [short_grass.png](short_grass.png) | Local procedural generation |
 | [silver.png](silver.png) | Local procedural generation |
 | [silver_ore.png](silver_ore.png) | Local procedural generation |
+| [snow.png](snow.png) | Local procedural generation |
 | [soil.png](soil.png) | Local procedural generation |
 | [spruce_leaves.png](spruce_leaves.png) | Local procedural generation |
 | [spruce_log.png](spruce_log.png) | Local procedural generation |

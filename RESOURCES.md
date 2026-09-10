@@ -1,6 +1,9 @@
 # Resources and elemental balance
 
-The catalog contains **83 stackable, placeable resources**: **55 obtainable naturally** (six also craftable), and **28 crafting-only**. This adds 60 resources to the original 23. Air, water and bedrock are not counted. Surface blue crystals now stack in inventory; harvesting still sets the legacy crystal rule flag. No equipment, tools, consumable items, stations or animal harvesting were added.
+The catalog contains **84 stackable, placeable resources**: **56 obtainable naturally** (six also craftable), and **28 crafting-only**. This adds 61 resources to the original 23. Air, water and bedrock are not counted. Surface blue crystals now stack in inventory; harvesting still sets the legacy crystal rule flag. No equipment, tools, consumable items, stations or animal harvesting were added.
+
+
+Snow forms solid, opaque patches from Y=32 on mountain slopes and summits, mixed with exposed rock and rare grass. Generated snow is one block deep with stone immediately underneath. It is hand-pickable (one use), placeable from the hotbar, and extracts to Water 1. Snow is natural-only with no crafting recipe; it does not melt or spread. Its original, seamless 64px powder texture is shared by top, side and bottom faces, with no emission or shiny glimmer.
 
 ## Play and progression
 
@@ -18,6 +21,7 @@ E = Earth, F = Fire, W = Water, L = Life, D = Death. Arrows show slot order; `-`
 
 | Resource | Family | Availability | Formula | Mana | Extraction E/F/W/L/D |
 |---|---|---|---|---:|---|
+| Snow | Water and ice | Mountain snow patches, Y 32+ | - | - | 0/0/1/0/0 |
 | Grass | Plants | Trees and open grassland | - | - | 1/0/0/1/0 |
 | Soil | Earth and stone | Surface terrain | - | - | 2/0/0/0/0 |
 | Stone | Earth and stone | Underground pockets + crafting | E1 -> W1 | 2 | 1/0/0/0/0 |

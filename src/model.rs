@@ -45,6 +45,7 @@ use crate::voxel::atlas::white_uv;
 use crate::voxel::mesher::Vertex;
 
 struct Primitive {
+    uvs: Vec<[f32; 2]>,
     positions: Vec<Vec3>,
     normals: Vec<Vec3>,
     indices: Vec<u32>,
@@ -115,6 +116,7 @@ struct SkinnedMesh {
 /// "walk", ...), and -- for every model but sheep/chicken -- a `Skin`.
 /// Not every model has every clip; see each `.glb`'s own export.
 pub struct AnimatedModel {
+    hat_socket: Option<usize>,
     nodes: Vec<ModelNode>,
     roots: Vec<usize>,
     animations: HashMap<String, AnimationClip>,
@@ -129,6 +131,8 @@ pub struct AnimatedModel {
 /// The eight creature models, loaded once at startup and shared by every
 /// spawned creature of that kind (see `App::new`).
 pub struct Models {
+    players: [AnimatedModel; 4],
+    hats: [AnimatedModel; 4],
     sheep: AnimatedModel,
     chicken: AnimatedModel,
     stone_golem: AnimatedModel,
@@ -142,6 +146,18 @@ pub struct Models {
 impl Models {
     pub fn load() -> Self {
         Self {
+            players: [
+                load_glb(include_bytes!("../models/player/player1.glb")),
+                load_glb(include_bytes!("../models/player/player2.glb")),
+                load_glb(include_bytes!("../models/player/player3.glb")),
+                load_glb(include_bytes!("../models/player/player4.glb")),
+            ],
+            hats: [
+                load_glb(include_bytes!("../models/player/hat1.glb")),
+                load_glb(include_bytes!("../models/player/hat2.glb")),
+                load_glb(include_bytes!("../models/player/hat3.glb")),
+                load_glb(include_bytes!("../models/player/hat4.glb")),
+            ],
             sheep: load_glb(include_bytes!("../models/sheep.glb")),
             chicken: load_glb(include_bytes!("../models/chicken.glb")),
             stone_golem: load_glb(include_bytes!("../models/stone_golem.glb")),
@@ -171,7 +187,7 @@ impl Models {
     /// (see this module's doc comment). `app.rs`'s `create_atlas_bind_group`
     /// uploads these once at startup into the `tex_layer`-indexed
     /// `creature_texture` array `emit_skinned_mesh`'s vertices sample from.
-    pub fn creature_texture_layers(&self) -> [Option<&image::RgbaImage>; 8] {
+    pub fn creature_texture_layers(&self) -> [Option<&image::RgbaImage>; 16] {
         [
             self.sheep.texture.as_ref(),
             self.chicken.texture.as_ref(),
@@ -181,6 +197,14 @@ impl Models {
             self.cow.texture.as_ref(),
             self.goblin.texture.as_ref(),
             self.sunscorch.texture.as_ref(),
+            self.players[0].texture.as_ref(),
+            self.players[1].texture.as_ref(),
+            self.players[2].texture.as_ref(),
+            self.players[3].texture.as_ref(),
+            self.hats[0].texture.as_ref(),
+            self.hats[1].texture.as_ref(),
+            self.hats[2].texture.as_ref(),
+            self.hats[3].texture.as_ref(),
         ]
     }
 }
@@ -437,6 +461,10 @@ fn load_glb(bytes: &[u8]) -> AnimatedModel {
                     }
                     let material_idx = prim.get("material").and_then(Value::as_u64).map(|v| v as usize);
                     mesh.push(Primitive {
+                        uvs: attrs.get("TEXCOORD_0").and_then(Value::as_u64)
+                            .map(|idx| accessor_floats(&json, bin, idx as usize, 2)
+                                .chunks_exact(2).map(|uv| [uv[0], uv[1]]).collect())
+                            .unwrap_or_default(),
                         positions,
                         normals,
                         indices,
@@ -586,7 +614,39 @@ fn load_glb(bytes: &[u8]) -> AnimatedModel {
         None => (None, None),
     };
 
-    AnimatedModel { nodes, roots, animations, skin, texture }
+    let texture = texture.or_else(|| material_base_color_image(&json, bin, Some(0)));
+    let hat_socket = nodes_json.iter().position(|n| n["name"] == "hat_socket");
+    AnimatedModel { nodes, roots, animations, skin, texture, hat_socket }
+}
+
+impl Models {
+    /// Player assets are authored in meters, facing +Z, with a named hat socket.
+    pub fn push_player(&self, vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>,
+        appearance: crate::remote_player::Appearance, origin: Vec3, yaw: f32,
+        speed: f32, time: f32) {
+        let model_index = usize::from(appearance.model).min(3);
+        let model = &self.players[model_index];
+        let clip = model.animations.get(if speed > 5.0 { "run" } else if speed > 0.2 { "walk" } else { "idle" });
+        let t = clip.filter(|c| c.duration > 0.0).map_or(0.0, |c| time.rem_euclid(c.duration));
+        let matrices = compute_world_matrices(model, clip, t);
+        let (s, c) = yaw.sin_cos();
+        let rotate = |x: f32, z: f32| (x * s + z * c, -x * c + z * s);
+        if let Some(skin) = &model.skin {
+            emit_skinned_mesh(skin, &matrices, vertices, indices, origin, &rotate, 9.0 + model_index as f32);
+        }
+        if let Some((hat_index, socket)) = appearance.hat.filter(|&h| h < 4).zip(model.hat_socket) {
+            let hat = &self.hats[hat_index as usize];
+            let hat_matrices: Vec<_> = compute_world_matrices(hat, None, 0.0).into_iter()
+                .map(|m| matrices[socket] * m).collect();
+            let start = vertices.len();
+            emit_rigid_parts(hat, &hat_matrices, vertices, indices, origin, &rotate, white_uv());
+            let uvs = hat.nodes.iter().flat_map(|n| &n.mesh).flat_map(|p| &p.uvs);
+            for (vertex, uv) in vertices[start..].iter_mut().zip(uvs) {
+                vertex.uv = *uv;
+                vertex.tex_layer = 13.0 + hat_index as f32;
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -846,6 +906,33 @@ pub fn push_model(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn player_models_and_all_hats_render_with_textures_and_animated_sockets() {
+        use super::*;
+        let models = Models::load();
+        assert!(models.creature_texture_layers()[8..].iter().all(|t| t.is_some()));
+        for model in 0..4 {
+            assert!(models.players[model as usize].hat_socket.is_some());
+            for hat in [None, Some(0), Some(1), Some(2), Some(3)] {
+                for speed in [0.0, 3.0, 7.0] {
+                    let mut vertices = Vec::new();
+                    let mut indices = Vec::new();
+                    models.push_player(&mut vertices, &mut indices,
+                        crate::remote_player::Appearance { model, hat }, Vec3::ZERO, 0.0, speed, 0.3);
+                    assert!(!indices.is_empty());
+                    assert!(indices.iter().all(|&i| (i as usize) < vertices.len()));
+                    assert!(vertices.iter().all(|v| Vec3::from_array(v.position).is_finite()));
+                    assert!(vertices.iter().any(|v| v.tex_layer == 9.0 + model as f32));
+                    if let Some(hat) = hat {
+                        let hat_vertices: Vec<_> = vertices.iter().filter(|v| v.tex_layer == 13.0 + hat as f32).collect();
+                        assert!(!hat_vertices.is_empty());
+                        assert!(hat_vertices.iter().all(|v| v.position[1] > 1.4 && v.position[1] < 2.3));
+                        assert!(hat_vertices.iter().any(|v| v.uv != hat_vertices[0].uv));
+                    }
+                }
+            }
+        }
+    }
     use super::*;
 
     #[test]

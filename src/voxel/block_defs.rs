@@ -1240,6 +1240,21 @@ pub(crate) fn csv_def(block: BlockType) -> Option<BlockDef> {
             cutout: false,
             cross: true,
         },
+        BlockType::Snow => BlockDef {
+            display_name: "Snow",
+            resource_type: "water and ice",
+            opacity: 1.0,
+            roughness: 0.9,
+            emission: 0.0,
+            hardness: 1,
+            tile_top: TILE_SNOW,
+            tile_side: TILE_SNOW,
+            tile_bottom: TILE_SNOW,
+            only_on_top: false,
+            single_item: false,
+            cutout: false,
+            cross: false,
+        },
         _ => return None,
     })
 }
@@ -1331,6 +1346,7 @@ pub(crate) fn csv_from_name(lower_name: &str) -> Option<BlockType> {
         "glowcap" => BlockType::Glowcap,
         "thorn_bush" => BlockType::ThornBush,
         "dry_shrub" => BlockType::DryShrub,
+        "snow" => BlockType::Snow,
         _ => return None,
     })
 }
@@ -1422,6 +1438,7 @@ pub(crate) fn csv_id(block: BlockType) -> Option<&'static str> {
         BlockType::Glowcap => "glowcap",
         BlockType::ThornBush => "thorn_bush",
         BlockType::DryShrub => "dry_shrub",
+        BlockType::Snow => "snow",
         _ => return None,
     })
 }

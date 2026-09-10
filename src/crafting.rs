@@ -957,7 +957,7 @@ mod resource_balance_tests {
     #[test]
     fn all_resource_formulas_execute_without_recycling_profit() {
         let registry = Registry::parse(include_str!("../data/crafting.json")).unwrap();
-        assert_eq!(COLLECTIBLE_BLOCKS.len(), 83);
+        assert_eq!(COLLECTIBLE_BLOCKS.len(), 84);
         let world = World::new(5);
         let mut creatures = Creatures::new();
         for (index, block) in COLLECTIBLE_BLOCKS.iter().enumerate() {
@@ -1051,6 +1051,10 @@ mod resource_balance_tests {
         assert_eq!(COLLECTIBLE_BLOCKS[82], BlockType::Crystal);
         assert_eq!(before_crystals.resources[82], 0);
         assert_eq!(BlockType::Fern as u8, 76);
+        let before_snow: Account=serde_json::from_value(serde_json::json!({"resources":(1..=83).collect::<Vec<u32>>()})).unwrap();
+        assert_eq!(before_snow.resources[..83],(1..=83).collect::<Vec<u32>>());
+        assert_eq!(COLLECTIBLE_BLOCKS[83],BlockType::Snow);
+        assert_eq!(before_snow.resources[83],0);
         let mut expanded = account;
         expanded.resources[COLLECTIBLE_BLOCKS.len() - 1] = 55;
         let bytes = bincode::serialize(&expanded).unwrap();

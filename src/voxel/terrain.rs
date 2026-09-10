@@ -9,6 +9,27 @@ const RIVER_SPACING: f32 = 384.0;
 const LAKE_SPACING: f32 = 336.0;
 const MOUNTAIN_SPACING: f32 = 256.0;
 pub const ROCK_LINE: i32 = 34;
+pub const ALPINE_LINE: i32 = 32;
+/// Coherent snow patches, bare steep faces, and occasional grassy ledges.
+/// All decisions use world coordinates so neighboring chunks share the pattern.
+#[cfg(test)]
+pub fn mountain_surface(wx:i32,wz:i32,h:i32,seed:u32)->super::BlockType {
+    use super::BlockType;
+    if h<ALPINE_LINE {return BlockType::Grass;}
+    let slope=[height(wx-1,wz,seed),height(wx+1,wz,seed),height(wx,wz-1,seed),height(wx,wz+1,seed)]
+        .into_iter().map(|n|(n-h).abs()).max().unwrap_or(0);
+    mountain_surface_with_slope(wx,wz,h,seed,slope)
+}
+pub(super) fn mountain_surface_with_slope(wx:i32,wz:i32,h:i32,seed:u32,slope:i32)->super::BlockType {
+    use super::BlockType;
+    if h<ALPINE_LINE {return BlockType::Grass;}
+    let patch=fbm(wx as f32*0.075,wz as f32*0.075,seed^0x5A0F,3,2.0,0.5);
+    let threshold=0.63-(h-ALPINE_LINE) as f32*0.022+(slope as f32*0.055).min(0.20);
+    if patch>threshold {return BlockType::Snow;}
+    if h<ROCK_LINE {return BlockType::Grass;}
+    let grass=fbm(wx as f32*0.11,wz as f32*0.11,seed^0x5A10,2,2.0,0.5);
+    if slope<=1 && grass>0.80 {BlockType::Grass}else{BlockType::Stone}
+}
 
 fn river_z(x: f32, row: i32, seed: u32) -> f32 {
     let phase = column_rand(row, 0, seed, 0xA710) * std::f32::consts::TAU;
@@ -87,6 +108,19 @@ pub fn height(wx: i32, wz: i32, seed: u32) -> i32 {
 mod tests {
     use super::*;
     #[test]
+    fn snowy_summits_have_solid_caps_and_preserve_player_edits() {
+        use super::super::{World,BlockType,chunk::world_to_chunk};
+        let (x,z,h)=(-512..512).step_by(8).flat_map(|x|(-512..512).step_by(8).map(move|z|(x,z,height(x,z,42))))
+            .find(|(x,z,h)|*h>=40 && mountain_surface(*x,*z,*h,42)==BlockType::Snow).expect("snowy summit");
+        let mut world=World::new(42);let (cx,cz)=world_to_chunk(x,z);world.ensure_chunk_loaded(cx,cz);
+        assert_eq!(world.get_block(x,h,z),BlockType::Snow);
+        assert_eq!(world.get_block(x,h-1,z),BlockType::Stone);
+        assert!(BlockType::Snow.is_solid());assert!(BlockType::Snow.hand_pickable());
+        assert_eq!(BlockType::from_name("snow"),Some(BlockType::Snow));
+        world.set_block(x,h,z,BlockType::Bricks);world.unload_chunk(cx,cz);world.ensure_chunk_loaded(cx,cz);
+        assert_eq!(world.get_block(x,h,z),BlockType::Bricks);
+    }
+    #[test]
     fn winding_channels_connect_lake_centers_across_negative_and_positive_chunks() {
         for seed in [7, 42, 2026] {
             for row in [-1, 0, 1] {
@@ -131,6 +165,7 @@ mod tests {
     #[test]
     fn terrain_survey_has_sparse_high_peaks_and_water() {
         let mut rocky = 0;
+        let (mut snow,mut bare_rock,mut alpine_grass,mut lower_snow)=(0,0,0,0);
         let mut water = 0;
         let mut peak = 0;
         let mut image = image::RgbImage::new(512, 512);
@@ -140,11 +175,17 @@ mod tests {
                 peak = peak.max(h);
                 rocky += usize::from(h >= ROCK_LINE);
                 water += usize::from(h < SEA_LEVEL);
+                let surface=mountain_surface(x as i32*2-512,z as i32*2-512,h,42);
+                if h>=ROCK_LINE {
+                    match surface {super::super::BlockType::Snow=>snow+=1,super::super::BlockType::Stone=>bare_rock+=1,_=>alpine_grass+=1}
+                } else if surface==super::super::BlockType::Snow {lower_snow+=1;}
+
                 let color = if h < SEA_LEVEL {
                     [25, 85 + ((h - 2) * 3) as u8, 155]
-                } else if h >= ROCK_LINE {
-                    let v = 100 + (h - ROCK_LINE) as u8 * 12;
-                    [v, v, v]
+                } else if surface==super::super::BlockType::Snow {
+                    [223,235,245]
+                } else if surface==super::super::BlockType::Stone {
+                    [115,119,125]
                 } else {
                     [65 + (h - 18) as u8 * 3, 110 + (h - 18) as u8 * 3, 55]
                 };
@@ -160,6 +201,11 @@ mod tests {
             "water coverage {water}/262144"
         );
         assert!(peak >= 40 && peak < CHUNK_Y);
+        assert!(snow>100 && bare_rock>100,"snow={snow}, rock={bare_rock}");
+        assert!(alpine_grass>0 && alpine_grass<rocky/10,"grass={alpine_grass}/{rocky}");
+        assert!(lower_snow>0,"missing lower snow patches");
+        println!("Alpine mix: snow={snow}, rock={bare_rock}, grass={alpine_grass}; lower snow={lower_snow}");
+
         std::fs::create_dir_all("target").unwrap();
         image.save("target/terrain-map.png").unwrap();
         std::fs::write("target/terrain-survey.txt",format!("seed=42, area=1024x1024, samples=262144\nrocky={rocky}\nwater={water}\npeak={peak}\n")).unwrap();

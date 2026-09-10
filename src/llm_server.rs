@@ -9,6 +9,9 @@ const SERVER_SUBDIR: &str = "llm-runtime/server";
 const MODEL_RELATIVE: &str = "../models/qwen2.5-coder-7b-instruct-q4_k_m.gguf";
 
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_millis(500);
+// One host submits one pipeline at a time. Auto-sizing reserves a very large
+// context and several slots on the bundled server, competing with game rendering.
+const INFERENCE_ARGS: &[&str] = &["--ctx-size", "32768", "--parallel", "1"];
 
 /// Makes sure a local `llama-server` is answering at `llm_url`, launching
 /// the bundled one if it isn't. Meant to be called on a background thread
@@ -121,6 +124,7 @@ fn spawn_server(server_dir: &Path, host: &str, port: u16) -> Result<(), String> 
         .arg(host)
         .arg("--port")
         .arg(port.to_string())
+        .args(INFERENCE_ARGS)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_file_err));

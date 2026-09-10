@@ -1,25 +1,35 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use glam::Vec3;
+use glam::{Vec3, Vec3Swizzles};
 
 use crate::net::PlayerId;
 use crate::voxel::atlas::white_uv;
 use crate::voxel::mesher::{push_cuboid, MeshData, Vertex};
 
-const PLAYER_COLORS: [[f32; 3]; 4] = [
-    [0.85, 0.25, 0.25],
-    [0.25, 0.5, 0.85],
-    [0.85, 0.75, 0.2],
-    [0.5, 0.85, 0.3],
-];
 const CRYSTAL_MARKER_COLOR: [f32; 3] = [0.55, 0.85, 0.95];
 
-fn color_for(id: PlayerId) -> [f32; 3] {
-    PLAYER_COLORS[id as usize % PLAYER_COLORS.len()]
+/// Host-selected combination. Model/hat indices are zero-based; None is bareheaded.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct Appearance {
+    pub model: u8,
+    pub hat: Option<u8>,
 }
 
+impl Appearance {
+    pub fn choose(seed: u32, used: impl IntoIterator<Item = Self>) -> Self {
+        let used: Vec<_> = used.into_iter().collect();
+        let available: Vec<_> = (0..20).map(|i| Self {
+            model: i / 5,
+            hat: if i % 5 == 0 { None } else { Some(i % 5 - 1) },
+        }).filter(|a| !used.contains(a)).collect();
+        assert!(!available.is_empty(), "all player appearances occupied");
+        available[seed as usize % available.len()]
+    }
+}
 pub struct RemotePlayer {
+    pub appearance: Appearance,
+    pub animation_started: Instant,
     pub held: Option<crate::equipment::Entry>,
     pub pos: Vec3,
     pub yaw: f32,
@@ -59,6 +69,8 @@ impl RemotePlayer {
     /// own `Player` or this `RemotePlayer` record of someone else's.
     pub fn new(pos: Vec3, yaw: f32, carrying_crystal: bool, nickname: String) -> Self {
         Self {
+            appearance: Appearance::default(),
+            animation_started: Instant::now(),
             held:None,
             pos,
             yaw,
@@ -77,7 +89,7 @@ impl RemotePlayer {
 
 /// Builds a mesh for every tracked remote player except `exclude` (the
 /// local player, if it appears in the same map).
-pub fn build_mesh(players: &HashMap<PlayerId, RemotePlayer>, exclude: PlayerId) -> MeshData {
+pub fn build_mesh(players: &HashMap<PlayerId, RemotePlayer>, exclude: PlayerId, models: &crate::model::Models) -> MeshData {
     let mut vertices: Vec<Vertex> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
 
@@ -88,22 +100,16 @@ pub fn build_mesh(players: &HashMap<PlayerId, RemotePlayer>, exclude: PlayerId) 
         }
         let held=crate::held_item::mesh(rp.held,rp.pos+Vec3::new(0.4,0.65,0.0),glam::Mat3::from_rotation_y(-rp.yaw),0.55);
         let offset=vertices.len() as u32;vertices.extend(held.vertices);indices.extend(held.indices.into_iter().map(|i|i+offset));
-        let color = color_for(id);
         let feet = rp.pos;
-        let body_min = Vec3::new(feet.x - 0.3, feet.y, feet.z - 0.3);
-        let body_max = Vec3::new(feet.x + 0.3, feet.y + 1.4, feet.z + 0.3);
-        push_cuboid(&mut vertices, &mut indices, body_min, body_max, color, uv);
-
-        let head_min = Vec3::new(feet.x - 0.22, body_max.y, feet.z - 0.22);
-        let head_max = Vec3::new(feet.x + 0.22, body_max.y + 0.4, feet.z + 0.22);
-        push_cuboid(&mut vertices, &mut indices, head_min, head_max, color, uv);
-
+        models.push_player(&mut vertices, &mut indices, rp.appearance, feet, rp.yaw,
+            if rp.last_seen.elapsed().as_secs_f32() < 0.25 { rp.velocity.xz().length() } else { 0.0 },
+            rp.animation_started.elapsed().as_secs_f32());
         // Small floating marker above crystal carriers, so "sheep hunt
         // players carrying a crystal" is something you can actually see
         // happening, not just trust the log for.
         if rp.carrying_crystal {
-            let marker_min = Vec3::new(feet.x - 0.1, head_max.y + 0.15, feet.z - 0.1);
-            let marker_max = Vec3::new(feet.x + 0.1, head_max.y + 0.35, feet.z + 0.1);
+            let marker_min = Vec3::new(feet.x - 0.1, feet.y + 2.2, feet.z - 0.1);
+            let marker_max = Vec3::new(feet.x + 0.1, feet.y + 2.4, feet.z + 0.1);
             push_cuboid(
                 &mut vertices,
                 &mut indices,
@@ -116,4 +122,26 @@ pub fn build_mesh(players: &HashMap<PlayerId, RemotePlayer>, exclude: PlayerId) 
     }
 
     MeshData { vertices, indices }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assignments_are_unique_including_host_and_bare_heads() {
+        for seed in 0..100 {
+            let mut assigned = Vec::new();
+            for _ in 0..20 {
+                let next = Appearance::choose(seed, assigned.iter().copied());
+                assert!(!assigned.contains(&next));
+                assigned.push(next);
+            }
+            assert_eq!(assigned.iter().filter(|a| a.hat.is_none()).count(), 4);
+            // A replacement guest can only receive a currently free combination.
+            assigned.remove(2);
+            let replacement = Appearance::choose(seed, assigned.iter().copied());
+            assert!(!assigned.contains(&replacement));
+        }
+    }
 }

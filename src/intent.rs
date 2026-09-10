@@ -355,12 +355,17 @@ fn resolve_target_scope(url: &str, prompt: &str) -> Result<String, String> {
     Ok(targets.into())
 }
 
+#[cfg(test)]
 pub fn generate(
     url: &str,
     prompt: &str,
     kind: PromptKind,
     correction: Option<(&str, &str)>,
 ) -> Result<String, String> {
+    generate_prepared(url, prompt, kind, correction, prepare(url, prompt, kind)?)
+}
+
+pub(super) fn prepare(url: &str, prompt: &str, kind: PromptKind) -> Result<Plan, String> {
     let mut plan = interpreted(url, prompt, kind, None)?;
     // A model-only critic of abstract plans produced false rejections in evaluation.
     // Validate structure here, then use executable checks and review actual custom Lua.
@@ -385,6 +390,13 @@ pub fn generate(
         .into();
         plan.validate(kind)?;
     }
+    Ok(plan)
+}
+
+pub(super) fn generate_prepared(
+    url: &str, prompt: &str, kind: PromptKind,
+    correction: Option<(&str, &str)>, plan: Plan,
+) -> Result<String, String> {
     if let Some(code) = plan.compile() {
         crate::world_api_validate::validate_source(&code)
             .first()
@@ -705,6 +717,29 @@ mod tests {
         assert!(prompt.contains("- api.protect_player("));
         assert!(!prompt.contains("- api.give_item("));
     }
+    #[test]
+    #[ignore = "live preflight timing and semantic checks; requires local llama-server"]
+    fn profile_preflight() {
+        let cases = [
+            ("players are protected during rain from wolf attack", "protect_players", "rain", "players"),
+            ("if it rains then wolf doesnt attack", "suppress_attacks", "rain", "all"),
+            ("start day", "custom", "always", "custom"),
+            ("At night sheep hunt players carrying a crystal", "custom", "night", "custom"),
+        ];
+        for (prompt, effect, condition, targets) in cases {
+            let start = std::time::Instant::now();
+            let p = interpreted("http://127.0.0.1:8090/v1/chat/completions", prompt, super::super::classify_prompt(prompt), None).unwrap();
+            let interpretation = start.elapsed().as_secs_f32();
+            let scope = if p.effect != "custom" { Some(resolve_target_scope("http://127.0.0.1:8090/v1/chat/completions", prompt).unwrap()) } else { None };
+            println!("{prompt}: interpretation={interpretation:.2}s total={:.2}s plan={}", start.elapsed().as_secs_f32(), serde_json::to_string(&p).unwrap());
+            assert_eq!(p.effect, effect);
+            if effect != "custom" {
+                assert_eq!(p.condition, condition);
+                assert_eq!(scope.as_deref(), Some(targets));
+            }
+        }
+    }
+
     #[test]
     #[ignore = "32-case live model evaluation; writes results and reports failures without activating rules"]
     fn live_intent_evaluation_suite() {

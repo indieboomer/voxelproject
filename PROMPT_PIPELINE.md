@@ -33,3 +33,20 @@ The broader evaluation reports acceptance/errors rather than asserting perfect m
 The regular Steam-feature suite passed 281 tests (13 opt-in tests ignored). A 32-case live evaluation during development accepted 30 cases, including 21/22 authored policy scenarios and 9/10 custom generation cases. The original omitted-target phrasing and a false rejection of healing prompted further scope/review corrections. The final focused live rerun passed all four protection prompts, including both original examples, checking their expected scope and conditions. Healing, inventory grants and time changes also passed live smoke checks during development. The full 32-case suite was not rerun after the final corrections; these figures are not a guarantee of perfect language understanding.
 
 Structured interpretation/scope replies use greedy decoding (temperature 0); Lua generation retains temperature 0.2. When two supported scope readings disagree, player-only protection is preferred to avoid unexpectedly pacifying combat against other creatures. The resulting scope is shown explicitly in review. The model remains Qwen2.5-Coder 7B Q4_K_M.
+
+## Preflight latency
+
+The client retains its last successfully validated interpretation and independently checked target scope for five minutes. Repeating the exact prompt or repairing its code can reuse that result. A different prompt, execution type, client/server configuration, or expired entry requires fresh interpretation. Failures are not cached. This cache is in memory only; generated Lua, sandbox/scenario checks, and code review are never cached or skipped.
+
+The bundled server now starts with `--ctx-size 32768 --parallel 1`. Only one host pipeline runs at a time, so reserving multiple large contexts is unnecessary. The previously running server reported four slots and `n_ctx=111616`. The new limits apply only when the game starts a server; an already-running server or a manually managed endpoint is left alone. Exit the game, stop its bundled `llama-server.exe`, then launch the game to apply these startup defaults. The model is unchanged.
+
+Logs now record preflight elapsed time/cache hits and model-request time/token counts. Opt-in measurements:
+
+```powershell
+cargo test --features steam profile_preflight -- --ignored --nocapture
+cargo test --features steam profile_preflight_cache -- --ignored --nocapture
+```
+
+On the existing server, the cache benchmark generated the same player-protection rule in 2.179 seconds initially and 0.006 seconds on repetition, including executable policy validation both times. This is a repeat-request result, not a claim about new prompts. Initial four-prompt measurements took 1.5–4.2 seconds for interpretation, with an additional roughly 0.7–0.8 seconds for policy scope extraction; server load and prompt-cache state affect timings. The reduced server allocation has not yet been benchmarked against that running instance. Shorter semantic plans were tried and rejected after live tests found interpretation regressions; the original interpretation instructions, schema, examples, and validation remain intact.
+
+Final verification: 303 offline tests passed (19 opt-in tests ignored), all seven live pipeline prompts passed, the live cache benchmark passed, and the Steam build completed.

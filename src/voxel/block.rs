@@ -105,6 +105,7 @@ pub enum BlockType {
     Glowcap,
     ThornBush,
     DryShrub,
+    Snow,
 }
 
 /// Per-block static properties, transcribed 1:1 from `textures/blocks.csv`
@@ -156,7 +157,7 @@ pub struct BlockDef {
 /// Block types the player can gather (by breaking) and place again, shown
 /// in the Resources inventory panel and assignable to the nine-slot hotbar.
 /// Air, Water, and Bedrock cannot be gathered. Keep slots append-only for saves.
-pub const COLLECTIBLE_BLOCKS: [BlockType; 83] = [
+pub const COLLECTIBLE_BLOCKS: [BlockType; 84] = [
     BlockType::Grass,
     BlockType::Soil,
     BlockType::Stone,
@@ -240,6 +241,7 @@ pub const COLLECTIBLE_BLOCKS: [BlockType; 83] = [
     BlockType::ThornBush,
     BlockType::DryShrub,
     BlockType::Crystal,
+    BlockType::Snow,
 ];
 
 impl BlockType {
@@ -323,7 +325,7 @@ impl BlockType {
             | Ruby | Sapphire | Glass | Charcoal | Ash | Lime | Mortar | Ceramic | Planks
             | WoodPulp | PlantFiber | Cloth | Resin | CrystalDust | EnchantedGlass | MoonSilver
             | Runestone | Fern | Clover | Lavender | RedPoppy | Bluebell | Cattail
-            | BrownMushroom | Glowcap | ThornBush | DryShrub => {
+            | BrownMushroom | Glowcap | ThornBush | DryShrub | Snow => {
                 unreachable!("block_defs::csv_def should have handled every CSV block")
             }
         }

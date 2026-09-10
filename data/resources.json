@@ -2285,5 +2285,28 @@
     "hardness": 1,
     "harvest_category": "stone",
     "hand_pickable": false
+  },
+  {
+    "id": "snow",
+    "name": "Snow",
+    "category": "Water and ice",
+    "source": "natural",
+    "location": "Patchy mountain snow from Y 32 upward, more common near summits",
+    "composition": [
+      0,
+      0,
+      1,
+      0,
+      0
+    ],
+    "formula": null,
+    "texture": {
+      "pattern": "snow",
+      "color": "#e7eff5"
+    },
+    "hardness": 1,
+    "emission": 0,
+    "harvest_category": "soil",
+    "hand_pickable": true
   }
 ]

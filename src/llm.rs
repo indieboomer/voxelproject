@@ -1,6 +1,7 @@
 #[path = "intent.rs"]
 pub mod intent;
 use std::sync::mpsc::{channel, Receiver};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const SYSTEM_PROMPT_TEMPLATE: &str = include_str!("../prompts/system_prompt.txt");
@@ -62,11 +63,27 @@ impl ChatMessage {
 /// doesn't care, matching the README's "configurable GGUF coding model".
 pub struct LlmClient {
     base_url: String,
+    preflight: Arc<Mutex<PreflightCache>>,
+}
+
+#[derive(Default)]
+struct PreflightCache {
+    last: Option<(String, PromptKind, std::time::Instant, intent::Plan)>,
+}
+impl PreflightCache {
+    fn get(&self, prompt: &str, kind: PromptKind) -> Option<intent::Plan> {
+        self.last.as_ref().filter(|(p, k, time, _)| {
+            p == prompt && *k == kind && time.elapsed() < Duration::from_secs(300)
+        }).map(|(_, _, _, plan)| plan.clone())
+    }
+    fn put(&mut self, prompt: &str, kind: PromptKind, plan: intent::Plan) {
+        self.last = Some((prompt.into(), kind, std::time::Instant::now(), plan));
+    }
 }
 
 impl LlmClient {
     pub fn new(base_url: String) -> Self {
-        Self { base_url }
+        Self { base_url, preflight: Arc::default() }
     }
 
     fn system_prompt() -> String {
@@ -119,9 +136,22 @@ impl LlmClient {
     fn spawn_pipeline(&self, prompt: &str, kind: PromptKind, correction: Option<(String,String)>) -> PendingGeneration {
         let url=format!("{}/v1/chat/completions",self.base_url.trim_end_matches('/'));
         let prompt=prompt.to_string();
+        let preflight = Arc::clone(&self.preflight);
         let (tx,rx)=channel();
         std::thread::spawn(move || {
-            let result=intent::generate(&url,&prompt,kind,correction.as_ref().map(|(a,b)|(a.as_str(),b.as_str())));
+            let started = std::time::Instant::now();
+            let cached = preflight.lock().unwrap().get(&prompt, kind);
+            let reused = cached.is_some();
+            let plan = cached.map(Ok).unwrap_or_else(|| intent::prepare(&url, &prompt, kind));
+            log::info!("Rule preflight: {:.2}s (cached={reused})", started.elapsed().as_secs_f32());
+            let result = plan.and_then(|plan| {
+                // Only interpretation/scope are reused. Code generation, sandbox
+                // checks and review still run on every request, including retries.
+                if !reused {
+                    preflight.lock().unwrap().put(&prompt, kind, plan.clone());
+                }
+                intent::generate_prepared(&url, &prompt, kind, correction.as_ref().map(|(a,b)|(a.as_str(),b.as_str())), plan)
+            });
             let _=tx.send(result);
         });
         PendingGeneration {receiver:rx}
@@ -152,6 +182,8 @@ fn request_json(url: &str, messages: Vec<ChatMessage>, schema: serde_json::Value
     serde_json::from_str(&text).map_err(|e|format!("Invalid structured model output: {e}"))
 }
 fn request_text(url: &str, messages: Vec<ChatMessage>, schema: Option<serde_json::Value>) -> Result<String,String> {
+    let started = std::time::Instant::now();
+    let structured = schema.is_some();
     let mut body = serde_json::json!({
         "messages": messages
             .iter()
@@ -170,6 +202,8 @@ fn request_text(url: &str, messages: Vec<ChatMessage>, schema: Option<serde_json
     let json: serde_json::Value = response
         .into_json()
         .map_err(|e| format!("couldn't parse response as JSON: {e}"))?;
+    log::info!("Local model response: {:.2}s structured={structured} prompt_tokens={} output_tokens={}",
+        started.elapsed().as_secs_f32(), json["usage"]["prompt_tokens"], json["usage"]["completion_tokens"]);
 
     if json["choices"][0]["finish_reason"] == "length" { return Err("Model output exceeded the response budget".into()); }
     let content = json["choices"][0]["message"]["content"]
@@ -312,6 +346,43 @@ pub fn derive_rule_name(prompt: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preflight_cache_is_exact_bounded_and_expires() {
+        let mut cache = PreflightCache::default();
+        let plan: intent::Plan = serde_json::from_value(serde_json::json!({"execution":"instant","summary":"Start day","condition":"always","actor_kind":"none","effect":"custom","targets":"all","api_groups":["time"],"requirements":["Change time to daytime once"],"unsupported":[]})).unwrap();
+        assert!(cache.get("start day", PromptKind::Instant).is_none());
+        cache.put("start day", PromptKind::Instant, plan.clone());
+        assert!(cache.get("start day", PromptKind::Instant).is_some());
+        assert!(cache.get("start night", PromptKind::Instant).is_none());
+        assert!(cache.get("start day", PromptKind::Rule).is_none());
+        cache.last.as_mut().unwrap().2 -= Duration::from_secs(301);
+        assert!(cache.get("start day", PromptKind::Instant).is_none());
+        cache.put("day", PromptKind::Instant, plan);
+        assert!(cache.get("start day", PromptKind::Instant).is_none());
+        assert!(LlmClient::new("different-server".into()).preflight.lock().unwrap().get("day", PromptKind::Instant).is_none());
+    }
+
+    #[test]
+    #[ignore = "live cache timing; requires local llama-server"]
+    fn profile_preflight_cache() {
+        let client = LlmClient::new("http://127.0.0.1:8090".into());
+        let prompt = "players are protected during rain from wolf attack";
+        let mut previous = None;
+        for pass in 0..2 {
+            let start = std::time::Instant::now();
+            let pending = client.generate(prompt, PromptKind::Rule);
+            let code = loop {
+                if let Some(result) = pending.poll() { break result.unwrap(); }
+                assert!(start.elapsed() < Duration::from_secs(180));
+                std::thread::sleep(Duration::from_millis(5));
+            };
+            println!("preflight cache pass {pass}: {:.3}s", start.elapsed().as_secs_f32());
+            assert!(client.preflight.lock().unwrap().get(prompt, PromptKind::Rule).is_some());
+            if let Some(previous) = previous { assert_eq!(code, previous); }
+            previous = Some(code);
+        }
+    }
 
     #[test]
     fn system_prompt_embeds_the_world_api_doc_and_strips_example_version_tags() {

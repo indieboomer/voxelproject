@@ -1,15 +1,22 @@
-//! Sound playback -- footsteps, creature attacks/deaths/ambient calls, and
-//! weather/night ambience. All clips are `include_bytes!`-compiled in (same
-//! pattern `model.rs` uses for the bundled `.glb` files), decoded fresh
-//! each time they're played via `rodio`.
+//! Sound playback -- footsteps, creature attacks/deaths/ambient calls,
+//! weather/night ambience, and a looping background-music theme. All clips
+//! are `include_bytes!`-compiled in (same pattern `model.rs` uses for the
+//! bundled `.glb` files), decoded fresh each time they're played via
+//! `rodio`.
 //!
 //! Creature-originated sounds (steps/attacks/deaths/ambient calls) are
 //! spatialized -- distance falloff and left/right panning relative to the
 //! listener (the local player's camera) -- via `rodio`'s `SpatialSink`; see
 //! `spatial_positions`. Everything else (the player's own footsteps/mining
-//! swing, weather ambience, lightning, bird flocks) plays centered/flat,
-//! since it either originates at the listener itself or is meant to read
-//! as diffuse/omnipresent atmosphere rather than coming from one point.
+//! swing, weather ambience, lightning, bird flocks, background music) plays
+//! centered/flat, since it either originates at the listener itself or is
+//! meant to read as diffuse/omnipresent atmosphere rather than coming from
+//! one point.
+//!
+//! The weather/night ambience track and the background-music theme both
+//! crossfade rather than cut -- see `update_ambience`, `update_music`, and
+//! the shared `approach` ease helper -- so a weather or day/night change
+//! never snaps audibly.
 
 use std::io::Cursor;
 
@@ -21,6 +28,7 @@ use crate::daynight::is_night;
 use crate::weather::Weather;
 
 const ANIMAL_STEP: &[u8] = include_bytes!("../sounds/animal_step.mp3");
+const BACKGROUND_MUSIC: &[u8] = include_bytes!("../sounds/background_music.mp3");
 const BIRDS_FLOCK: &[u8] = include_bytes!("../sounds/birds_flock.mp3");
 const COW: &[u8] = include_bytes!("../sounds/cow.mp3");
 const CREATURE_DEATH: &[u8] = include_bytes!("../sounds/creature_generic_death.mp3");
@@ -111,6 +119,35 @@ impl AmbientTrack {
 /// sound competing with steps/attacks.
 const AMBIENT_VOLUME: f32 = 0.35;
 
+/// Volume for the looping background music theme -- deliberately quieter
+/// than `AMBIENT_VOLUME` so it stays a faint undercurrent under weather/
+/// creature ambience rather than a foreground track.
+const MUSIC_VOLUME: f32 = 0.16;
+
+/// How long (in seconds) a full silence-to-target fade takes for both the
+/// music and ambient-track crossfades -- long enough to read as a smooth
+/// ease rather than a cut, short enough not to lag noticeably behind a
+/// day/night or weather transition.
+const FADE_SECONDS: f32 = 4.0;
+
+/// Moves `current` toward `target` at a constant rate such that a full
+/// `0.0..=1.0` sweep takes `duration` seconds, clamping exactly to `target`
+/// once within one step -- the shared ease-in/ease-out primitive behind the
+/// music and ambient-track crossfades.
+fn approach(current: f32, target: f32, dt: f32, duration: f32) -> f32 {
+    if duration <= 0.0 {
+        return target;
+    }
+    let max_delta = dt / duration;
+    if (target - current).abs() <= max_delta {
+        target
+    } else if target > current {
+        current + max_delta
+    } else {
+        current - max_delta
+    }
+}
+
 /// Half the ear-to-ear separation used to derive left/right panning for a
 /// creature sound -- see `spatial_positions`. Not a real physical head
 /// width; just enough separation for `rodio`'s per-ear falloff model to
@@ -162,7 +199,25 @@ pub struct AudioEngine {
     handle: Option<OutputStreamHandle>,
     rng: Rng,
     ambient_sink: Option<Sink>,
+    /// Current fade multiplier (`0.0..=1.0`) applied on top of
+    /// `AMBIENT_VOLUME` for `ambient_sink` -- ramps toward `1.0` after a
+    /// track starts, via `approach` in `update_ambience`.
+    ambient_fade: f32,
+    /// The previous ambient sink, still playing while it fades out after a
+    /// track change -- dropped once `ambient_out_fade` reaches zero.
+    ambient_out_sink: Option<Sink>,
+    ambient_out_fade: f32,
     ambient_track: AmbientTrack,
+    /// The looping background-music sink -- created once (lazily, on first
+    /// `update_ambience` call with an output device) and kept alive for the
+    /// life of the engine; day/night is expressed purely as a volume fade
+    /// (see `music_fade`) rather than stopping/restarting playback, so the
+    /// loop never audibly restarts mid-phrase.
+    music_sink: Option<Sink>,
+    /// Current fade multiplier (`0.0..=1.0`) applied on top of
+    /// `MUSIC_VOLUME` -- eased toward `1.0` by day and `0.0` by night, via
+    /// `approach` in `update_ambience`.
+    music_fade: f32,
     /// The local player's camera eye position -- the origin every creature
     /// sound's distance/panning is computed relative to. Updated once per
     /// frame via `update_listener`.
@@ -181,7 +236,12 @@ impl AudioEngine {
                 handle: Some(handle),
                 rng: Rng(0x9E3779B97F4A7C15),
                 ambient_sink: None,
+                ambient_fade: 0.0,
+                ambient_out_sink: None,
+                ambient_out_fade: 0.0,
                 ambient_track: AmbientTrack::Silence,
+                music_sink: None,
+                music_fade: 0.0,
                 listener_pos: Vec3::ZERO,
                 listener_right: Vec3::X,
             },
@@ -192,7 +252,12 @@ impl AudioEngine {
                     handle: None,
                     rng: Rng(1),
                     ambient_sink: None,
+                    ambient_fade: 0.0,
+                    ambient_out_sink: None,
+                    ambient_out_fade: 0.0,
                     ambient_track: AmbientTrack::Silence,
+                    music_sink: None,
+                    music_fade: 0.0,
                     listener_pos: Vec3::ZERO,
                     listener_right: Vec3::X,
                 }
@@ -346,26 +411,77 @@ impl AudioEngine {
         self.play_varied(BIRDS_FLOCK, 0.25, 0.03, 0.08);
     }
 
-    /// Starts/stops/swaps the single looping ambience sink to match the
-    /// current weather + time of day -- see `ambient_track_for`. Cheap to
-    /// call every frame: it's a no-op unless the desired track actually
-    /// changed since the last call. Centered, like all ambience.
-    pub fn update_ambience(&mut self, weather: Weather, time_of_day: f32) {
-        let Some(handle) = &self.handle else { return };
-        let desired = ambient_track_for(weather, time_of_day);
-        if desired == self.ambient_track && (self.ambient_sink.is_some() || desired == AmbientTrack::Silence) {
+    /// Starts/swaps the single looping ambience sink to match the current
+    /// weather + time of day -- see `ambient_track_for` -- crossfading the
+    /// old track out and the new one in over `FADE_SECONDS` rather than
+    /// cutting between them, and eases the background-music theme in by day
+    /// and out by night (see `update_music`). Cheap to call every frame:
+    /// once a fade settles at its target there's nothing left to do but a
+    /// couple of float comparisons and `set_volume` calls. Centered, like
+    /// all ambience.
+    pub fn update_ambience(&mut self, weather: Weather, time_of_day: f32, dt: f32) {
+        if self.handle.is_none() {
             return;
         }
-        if let Some(sink) = self.ambient_sink.take() {
-            sink.stop();
+        let desired = ambient_track_for(weather, time_of_day);
+        if desired != self.ambient_track {
+            if let Some(sink) = self.ambient_sink.take() {
+                if let Some(old) = self.ambient_out_sink.replace(sink) {
+                    old.stop();
+                }
+                self.ambient_out_fade = self.ambient_fade;
+            }
+            self.ambient_track = desired;
+            self.ambient_fade = 0.0;
+            if let Some(bytes) = desired.bytes() {
+                let handle = self.handle.as_ref().expect("checked above");
+                if let Ok(decoder) = Decoder::new(Cursor::new(bytes)) {
+                    if let Ok(sink) = Sink::try_new(handle) {
+                        sink.set_volume(0.0);
+                        sink.append(decoder.repeat_infinite());
+                        self.ambient_sink = Some(sink);
+                    }
+                }
+            }
         }
-        self.ambient_track = desired;
-        let Some(bytes) = desired.bytes() else { return };
-        let Ok(decoder) = Decoder::new(Cursor::new(bytes)) else { return };
-        let Ok(sink) = Sink::try_new(handle) else { return };
-        sink.set_volume(AMBIENT_VOLUME);
-        sink.append(decoder.repeat_infinite());
-        self.ambient_sink = Some(sink);
+
+        if let Some(sink) = &self.ambient_sink {
+            self.ambient_fade = approach(self.ambient_fade, 1.0, dt, FADE_SECONDS);
+            sink.set_volume(AMBIENT_VOLUME * self.ambient_fade);
+        }
+        if let Some(sink) = &self.ambient_out_sink {
+            self.ambient_out_fade = approach(self.ambient_out_fade, 0.0, dt, FADE_SECONDS);
+            sink.set_volume(AMBIENT_VOLUME * self.ambient_out_fade);
+            if self.ambient_out_fade <= 0.0 {
+                sink.stop();
+                self.ambient_out_sink = None;
+            }
+        }
+
+        self.update_music(time_of_day, dt);
+    }
+
+    /// Eases the looping background-music theme in by day and out by night
+    /// -- a quiet undercurrent (see `MUSIC_VOLUME`) that never plays while
+    /// `is_night` holds. The sink itself is created once and left looping
+    /// for the engine's whole lifetime; day/night is expressed purely as a
+    /// volume fade so the track never audibly restarts mid-phrase.
+    fn update_music(&mut self, time_of_day: f32, dt: f32) {
+        let Some(handle) = &self.handle else { return };
+        if self.music_sink.is_none() {
+            if let Ok(decoder) = Decoder::new(Cursor::new(BACKGROUND_MUSIC)) {
+                if let Ok(sink) = Sink::try_new(handle) {
+                    sink.set_volume(0.0);
+                    sink.append(decoder.repeat_infinite());
+                    self.music_sink = Some(sink);
+                }
+            }
+        }
+        let target = if is_night(time_of_day) { 0.0 } else { 1.0 };
+        self.music_fade = approach(self.music_fade, target, dt, FADE_SECONDS);
+        if let Some(sink) = &self.music_sink {
+            sink.set_volume(MUSIC_VOLUME * self.music_fade);
+        }
     }
 }
 
@@ -452,7 +568,12 @@ mod tests {
             handle: None,
             rng: Rng(42),
             ambient_sink: None,
+            ambient_fade: 0.0,
+            ambient_out_sink: None,
+            ambient_out_fade: 0.0,
             ambient_track: AmbientTrack::Silence,
+            music_sink: None,
+            music_fade: 0.0,
             listener_pos: Vec3::ZERO,
             listener_right: Vec3::X,
         }
@@ -472,7 +593,30 @@ mod tests {
         engine.play_creature_ambient(CreatureKind::Cow, Vec3::new(-4.0, 0.0, 1.0));
         engine.play_lightning();
         engine.play_bird_flock();
-        engine.update_ambience(Weather::Storm, 0.75);
+        engine.update_ambience(Weather::Storm, 0.75, 1.0 / 60.0);
+    }
+
+    #[test]
+    fn approach_reaches_target_exactly_without_overshoot() {
+        let mut v = 0.0;
+        for _ in 0..1000 {
+            v = approach(v, 1.0, 1.0 / 60.0, FADE_SECONDS);
+        }
+        assert_eq!(v, 1.0);
+        for _ in 0..1000 {
+            v = approach(v, 0.0, 1.0 / 60.0, FADE_SECONDS);
+        }
+        assert_eq!(v, 0.0);
+    }
+
+    #[test]
+    fn music_and_ambient_fades_stay_a_no_op_without_an_output_device() {
+        let mut engine = silent_engine();
+        for _ in 0..10 {
+            engine.update_ambience(Weather::Sunny, 0.75, 1.0 / 60.0);
+        }
+        assert!(engine.music_sink.is_none());
+        assert!(engine.ambient_sink.is_none());
     }
 
     #[test]

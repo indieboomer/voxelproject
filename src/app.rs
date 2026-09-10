@@ -299,11 +299,14 @@ impl BirdVertex {
 
 const RENDER_RADIUS: i32 = 5;
 const UNLOAD_RADIUS: i32 = RENDER_RADIUS + 2;
-const MESH_BUDGET_PER_FRAME: usize = 8;
+const MESH_BUDGET_PER_FRAME: usize = 2;
+const CHUNK_GENERATION_BUDGET: Duration = Duration::from_millis(2);
+const CHUNK_MESH_BUDGET: Duration = Duration::from_millis(3);
 const REACH: f32 = 6.0;
 const CREATURE_COUNT: usize = 9;
 
 struct HostNet {
+    appearance: remote_player::Appearance,
     socket: Transport,
     clients: HashMap<Peer, PlayerId>,
     remote_players: HashMap<PlayerId, RemotePlayer>,
@@ -526,6 +529,7 @@ pub struct App {
     size: winit::dpi::PhysicalSize<u32>,
 
     block_target: crate::block_target::BlockTarget,
+    wind: crate::wind::Wind,
     render_pipeline: wgpu::RenderPipeline,
     depth_view: wgpu::TextureView,
 
@@ -1124,6 +1128,7 @@ impl App {
                     })?;
                 log::info!("Hosting on port {}", launch.port);
                 let host_net = HostNet {
+                    appearance: remote_player::Appearance::choose(random_world_seed(), []),
                     socket,
                     clients: HashMap::new(),
                     remote_players: HashMap::new(),
@@ -1194,6 +1199,7 @@ impl App {
         let lightning_seed = world.seed;
 
         let llm = LlmClient::new(launch.llm_url.clone());
+        let wind=crate::wind::Wind::new(&device,&camera_bgl,config.format);
         let block_target = crate::block_target::BlockTarget::new(&device, &camera_bgl, config.format);
         let ui = Ui::new(&device, config.format, &window);
         let entity_mesh = DynamicMesh::new(&device);
@@ -1212,6 +1218,7 @@ impl App {
             config,
             size,
             block_target,
+            wind,
             render_pipeline,
             depth_view,
             sky_pipeline,
@@ -1282,6 +1289,7 @@ impl App {
         };
 
         app.grab_cursor(true);
+        crate::crafting::load_interaction_area(&mut app.world,app.player.position);
         app.update_chunks();
         Ok(app)
     }
@@ -1678,7 +1686,7 @@ impl App {
         self.water_time = (self.water_time + dt) % 10_000.0;
         self.update_lightning(dt);
         self.update_birds(dt);
-        self.audio.update_ambience(self.weather.current, self.time_of_day);
+        self.audio.update_ambience(self.weather.current, self.time_of_day, dt);
 
         const SENSITIVITY: f32 = 0.0022;
         self.camera.yaw += self.input.mouse_delta.0 * SENSITIVITY;
@@ -1690,9 +1698,12 @@ impl App {
 
         let forward = self.camera.forward();
         let right = self.camera.right();
+        // Collision-critical terrain must exist before physics, including after teleport.
+        crate::crafting::load_interaction_area(&mut self.world,self.player.position);
         self.player
             .update(&self.world, &self.input, forward, right, dt);
         self.camera.position = self.player.position;
+        self.wind.update(dt,self.camera.eye_position(),self.weather.current);
         self.audio.update_listener(self.camera.eye_position(), right);
         for _ in 0..self.player.take_steps() {
             self.audio.play_player_step();
@@ -1853,6 +1864,7 @@ impl App {
         mesh.extend(remote_player::build_mesh(
             remote_players,
             self.local_player_id,
+            &self.models,
         ));
         self.entity_mesh.update(&self.device, &self.queue, &mesh);
         let entry=self.player.crafting.hotbar.entry().filter(|e|e.count(&self.player.crafting)>0);
@@ -2601,6 +2613,7 @@ impl App {
         if host.broadcast_timer >= SNAPSHOT_INTERVAL {
             host.broadcast_timer = 0.0;
             let mut players: Vec<SnapshotPlayer> = vec![SnapshotPlayer {
+                appearance: host.appearance,
                 id: HOST_PLAYER_ID,
                 pos: self.player.position.to_array(),
                 yaw: self.camera.yaw,
@@ -2617,6 +2630,7 @@ impl App {
                     if let Some(account)=self.guest_accounts.get(&peer.account_key(&rp.nickname)) {rp.held=account.hotbar.entry().filter(|e|e.count(account)>0);}
                 }
                 players.push(SnapshotPlayer {
+                    appearance: rp.appearance,
                     id,
                     pos: rp.pos.to_array(),
                     yaw: rp.yaw,
@@ -2684,10 +2698,14 @@ impl App {
                             as f32
                             + 2.0;
                         let spawn = Vec3::new(spawn_x, spawn_y, spawn_z);
+                        let appearance = remote_player::Appearance::choose(random_world_seed(),
+                            std::iter::once(host.appearance).chain(host.remote_players.values().map(|p| p.appearance)));
+                        let mut remote = RemotePlayer::new(spawn, 0.0, false, nickname.clone());
+                        remote.appearance = appearance;
                         host.clients.insert(from, player_id);
                         host.remote_players.insert(
                             player_id,
-                            RemotePlayer::new(spawn, 0.0, false, nickname.clone()),
+                            remote,
                         );
                         for msg in net::welcome_messages(player_id,self.world.seed,self.time_of_day,spawn.to_array(),edits)
                             .expect("world size checked before admission") {
@@ -2938,6 +2956,8 @@ impl App {
                         .remote_players
                         .entry(sp.id)
                         .and_modify(|rp| {
+                            rp.velocity = (Vec3::from_array(sp.pos) - rp.pos) / now.duration_since(rp.last_seen).as_secs_f32().max(0.001);
+                            rp.appearance = sp.appearance;
                             rp.pos = Vec3::from_array(sp.pos);
                             rp.yaw = sp.yaw;
                             rp.carrying_crystal = sp.carrying_crystal;
@@ -2959,6 +2979,7 @@ impl App {
                                 sp.carrying_crystal,
                                 String::new(),
                             );
+                            rp.appearance = sp.appearance;
                             rp.health = sp.health;
                             rp.poisoned = sp.poisoned;
                             rp.speed_multiplier = sp.speed_multiplier;
@@ -2977,23 +2998,25 @@ impl App {
         let pcx = (self.player.position.x.floor() as i32).div_euclid(CHUNK_X);
         let pcz = (self.player.position.z.floor() as i32).div_euclid(CHUNK_Z);
 
-        for cx in (pcx - RENDER_RADIUS)..=(pcx + RENDER_RADIUS) {
-            for cz in (pcz - RENDER_RADIUS)..=(pcz + RENDER_RADIUS) {
-                self.world.ensure_chunk_loaded(cx, cz);
-            }
+        let mut missing=Vec::new();
+        for cx in pcx-RENDER_RADIUS..=pcx+RENDER_RADIUS {for cz in pcz-RENDER_RADIUS..=pcz+RENDER_RADIUS {
+            if !self.world.chunks.contains_key(&(cx,cz)){missing.push((cx,cz));}
+        }}
+        missing.sort_unstable_by_key(|&(x,z)|((x-pcx).pow(2)+(z-pcz).pow(2),x,z));
+        let generation_start=Instant::now();
+        for (i,(cx,cz)) in missing.into_iter().enumerate() {
+            if i>0 && (i>=2 || generation_start.elapsed()>=CHUNK_GENERATION_BUDGET){break;}
+            self.world.ensure_chunk_loaded(cx,cz);
         }
 
         let mut rebuilt = 0usize;
-        let dirty_keys: Vec<(i32, i32)> = self
-            .world
-            .chunks
-            .iter()
-            .filter(|(_, c)| c.dirty)
-            .map(|(k, _)| *k)
-            .take(MESH_BUDGET_PER_FRAME)
-            .collect();
-
+        let mut dirty_keys: Vec<(i32, i32)> = self.world.chunks.iter()
+            .filter(|(&(x,z),c)|c.dirty && (x-pcx).abs()<=RENDER_RADIUS && (z-pcz).abs()<=RENDER_RADIUS)
+            .map(|(k,_)|*k).collect();
+        dirty_keys.sort_unstable_by_key(|&(x,z)|((x-pcx).pow(2)+(z-pcz).pow(2),x,z));
+        let mesh_start=Instant::now();
         for key in dirty_keys {
+            if rebuilt>0 && (rebuilt>=MESH_BUDGET_PER_FRAME || mesh_start.elapsed()>=CHUNK_MESH_BUDGET){break;}
             let mesh_data = {
                 let chunk = self.world.chunks.get(&key).unwrap();
                 build_chunk_mesh(&self.world, chunk)
@@ -3073,6 +3096,9 @@ impl App {
         let underwater = is_in_water(&self.world, cam_pos);
         let light_view_proj = light_view_proj(lighting.sun_dir, self.player.position);
         let view_proj = self.camera.view_proj();
+        let camera_frustum=crate::visibility::Frustum::new(view_proj);
+        let sun_frustum=crate::visibility::Frustum::new(light_view_proj);
+        let (render_cx,render_cz)=chunk_of(self.player.position);
         let fog_color = if self.weather.current == Weather::Mist {
             [
                 sky[0] * (1.0 - MIST_FOG_BLEND) + MIST_FOG_TINT[0] * MIST_FOG_BLEND,
@@ -3131,6 +3157,7 @@ impl App {
         } else { None };
         self.block_target.update(&self.queue, target);
 
+        self.wind.prepare(&self.queue,cam_pos,self.camera.right(),self.camera.right().cross(self.camera.forward()),&self.world,underwater,self.weather.current);
         let raining = self.weather.current.has_rain_particles() && !underwater;
         let rain_vertex_count = if raining {
             self.write_rain_vertices(cam_pos);
@@ -3169,7 +3196,8 @@ impl App {
             });
             shadow_pass.set_pipeline(&self.shadow_pipeline);
             shadow_pass.set_bind_group(0, &self.shadow_light_bind_group, &[]);
-            for mesh in self.chunk_meshes.values() {
+            for (&(cx,cz),mesh) in &self.chunk_meshes {
+                if !sun_frustum.chunk(cx,cz){continue;}
                 shadow_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                 shadow_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 shadow_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
@@ -3221,7 +3249,8 @@ impl App {
             rpass.set_bind_group(0, &self.camera_bind_group, &[]);
             rpass.set_bind_group(1, &self.texture_bind_group, &[]);
             rpass.set_bind_group(2, &self.shadow_sample_bind_group, &[]);
-            for mesh in self.chunk_meshes.values() {
+            for (&(cx,cz),mesh) in &self.chunk_meshes {
+                if (cx-render_cx).abs()>RENDER_RADIUS || (cz-render_cz).abs()>RENDER_RADIUS || !camera_frustum.chunk(cx,cz){continue;}
                 rpass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                 rpass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 rpass.draw_indexed(0..mesh.index_count, 0, 0..1);
@@ -3244,6 +3273,7 @@ impl App {
                 rpass.set_vertex_buffer(0, self.bird_vertex_buffer.slice(..));
                 rpass.draw(0..bird_vertex_count, 0..1);
             }
+            self.wind.draw(&mut rpass,&self.camera_bind_group);
             self.block_target.draw(&mut rpass, &self.camera_bind_group);
         }
 

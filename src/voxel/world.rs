@@ -164,11 +164,18 @@ impl World {
         let mut chunk = Chunk::new(cx, cz);
         let (ox, oz) = chunk.world_origin();
 
+        // Reuse the seed-only height map for all generation passes. The one-cell
+        // halo supplies exact mountain slopes at chunk boundaries.
+        let halo:[[i32;(CHUNK_Z+2) as usize];(CHUNK_X+2) as usize]=std::array::from_fn(|x|std::array::from_fn(|z|self.terrain_height(ox+x as i32-1,oz+z as i32-1)));
+        let heights:[[i32;CHUNK_Z as usize];CHUNK_X as usize]=std::array::from_fn(|x|std::array::from_fn(|z|halo[x+1][z+1]));
         for lx in 0..CHUNK_X {
             for lz in 0..CHUNK_Z {
                 let wx = ox + lx;
                 let wz = oz + lz;
-                let height = self.terrain_height(wx, wz);
+                let (x,z)=(lx as usize+1,lz as usize+1);
+                let height = halo[x][z];
+                let slope=[halo[x-1][z],halo[x+1][z],halo[x][z-1],halo[x][z+1]].into_iter().map(|h|(h-height).abs()).max().unwrap_or(0);
+                let mountain_surface=super::terrain::mountain_surface_with_slope(wx,wz,height,self.seed,slope);
 
                 for ly in 0..CHUNK_Y {
                     let block = if ly < BEDROCK_DEPTH {
@@ -182,12 +189,12 @@ impl World {
                     } else if ly == height {
                         if height <= SEA_LEVEL + 1 {
                             BlockType::Sand
-                        } else if height>=super::terrain::ROCK_LINE {
-                            BlockType::Stone
+                        } else if height>=super::terrain::ALPINE_LINE {
+                            mountain_surface
                         } else {
                             BlockType::Grass
                         }
-                    } else if height>=super::terrain::ROCK_LINE {
+                    } else if height>=super::terrain::ALPINE_LINE {
                         BlockType::Stone
                     } else if ly > height - 4 {
                         BlockType::Soil
@@ -199,7 +206,7 @@ impl World {
 
                 // Simple tree scattering, away from the shoreline. Species
                 // is picked per-tree so all four wood types show up.
-                let on_dry_land = height > SEA_LEVEL + 2 && height < super::terrain::ROCK_LINE;
+                let on_dry_land = height > SEA_LEVEL + 2 && height < super::terrain::ALPINE_LINE;
                 let mut placed_topper = false;
                 if on_dry_land && column_rand(wx, wz, self.seed, 0xA11CE) < 0.006 {
                     let species_roll = column_rand(wx, wz, self.seed, 0x5FEC1E5);
@@ -237,20 +244,26 @@ impl World {
             }
         }
 
-        self.scatter_veins(&mut chunk, cx, cz);
+        self.scatter_veins(&mut chunk, cx, cz, &heights);
         self.scatter_brick_ruins(&mut chunk, cx, cz);
-        self.scatter_surface_resources(&mut chunk);
+        self.scatter_surface_resources(&mut chunk, &heights);
+        // Keep a stone support directly beneath generated snow even where
+        // ore/deposit passes have changed the surrounding mountain interior.
+        for lx in 0..CHUNK_X {for lz in 0..CHUNK_Z {
+            let h=heights[lx as usize][lz as usize];
+            if chunk.get_local(lx,h,lz)==BlockType::Snow {chunk.set_local(lx,h-1,lz,BlockType::Stone);}
+        }}
 
         chunk.dirty = true;
         chunk
     }
 
     /// A second pass never overwrites tree trunks, leaves, existing decorations or water.
-    fn scatter_surface_resources(&self, chunk: &mut Chunk) {
+    fn scatter_surface_resources(&self, chunk: &mut Chunk, heights:&[[i32;CHUNK_Z as usize];CHUNK_X as usize]) {
         let (ox,oz)=chunk.world_origin();
         for lx in 0..CHUNK_X { for lz in 0..CHUNK_Z {
             let (wx,wz)=(ox+lx,oz+lz);
-            let y=self.terrain_height(wx,wz);
+            let y=heights[lx as usize][lz as usize];
             let surface=chunk.get_local(lx,y,lz);
             let wet=(SEA_LEVEL..=SEA_LEVEL+2).contains(&y);
             if wet && matches!(surface,BlockType::Sand | BlockType::Grass | BlockType::Soil) {
@@ -353,9 +366,7 @@ impl World {
     /// deterministic per-chunk-attempt roll and grows via a short random
     /// walk, so results are reproducible from `(seed, cx, cz)` alone like
     /// the rest of chunk generation.
-    fn scatter_veins(&self, chunk: &mut Chunk, cx: i32, cz: i32) {
-        let (ox,oz)=chunk.world_origin();
-        let heights: [[i32; CHUNK_Z as usize]; CHUNK_X as usize]=std::array::from_fn(|x|std::array::from_fn(|z|self.terrain_height(ox+x as i32,oz+z as i32)));
+    fn scatter_veins(&self, chunk: &mut Chunk, cx: i32, cz: i32, heights:&[[i32;CHUNK_Z as usize];CHUNK_X as usize]) {
         for vein in VEINS.iter().chain(RESOURCE_VEINS.iter()) {
             let ore=vein.block.id().ends_with("_ore") || vein.block==BlockType::Coal;
             let attempts=vein.attempts_per_chunk * if ore {2} else {1};
@@ -424,6 +435,15 @@ impl World {
         let mut chunk = self.generate_chunk(cx, cz);
         self.apply_edits_to_chunk(&mut chunk);
         self.chunks.insert((cx, cz), chunk);
+        // Previously meshed neighbors may have exposed boundary faces/AO
+        // calculated while this chunk was absent. Refresh them incrementally.
+        self.dirty_neighbors(cx,cz);
+    }
+
+    fn dirty_neighbors(&mut self,cx:i32,cz:i32) {
+        for dx in -1..=1 {for dz in -1..=1 {
+            if let Some(chunk)=self.chunks.get_mut(&(cx+dx,cz+dz)){chunk.dirty=true;}
+        }}
     }
 
     fn apply_edits_to_chunk(&self, chunk: &mut Chunk) {
@@ -443,7 +463,7 @@ impl World {
     }
 
     pub fn unload_chunk(&mut self, cx: i32, cz: i32) {
-        self.chunks.remove(&(cx, cz));
+        if self.chunks.remove(&(cx, cz)).is_some(){self.dirty_neighbors(cx,cz);}
     }
 
     pub fn get_block(&self, wx: i32, wy: i32, wz: i32) -> BlockType {
@@ -712,5 +732,31 @@ mod resource_generation_tests {
         for x in 0..CHUNK_X {for z in 0..CHUNK_Z {for y in 0..CHUNK_Y {
             assert_eq!(a.get_local(x,y,z),b.get_local(x,y,z));
         }}}
+    }
+}
+
+#[cfg(test)]
+mod performance_tests {
+    use super::*;
+    #[test]
+    fn streamed_neighbor_arrival_and_departure_invalidate_boundary_meshes(){
+        let mut world=World::new(42);world.ensure_chunk_loaded(0,0);world.chunks.get_mut(&(0,0)).unwrap().dirty=false;
+        world.ensure_chunk_loaded(1,0);assert!(world.chunks[&(0,0)].dirty);
+        world.chunks.get_mut(&(0,0)).unwrap().dirty=false;world.unload_chunk(1,0);assert!(world.chunks[&(0,0)].dirty);
+    }
+    #[test]
+    #[ignore = "CPU terrain/meshing benchmark; prints exploration costs"]
+    fn profile_exploration() {
+        use std::time::Instant;
+        for center in [0,128,1024] {
+            let mut world=World::new(42);
+            let start=Instant::now();
+            for x in center-5..=center+5 {for z in -5..=5 {world.ensure_chunk_loaded(x,z);}}
+            let generation=start.elapsed();let start=Instant::now();let mut triangles=0;
+            for chunk in world.chunks.values(){triangles+=super::super::mesher::build_chunk_mesh(&world,chunk).indices.len()/3;}
+            let meshing=start.elapsed();let start=Instant::now();
+            for z in -5..=5 {world.ensure_chunk_loaded(center+6,z);}
+            println!("center_x={} blocks, generate121={:?}, mesh121={:?}, crossing11={:?}, triangles={}",center*16,generation,meshing,start.elapsed(),triangles);
+        }
     }
 }
