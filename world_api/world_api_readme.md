@@ -271,7 +271,7 @@ One integer world position, as returned by find_blocks().
   - `z` (integer)
 
 ### `CastEvent`
-Passed as `event` to on_cast.
+Passed as `event` to on_cast. Contains only player_id, no coordinates or position. Find the caster by matching PlayerSnapshot.id in api.players(), or pass event.player_id directly to a documented near-player placement helper.
 
   - `player_id` (integer) -- id of the player who clicked Run (matches PlayerSnapshot.id). Only the host can run a spell, so this is currently always the host's id, but treat it as any connected player's id -- don't hardcode 0.
 
@@ -382,7 +382,7 @@ Every connected player.
 Returns: `PlayerSnapshot[]` -- Empty array if nobody is connected.
 
 ### `api.nearest_player(x, y, z)`
-The single closest connected player to a point. Prefer this over looping players() yourself when you just need the closest one.
+The single closest connected player to THREE numeric coordinates (x, y, z), not a player ID or position table. To find the caster, match event.player_id in api.players(); for a nearby campfire use place_campfire_near_player(event.player_id, 6).
 
 Parameters:
   - `x` (number)

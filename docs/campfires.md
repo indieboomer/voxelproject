@@ -37,8 +37,13 @@ silence at 24 blocks. Removing a fire, its support, or its loaded chunk stops
 its audio. These loops are independent of rain and waterfall ambience.
 
 There is no fuel consumption, weather extinguishing, damage, crafting recipe,
-or collectible inventory entry. Campfires can be removed like other breakable
-blocks; a missing support suppresses their fire/light effects. Placement and
+or collectible inventory entry. Empty hands (one hit) or a pickaxe (two hits)
+salvage 2 stone (`stone`), 2 oak wood (`oak_wood`), and 4 Fire elements. The stone
+ring and logs return existing resources; the flame releases elemental Fire into
+the crafting balance. The host grants all rewards together, once, to the breaking
+player. A full balance rejects harvesting without partial rewards or removal.
+Script removal grants no mining rewards. A missing support suppresses fire/light
+effects. Placement and
 edits use the existing authoritative block and save systems, while animation is
 local and requires no effect replication packets.
 

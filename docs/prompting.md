@@ -27,6 +27,12 @@ authoritative gameplay properties. `can_fly` indicates capability, not flight mo
 
 ## Example: create a campfire nearby
 
+`on_cast` receives only `event.player_id`, not coordinates. Use the nearby placement
+helper directly. `nearest_player(x,y,z)` requires three numeric coordinates; it
+cannot look up a player by ID. For other caster queries, find the matching `id` in
+`api.players()`. Generation review reports this mistake with repair instructions
+and exercises placement on loaded ground in its isolated world.
+
 "Create campfire nearby", "place a campfire near me", and "create camfpire nearby"
 are one-time spells. The classifier recognizes create/build, and the focused
 block context includes campfire and water helpers.

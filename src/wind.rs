@@ -1,4 +1,4 @@
-//! Local atmospheric motes and curved wind ribbons; no simulation/network effects.
+//! Local atmospheric motes and stepped wind ribbons; no simulation/network effects.
 use crate::{
     voxel::{chunk::CHUNK_Y, BlockType, World},
     weather::Weather,
@@ -135,28 +135,28 @@ impl Air {
                 );
             } else {
                 let length = 0.8 + self.strength * 1.7;
+                let phase = f.phase + (self.clock * 8.0).floor() / 8.0 * 0.65;
                 let path = |t: f32| {
                     f.pos - direction() * length * t
                         + Vec3::Y
-                            * ((t * 4.0 + f.phase + self.clock * 0.65).sin()
-                                - (f.phase + self.clock * 0.65).sin())
-                            * 0.18
+                            * (((t * 4.0 + phase).sin() - phase.sin()) * 3.0).round()
+                            * 0.06
                 };
                 for segment in 0..SEGMENTS {
                     let t0 = segment as f32 / SEGMENTS as f32;
                     let t1 = (segment + 1) as f32 / SEGMENTS as f32;
                     let a = path(t0);
-                    let b = path(t1);
+                    // Flat short strokes form stair steps rather than a silky curve.
+                    let b = Vec3::new(path(t1).x, a.y, path(t1).z);
                     if !open_air(world, a) || !open_air(world, b) {
                         continue;
                     }
-                    let side = (b - a).cross(eye - (a + b) * 0.5).normalize_or_zero() * 0.016;
-                    let aa = alpha * (t0 * std::f32::consts::PI).sin().max(0.0);
-                    let ab = alpha * (t1 * std::f32::consts::PI).sin().max(0.0);
+                    let side = (b - a).cross(eye - (a + b) * 0.5).normalize_or_zero() * 0.024;
+                    let band = (((t0 + t1) * 0.5 * std::f32::consts::PI).sin() * 4.0).ceil() / 4.0;
                     ribbon_quad(
                         &mut out,
                         [a - side, b - side, b + side, a + side],
-                        [aa, ab, ab, aa],
+                        [alpha * band; 4],
                     );
                 }
             }

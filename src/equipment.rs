@@ -119,7 +119,7 @@ pub enum Category {
 }
 impl BlockType {
     pub fn hand_pickable(self) -> bool {
-        crate::voxel::resource_catalog::RESOURCES
+        self == BlockType::Campfire || crate::voxel::resource_catalog::RESOURCES
             .iter()
             .find(|r| r.block == self)
             .is_some_and(|r| r.hand_pickable)
@@ -274,13 +274,24 @@ pub fn block_action(
                     format!("Requires a {}", old.required_tool().name().to_lowercase())
                 });
             }
-            let i = COLLECTIBLE_BLOCKS
-                .iter()
-                .position(|b| *b == old)
-                .ok_or("Cannot gather this block")?;
-            let next = account.resources[i]
-                .checked_add(1)
-                .ok_or("Inventory full")?;
+            // Stage the complete reward before changing either inventory. Campfires
+            // salvage their stone ring/logs and release stored Fire essence.
+            let mut resources = account.resources;
+            let mut elements = account.elements;
+            let drops: &[(BlockType, u32)] = if old == BlockType::Campfire {
+                &[(BlockType::Stone, 2), (BlockType::OakWood, 2)]
+            } else {
+                &[(old, 1)]
+            };
+            for &(block, count) in drops {
+                let i = COLLECTIBLE_BLOCKS.iter().position(|b| *b == block)
+                    .ok_or("Cannot gather this block")?;
+                resources[i] = resources[i].checked_add(count).ok_or("Inventory full")?;
+            }
+            if old == BlockType::Campfire {
+                let fire = crate::crafting::Element::Fire as usize;
+                elements[fire] = elements[fire].checked_add(4).ok_or("Element inventory full")?;
+            }
             let key = (hit.target, old, entry);
             if mining.target != Some(key) {
                 mining.target = Some(key);
@@ -293,7 +304,8 @@ pub fn block_action(
             }
             mining.target = None;
             mining.hits = 0;
-            account.resources[i] = next;
+            account.resources = resources;
+            account.elements = elements;
             account.revision += 1;
             Ok(Some((hit.target, BlockType::Air, old)))
         }
@@ -538,6 +550,49 @@ mod tests {
         assert_eq!(Entry::Resource(BlockType::Stone).count(&account), 1);
         assert!(block_action(&world, &mut account, &mut state, feet, &[], &intent).is_err());
         assert_eq!(Entry::Resource(BlockType::Stone).count(&account), 1);
+    }
+    #[test]
+    fn campfire_salvage_is_atomic_and_awarded_once() {
+        for entry in [None, Some(Entry::Gear(Gear::Pickaxe))] {
+            let (mut world, mut account, intent, feet) = fixture(BlockType::Campfire, entry);
+            let before = account.clone();
+            let mut state = Mining::default();
+            let hits = if entry.is_none() { 1 } else { BlockType::Campfire.hardness() };
+            for n in 1..=hits {
+                state.last_use = None;
+                let result = block_action(&world, &mut account, &mut state, feet, &[], &intent).unwrap();
+                if n < hits {
+                    assert!(result.is_none());
+                    assert_eq!(account, before);
+                } else {
+                    let (p, block, old) = result.unwrap();
+                    assert_eq!(old, BlockType::Campfire);
+                    world.set_block(p.0, p.1, p.2, block);
+                }
+            }
+            for block in [BlockType::Stone, BlockType::OakWood] {
+                assert_eq!(Entry::Resource(block).count(&account), Entry::Resource(block).count(&before) + 2);
+            }
+            let fire = crate::crafting::Element::Fire.index();
+            assert_eq!(account.elements[fire], before.elements[fire] + 4);
+            let after = account.clone();
+            state.last_use = None;
+            assert!(block_action(&world, &mut account, &mut state, feet, &[], &intent).is_err());
+            assert_eq!(account, after);
+        }
+        for full in 0..3 {
+            let (world, mut account, intent, feet) = fixture(BlockType::Campfire, None);
+            if full == 2 { account.elements[crate::crafting::Element::Fire.index()] = u32::MAX; }
+            else {
+                let block = [BlockType::Stone, BlockType::OakWood][full];
+                let i = COLLECTIBLE_BLOCKS.iter().position(|b| *b == block).unwrap();
+                account.resources[i] = u32::MAX;
+            }
+            let before = account.clone();
+            assert!(block_action(&world, &mut account, &mut Mining::default(), feet, &[], &intent).is_err());
+            assert_eq!(account, before);
+            assert_eq!(world.get_block(4, 41, 2), BlockType::Campfire);
+        }
     }
     #[test]
     fn placement_consumes_exactly_one_and_failures_are_atomic() {

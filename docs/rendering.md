@@ -1,5 +1,10 @@
 # Lighting and surface weather
 
+Wind ribbons use short, crisp rectangular strokes with stepped heights and four
+opacity bands. Their shape animates at eight frames per second while wind drift
+stays continuous. The existing particle count, vertex budget and draw call are
+unchanged; no textures or extra rendering passes are needed.
+
 The forward renderer uses directional hemisphere fill, warm sunlight, ambient
 occlusion, four bilinear shadow comparisons, analytic sky reflections, and a
 blended filmic curve. Reflections approximate sky illumination; they do not

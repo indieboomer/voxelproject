@@ -167,7 +167,7 @@ function api.spawn_fish(x, y, z) end
 ---@return PlayerSnapshot[]
 function api.players() end
 
---- The single closest connected player to a point. Prefer this over looping players() yourself when you just need the closest one.
+--- The single closest connected player to THREE numeric coordinates (x, y, z), not a player ID or position table. To find the caster, match event.player_id in api.players(); for a nearby campfire use place_campfire_near_player(event.player_id, 6).
 ---@param x number
 ---@param y number
 ---@param z number

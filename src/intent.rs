@@ -307,6 +307,7 @@ fn focused_prompt(plan: &Plan) -> String {
         let method = line.split('(').next().unwrap_or(line);
         let relevant = !line.starts_with("- api.")
             || method == "- api.broadcast"
+            || method == "- api.players"
             || plan.api_groups.iter().any(|g| match g.as_str() {
                 "creatures" => [
                     "creature",
@@ -485,8 +486,16 @@ fn smoke_code(code: &str, kind: PromptKind) -> Result<(), String> {
                 .into(),
         );
     }
-    let world = World::new(1);
-    let pos = Vec3::new(0.5, world.terrain_height(0, 0) as f32 + 1.0, 0.5);
+    let mut world = World::new(1);
+    // Placement APIs query loaded, edited blocks, not procedural height guesses.
+    let mut chunk = crate::voxel::chunk::Chunk::new(0, 0);
+    for x in 0..16 {
+        for z in 0..16 {
+            chunk.set_local(x, 24, z, crate::voxel::BlockType::Stone);
+        }
+    }
+    world.chunks.insert((0, 0), chunk);
+    let pos = Vec3::new(8.5, 25.0, 8.5);
     let mut creatures = Creatures::new();
     creatures.spawn_one(CreatureKind::Wolf, pos, 1);
     creatures.spawn_one(CreatureKind::Sheep, pos + Vec3::X, 2);
@@ -739,6 +748,30 @@ mod tests {
             PromptKind::Instant
         )
         .is_ok());
+    }
+
+    #[test]
+    fn campfire_generation_reports_coordinate_mistakes_and_checks_real_placement() {
+        for arguments in ["event.player_id", "event.x, event.y, event.z", "{}"] {
+            let code = format!("function on_cast(api,event) api.nearest_player({arguments}) end");
+            let error = smoke_code(&code, PromptKind::Instant).unwrap_err();
+            assert!(error.contains("nearest_player(x, y, z)"), "{error}");
+            assert!(error.contains("api.place_campfire_near_player(event.player_id, 6)"), "{error}");
+        }
+        smoke_code(r#"
+            function on_cast(api,event)
+                local fire = api.place_campfire_near_player(event.player_id,6)
+                assert(fire and fire.burning)
+                assert(api.get_block(fire.x,fire.y,fire.z)=='campfire')
+                local p = api.nearest_player(fire.x,fire.y,fire.z)
+                assert(p and p.distance >= 0)
+            end
+        "#, PromptKind::Instant).unwrap();
+        let mut p = plan();
+        p.api_groups = vec!["blocks".into()];
+        let context = focused_prompt(&p);
+        assert!(context.contains("- api.players()"));
+        assert!(context.contains("function on_cast(api, event) local fire = api.place_campfire_near_player"));
     }
 
     #[test]

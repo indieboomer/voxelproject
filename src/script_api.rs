@@ -757,6 +757,20 @@ fn populate_api<'lua, 'scope>(
             .map_or(&[][..], |(_, args)| *args);
         api.set(name, scope.create_function(move |lua, args: MultiValue| {
             budget.charge_api_call();
+            if method_name == "nearest_player" {
+                for index in 0..3 {
+                    let value = args.get(index).cloned().unwrap_or(Value::Nil);
+                    if lua.coerce_number(value)?.is_none() {
+                        return Err(mlua::Error::RuntimeError(format!(
+                            "nearest_player(x, y, z): argument #{} must be a numeric coordinate. \
+                             on_cast event contains only player_id, not x/y/z or position. \
+                             Find the caster in api.players() by p.id == event.player_id. \
+                             For a nearby campfire use api.place_campfire_near_player(event.player_id, 6) directly.",
+                            index + 1
+                        )));
+                    }
+                }
+            }
             for (index, value) in args.iter().enumerate() {
                 if !numeric_args.contains(&index) { continue; }
                 // mlua accepts numeric strings too; check the converted

@@ -13,6 +13,11 @@ struct Output {
     return out;
 }
 @fragment fn fs_main(in: Output) -> @location(0) vec4<f32> {
-    let edge = (1.0-smoothstep(0.35,1.0,abs(in.uv.y))) * (1.0-smoothstep(0.65,1.0,abs(in.uv.x)));
+    // Ribbons have zero horizontal UV: use crisp rectangular strokes.
+    // Motes keep their existing soft falloff.
+    var edge = 1.0;
+    if abs(in.uv.x) > 0.0001 {
+        edge = (1.0-smoothstep(0.35,1.0,abs(in.uv.y))) * (1.0-smoothstep(0.65,1.0,abs(in.uv.x)));
+    }
     return vec4<f32>(0.94,0.97,1.0,in.alpha * edge);
 }
