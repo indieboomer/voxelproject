@@ -9,7 +9,7 @@ use crate::voxel::block::BlockType;
 pub type PlayerId = u32;
 pub type WorldEdit = ((i32, i32, i32), BlockType);
 pub const MAX_PLAYERS: usize = 4;
-pub const PROTOCOL_VERSION: u32 = 16;
+pub const PROTOCOL_VERSION: u32 = 18;
 pub const HOST_PLAYER_ID: PlayerId = 0;
 pub const DEFAULT_PORT: u16 = 7878;
 pub const RELIABLE_RESEND_INTERVAL: Duration = Duration::from_millis(200);
@@ -124,6 +124,10 @@ pub enum ReliableMsg {
     // Append variants so older Hello messages still reach protocol-version rejection.
     RuleProposal { prompt: String, source: String },
     RuleProposalResult { accepted: bool, message: String },
+    DeathPuffs(Vec<[f32;3]>),
+    DisplayName(String),
+    /// Host -> collector only. Inventory balances travel separately in CraftState.
+    LootCollected(Vec<(BlockType,u32)>),
 }
 
 /// One player's position/status as carried in a `Snapshot` -- see
@@ -133,8 +137,9 @@ pub enum ReliableMsg {
 /// `health`/`poisoned`/`speed_multiplier`/`jump_multiplier` to its local
 /// `Player`, and everyone else's purely for future display (nothing reads
 /// another player's copy of these yet).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SnapshotPlayer {
+    pub name: String,
     pub appearance: crate::remote_player::Appearance,
     pub held: Option<crate::equipment::Entry>,
     pub id: PlayerId,
@@ -158,6 +163,7 @@ pub enum UnreliableMsg {
         carrying_crystal: bool,
     },
     Snapshot {
+        loot: Vec<crate::loot::Drop>,
         allow_guest_prompting: bool,
         time_of_day: f32,
         weather: u8,
@@ -397,6 +403,16 @@ mod tests {
     use crate::creature::{AnimClip, CreatureKind};
     use crate::weather::Weather;
 
+    #[test]
+    fn loot_collection_feedback_round_trips() {
+        let contents=crate::loot::rewards(CreatureKind::StoneGolem);
+        let packet=Packet::Reliable {id:19,msg:ReliableMsg::LootCollected(contents.clone())};
+        match decode(&encode(&packet)).unwrap() {
+            Packet::Reliable {id:19,msg:ReliableMsg::LootCollected(received)} => assert_eq!(received,contents),
+            other => panic!("unexpected loot feedback: {other:?}"),
+        }
+    }
+
     /// A World API rule's `replace_block` reaches clients exclusively as a
     /// `ReliableMsg::BlockEdit` (see world_api/schema.yaml's
     /// `replication.block_edits`) -- this pins down that the wire format
@@ -435,6 +451,7 @@ mod tests {
     #[test]
     fn snapshot_round_trips_through_encode_decode() {
         let player = SnapshotPlayer {
+            name:"Sir Turnip".into(),
             appearance: crate::remote_player::Appearance { model: 3, hat: Some(2) },
             held: Some(crate::equipment::Entry::Gear(crate::equipment::Gear::Pickaxe)),
             id: 7,
@@ -448,10 +465,11 @@ mod tests {
             oxygen: 42.0,
         };
         let packet = Packet::Unreliable(UnreliableMsg::Snapshot {
+            loot:vec![],
             allow_guest_prompting: true,
             time_of_day: 0.42,
             weather: Weather::Rain.to_u8(),
-            players: vec![player],
+            players: vec![player.clone()],
             creatures: vec![(
                 [4.0, 5.0, 6.0],
                 CreatureKind::Chicken.to_u8(),
@@ -464,6 +482,7 @@ mod tests {
         let decoded = decode(&bytes).expect("a just-encoded packet must decode");
         match decoded {
             Packet::Unreliable(UnreliableMsg::Snapshot {
+                loot:_,
                 allow_guest_prompting,
                 time_of_day,
                 weather,

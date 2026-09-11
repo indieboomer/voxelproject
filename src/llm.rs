@@ -105,6 +105,7 @@ impl PreflightCache {
 }
 
 impl LlmClient {
+    pub fn base_url(&self)->&str {&self.base_url}
     pub fn new(base_url: String) -> Self {
         Self { base_url, preflight: Arc::default(), completed: Arc::default() }
     }

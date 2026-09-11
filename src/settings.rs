@@ -13,6 +13,9 @@ pub enum UiTheme {
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub player_name: String,
+    /// Stable direct-session account key; display-name edits do not move inventory.
+    pub connection_name: String,
     pub gameplay: Gameplay,
     pub appearance: Appearance,
     pub multiplayer: Multiplayer,
@@ -81,12 +84,30 @@ impl Settings {
 }
 
 pub struct SettingsPanel {
+    name_job: Option<std::sync::mpsc::Receiver<Result<String,String>>>,
+    pub name_status: String,
     pub open: bool,
     pub values: Settings,
     message: String,
 }
 
 impl SettingsPanel {
+    pub fn poll_name(&mut self,url:&str) {
+        if let Some(job)=&self.name_job {
+            if let Ok(result)=job.try_recv() {
+                self.name_job=None;
+                if self.values.player_name.trim().is_empty() {
+                    self.values.player_name=match result {Ok(name)=>{self.name_status="AI name suggestion ready".into();name},Err(_)=>{self.name_status="Local AI unavailable; using a fantasy fallback".into();crate::fantasy_name::fallback()}};
+                    let _=self.values.save(Path::new("settings.json"));
+                }
+            }
+        }
+        if self.values.player_name.trim().is_empty() && self.name_job.is_none() {
+            let (tx,rx)=std::sync::mpsc::channel();let url=url.to_string();
+            std::thread::spawn(move || {let _=tx.send(crate::fantasy_name::request(&url));});
+            self.name_job=Some(rx);self.name_status="Asking local AI for a fantasy name… You can also type your own.".into();
+        }
+    }
     pub fn new(ctx: &egui::Context) -> Self {
         let (values, message) = match Settings::load(Path::new("settings.json")) {
             Ok(s) => (s, String::new()),
@@ -94,6 +115,8 @@ impl SettingsPanel {
         };
         crate::ui_theme::apply(ctx, values.appearance.ui_theme);
         Self {
+            name_job:None,
+            name_status:String::new(),
             open: false,
             values,
             message,
@@ -112,6 +135,10 @@ impl SettingsPanel {
             .max_height((ctx.screen_rect().height() - 64.0).max(180.0))
             .vscroll(true)
             .show(ctx, |ui| {
+                ui.heading("Player name");
+                ui.add(egui::TextEdit::singleline(&mut self.values.player_name).char_limit(crate::net::MAX_NICKNAME_LEN).hint_text("Leave empty for an AI fantasy name"));
+                if ui.button("Suggest funny fantasy name (AI)").clicked() {self.values.player_name.clear();}
+                if !self.name_status.is_empty() {ui.small(&self.name_status);}
                 ui.heading("Multiplayer");
                 ui.horizontal_wrapped(|ui| {
                     ui.selectable_value(

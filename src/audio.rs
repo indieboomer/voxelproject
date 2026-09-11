@@ -36,6 +36,7 @@ const DRAGON_ATTACK: &[u8] = include_bytes!("../sounds/dragon_attack.mp3");
 const DRAGON_FLY: &[u8] = include_bytes!("../sounds/dragon_fly.mp3");
 const WATERFALL: &[u8] = include_bytes!("../sounds/waterfall.mp3");
 const CAMPFIRE: &[u8] = include_bytes!("../sounds/campfire.mp3");
+const LOOT: &[u8] = include_bytes!("../sounds/loot.mp3");
 const GOBLIN_ATTACK: &[u8] = include_bytes!("../sounds/goblin_attack.mp3");
 const HUMAN_STEP: &[u8] = include_bytes!("../sounds/human_step.mp3");
 const HUMAN_STEP_2: &[u8] = include_bytes!("../sounds/human_step_2.mp3");
@@ -388,6 +389,10 @@ impl AudioEngine {
         self.play_varied(bytes, 0.45, 0.08, 0.18);
     }
 
+    pub fn play_loot(&mut self) {
+        self.play_varied(LOOT,0.55,0.0,0.0);
+    }
+
     /// One creature footstep at `pos`, any kind -- a single generic clip
     /// (see `ANIMAL_STEP`), since the engine doesn't ship per-kind step
     /// sounds. Spatialized, falls off over a short range (see
@@ -608,6 +613,11 @@ impl Default for AudioEngine {
 mod tests {
     use super::*;
 
+    #[test]
+    fn loot_recording_decodes_with_audible_samples() {
+        let decoder=Decoder::new(Cursor::new(LOOT)).expect("loot recording must decode");
+        assert!(decoder.into_iter().any(|sample|sample!=0));
+    }
     #[test]
     fn new_creature_recordings_decode_and_are_assigned_to_the_correct_kinds() {
         assert_eq!(attack_sound(CreatureKind::Zombie), Some(ZOMBIE_GROWL));

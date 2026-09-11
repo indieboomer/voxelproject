@@ -614,6 +614,7 @@ pub enum AttackPolicy {
 }
 
 pub struct Creatures {
+    pub player_kills: Vec<DeathEvent>,
     pub(crate) wildlife: std::collections::BTreeMap<u32, Option<(i32, i32)>>,
     population_timer: f32,
     population_sequence: u64,
@@ -762,6 +763,7 @@ impl Creatures {
             pending_audio: CreatureAudioEvents::default(),
             behaviors: Default::default(),
             combat_deaths: Vec::new(),
+            player_kills: Vec::new(),
             attack_policies: Default::default(),
         }
     }

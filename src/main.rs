@@ -10,6 +10,8 @@ mod input;
 mod equipment;
 mod equipment_ui;
 mod inventory_ui;
+mod loot;
+mod fantasy_name;
 mod held_item;
 mod llm;
 mod llm_server;

@@ -649,6 +649,7 @@ pub struct App {
     interaction_states: HashMap<PlayerId, crate::equipment::Mining>,
     use_animation: f32,
     inventory_ready: bool,
+    loot: crate::loot::Effects,
     mana_timer: f32,
     /// Position of the block the player is currently chipping away at with
     /// left-click, and hits landed on it so far -- reset whenever a click
@@ -1336,6 +1337,7 @@ impl App {
             interaction_states: HashMap::new(),
             use_animation: 0.0,
             inventory_ready: false,
+            loot: Default::default(),
             mana_timer: 0.0,
             mining_target: None,
             mining_hits: 0,
@@ -1838,6 +1840,12 @@ impl App {
         }
 
         self.input.end_frame();
+        self.ui.settings.poll_name(self.llm.base_url());
+        let display=crate::fantasy_name::clean(&self.ui.settings.values.player_name);
+        if !display.is_empty() && display!=self.local_nickname {
+            self.local_nickname=display.clone();
+            if let NetRole::Joined(client)=&mut self.net {client.reliable.send(&client.socket,client.server_addr,ReliableMsg::DisplayName(display));}
+        }
         self.update_chunks();
         self.poll_network(dt);
         self.scripting.inventory_registry = self.crafting_registry.clone();
@@ -1915,10 +1923,26 @@ impl App {
             for (kind, pos) in events.ambient_calls {
                 self.audio.play_creature_ambient(kind, pos);
             }
+            let puffs:Vec<_>=events.deaths.iter().take(16).map(|(_,p)|p.to_array()).collect();
+            if !puffs.is_empty() {if let NetRole::Host(host)=&mut self.net {for &peer in host.clients.keys() {host.reliable.send(&host.socket,peer,ReliableMsg::DeathPuffs(puffs.clone()));}}}
             for (_, pos) in events.deaths {
+                self.loot.puff(pos);
                 self.audio.play_creature_death(pos);
             }
+            for death in self.creatures.player_kills.drain(..) {self.loot.spawn(&self.world,death.kind,death.pos);}
+            let acquired=self.loot.collect(&self.world,self.player.position,&mut self.player.crafting);
+            if !acquired.is_empty() {self.audio.play_loot();}
+            self.ui.show_pickup(acquired);
+            let mut changed=false;
+            if let NetRole::Host(host)=&mut self.net {for (peer,id) in &host.clients {
+                if let Some(p)=host.remote_players.get(id) {let account=self.guest_accounts.entry(peer.account_key(&p.nickname)).or_default();let rev=account.revision;
+                    let acquired=self.loot.collect(&self.world,p.pos,account);changed|=rev!=account.revision;
+                    if !acquired.is_empty() {host.reliable.send(&host.socket,*peer,ReliableMsg::LootCollected(acquired));}
+                }
+            }}
+            if changed {self.sync_guest_mana();}
         }
+        self.loot.update(dt,matches!(self.net,NetRole::Host(_)));
 
         match &self.net {
             NetRole::Host(_) => self.audio.update_creature_flight(&self.creatures.snapshot()),
@@ -1935,6 +1959,7 @@ impl App {
                 && self.chunk_meshes.contains_key(&cell)
         });
         let mut mesh = mesh_for_snapshot(&visible_creatures, &self.models);
+        mesh.extend(self.loot.mesh(|pos|{let cell=chunk_of(pos);crate::visibility::within_terrain_range(cell,center,RENDER_RADIUS)&&self.chunk_meshes.contains_key(&cell)}));
         let remote_players = match &self.net {
             NetRole::Host(host) => &host.remote_players,
             NetRole::Joined(client) => &client.remote_players,
@@ -2819,6 +2844,7 @@ impl App {
         if host.broadcast_timer >= SNAPSHOT_INTERVAL {
             host.broadcast_timer = 0.0;
             let mut players: Vec<SnapshotPlayer> = vec![SnapshotPlayer {
+                name:self.local_nickname.clone(),
                 appearance: host.appearance,
                 id: HOST_PLAYER_ID,
                 pos: self.player.position.to_array(),
@@ -2836,6 +2862,7 @@ impl App {
                     if let Some(account)=self.guest_accounts.get(&peer.account_key(&rp.nickname)) {rp.held=account.hotbar.entry().filter(|e|e.count(account)>0);}
                 }
                 players.push(SnapshotPlayer {
+                    name:rp.display_name.clone(),
                     appearance: rp.appearance,
                     id,
                     pos: rp.pos.to_array(),
@@ -2850,6 +2877,7 @@ impl App {
                 });
             }
             let snapshot = UnreliableMsg::Snapshot {
+                loot:self.loot.drops.clone(),
                 allow_guest_prompting: self.ui.settings.values.multiplayer.allow_guest_prompting,
                 time_of_day: self.time_of_day,
                 weather: self.weather.current.to_u8(),
@@ -2963,6 +2991,9 @@ impl App {
                         if let (Some(nickname), Some(text)) = (sender, net::chat_text(&text)) {
                             self.broadcast_chat(format!("{nickname}: {text}"));
                         }
+                    }
+                    ReliableMsg::DisplayName(name) => {
+                        if let Some(id)=host.clients.get(&from) {if let Some(p)=host.remote_players.get_mut(id) {p.display_name=sanitize_nickname(&name);}}
                     }
                     ReliableMsg::Interact { x, y, z } => {
                         // The host reads the block itself rather than
@@ -3091,6 +3122,13 @@ impl App {
                     ReliableMsg::CraftRegistry(registry) => {
                         if registry.validate().is_ok() { self.crafting_registry = std::sync::Arc::new(registry); }
                     }
+                    ReliableMsg::DeathPuffs(positions) => {
+                        for pos in positions.into_iter().take(16).map(Vec3::from_array).filter(|p|p.is_finite()) {self.loot.puff(pos);}
+                    }
+                    ReliableMsg::LootCollected(contents) => {
+                        if !contents.is_empty() {self.audio.play_loot();}
+                        self.ui.show_pickup(contents);
+                    }
                     ReliableMsg::CraftState { account, feedback } => {
                         if account.revision >= self.player.crafting.revision || !self.inventory_ready {
                             let local_hotbar=self.player.crafting.hotbar.clone();
@@ -3143,6 +3181,7 @@ impl App {
             }
             Packet::Ack { id } => client.reliable.ack(id, client.server_addr),
             Packet::Unreliable(UnreliableMsg::Snapshot {
+                loot,
                 allow_guest_prompting,
                 time_of_day,
                 weather,
@@ -3155,6 +3194,7 @@ impl App {
                     unreachable!()
                 };
                 client.creature_snapshot = creatures;
+                self.loot.drops=loot.into_iter().take(48).collect();
                 client.allow_guest_prompting = allow_guest_prompting;
                 let local_player_id = self.local_player_id;
                 let now = Instant::now();
@@ -3178,6 +3218,7 @@ impl App {
                         .remote_players
                         .entry(sp.id)
                         .and_modify(|rp| {
+                            rp.display_name=sanitize_nickname(&sp.name);
                             rp.velocity = (Vec3::from_array(sp.pos) - rp.pos) / now.duration_since(rp.last_seen).as_secs_f32().max(0.001);
                             rp.appearance = sp.appearance;
                             rp.pos = Vec3::from_array(sp.pos);
@@ -3199,7 +3240,7 @@ impl App {
                                 Vec3::from_array(sp.pos),
                                 sp.yaw,
                                 sp.carrying_crystal,
-                                String::new(),
+                                sanitize_nickname(&sp.name),
                             );
                             rp.appearance = sp.appearance;
                             rp.health = sp.health;
@@ -3227,6 +3268,17 @@ impl App {
                 .map(|p| chunk_of(p.pos)).collect(),
             NetRole::Joined(_) => Vec::new(),
         };
+        self.ui.nameplates.clear();
+        let remote_players=match &self.net {NetRole::Host(host)=>&host.remote_players,NetRole::Joined(client)=>&client.remote_players};
+        let eye=self.camera.eye_position();let matrix=self.camera.view_proj();
+        let screen=self.window.inner_size();let scale=self.window.scale_factor() as f32;
+        for (&id,p) in remote_players {
+            let target=p.pos+Vec3::Y*2.15;let distance=eye.distance(target);
+            if id==self.local_player_id || distance>48.0 || crate::raycast::raycast(&self.world,eye,target-eye,(distance-0.3).max(0.0)).is_some() {continue;}
+            let clip=matrix*target.extend(1.0);if clip.w<=0.0 {continue;}
+            let ndc=clip.truncate()/clip.w;if ndc.x.abs()>1.0 || ndc.y.abs()>1.0 || !(0.0..=1.0).contains(&ndc.z) {continue;}
+            self.ui.nameplates.push((egui::pos2((ndc.x+1.0)*0.5*screen.width as f32/scale,(1.0-ndc.y)*0.5*screen.height as f32/scale),p.display_name.clone()));
+        }
         let mut centers = vec![(pcx,pcz)];
         centers.extend(remote_chunks.iter().copied());
         let mut missing=Vec::new();

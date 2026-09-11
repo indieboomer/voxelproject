@@ -45,6 +45,7 @@ pub struct RemotePlayer {
     /// client's own `remote_players` entries leave this empty since they
     /// never need it (no in-world name tags yet).
     pub nickname: String,
+    pub display_name: String,
     /// The host's authoritative record of this player's health/poison/
     /// movement-attribute state, set via the World API (`api.damage_player`
     /// et al) and the poison DoT timer, then broadcast to everyone in the
@@ -77,6 +78,7 @@ impl RemotePlayer {
             carrying_crystal,
             last_seen: Instant::now(),
             velocity: Vec3::ZERO,
+            display_name:nickname.clone(),
             nickname,
             health: crate::player::MAX_HEALTH,
             poisoned: false,

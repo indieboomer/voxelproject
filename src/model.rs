@@ -45,6 +45,7 @@ use crate::voxel::atlas::white_uv;
 use crate::voxel::mesher::Vertex;
 
 struct Primitive {
+    colors: Vec<[f32;3]>,
     uvs: Vec<[f32; 2]>,
     positions: Vec<Vec3>,
     normals: Vec<Vec3>,
@@ -516,6 +517,11 @@ fn load_glb(bytes: &[u8]) -> AnimatedModel {
                     }
                     let material_idx = prim.get("material").and_then(Value::as_u64).map(|v| v as usize);
                     mesh.push(Primitive {
+                        colors: attrs.get("COLOR_0").and_then(Value::as_u64).map(|idx| {
+                            let components=if json["accessors"][idx as usize]["type"]=="VEC4" {4} else {3};
+                            accessor_floats(&json,bin,idx as usize,components).chunks_exact(components)
+                                .map(|c|[c[0],c[1],c[2]]).collect()
+                        }).unwrap_or_default(),
                         uvs: attrs.get("TEXCOORD_0").and_then(Value::as_u64)
                             .map(|idx| accessor_floats(&json, bin, idx as usize, 2)
                                 .chunks_exact(2).map(|uv| [uv[0], uv[1]]).collect())
@@ -839,7 +845,7 @@ fn emit_rigid_parts(
                 let (nx, nz) = yaw_rotate(world_normal.x, world_normal.z);
                 vertices.push(Vertex {
                     position: [origin.x + wx, origin.y + world_pos.y, origin.z + wz],
-                    color: prim.color,
+                    color: (Vec3::from_array(prim.color)*Vec3::from_array(prim.colors.get(i).copied().unwrap_or([1.0;3]))).to_array(),
                     normal: [nx, world_normal.y, nz],
                     uv: [uv[0], uv[1]],
                     ao: 1.0,
@@ -966,8 +972,35 @@ pub fn push_model(
     }
 }
 
+/// Cache the static bag geometry once; instances only translate these vertices.
+pub fn loot_bag_mesh() -> &'static crate::voxel::mesher::MeshData {
+    static MESH: std::sync::OnceLock<crate::voxel::mesher::MeshData> = std::sync::OnceLock::new();
+    MESH.get_or_init(|| {
+        let model=load_glb(include_bytes!("../models/loot_bag.glb"));
+        let mut mesh=crate::voxel::mesher::MeshData {vertices:Vec::new(),indices:Vec::new()};
+        let matrices=compute_world_matrices(&model,None,0.0);
+        emit_rigid_parts(&model,&matrices,&mut mesh.vertices,&mut mesh.indices,Vec3::ZERO,&|x,z|(x,z),white_uv());
+        for v in &mut mesh.vertices {
+            // Keep the bag readable at pickup size and center it on the bobbing origin.
+            v.position=(Vec3::from_array(v.position)*1.5-Vec3::Y*0.2).to_array();
+            v.emission=0.15;
+        }
+        mesh
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn loot_bag_preserves_vertex_colors_and_valid_geometry() {
+        let mesh=super::loot_bag_mesh();
+        assert_eq!(mesh.vertices.len(),6480);
+        assert_eq!(mesh.indices.len(),6480);
+        assert!(mesh.indices.iter().all(|i|(*i as usize)<mesh.vertices.len()));
+        assert!(mesh.vertices.iter().all(|v|v.position.iter().all(|p|p.is_finite())));
+        assert!(mesh.vertices.iter().any(|v|v.color!=mesh.vertices[0].color));
+        assert!(mesh.vertices.iter().all(|v|v.position[1]>=-0.21 && v.position[1]<0.3));
+    }
     #[test]
     fn fish_model_animates_and_fits_its_water_clearance() {
         let models = Models::load();

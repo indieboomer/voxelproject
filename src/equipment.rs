@@ -381,6 +381,7 @@ pub fn attack(
     let best = creatures.weapon_target(world, eye, dir, reach);
     if let Some(id) = best {
         if let Some(death) = creatures.damage(id, 12.0) {
+            creatures.player_kills.push(death);
             creatures.combat_deaths.push(death);
         }
     }
@@ -414,6 +415,31 @@ mod tests {
             action: Action::Mine,
         };
         (world, account, intent, Vec3::new(1.5, 40.0, 2.5))
+    }
+    #[test]
+    fn sword_kill_queues_renderable_collectible_loot_once() {
+        let (mut world, mut account, mut intent, feet) = fixture(BlockType::Stone, Some(Entry::Gear(Gear::Sword)));
+        for x in 0..9 { for z in 0..9 { world.set_block(x,39,z,BlockType::Stone); } }
+        intent.action=Action::Attack;
+        let mut creatures=crate::creature::Creatures::new();
+        creatures.spawn_one(crate::creature::CreatureKind::Wolf,Vec3::new(3.0,40.8,2.5),1);
+        for _ in 0..20 {
+            attack(&world,&mut creatures,&mut account,&mut Mining::default(),feet,&intent).unwrap();
+            if creatures.snapshot_with_ids().is_empty() { break; }
+        }
+        assert!(creatures.snapshot_with_ids().is_empty());
+        assert_eq!(creatures.player_kills.len(),1);
+        let mut loot=crate::loot::Effects::default();
+        for death in creatures.player_kills.drain(..) { loot.spawn(&world,death.kind,death.pos); }
+        assert_eq!(loot.drops.len(),1);
+        assert!(!loot.mesh(|_|true).indices.is_empty());
+        loot.update(2.0,true);
+        let before=account.clone();
+        for drop in loot.drops.clone() { loot.collect(&world,Vec3::from_array(drop.pos),&mut account); }
+        assert!(loot.drops.is_empty());
+        for (block,amount) in crate::loot::rewards(crate::creature::CreatureKind::Wolf) {
+            assert_eq!(Entry::Resource(block).count(&account),Entry::Resource(block).count(&before)+amount);
+        }
     }
     #[test]
     fn empty_slot_picks_each_soft_resource_once_and_rejects_hard_materials() {

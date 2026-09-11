@@ -84,6 +84,9 @@ pub struct UiRequests {
 }
 
 pub struct Ui {
+    pickup_rows: Vec<(crate::voxel::BlockType,u32)>,
+    pickup_started: Instant,
+    pub nameplates: Vec<(egui::Pos2,String)>,
     pub settings: crate::settings::SettingsPanel,
     ctx: egui::Context,
     state: State,
@@ -99,6 +102,19 @@ pub struct Ui {
 }
 
 impl Ui {
+    pub fn show_pickup(&mut self, contents: Vec<(crate::voxel::BlockType,u32)>) {
+        if contents.is_empty() {return;}
+        if self.pickup_started.elapsed().as_secs_f32()>=4.0 {self.pickup_rows.clear();}
+        for (block,amount) in contents {
+            if amount==0 {continue;}
+            if let Some((_,count))=self.pickup_rows.iter_mut().find(|(b,_)|*b==block) {
+                *count=count.saturating_add(amount);
+            } else if self.pickup_rows.len()<12 {
+                self.pickup_rows.push((block,amount));
+            }
+        }
+        self.pickup_started=Instant::now();
+    }
 
     pub fn new(device: &wgpu::Device, output_format: wgpu::TextureFormat, window: &Window) -> Self {
         let ctx = egui::Context::default();
@@ -106,6 +122,9 @@ impl Ui {
         let state = State::new(ctx.clone(), egui::ViewportId::ROOT, window, None, None);
         let renderer = Renderer::new(device, output_format, None, 1);
         Self {
+            pickup_rows:Vec::new(),
+            pickup_started:Instant::now(),
+            nameplates:Vec::new(),
             settings,
             ctx,
             state,
@@ -175,6 +194,33 @@ impl Ui {
         let fantasy = self.settings.values.appearance.ui_theme == crate::settings::UiTheme::Fantasy;
 
         let full_output = self.ctx.run(raw_input, |ctx| {
+            let age=self.pickup_started.elapsed().as_secs_f32();
+            if !self.pickup_rows.is_empty() && age<4.0 {
+                let enter=(age/0.2).clamp(0.0,1.0);
+                let fade=((4.0-age)/0.7).clamp(0.0,1.0)*enter;
+                egui::Area::new(egui::Id::new("loot_acquired"))
+                    .anchor(egui::Align2::RIGHT_CENTER,egui::vec2(-24.0+(1.0-enter)*30.0,-40.0))
+                    .interactable(false)
+                    .show(ctx,|ui| {
+                        ui.set_opacity(fade);
+                        egui::Frame::none().fill(egui::Color32::from_rgba_unmultiplied(15,24,34,225))
+                            .rounding(4.0).inner_margin(12.0).show(ui,|ui| {
+                                ui.label(egui::RichText::new("Acquired").color(egui::Color32::from_rgb(140,225,255)).strong());
+                                for &(block,amount) in &self.pickup_rows {
+                                    ui.horizontal(|ui| {
+                                        crate::resource_ui::icon(ui,block);
+                                        ui.label(format!("+{amount} {}",block.name()));
+                                    });
+                                }
+                            });
+                    });
+                ctx.request_repaint();
+            }
+            let painter=ctx.layer_painter(egui::LayerId::new(egui::Order::Background,egui::Id::new("player_names")));
+            for (pos,name) in &self.nameplates {
+                painter.text(*pos+egui::vec2(1.0,1.0),egui::Align2::CENTER_BOTTOM,name,egui::FontId::proportional(16.0),egui::Color32::BLACK);
+                painter.text(*pos,egui::Align2::CENTER_BOTTOM,name,egui::FontId::proportional(16.0),egui::Color32::WHITE);
+            }
             if self.settings.open {
                 // No underlying controls run while the settings panel owns input.
                 self.settings.draw(ctx);
