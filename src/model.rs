@@ -116,6 +116,8 @@ struct SkinnedMesh {
 /// "walk", ...), and -- for every model but sheep/chicken -- a `Skin`.
 /// Not every model has every clip; see each `.glb`'s own export.
 pub struct AnimatedModel {
+    /// Optional texture slot for visual variants, after the player/hat slots.
+    texture_layer: Option<f32>,
     hat_socket: Option<usize>,
     nodes: Vec<ModelNode>,
     roots: Vec<usize>,
@@ -128,7 +130,7 @@ pub struct AnimatedModel {
     texture: Option<image::RgbaImage>,
 }
 
-/// The eight creature models, loaded once at startup and shared by every
+/// Creature models and their variants, loaded once at startup and shared by every
 /// spawned creature of that kind (see `App::new`).
 pub struct Models {
     players: [AnimatedModel; 4],
@@ -141,6 +143,9 @@ pub struct Models {
     cow: AnimatedModel,
     goblin: AnimatedModel,
     sunscorch: AnimatedModel,
+    zombies: [AnimatedModel; 4],
+    skeletons: [AnimatedModel; 4],
+    dragons: [AnimatedModel; 2],
 }
 
 impl Models {
@@ -166,6 +171,22 @@ impl Models {
             cow: load_glb(include_bytes!("../models/cow.glb")),
             goblin: load_glb(include_bytes!("../models/goblin.glb")),
             sunscorch: load_glb(include_bytes!("../models/sunscorch.glb")),
+            zombies: load_variants([
+                include_bytes!("../models/zombie_01.glb"),
+                include_bytes!("../models/zombie_02.glb"),
+                include_bytes!("../models/zombie_03.glb"),
+                include_bytes!("../models/zombie_04.glb"),
+            ], 17),
+            skeletons: load_variants([
+                include_bytes!("../models/skeleton_01.glb"),
+                include_bytes!("../models/skeleton_02.glb"),
+                include_bytes!("../models/skeleton_03.glb"),
+                include_bytes!("../models/skeleton_04.glb"),
+            ], 21),
+            dragons: load_variants([
+                include_bytes!("../models/dragon_green.glb"),
+                include_bytes!("../models/dragon_red.glb"),
+            ], 25),
         }
     }
 
@@ -179,6 +200,10 @@ impl Models {
             CreatureKind::Cow => &self.cow,
             CreatureKind::Goblin => &self.goblin,
             CreatureKind::Sunscorch => &self.sunscorch,
+            CreatureKind::Zombie => &self.zombies[0],
+            CreatureKind::Skeleton => &self.skeletons[0],
+            CreatureKind::DragonGreen => &self.dragons[0],
+            CreatureKind::DragonRed => &self.dragons[1],
         }
     }
 
@@ -187,7 +212,7 @@ impl Models {
     /// (see this module's doc comment). `app.rs`'s `create_atlas_bind_group`
     /// uploads these once at startup into the `tex_layer`-indexed
     /// `creature_texture` array `emit_skinned_mesh`'s vertices sample from.
-    pub fn creature_texture_layers(&self) -> [Option<&image::RgbaImage>; 16] {
+    pub fn creature_texture_layers(&self) -> [Option<&image::RgbaImage>; 26] {
         [
             self.sheep.texture.as_ref(),
             self.chicken.texture.as_ref(),
@@ -205,8 +230,34 @@ impl Models {
             self.hats[1].texture.as_ref(),
             self.hats[2].texture.as_ref(),
             self.hats[3].texture.as_ref(),
+            self.zombies[0].texture.as_ref(),
+            self.zombies[1].texture.as_ref(),
+            self.zombies[2].texture.as_ref(),
+            self.zombies[3].texture.as_ref(),
+            self.skeletons[0].texture.as_ref(),
+            self.skeletons[1].texture.as_ref(),
+            self.skeletons[2].texture.as_ref(),
+            self.skeletons[3].texture.as_ref(),
+            self.dragons[0].texture.as_ref(),
+            self.dragons[1].texture.as_ref(),
         ]
     }
+
+    pub fn for_variant(&self, kind: CreatureKind, variant: u8) -> &AnimatedModel {
+        match kind {
+            CreatureKind::Zombie => &self.zombies[(variant % 4) as usize],
+            CreatureKind::Skeleton => &self.skeletons[(variant % 4) as usize],
+            _ => self.for_kind(kind),
+        }
+    }
+}
+
+fn load_variants<const N: usize>(bytes: [&[u8]; N], first_layer: u8) -> [AnimatedModel; N] {
+    std::array::from_fn(|i| {
+        let mut model = load_glb(bytes[i]);
+        model.texture_layer = Some((first_layer as usize + i) as f32);
+        model
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -616,7 +667,7 @@ fn load_glb(bytes: &[u8]) -> AnimatedModel {
 
     let texture = texture.or_else(|| material_base_color_image(&json, bin, Some(0)));
     let hat_socket = nodes_json.iter().position(|n| n["name"] == "hat_socket");
-    AnimatedModel { nodes, roots, animations, skin, texture, hat_socket }
+    AnimatedModel { nodes, roots, animations, skin, texture, hat_socket, texture_layer: None }
 }
 
 impl Models {
@@ -879,6 +930,7 @@ pub fn push_model(
     facing: f32,
 ) {
     let clip = model.animations.get(clip_name);
+    let first_vertex = vertices.len();
     let t = match clip {
         Some(c) if c.duration > 0.0 => clip_time.rem_euclid(c.duration),
         _ => 0.0,
@@ -899,13 +951,68 @@ pub fn push_model(
         // See `shader.wgsl`'s `fs_main` and `voxel::mesher::Vertex::tex_layer`
         // -- 0.0 is reserved for "sample the terrain atlas", so a real
         // creature layer is offset by one.
-        let tex_layer = kind.to_u8() as f32 + 1.0;
+        let tex_layer = model.texture_layer.unwrap_or(kind.to_u8() as f32 + 1.0);
         emit_skinned_mesh(skin, &world_matrices, vertices, indices, origin, &yaw_rotate, tex_layer);
+    }
+    let scale = kind.model_scale();
+    if scale != 1.0 {
+        for vertex in &mut vertices[first_vertex..] {
+            vertex.position = (origin + (Vec3::from_array(vertex.position) - origin) * scale).to_array();
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dragon_models_have_all_ground_and_flight_clips_at_seven_human_heights() {
+        let models = Models::load();
+        let mut human = Vec::new();
+        let mut indices = Vec::new();
+        models.push_player(&mut human, &mut indices,
+            crate::remote_player::Appearance { model: 0, hat: None }, Vec3::ZERO, 0.0, 0.0, 0.0);
+        let height = |vertices: &[Vertex]| vertices.iter().map(|v| v.position[1]).fold(f32::NEG_INFINITY, f32::max)
+            - vertices.iter().map(|v| v.position[1]).fold(f32::INFINITY, f32::min);
+        let human_height = height(&human);
+        for kind in [CreatureKind::DragonGreen, CreatureKind::DragonRed] {
+            let model = models.for_kind(kind);
+            assert!(model.texture.is_some());
+            for clip in ["idle", "walk", "fly", "attack_walk", "attack_fly", "die"] {
+                assert!(model.animations.contains_key(clip), "missing {clip}");
+                let mut vertices = Vec::new();
+                let mut indices = Vec::new();
+                push_model(&mut vertices, &mut indices, model, kind, clip, 0.3, Vec3::ZERO, 0.0);
+                assert!(!indices.is_empty());
+                assert!(indices.iter().all(|&i| (i as usize) < vertices.len()));
+                assert!(vertices.iter().all(|v| Vec3::from_array(v.position).is_finite()));
+                assert!(vertices.iter().all(|v| v.tex_layer == model.texture_layer.unwrap()));
+                if clip == "idle" {
+                    let ratio = height(&vertices) / human_height;
+                    assert!((6.0..=8.0).contains(&ratio), "dragon/human height ratio = {ratio}");
+                }
+            }
+        }
+    }
+    #[test]
+    fn undead_variants_have_textures_and_render_all_required_animations() {
+        let models = Models::load();
+        for kind in [CreatureKind::Zombie, CreatureKind::Skeleton] {
+            for variant in 0..4 {
+                let model = models.for_variant(kind, variant);
+                assert!(model.texture.is_some());
+                for clip in ["idle", "walk", "attack", "die"] {
+                    assert!(model.animations.contains_key(clip));
+                    let mut vertices = Vec::new();
+                    let mut indices = Vec::new();
+                    push_model(&mut vertices, &mut indices, model, kind, clip, 0.3, Vec3::ZERO, 0.0);
+                    assert!(!indices.is_empty());
+                    assert!(indices.iter().all(|&i| (i as usize) < vertices.len()));
+                    assert!(vertices.iter().all(|v| Vec3::from_array(v.position).is_finite()));
+                    assert!(vertices.iter().all(|v| v.tex_layer == model.texture_layer.unwrap()));
+                }
+            }
+        }
+    }
     #[test]
     fn player_models_and_all_hats_render_with_textures_and_animated_sockets() {
         use super::*;

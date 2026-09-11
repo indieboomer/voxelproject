@@ -366,20 +366,7 @@ pub fn attack(
     state.hits = 0;
     let eye = feet + Vec3::Y * 1.62;
     let reach = 3.2;
-    let mut best = None;
-    let mut distance = reach;
-    for (id, _, pos, _, _) in creatures.snapshot_with_ids() {
-        let center = Vec3::from_array(pos) + Vec3::Y * 0.65;
-        let t = (center - eye).dot(dir);
-        if t >= 0.0
-            && t < distance
-            && (eye + dir * t).distance(center) < 0.8
-            && crate::raycast::raycast(world, eye, dir, t).is_none()
-        {
-            best = Some(id);
-            distance = t;
-        }
-    }
+    let best = creatures.weapon_target(world, eye, dir, reach);
     if let Some(id) = best {
         if let Some(death) = creatures.damage(id, 12.0) {
             creatures.combat_deaths.push(death);

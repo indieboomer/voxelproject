@@ -12,6 +12,29 @@ Then update this file by hand with what actually changed and why -- the docs
 regenerate automatically, but "what changed and why" is not mechanically
 derivable from a diff of the schema alone.
 
+## 1.18.0 -- 2026-09-11 (solitary ground and flying dragons)
+
+- Added `dragon_green` and `dragon_red`, both with 240 health, ground and aerial
+  attacks, and automatic takeoff/landing. Rendered scale is about seven human heights.
+- Dragons have a 56-block detection radius, walk at 2.4 blocks/s, fly at 7 blocks/s,
+  and deal 8 damage every 3 seconds when within reach and line of sight.
+- Natural spawning uses one candidate per 384-block region with 30% occupancy,
+  rejected over water. Homes are at least 320 blocks apart across both colors;
+  dragons roam/chase within 64 blocks of home (at least 192 blocks between bodies' origins).
+  Discovery happens during exploration, 80–160 blocks from players, outside the starter scatter.
+- Rule and crafting spawns enforce the same home spacing, including within a
+  single callback. Conflicting dragon spawns return nil. Scripts cannot override the leash.
+- World saves retain flight state, homes and consumed regions. Defeated natural
+  dragons stay defeated after reloading. Multiplayer protocol 15 carries flight clips.
+
+## 1.17.0 -- 2026-09-11 (zombie and skeleton enemies)
+
+- Added `zombie` (24 health) and `skeleton` (18 health) to creature spawning,
+  queries, targeting, and natural world spawns. Both use melee attacks and
+  always walk, including during autonomous and scripted chases.
+- Each species has four model variants. Appearance follows the saved creature
+  ID and is replicated in the render snapshot; multiplayer protocol is now 14.
+
 ## 1.13.0 -- 2026-09-07 (sunscorch creature, reimported models, weighted starter spawns)
 
 - All bundled creature models were reimported from `models/`. Six of eight

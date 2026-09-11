@@ -32,12 +32,15 @@ const BACKGROUND_MUSIC: &[u8] = include_bytes!("../sounds/background_music.mp3")
 const BIRDS_FLOCK: &[u8] = include_bytes!("../sounds/birds_flock.mp3");
 const COW: &[u8] = include_bytes!("../sounds/cow.mp3");
 const CREATURE_DEATH: &[u8] = include_bytes!("../sounds/creature_generic_death.mp3");
+const DRAGON_ATTACK: &[u8] = include_bytes!("../sounds/dragon_attack.mp3");
+const DRAGON_FLY: &[u8] = include_bytes!("../sounds/dragon_fly.mp3");
 const GOBLIN_ATTACK: &[u8] = include_bytes!("../sounds/goblin_attack.mp3");
 const HUMAN_STEP: &[u8] = include_bytes!("../sounds/human_step.mp3");
 const HUMAN_STEP_2: &[u8] = include_bytes!("../sounds/human_step_2.mp3");
 const LIGHTNING: &[u8] = include_bytes!("../sounds/lightning.mp3");
 const PLAYER_ATTACK: &[u8] = include_bytes!("../sounds/player_attack.mp3");
 const SHEEP: &[u8] = include_bytes!("../sounds/sheep.mp3");
+const SKELETON: &[u8] = include_bytes!("../sounds/skeleton.mp3");
 const STINGER_ATTACK: &[u8] = include_bytes!("../sounds/stinger_attack.mp3");
 const STONE_GOLEM_ATTACK: &[u8] = include_bytes!("../sounds/stone_golem_attack.mp3");
 const SUNSCORCH_ATTACK: &[u8] = include_bytes!("../sounds/sunscorch_attack.mp3");
@@ -47,6 +50,8 @@ const WEATHER_NIGHT: &[u8] = include_bytes!("../sounds/weather_night.mp3");
 const WEATHER_RAIN: &[u8] = include_bytes!("../sounds/weather_rain.mp3");
 const WEATHER_STORM: &[u8] = include_bytes!("../sounds/weather_storm.mp3");
 const WOLF_ATTACK: &[u8] = include_bytes!("../sounds/wolf_attack.mp3");
+const ZOMBIE_GROWL: &[u8] = include_bytes!("../sounds/zombie_growl.mp3");
+const ZOMBIE_PITCH_SPREAD: f32 = 0.18;
 
 /// Which hostile kind's attack clip to play -- `None` for a kind that
 /// never attacks (see `CreatureKind::is_hostile`).
@@ -57,18 +62,33 @@ fn attack_sound(kind: CreatureKind) -> Option<&'static [u8]> {
         CreatureKind::Stinger => Some(STINGER_ATTACK),
         CreatureKind::StoneGolem => Some(STONE_GOLEM_ATTACK),
         CreatureKind::Sunscorch => Some(SUNSCORCH_ATTACK),
+        CreatureKind::Zombie => Some(ZOMBIE_GROWL),
+        CreatureKind::Skeleton => Some(SKELETON),
+        CreatureKind::DragonGreen | CreatureKind::DragonRed => Some(DRAGON_ATTACK),
         CreatureKind::Sheep | CreatureKind::Chicken | CreatureKind::Cow => None,
     }
 }
 
-/// Idle vocalization clip for a kind that has one -- only cow/sheep ship a
+/// Idle vocalization clip for a kind that has one -- cow, sheep and zombie ship a
 /// sound file for this (see `CreatureKind::has_ambient_call`).
 fn ambient_sound(kind: CreatureKind) -> Option<&'static [u8]> {
     match kind {
         CreatureKind::Cow => Some(COW),
         CreatureKind::Sheep => Some(SHEEP),
+        CreatureKind::Zombie => Some(ZOMBIE_GROWL),
         _ => None,
     }
+}
+
+fn flying_dragon_positions(entries: &[([f32; 3], u8, f32, u8, f32)], listener: Vec3) -> Vec<Vec3> {
+    use crate::creature::AnimClip;
+    entries.iter().filter_map(|&(pos, kind, _, clip, _)| {
+        let pos = Vec3::from_array(pos);
+        (CreatureKind::from_u8(kind & 0x0f).is_dragon()
+            && matches!(AnimClip::from_u8(clip), AnimClip::Fly | AnimClip::AttackFly)
+            && pos.is_finite() && pos.distance_squared(listener) <= 128.0 * 128.0)
+            .then_some(pos)
+    }).collect()
 }
 
 /// Which looping ambience track (if any) should be playing right now --
@@ -193,6 +213,9 @@ impl Rng {
 /// sound is a nice-to-have, not something that should ever crash or block
 /// the game.
 pub struct AudioEngine {
+    /// Reused spatial loops, one per audible flying dragon. Keeping the sinks
+    /// alive avoids restarting or stacking the recording on every frame.
+    flight_sinks: Vec<SpatialSink>,
     /// Kept alive for as long as the engine exists -- dropping it stops
     /// all playback. Never read otherwise, hence the leading underscore.
     _stream: Option<OutputStream>,
@@ -232,6 +255,7 @@ impl AudioEngine {
     pub fn new() -> Self {
         match OutputStream::try_default() {
             Ok((stream, handle)) => Self {
+                flight_sinks: Vec::new(),
                 _stream: Some(stream),
                 handle: Some(handle),
                 rng: Rng(0x9E3779B97F4A7C15),
@@ -248,6 +272,7 @@ impl AudioEngine {
             Err(err) => {
                 log::warn!("No audio output device available, sounds disabled: {err}");
                 Self {
+                    flight_sinks: Vec::new(),
                     _stream: None,
                     handle: None,
                     rng: Rng(1),
@@ -370,7 +395,32 @@ impl AudioEngine {
     /// typical aggro radius.
     pub fn play_creature_attack(&mut self, kind: CreatureKind, pos: Vec3) {
         if let Some(bytes) = attack_sound(kind) {
-            self.play_spatial(bytes, 0.6, 0.05, 0.1, pos, ATTACK_REFERENCE_DISTANCE);
+            let pitch_spread = if kind == CreatureKind::Zombie { ZOMBIE_PITCH_SPREAD } else { 0.05 };
+            let reference = if kind.is_dragon() { 24.0 } else { ATTACK_REFERENCE_DISTANCE };
+            self.play_spatial(bytes, 0.6, pitch_spread, 0.1, pos, reference);
+        }
+    }
+
+    /// Continuous flight audio follows rendered state on both host and clients.
+    /// Landing, death, removal, or leaving earshot drops the corresponding loop.
+    pub fn update_creature_flight(&mut self, entries: &[([f32; 3], u8, f32, u8, f32)]) {
+        let positions = flying_dragon_positions(entries, self.listener_pos);
+        self.flight_sinks.truncate(positions.len());
+        let Some(handle) = &self.handle else { return };
+        while self.flight_sinks.len() < positions.len() {
+            let Ok(decoder) = Decoder::new(Cursor::new(DRAGON_FLY)) else { break };
+            let Ok(sink) = SpatialSink::try_new(handle, [0.0; 3], [-0.1, 0.0, 0.0], [0.1, 0.0, 0.0]) else { break };
+            sink.set_volume(0.0);
+            sink.append(decoder.repeat_infinite());
+            self.flight_sinks.push(sink);
+        }
+        for (index, pos) in positions.into_iter().enumerate().take(self.flight_sinks.len()) {
+            let (emitter, left, right) = self.spatial_positions(pos, 24.0);
+            let sink = &self.flight_sinks[index];
+            sink.set_emitter_position(emitter);
+            sink.set_left_ear_position(left);
+            sink.set_right_ear_position(right);
+            sink.set_volume(0.45);
         }
     }
 
@@ -388,11 +438,12 @@ impl AudioEngine {
         self.play_spatial(CREATURE_DEATH, 0.55, 0.05, 0.1, pos, DEATH_REFERENCE_DISTANCE);
     }
 
-    /// A cow/sheep's idle vocalization at `pos`. A no-op for any other
+    /// A cow, sheep or zombie's ambient vocalization at `pos`. A no-op for any other
     /// kind. Spatialized.
     pub fn play_creature_ambient(&mut self, kind: CreatureKind, pos: Vec3) {
         if let Some(bytes) = ambient_sound(kind) {
-            self.play_spatial(bytes, 0.4, 0.08, 0.15, pos, AMBIENT_CALL_REFERENCE_DISTANCE);
+            let pitch_spread = if kind == CreatureKind::Zombie { ZOMBIE_PITCH_SPREAD } else { 0.08 };
+            self.play_spatial(bytes, 0.4, pitch_spread, 0.15, pos, AMBIENT_CALL_REFERENCE_DISTANCE);
         }
     }
 
@@ -496,6 +547,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn new_creature_recordings_decode_and_are_assigned_to_the_correct_kinds() {
+        assert_eq!(attack_sound(CreatureKind::Zombie), Some(ZOMBIE_GROWL));
+        assert_eq!(ambient_sound(CreatureKind::Zombie), Some(ZOMBIE_GROWL));
+        assert_eq!(attack_sound(CreatureKind::Skeleton), Some(SKELETON));
+        for kind in [CreatureKind::DragonGreen, CreatureKind::DragonRed] {
+            assert_eq!(attack_sound(kind), Some(DRAGON_ATTACK));
+        }
+        for bytes in [ZOMBIE_GROWL, SKELETON, DRAGON_ATTACK, DRAGON_FLY] {
+            let decoder = Decoder::new(Cursor::new(bytes)).expect("bundled sound must decode");
+            assert!(decoder.into_iter().any(|sample| sample != 0), "recording must contain audible samples");
+        }
+        let mut rng = Rng(42);
+        let pitches: Vec<_> = (0..64).map(|_| rng.jitter(ZOMBIE_PITCH_SPREAD)).collect();
+        assert!(pitches.iter().all(|&p| (0.82..=1.18).contains(&p)));
+        assert!(pitches.windows(2).any(|p| (p[0] - p[1]).abs() > 0.05));
+    }
+
+    #[test]
+    fn flight_audio_tracks_airborne_dragons_and_stops_for_grounded_or_removed_ones() {
+        use crate::creature::AnimClip;
+        let mut entries = vec![
+            ([1.0, 10.0, 0.0], CreatureKind::DragonGreen.to_u8(), 0.0, AnimClip::Fly.to_u8(), 0.0),
+            ([2.0, 10.0, 0.0], CreatureKind::DragonRed.to_u8(), 0.0, AnimClip::AttackFly.to_u8(), 0.0),
+            ([3.0, 0.0, 0.0], CreatureKind::DragonRed.to_u8(), 0.0, AnimClip::AttackWalk.to_u8(), 0.0),
+            ([4.0, 0.0, 0.0], CreatureKind::Zombie.to_u8(), 0.0, AnimClip::Walk.to_u8(), 0.0),
+            ([500.0, 0.0, 0.0], CreatureKind::DragonGreen.to_u8(), 0.0, AnimClip::Fly.to_u8(), 0.0),
+        ];
+        assert_eq!(flying_dragon_positions(&entries, Vec3::ZERO).len(), 2);
+        entries[0].3 = AnimClip::Walk.to_u8();
+        entries[1].3 = AnimClip::Idle.to_u8();
+        assert!(flying_dragon_positions(&entries, Vec3::ZERO).is_empty());
+        assert!(flying_dragon_positions(&[], Vec3::ZERO).is_empty());
+    }
+
+    #[test]
     fn every_hostile_kind_has_an_attack_sound_and_every_passive_kind_has_none() {
         for kind in [
             CreatureKind::StoneGolem,
@@ -512,9 +598,10 @@ mod tests {
     }
 
     #[test]
-    fn only_cow_and_sheep_have_an_ambient_sound() {
+    fn only_cow_sheep_and_zombie_have_an_ambient_sound() {
         assert!(ambient_sound(CreatureKind::Cow).is_some());
         assert!(ambient_sound(CreatureKind::Sheep).is_some());
+        assert!(ambient_sound(CreatureKind::Zombie).is_some());
         for kind in [
             CreatureKind::Chicken,
             CreatureKind::StoneGolem,
@@ -523,7 +610,7 @@ mod tests {
             CreatureKind::Goblin,
             CreatureKind::Sunscorch,
         ] {
-            assert!(ambient_sound(kind).is_none(), "only cow/sheep should have an ambient call sound");
+            assert!(ambient_sound(kind).is_none(), "this kind has no ambient call sound");
         }
     }
 
@@ -564,6 +651,7 @@ mod tests {
 
     fn silent_engine() -> AudioEngine {
         AudioEngine {
+            flight_sinks: Vec::new(),
             _stream: None,
             handle: None,
             rng: Rng(42),
@@ -591,6 +679,10 @@ mod tests {
         engine.play_player_attack();
         engine.play_creature_death(Vec3::new(3.0, 0.0, 3.0));
         engine.play_creature_ambient(CreatureKind::Cow, Vec3::new(-4.0, 0.0, 1.0));
+        engine.play_creature_ambient(CreatureKind::Zombie, Vec3::ZERO);
+        engine.update_creature_flight(&[([5.0, 10.0, 0.0], CreatureKind::DragonRed.to_u8(), 0.0, crate::creature::AnimClip::Fly.to_u8(), 0.0)]);
+        engine.update_creature_flight(&[]);
+        assert!(engine.flight_sinks.is_empty());
         engine.play_lightning();
         engine.play_bird_flock();
         engine.update_ambience(Weather::Storm, 0.75, 1.0 / 60.0);

@@ -1,5 +1,9 @@
 use glam::Vec3;
 
+#[path = "dragon.rs"]
+mod dragon;
+pub use dragon::DragonSave;
+
 use crate::model::{push_model, Models};
 use crate::net::PlayerId;
 use crate::voxel::mesher::MeshData;
@@ -58,9 +62,21 @@ pub enum CreatureKind {
     /// golem. Never gives up a chase once aggroed (see
     /// `chase_giveup_duration`), the same as StoneGolem. See `is_hostile`.
     Sunscorch,
+    /// Walking-only hostile melee enemies, each with four visual variants.
+    Zombie,
+    Skeleton,
+    DragonGreen,
+    DragonRed,
 }
 
 impl CreatureKind {
+    pub fn is_dragon(self) -> bool {
+        matches!(self, Self::DragonGreen | Self::DragonRed)
+    }
+
+    /// Includes the rig's animated standing pose, verified against the player mesh.
+    pub fn model_scale(self) -> f32 { if self.is_dragon() { 1.25 } else { 1.0 } }
+
     fn speed(self) -> f32 {
         match self {
             CreatureKind::Sheep => 1.4,
@@ -77,6 +93,9 @@ impl CreatureKind {
             // Same pace whether wandering or aggro-chasing -- see
             // `aggro_speed` and this variant's own doc comment.
             CreatureKind::Sunscorch => 1.2,
+            CreatureKind::Zombie => 1.2,
+            CreatureKind::Skeleton => 1.5,
+            CreatureKind::DragonGreen | CreatureKind::DragonRed => 2.4,
         }
     }
 
@@ -90,6 +109,9 @@ impl CreatureKind {
             CreatureKind::Cow => 20.0,
             CreatureKind::Goblin => 24.0,
             CreatureKind::Sunscorch => 28.0,
+            CreatureKind::Zombie => 24.0,
+            CreatureKind::Skeleton => 18.0,
+            CreatureKind::DragonGreen | CreatureKind::DragonRed => 240.0,
         }
     }
 
@@ -97,7 +119,7 @@ impl CreatureKind {
     /// player on its own -- entirely independent of any Lua rule, unlike
     /// every other kind which only ever moves under `chase()`. See
     /// `Creatures::update`'s aggro pass and `spawn_around`'s doc comment for
-    /// why hostile kinds are excluded from the starter world scatter.
+    /// how these kinds participate in the starter world scatter.
     fn is_hostile(self) -> bool {
         matches!(
             self,
@@ -106,6 +128,10 @@ impl CreatureKind {
                 | CreatureKind::Stinger
                 | CreatureKind::Goblin
                 | CreatureKind::Sunscorch
+                | CreatureKind::Zombie
+                | CreatureKind::Skeleton
+                | CreatureKind::DragonGreen
+                | CreatureKind::DragonRed
         )
     }
 
@@ -117,6 +143,8 @@ impl CreatureKind {
             CreatureKind::Stinger => STINGER_AGGRO_RADIUS,
             CreatureKind::Goblin => GOBLIN_AGGRO_RADIUS,
             CreatureKind::Sunscorch => SUNSCORCH_AGGRO_RADIUS,
+            CreatureKind::Zombie | CreatureKind::Skeleton => 14.0,
+            CreatureKind::DragonGreen | CreatureKind::DragonRed => 56.0,
             _ => 0.0,
         }
     }
@@ -158,6 +186,8 @@ impl CreatureKind {
             CreatureKind::Stinger => STINGER_ATTACK_RANGE,
             CreatureKind::Goblin => GOBLIN_ATTACK_RANGE,
             CreatureKind::Sunscorch => SUNSCORCH_ATTACK_RANGE,
+            CreatureKind::Zombie | CreatureKind::Skeleton => 1.8,
+            CreatureKind::DragonGreen | CreatureKind::DragonRed => 14.0,
             _ => 0.0,
         }
     }
@@ -169,6 +199,9 @@ impl CreatureKind {
             CreatureKind::Stinger => STINGER_ATTACK_DAMAGE,
             CreatureKind::Goblin => GOBLIN_ATTACK_DAMAGE,
             CreatureKind::Sunscorch => SUNSCORCH_ATTACK_DAMAGE,
+            CreatureKind::Zombie => 4.0,
+            CreatureKind::Skeleton => 3.0,
+            CreatureKind::DragonGreen | CreatureKind::DragonRed => 8.0,
             _ => 0.0,
         }
     }
@@ -180,6 +213,9 @@ impl CreatureKind {
             CreatureKind::Stinger => STINGER_ATTACK_COOLDOWN,
             CreatureKind::Goblin => GOBLIN_ATTACK_COOLDOWN,
             CreatureKind::Sunscorch => SUNSCORCH_ATTACK_COOLDOWN,
+            CreatureKind::Zombie => 2.0,
+            CreatureKind::Skeleton => 1.5,
+            CreatureKind::DragonGreen | CreatureKind::DragonRed => 3.0,
             _ => f32::MAX,
         }
     }
@@ -199,12 +235,12 @@ impl CreatureKind {
     }
 
     /// Whether this kind periodically plays an idle vocalization while
-    /// alive and wandering -- only the two kinds with a dedicated ambient
+    /// alive and wandering -- only kinds with a dedicated ambient
     /// sound file (see `audio.rs`'s `ambient_sound`). Every other kind's
     /// `AmbientCall` timer is left at `f32::INFINITY` at spawn and never
     /// fires; see `Creatures::spawn_with_rng`/`update`.
     fn has_ambient_call(self) -> bool {
-        matches!(self, CreatureKind::Cow | CreatureKind::Sheep)
+        matches!(self, CreatureKind::Cow | CreatureKind::Sheep | CreatureKind::Zombie)
     }
 
     pub fn to_u8(self) -> u8 {
@@ -217,6 +253,10 @@ impl CreatureKind {
             CreatureKind::Cow => 5,
             CreatureKind::Goblin => 6,
             CreatureKind::Sunscorch => 7,
+            CreatureKind::Zombie => 8,
+            CreatureKind::Skeleton => 9,
+            CreatureKind::DragonGreen => 10,
+            CreatureKind::DragonRed => 11,
         }
     }
 
@@ -228,6 +268,10 @@ impl CreatureKind {
             4 => CreatureKind::Stinger,
             5 => CreatureKind::Cow,
             7 => CreatureKind::Sunscorch,
+            8 => CreatureKind::Zombie,
+            9 => CreatureKind::Skeleton,
+            10 => CreatureKind::DragonGreen,
+            11 => CreatureKind::DragonRed,
             6 => CreatureKind::Goblin,
             _ => CreatureKind::Sheep,
         }
@@ -236,11 +280,8 @@ impl CreatureKind {
 
 /// Relative weight of each kind in a fresh world's starter scatter (see
 /// `Creatures::spawn_around`) -- not a probability, just a share of the
-/// total (sums to 100 here for readability, but doesn't have to). Neutral
-/// grazers dominate (26+26+20 = 72%), hostile-but-common kinds are
-/// noticeably rarer (8% each, 24% together), and the two toughest/most
-/// dangerous hostile kinds -- stone_golem and sunscorch -- are rare (2%
-/// each, 4% together) rather than excluded outright.
+/// total. Neutral grazers dominate (72 of 110 shares); ordinary hostiles
+/// have 5–8 shares each, while stone_golem and sunscorch have only 2 each.
 const STARTER_KIND_WEIGHTS: &[(CreatureKind, u32)] = &[
     (CreatureKind::Sheep, 26),
     (CreatureKind::Chicken, 26),
@@ -250,6 +291,8 @@ const STARTER_KIND_WEIGHTS: &[(CreatureKind, u32)] = &[
     (CreatureKind::Goblin, 8),
     (CreatureKind::StoneGolem, 2),
     (CreatureKind::Sunscorch, 2),
+    (CreatureKind::Zombie, 5),
+    (CreatureKind::Skeleton, 5),
 ];
 
 /// Draws one creature kind for the starter world scatter, weighted per
@@ -279,6 +322,9 @@ pub enum AnimClip {
     Walk,
     Run,
     Attack,
+    Fly,
+    AttackWalk,
+    AttackFly,
 }
 
 impl AnimClip {
@@ -288,6 +334,9 @@ impl AnimClip {
             AnimClip::Walk => "walk",
             AnimClip::Run => "run",
             AnimClip::Attack => "attack",
+            AnimClip::Fly => "fly",
+            AnimClip::AttackWalk => "attack_walk",
+            AnimClip::AttackFly => "attack_fly",
         }
     }
 
@@ -297,6 +346,9 @@ impl AnimClip {
             AnimClip::Walk => 1,
             AnimClip::Run => 2,
             AnimClip::Attack => 3,
+            AnimClip::Fly => 4,
+            AnimClip::AttackWalk => 5,
+            AnimClip::AttackFly => 6,
         }
     }
 
@@ -305,6 +357,9 @@ impl AnimClip {
             1 => AnimClip::Walk,
             2 => AnimClip::Run,
             3 => AnimClip::Attack,
+            4 => AnimClip::Fly,
+            5 => AnimClip::AttackWalk,
+            6 => AnimClip::AttackFly,
             _ => AnimClip::Idle,
         }
     }
@@ -483,7 +538,7 @@ const CHASE_GIVEUP_COOLDOWN_SECS: f32 = 4.0;
 /// itself (`animal_step.mp3`) is generic, so a per-kind cadence wouldn't
 /// read as meaningfully different without kind-specific clips to match.
 const CREATURE_STEP_LENGTH: f32 = 1.6;
-/// Random range (seconds) between a cow/sheep's idle vocalization -- see
+/// Random range (seconds) between ambient vocalizations, including zombie growls -- see
 /// `CreatureKind::has_ambient_call`/`AmbientCall`.
 const AMBIENT_CALL_INTERVAL_MIN: f32 = 8.0;
 const AMBIENT_CALL_INTERVAL_MAX: f32 = 22.0;
@@ -522,7 +577,7 @@ pub struct CreatureAudioEvents {
     /// One entry per creature that completed a `CREATURE_STEP_LENGTH`
     /// stride while walking/running.
     pub steps: Vec<CreatureAudioEvent>,
-    /// One entry per cow/sheep idle vocalization that fired.
+    /// One entry per cow, sheep or zombie ambient vocalization that fired.
     pub ambient_calls: Vec<CreatureAudioEvent>,
 }
 
@@ -551,6 +606,7 @@ pub enum AttackPolicy {
 }
 
 pub struct Creatures {
+    dragon_regions: std::collections::BTreeSet<(i32, i32)>,
     ecs: hecs::World,
     next_id: u32,
     pending_audio: CreatureAudioEvents,
@@ -563,6 +619,7 @@ pub struct Creatures {
 /// mutation occurs until commit, so discarded drafts also preserve AI,
 /// animation, entity IDs, and the spawn sequence without cloning the ECS.
 pub(crate) struct CreatureDraft {
+    dragon_homes: Vec<Vec3>,
     pub snapshot: Vec<(u32, u8, [f32; 3], f32, f32)>,
     next_id: u32,
     commands: Vec<CreatureCommand>,
@@ -581,15 +638,24 @@ impl CreatureDraft {
     pub fn new(creatures: &Creatures) -> Self {
         let mut snapshot = creatures.snapshot_with_ids();
         snapshot.sort_by_key(|entry| entry.0);
-        Self { snapshot, next_id: creatures.next_id, commands: Vec::new(), behaviors: creatures.behaviors.clone() }
+        let dragon_homes = creatures.ecs.query::<&dragon::Dragon>().iter().map(|(_, d)| d.home).collect();
+        Self { snapshot, next_id: creatures.next_id, commands: Vec::new(), behaviors: creatures.behaviors.clone(), dragon_homes }
     }
 
     pub fn spawn(&mut self, kind: CreatureKind, pos: Vec3, seed: u64) -> Option<u32> {
+        if kind.is_dragon() {
+            if !pos.is_finite() || pos.abs().max_element() > 1_000_000.0 { return None; }
+            // Includes earlier spawns in this callback: a generated rule cannot create a pack.
+            if self.dragon_homes.iter().any(|&home| dragon::horizontal_distance(home, pos) < dragon::MIN_HOME_SPACING) {
+                return None;
+            }
+        }
         if self.snapshot.len() >= crate::world_api_gen::SCRIPT_CREATURES_MAX {
             return None;
         }
         let id = self.next_id;
         self.next_id = id.checked_add(1)?;
+        if kind.is_dragon() { self.dragon_homes.push(pos); }
         self.snapshot.push((id, kind.to_u8(), pos.to_array(), kind.max_health(), kind.max_health()));
         self.behaviors.insert(id, CreatureBehavior::natural(kind));
         self.commands.push(CreatureCommand::Spawn(id, kind, pos, seed));
@@ -661,6 +727,7 @@ impl CreatureDraft {
 impl Creatures {
     pub fn new() -> Self {
         Self {
+            dragon_regions: Default::default(),
             ecs: hecs::World::new(),
             next_id: 1,
             pending_audio: CreatureAudioEvents::default(),
@@ -673,8 +740,8 @@ impl Creatures {
     /// Populates a brand-new world's starter creatures by drawing each
     /// spawn's kind from `STARTER_KIND_WEIGHTS` -- every kind can appear,
     /// including hostile ones, but weighted heavily toward the neutral
-    /// grazers (sheep/chicken/cow together are ~70% of the table), with
-    /// wolf/stinger/goblin uncommon (~8% each) and stone_golem/sunscorch
+    /// grazers (sheep/chicken/cow together are ~65% of the table), with
+    /// wolf/stinger/goblin/zombie/skeleton uncommon and stone_golem/sunscorch
     /// rare (~2% each). This is a deliberate design choice, not a
     /// left-over default: a fresh world's first minutes can now include a
     /// hostile encounter, just an infrequent one. See
@@ -707,7 +774,7 @@ impl Creatures {
             f32::INFINITY
         });
         self.behaviors.insert(id, CreatureBehavior::natural(kind));
-        self.ecs.spawn((
+        let entity = self.ecs.spawn((
             Pos(pos),
             Wander {
                 target: (pos.x, pos.z),
@@ -732,6 +799,9 @@ impl Creatures {
             ambient_call,
             rng,
         ));
+        if kind.is_dragon() {
+            self.ecs.insert_one(entity, dragon::Dragon::new(pos, rng_seed)).unwrap();
+        }
         id
     }
 
@@ -747,7 +817,7 @@ impl Creatures {
         let mut next_id = self.next_id;
         for &(id, kind, pos, health, _) in entries {
             if id == u32::MAX
-                || kind > 7
+                || kind > 11
                 || !seen.insert(id)
                 || !Vec3::from_array(pos).is_finite()
                 || !health.is_finite()
@@ -787,7 +857,7 @@ impl Creatures {
         let mut attack_sound_events = Vec::new();
         let mut ambient_events = Vec::new();
 
-        for (_, (pos, wander, kind, rng, facing, cooldown, atk_anim, anim, chase, steps, ambient_call, cid)) in
+        for (_, (pos, wander, kind, rng, facing, cooldown, atk_anim, anim, chase, steps, ambient_call, cid, dragon)) in
             self.ecs.query_mut::<(
                 &mut Pos,
                 &mut Wander,
@@ -801,6 +871,7 @@ impl Creatures {
                 &mut Steps,
                 &mut AmbientCall,
                 &CreatureId,
+                Option<&mut dragon::Dragon>,
             )>()
         {
             cooldown.0 = (cooldown.0 - dt).max(0.0);
@@ -860,6 +931,28 @@ impl Creatures {
             if state.mode == BehaviorMode::Ignore && wander.hunting {
                 wander.hunting = false;
                 wander.timer = 0.0;
+            }
+            if let Some(dragon) = dragon {
+                let protected = self.attack_policies.values().flatten().any(|policy| match *policy {
+                    AttackPolicy::SuppressCreature(id) => id == cid.0,
+                    AttackPolicy::ProtectPlayer(id, species) => aggro.is_some_and(|(target, _, _)| target == BehaviorTarget::Player(id)) && kind.0.to_u8() == species,
+                });
+                let result = dragon::update(world, dt, dragon, pos, facing, anim, cooldown,
+                    atk_anim, wander, kind.0, aggro.map(|(id, p, _)| (id, p)),
+                    !protected && state.mode != BehaviorMode::Chase);
+                if let Some(target) = result.attack {
+                    match target {
+                        BehaviorTarget::Player(id) => attacks.push((id, kind.0.attack_damage())),
+                        BehaviorTarget::Creature(id) => creature_hits.push((id, kind.0.attack_damage())),
+                    }
+                    attack_sound_events.push((kind.0, pos.0));
+                }
+                steps.0 += result.walked;
+                if steps.0 >= 4.0 {
+                    steps.0 %= 4.0;
+                    step_events.push((kind.0, pos.0));
+                }
+                continue;
             }
             let mut moving = false;
             // Whether this tick's movement should read as the elevated
@@ -923,7 +1016,7 @@ impl Creatures {
                 if dist > 0.15 {
                     let dir = to_target / dist;
                     let speed = kind.0.speed()
-                        * if wander.hunting {
+                        * if wander.hunting && !matches!(kind.0, CreatureKind::Zombie | CreatureKind::Skeleton) {
                             HUNT_SPEED_MULTIPLIER
                         } else {
                             1.0
@@ -992,13 +1085,13 @@ impl Creatures {
     pub fn build_mesh(&self, models: &Models) -> MeshData {
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
-        for (_, (pos, kind, facing, anim)) in
-            self.ecs.query::<(&Pos, &Kind, &Facing, &AnimState)>().iter()
+        for (_, (id, pos, kind, facing, anim)) in
+            self.ecs.query::<(&CreatureId, &Pos, &Kind, &Facing, &AnimState)>().iter()
         {
             push_model(
                 &mut vertices,
                 &mut indices,
-                models.for_kind(kind.0),
+                models.for_variant(kind.0, (id.0 % 4) as u8),
                 kind.0,
                 anim.clip.model_name(),
                 anim.time,
@@ -1009,17 +1102,44 @@ impl Creatures {
         MeshData { vertices, indices }
     }
 
+    /// Weapon reach is measured to the body, not the feet origin of a giant model.
+    pub fn weapon_target(&self, world: &World, eye: Vec3, dir: Vec3, reach: f32) -> Option<u32> {
+        let mut best = None;
+        let mut distance = reach;
+        for (_, (id, kind, pos, facing)) in self.ecs.query::<(&CreatureId, &Kind, &Pos, &Facing)>().iter() {
+            let hit = if kind.0.is_dragon() {
+                dragon::body_hit(eye - pos.0, dir, facing.0, reach)
+            } else {
+                let center = pos.0 + Vec3::Y * 0.65;
+                let t = (center - eye).dot(dir);
+                (t >= 0.0 && (eye + dir * t).distance(center) < 0.8).then_some(t)
+            };
+            if let Some(t) = hit {
+                if t < distance && crate::raycast::raycast(world, eye, dir, t).is_none() {
+                    best = Some(id.0);
+                    distance = t;
+                }
+            }
+        }
+        best
+    }
+
     /// Positions + kinds + facing + anim clip/time for broadcasting to
     /// clients over the network, so a creature turns and animates the same
-    /// way on every screen.
+    /// way on every screen. The kind byte's low nibble identifies the
+    /// species and its high nibble selects the visual variant (0–3).
     pub fn snapshot(&self) -> Vec<([f32; 3], u8, f32, u8, f32)> {
         self.ecs
-            .query::<(&Pos, &Kind, &Facing, &AnimState)>()
+            .query::<(&CreatureId, &Pos, &Kind, &Facing, &AnimState)>()
             .iter()
-            .map(|(_, (pos, kind, facing, anim))| {
+            .map(|(_, (id, pos, kind, facing, anim))| {
                 (
                     pos.0.to_array(),
-                    kind.0.to_u8(),
+                    // Low nibble is species; high nibble is visual variant.
+                    // Stable IDs preserve appearance across save/reload.
+                    kind.0.to_u8() | if matches!(kind.0, CreatureKind::Zombie | CreatureKind::Skeleton) {
+                        ((id.0 % 4) as u8) << 4
+                    } else { 0 },
                     facing.0,
                     anim.clip.to_u8(),
                     anim.time,
@@ -1166,11 +1286,12 @@ pub fn mesh_for_snapshot(entries: &[([f32; 3], u8, f32, u8, f32)], models: &Mode
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     for &(pos, kind, facing, clip, time) in entries {
-        let kind = CreatureKind::from_u8(kind);
+        let variant = kind >> 4;
+        let kind = CreatureKind::from_u8(kind & 0x0f);
         push_model(
             &mut vertices,
             &mut indices,
-            models.for_kind(kind),
+            models.for_variant(kind, variant),
             kind,
             AnimClip::from_u8(clip).model_name(),
             time,
@@ -1204,6 +1325,75 @@ fn find_land_spot(
 mod tests {
     use super::*;
     use std::f32::consts::{FRAC_PI_2, PI};
+
+    #[test]
+    fn zombies_queue_repeated_ambient_growls_at_random_intervals() {
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        creatures.spawn_one(CreatureKind::Zombie, Vec3::new(0.0, 30.0, 0.0), 9);
+        let mut calls = Vec::new();
+        for tick in 0..900 {
+            creatures.update(&world, 0.1, &[]);
+            if creatures.take_audio_events().ambient_calls.iter().any(|(kind, _)| *kind == CreatureKind::Zombie) {
+                calls.push(tick);
+            }
+        }
+        assert!(calls.len() >= 3);
+        let intervals: Vec<_> = calls.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(intervals.iter().all(|&ticks| (80..=221).contains(&ticks)));
+        assert!(intervals.windows(2).any(|w| w[0] != w[1]));
+    }
+
+    #[test]
+    fn undead_walk_during_natural_and_scripted_chases_and_attack_in_melee() {
+        let world = World::new(1);
+        let spawn = Vec3::new(0.0, world.terrain_height(0, 0) as f32 + 1.0, 0.0);
+        for kind in [CreatureKind::Zombie, CreatureKind::Skeleton] {
+            for scripted in [false, true] {
+                let mut creatures = Creatures::new();
+                let id = creatures.spawn_one(kind, spawn, 1);
+                let target = spawn + Vec3::X * 6.0;
+                if scripted { creatures.set_chase_target(id, target); }
+                creatures.update(&world, 0.1, &[(5, target)]);
+                let after = Vec3::from_array(creatures.snapshot_with_ids()[0].2);
+                assert!((after.x - spawn.x - kind.speed() * 0.1).abs() < 0.0001);
+                assert_eq!(creatures.anim_clip_of(id), Some(AnimClip::Walk));
+            }
+            let mut creatures = Creatures::new();
+            let id = creatures.spawn_one(kind, spawn, 1);
+            let target = spawn + Vec3::X;
+            assert_eq!(creatures.update(&world, 0.01, &[(5, target)]), vec![(5, kind.attack_damage())]);
+            assert_eq!(creatures.anim_clip_of(id), Some(AnimClip::Attack));
+            assert!(creatures.update(&world, 0.01, &[(5, target)]).is_empty());
+        }
+    }
+
+    #[test]
+    fn undead_variants_survive_save_restore_and_render_identically_on_clients() {
+        let models = Models::load();
+        let mut creatures = Creatures::new();
+        for kind in [CreatureKind::Zombie, CreatureKind::Skeleton] {
+            for i in 0..4 {
+                creatures.spawn_one(kind, Vec3::new(i as f32 * 3.0, 5.0, 0.0), i);
+            }
+        }
+        let saved = creatures.snapshot_with_ids();
+        let mut restored = Creatures::new();
+        restored.restore_saved(&saved, 99);
+        let mut original = creatures.snapshot();
+        let mut loaded = restored.snapshot();
+        original.sort_by_key(|entry| entry.1);
+        loaded.sort_by_key(|entry| entry.1);
+        assert_eq!(original, loaded);
+        assert_eq!(original.len(), 8);
+        let host = restored.build_mesh(&models);
+        let client = mesh_for_snapshot(&restored.snapshot(), &models);
+        assert_eq!(host.indices, client.indices);
+        assert_eq!(bytemuck::cast_slice::<_, u8>(&host.vertices), bytemuck::cast_slice::<_, u8>(&client.vertices));
+        for layer in 17..=24 {
+            assert!(client.vertices.iter().any(|v| v.tex_layer == layer as f32));
+        }
+    }
 
     #[test]
     fn turn_toward_steps_by_at_most_max_delta() {
@@ -1306,7 +1496,7 @@ mod tests {
 
     #[test]
     fn creature_kind_u8_round_trips_for_every_kind() {
-        for v in 0..=6u8 {
+        for v in 0..=11u8 {
             assert_eq!(CreatureKind::from_u8(v).to_u8(), v);
         }
         assert_eq!(CreatureKind::StoneGolem.to_u8(), 2);

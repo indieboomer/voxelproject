@@ -18,7 +18,7 @@
 # (air, mud, redstone, crystal), so it can't drift out of sync with the
 # actual block system the way a third hand-copied list would.
 
-version: "1.16.0"
+version: "1.18.0"
 title: World API
 description: >
   The Lua API exposed to sandboxed rule modules as the `api` table passed
@@ -263,7 +263,7 @@ budgets:
     applies_to: []
     note: "1 health every 10 seconds -- slow enough to give a player time to notice and surface rather than punishing a moment of carelessness, but a real, escalating cost for staying under with no air. Stacks with poison_tick_secs if a player is unlucky enough to be both."
 
-creature_kinds: [sheep, chicken, stone_golem, wolf, stinger, cow, goblin, sunscorch]
+creature_kinds: [sheep, chicken, stone_golem, wolf, stinger, cow, goblin, sunscorch, zombie, skeleton, dragon_green, dragon_red]
 
 # ---------------------------------------------------------------------------
 # Shared table shapes returned by queries / passed to event handlers.
@@ -301,7 +301,7 @@ types:
       - {name: y, type: number}
       - {name: z, type: number}
       - {name: health, type: number}
-      - {name: max_health, type: number, desc: "Fixed per kind (sheep 12, chicken 6, stone_golem 40, wolf 18, stinger 14, cow 20, goblin 24, sunscorch 28); never changes at runtime."}
+      - {name: max_health, type: number, desc: "Fixed per kind (sheep 12, chicken 6, stone_golem 40, wolf 18, stinger 14, cow 20, goblin 24, sunscorch 28, zombie 24, skeleton 18, dragon_green/dragon_red 240); never changes at runtime."}
   CreatureSnapshotWithDistance:
     desc: "CreatureSnapshot plus distance from the query point, as returned by nearest_creature()."
     extends: CreatureSnapshot
@@ -403,7 +403,7 @@ methods:
     category: query
     summary: "Creatures of one kind within a radius of a point."
     params:
-      - {name: kind, type: string, enum_ref: creature_kinds, desc: "\"sheep\", \"chicken\", \"stone_golem\", \"wolf\", \"stinger\", \"cow\", \"goblin\", \"sunscorch\", or \"any\". An unrecognized string is treated the same as \"any\" -- it is NOT an error, so a typo silently matches every creature instead of failing loudly."}
+      - {name: kind, type: string, enum_ref: creature_kinds, desc: "\"sheep\", \"chicken\", \"stone_golem\", \"wolf\", \"stinger\", \"cow\", \"goblin\", \"sunscorch\", \"zombie\", \"skeleton\", \"dragon_green\", \"dragon_red\", or \"any\". An unrecognized string is treated the same as \"any\" -- it is NOT an error, so a typo silently matches every creature instead of failing loudly."}
       - {name: cx, type: number}
       - {name: cy, type: number}
       - {name: cz, type: number}
@@ -418,7 +418,7 @@ methods:
     category: query
     summary: "The single closest creature of one kind to a point. No radius argument -- it searches every creature in the world unconditionally."
     params:
-      - {name: kind, type: string, enum_ref: creature_kinds, desc: "\"sheep\", \"chicken\", \"stone_golem\", \"wolf\", \"stinger\", \"cow\", \"goblin\", \"sunscorch\", or \"any\" -- same unrecognized-string-means-any behavior as find_creatures."}
+      - {name: kind, type: string, enum_ref: creature_kinds, desc: "\"sheep\", \"chicken\", \"stone_golem\", \"wolf\", \"stinger\", \"cow\", \"goblin\", \"sunscorch\", \"zombie\", \"skeleton\", \"dragon_green\", \"dragon_red\", or \"any\" -- same unrecognized-string-means-any behavior as find_creatures."}
       - {name: x, type: number}
       - {name: y, type: number}
       - {name: z, type: number}
@@ -550,7 +550,7 @@ methods:
   - name: select_target
     namespace: world
     category: action
-    summary: "Select nearest live target of kind player, sheep, chicken, cow, wolf, stone_golem, stinger, goblin, or sunscorch within radius (clamped to query limit). Excludes self. Returns target ID or nil; no match clears selection. Does not start an action; follow with attack or chase_target."
+    summary: "Select nearest live target of kind player, sheep, chicken, cow, wolf, stone_golem, stinger, goblin, sunscorch, zombie, skeleton, dragon_green, or dragon_red within radius (clamped to query limit). Excludes self. Returns target ID or nil; no match clears selection. Does not start an action; follow with attack or chase_target."
     params:
       - {name: creature_id, type: integer}
       - {name: kind, type: string}
@@ -623,13 +623,13 @@ methods:
   - name: spawn_creature
     namespace: world
     category: action
-    summary: "Spawns a new creature at a position. sheep/chicken/cow are passive by default; set_aggressive or attack can enable combat. stone_golem, wolf, stinger, goblin, and sunscorch are different: all five hostile entirely on their own, with no Lua involved -- each closes on and periodically damages the nearest player within its own aggro radius. stone_golem is large, slow, and hits hardest on the longest cooldown; sunscorch is a rare, tanky ghost that never gives up a chase and (like stone_golem) never speeds up while chasing -- no run animation, mechanically identical pace whether wandering or aggroed; goblin is a mid-weight melee bruiser (moderate speed/damage/cooldown, tankier than wolf); wolf is faster and lighter; stinger is fastest to attack (shortest cooldown) but hits lightest and is the most fragile. Only spawn a hostile one when a hostile/dangerous creature is actually what the request wants."
+    summary: "Spawns a new creature at a position. sheep/chicken/cow are passive by default; set_aggressive or attack can enable combat. stone_golem, wolf, stinger, goblin, sunscorch, zombie, skeleton, dragon_green, and dragon_red are different: all nine hostile entirely on their own, with no Lua involved -- each closes on and periodically damages the nearest player within its own aggro radius. stone_golem is large, slow, and hits hardest on the longest cooldown; sunscorch is a rare, tanky ghost that never gives up a chase and (like stone_golem) never speeds up while chasing -- no run animation, mechanically identical pace whether wandering or aggroed; goblin is a mid-weight melee bruiser (moderate speed/damage/cooldown, tankier than wolf); wolf is faster and lighter; stinger is fastest to attack (shortest cooldown) but hits lightest and is the most fragile. Zombies and skeletons only walk, including while chasing, and use melee attacks. Dragons are giant solitary predators: they walk, take off, fly and attack in either mode, and land again. Dragon homes must be at least 320 blocks apart across both colors; spawn returns nil inside another dragon territory, including earlier spawns in the same callback. Dragons stay within 64 blocks of home even during scripted chases. Only spawn a hostile one when a hostile/dangerous creature is actually what the request wants."
     params:
-      - {name: kind, type: string, enum_ref: creature_kinds, desc: "\"sheep\", \"chicken\", \"stone_golem\", \"wolf\", \"stinger\", \"cow\", \"goblin\", or \"sunscorch\"; anything else (including a typo) silently becomes \"sheep\" -- not an error."}
+      - {name: kind, type: string, enum_ref: creature_kinds, desc: "\"sheep\", \"chicken\", \"stone_golem\", \"wolf\", \"stinger\", \"cow\", \"goblin\", or \"sunscorch\", \"zombie\", \"skeleton\", \"dragon_green\", \"dragon_red\"; anything else (including a typo) silently becomes \"sheep\" -- not an error."}
       - {name: x, type: number}
       - {name: y, type: number}
       - {name: z, type: number}
-    returns: {type: "integer | nil", desc: "The new creature's id, or nil if this call's spawn budget is already used up."}
+    returns: {type: "integer | nil", desc: "The new creature's id, or nil if this call's spawn budget is already used up or a dragon would violate territory spacing."}
     errors: []
     budget_ref: creature_spawns_per_call
     since: "1.0.0"

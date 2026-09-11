@@ -664,6 +664,7 @@ impl App {
             guests: self.guest_accounts.clone(),
             creatures: Some(self.creatures.snapshot_with_ids()),
             behaviors: self.creatures.behaviors.clone(),
+            dragons: self.creatures.save_dragons(),
         }
     }
 
@@ -1202,6 +1203,7 @@ impl App {
         } else if spawn_creatures {
             creatures.spawn_around(&world, spawn_pos, CREATURE_COUNT, world.seed);
         }
+        creatures.restore_dragons(crafting_save.dragons);
         let weather = WeatherState::new(world.seed);
         let rain_particles = build_rain_particles(world.seed);
         let lightning_seed = world.seed;
@@ -1802,6 +1804,7 @@ impl App {
                 .map(|p| (p.id, p.pos))
                 .collect();
             self.scripting.sync_attack_policies(&mut self.creatures);
+            self.creatures.discover_dragons(&self.world, &player_targets);
             let golem_attacks = self.creatures.update(&self.world, dt, &player_targets);
             for (player_id, damage) in golem_attacks {
                 self.apply_player_effect(PlayerEffect::Health {
@@ -1864,6 +1867,10 @@ impl App {
             }
         }
 
+        match &self.net {
+            NetRole::Host(_) => self.audio.update_creature_flight(&self.creatures.snapshot()),
+            NetRole::Joined(client) => self.audio.update_creature_flight(&client.creature_snapshot),
+        }
         let mut mesh = match &self.net {
             NetRole::Host(_) => self.creatures.build_mesh(&self.models),
             NetRole::Joined(client) => mesh_for_snapshot(&client.creature_snapshot, &self.models),

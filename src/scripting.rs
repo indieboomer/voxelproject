@@ -489,6 +489,10 @@ fn creature_kind_filter(kind: &str) -> Option<u8> {
         "cow" => Some(5),
         "goblin" => Some(6),
         "sunscorch" => Some(7),
+        "zombie" => Some(8),
+        "skeleton" => Some(9),
+        "dragon_green" => Some(10),
+        "dragon_red" => Some(11),
         _ => None,
     }
 }
@@ -506,6 +510,10 @@ fn creature_kind_name(kind_u8: u8) -> &'static str {
         5 => "cow",
         6 => "goblin",
         7 => "sunscorch",
+        8 => "zombie",
+        9 => "skeleton",
+        10 => "dragon_green",
+        11 => "dragon_red",
         _ => "sheep",
     }
 }
@@ -529,6 +537,14 @@ fn parse_creature_kind(kind: &str) -> CreatureKind {
         CreatureKind::Goblin
     } else if kind.eq_ignore_ascii_case("sunscorch") {
         CreatureKind::Sunscorch
+    } else if kind.eq_ignore_ascii_case("zombie") {
+        CreatureKind::Zombie
+    } else if kind.eq_ignore_ascii_case("skeleton") {
+        CreatureKind::Skeleton
+    } else if kind.eq_ignore_ascii_case("dragon_green") {
+        CreatureKind::DragonGreen
+    } else if kind.eq_ignore_ascii_case("dragon_red") {
+        CreatureKind::DragonRed
     } else {
         CreatureKind::Sheep
     }
@@ -3531,6 +3547,48 @@ mod tests {
 mod behavior_api_tests {
     use super::*;
     use crate::creature::{BehaviorMode, BehaviorTarget};
+
+    #[test]
+    fn dragon_rule_spawns_are_queryable_and_cannot_form_a_pack() {
+        let mut creatures = Creatures::new();
+        cast(&mut creatures, r#"
+            local green = api.spawn_creature("dragon_green", 0, 40, 0)
+            local red = api.spawn_creature("dragon_red", 400, 40, 0)
+            local blocked = api.spawn_creature("dragon_red", 20, 40, 0)
+            local found = api.find_creatures("dragon_green", 0, 40, 0, 1)
+            if green ~= nil and red ~= nil and blocked == nil and #found == 1
+                and found[1].kind == "dragon_green" and found[1].max_health == 240 then
+                api.damage(green, 1)
+                api.damage(red, 1)
+            end
+        "#);
+        let snapshot = creatures.snapshot_with_ids();
+        assert_eq!(snapshot.len(), 2);
+        for (_, kind, _, health, _) in snapshot {
+            assert!(CreatureKind::from_u8(kind).is_dragon());
+            assert_eq!(health, 239.0);
+        }
+    }
+
+    #[test]
+    fn undead_spawn_and_query_through_the_rule_api() {
+        let mut creatures = Creatures::new();
+        cast(&mut creatures, r#"
+            for _, kind in ipairs({"zombie", "skeleton"}) do
+                local id = api.spawn_creature(kind, 5, 5, 5)
+                local found = api.find_creatures(kind, 5, 5, 5, 1)
+                if #found == 1 and found[1].id == id and found[1].kind == kind then
+                    api.damage(id, 1)
+                end
+            end
+        "#);
+        let snapshot = creatures.snapshot_with_ids();
+        assert_eq!(snapshot.len(), 2);
+        for (_, kind, _, health, max_health) in snapshot {
+            assert!(matches!(CreatureKind::from_u8(kind), CreatureKind::Zombie | CreatureKind::Skeleton));
+            assert_eq!(health, max_health - 1.0);
+        }
+    }
 
     fn cast(creatures: &mut Creatures, code: &str) -> TickOutcome {
         let mut host = ScriptHost::new();

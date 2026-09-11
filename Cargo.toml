@@ -8,7 +8,7 @@ winit = "0.29"
 wgpu = "0.19"
 pollster = "0.3"
 bytemuck = { version = "1.14", features = ["derive"] }
-glam = "0.25"
+glam = { version = "0.25", features = ["serde"] }
 env_logger = "0.11"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }

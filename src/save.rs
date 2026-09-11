@@ -17,6 +17,7 @@ pub struct CraftingSave {
     pub guests: std::collections::HashMap<String, crate::crafting::Account>,
     pub creatures: Option<Vec<crate::creature::SavedCreature>>,
     pub behaviors: std::collections::BTreeMap<u32, crate::creature::CreatureBehavior>,
+    pub dragons: crate::creature::DragonSave,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SaveV2 {
