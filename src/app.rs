@@ -376,7 +376,7 @@ struct CameraUniform {
     /// storm's lightning strike whites out the whole scene, not just the
     /// sky or just the terrain). y = cloud_coverage (see
     /// `Weather::cloud_coverage` -- how much of sky.wgsl's procedural cloud
-    /// layer covers the sky dome). z = camera eye underwater; w is reserved.
+    /// layer covers the sky dome). z = camera eye underwater; w = surface wetness.
     weather_fx: [f32; 4],
 }
 
@@ -397,6 +397,10 @@ fn light_view_proj(sun_dir: Vec3, player_pos: Vec3) -> glam::Mat4 {
     let proj = glam::Mat4::orthographic_rh(-h, h, -h, h, 1.0, SHADOW_LIGHT_DISTANCE * 2.5);
     proj * view
 }
+
+#[cfg(test)]
+#[path = "render_preview_tests.rs"]
+mod render_preview_tests;
 
 struct GpuMesh {
     vertex_buffer: wgpu::Buffer,
@@ -574,6 +578,7 @@ pub struct App {
     models: Models,
     time_of_day: f32,
     weather: WeatherState,
+    surface_weather: crate::weather::SurfaceWeather,
     /// Sound output -- see `audio::AudioEngine`. Local-only, like
     /// `lightning_flash`/`bird_flock`: every client (host or joined) drives
     /// its own playback independently from the same shared, replicated
@@ -1258,6 +1263,7 @@ impl App {
             models,
             time_of_day,
             weather,
+            surface_weather: Default::default(),
             audio: AudioEngine::new(),
             lightning_rng: (lightning_seed as u64) ^ 0xB0C7_11C4_71E5,
             lightning_timer: LIGHTNING_MIN_INTERVAL_SECS,
@@ -1698,6 +1704,7 @@ impl App {
         // Wrap well before f32 precision would start eating into a sine's
         // period -- the animation is periodic anyway so this is seamless.
         self.water_time = (self.water_time + dt) % 10_000.0;
+        self.surface_weather.update(self.weather.current, dt);
         self.update_lightning(dt);
         self.update_birds(dt);
         self.audio.update_ambience(self.weather.current, self.time_of_day, dt);
@@ -3211,6 +3218,7 @@ impl App {
         let lighting = sky_lighting(self.time_of_day);
         let sky = lighting.sky_color;
         let zenith = lighting.zenith_color;
+        let clouds = self.surface_weather.clouds;
         let cam_pos = self.camera.eye_position();
         let underwater = is_in_water(&self.world, cam_pos);
         let light_view_proj = light_view_proj(lighting.sun_dir, self.player.position);
@@ -3241,16 +3249,16 @@ impl App {
                 lighting.sun_height,
             ],
             light_params: [
-                lighting.ambient,
-                lighting.sun_intensity,
+                lighting.ambient * (1.0 - clouds * 0.12),
+                lighting.sun_intensity * (1.0 - clouds * 0.72),
                 self.water_time,
                 self.weather.current.wind_strength(),
             ],
             weather_fx: [
                 self.lightning_flash,
-                self.weather.current.cloud_coverage(),
+                clouds,
                 if underwater {1.0} else {0.0},
-                0.0,
+                self.surface_weather.wetness,
             ],
         };
         self.queue

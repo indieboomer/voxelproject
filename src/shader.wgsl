@@ -14,7 +14,7 @@ struct CameraUniform {
     light_params: vec4<f32>,
     // x = lightning_flash, 0..1 (see App::update_lightning) -- blended
     // toward white in fs_main below during a storm's lightning strike.
-    // y = cloud coverage, z = camera eye underwater, w = reserved.
+    // y = cloud coverage, z = camera eye underwater, w = surface wetness.
     weather_fx: vec4<f32>,
 };
 
@@ -108,14 +108,16 @@ fn shadow_factor(world_pos: vec3<f32>, ndotl: f32) -> f32 {
     let bias = clamp(0.0035 * (1.0 - ndotl), 0.0007, 0.006);
     let texel = 1.0 / SHADOW_MAP_SIZE;
 
-    var lit = 0.0;
-    for (var dx = -1; dx <= 1; dx += 1) {
-        for (var dy = -1; dy <= 1; dy += 1) {
-            let offset = vec2<f32>(f32(dx), f32(dy)) * texel;
-            lit += textureSampleCompare(shadow_map, shadow_sampler, uv + offset, ndc.z - bias);
-        }
-    }
-    return lit / 9.0;
+    // Four bilinear PCF taps cover a soft footprint with fewer fetches than
+    // the previous nine-tap square. Level-zero sampling permits early-outs.
+    let depth = ndc.z - bias;
+    let lit = textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2<f32>(-0.75, -0.25) * texel, depth)
+        + textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2<f32>(0.25, -0.75) * texel, depth)
+        + textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2<f32>(0.75, 0.25) * texel, depth)
+        + textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2<f32>(-0.25, 0.75) * texel, depth);
+    // Avoid a hard moving edge at the limited-resolution shadow coverage.
+    let edge = smoothstep(0.85, 1.0, max(abs(ndc.x), abs(ndc.y)));
+    return mix(lit * 0.25, 1.0, edge);
 }
 
 // Water is the only block whose reflectivity is this high (0.85, vs. 0.5
@@ -150,17 +152,21 @@ fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
 // reflection, emissive glow) -- which the blend is dominated by, since the
 // linear side is already pinned at 1.0 there -- still pick up a
 // noticeably softer, richer rolloff than a flat clip to white.
-const TONEMAP_BLEND: f32 = 0.35;
+const TONEMAP_BLEND: f32 = 0.55;
 
 fn grade(color: vec3<f32>) -> vec3<f32> {
     let linear = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
-    let toned = aces_tonemap(color);
+    let toned = aces_tonemap(color * 0.9);
     return mix(linear, toned, TONEMAP_BLEND);
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let is_water = in.reflectivity > WATER_REFLECTIVITY_THRESHOLD;
+    let rain_exposure = step(1.5, in.reflectivity);
+    let reflectivity = in.reflectivity - rain_exposure * 2.0;
+    let is_water = reflectivity > WATER_REFLECTIVITY_THRESHOLD;
+    let wet = camera.weather_fx.w * rain_exposure * (0.25 + 0.75 * max(in.normal.y, 0.0))
+        * (1.0 - clamp(in.emission, 0.0, 1.0));
 
     // Slightly wavy *still* water: only the shading normal is animated (the
     // sun glint and sky reflection dance across the surface), never the
@@ -195,29 +201,43 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let ndotl = max(dot(shading_normal, camera.sun_dir.xyz), 0.0);
     let ambient = camera.light_params.x;
     let sun_intensity = camera.light_params.y;
-    let shadow = select(1.0, shadow_factor(in.world_pos, ndotl), sun_intensity > 0.0);
-    let base = tex.rgb * in.color * in.ao;
-    // Deliberately kept exactly as before (a flat scalar, hard-clamped):
-    // tinting this per-channel by the sky color was tried and reverted --
-    // multiplied straight onto an already-saturated texture like grass, it
-    // recolored ordinary matte terrain far more than intended, well before
-    // `grade`'s tonemap even entered the picture. The "epic" lighting
-    // upgrades (sky gradient/sun/moon/stars, filmic highlight rolloff,
-    // emissive glow/pulse) all live elsewhere and don't need this term
-    // touched.
-    let lit = base * clamp(ambient + sun_intensity * ndotl * shadow, 0.0, 1.0);
+    var shadow = 1.0;
+    // `select` evaluates both operands: the old shader sampled shadows even
+    // at night. This branch also skips back-facing surfaces entirely.
+    if sun_intensity > 0.001 && ndotl > 0.0 {
+        shadow = shadow_factor(in.world_pos, ndotl);
+    }
+    let material_wet = select(wet, 0.0, is_water);
+    let base = tex.rgb * in.color * (1.0 - material_wet * 0.28);
+    // Hemisphere fill and a subtle warm ground bounce give normals shape
+    // without irradiance probes. AO mainly occludes indirect illumination.
+    let hemisphere = shading_normal.y * 0.5 + 0.5;
+    let fill_tint = mix(vec3<f32>(1.02, 0.96, 0.88), vec3<f32>(0.94, 0.98, 1.04), hemisphere);
+    let fill = fill_tint * ambient * mix(0.65, 1.15, hemisphere) * in.ao;
+    let sun_tint = mix(vec3<f32>(1.0, 0.79, 0.60), vec3<f32>(1.0, 0.98, 0.93), smoothstep(0.0, 0.45, camera.sun_dir.w));
+    let direct = sun_tint * sun_intensity * ndotl * shadow * mix(0.8, 1.0, in.ao);
+    let lit = base * (fill + direct);
 
-    // Cheap reflection for shiny materials (water, crystal, stone): a
-    // fresnel-weighted tint of the sky color plus a Blinn-Phong sun glint,
-    // both scaled by the per-vertex `reflectivity` so matte blocks (grass,
-    // dirt, wood...) are completely unaffected. Uses the (possibly
-    // wave-perturbed) shading normal so water's glint shimmers too.
+    // View-dependent sky reflection and roughness-dependent sun highlights.
+    // Dry matte blocks stay diffuse; rain adds a reflective surface coat.
     let view_dir = normalize(camera.camera_pos.xyz - in.world_pos);
-    let fresnel = pow(clamp(1.0 - max(dot(shading_normal, view_dir), 0.0), 0.0, 1.0), 5.0);
-    let sky_reflection = camera.fog_color.rgb * in.reflectivity * mix(0.15, 1.0, fresnel);
+    let grazing = 1.0 - max(dot(shading_normal, view_dir), 0.0);
+    let grazing2 = grazing * grazing;
+    let fresnel = grazing2 * grazing2 * grazing;
+    let roughness = select(mix(0.85 - reflectivity * 0.55, 0.22, material_wet), 0.15, is_water);
+    let reflection_dir = reflect(-view_dir, shading_normal);
+    let sky_gradient = mix(camera.fog_color.rgb, camera.zenith_color.rgb, clamp(reflection_dir.y, 0.0, 1.0));
+    // Analytic environment reflection: no cubemap, screen-space ray march,
+    // or extra samples. Wet surfaces gain a clear coat at grazing angles.
+    let overcast = vec3<f32>(0.48, 0.51, 0.55) * ambient * 2.2;
+    let environment = mix(sky_gradient, overcast, camera.weather_fx.y * 0.7);
+    let reflection_strength = mix(reflectivity * 0.45, 0.55, material_wet);
+    let sky_reflection = environment * reflection_strength * mix(0.08, 1.0, fresnel) * in.ao;
     let half_dir = normalize(view_dir + camera.sun_dir.xyz);
     let spec_angle = max(dot(shading_normal, half_dir), 0.0);
-    let specular = pow(spec_angle, 64.0) * in.reflectivity * sun_intensity * shadow;
+    let exponent = mix(12.0, 128.0, (1.0 - roughness) * (1.0 - roughness));
+    let coat = max(reflectivity, material_wet * 0.7);
+    let specular = pow(spec_angle, exponent) * coat * sun_intensity * shadow * ndotl;
     // Emission is a purely visual glow on the block's own surface (ores),
     // added on top of the lit/reflected result rather than folded into the
     // lighting math -- it never affects neighboring geometry. A gentle
@@ -254,13 +274,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         glimmer = mix(vec3<f32>(1.0), tex.rgb, 0.25) * in.glimmer
             * clamp(inclusion, 0.0, 1.0) * (sparkle * visibility * illumination + sheen);
     }
-    let reflected = lit + sky_reflection + vec3<f32>(specular) + glow + glimmer;
+    let reflected = lit + sky_reflection + sun_tint * specular + glow + glimmer;
 
     let dist = distance(in.world_pos, camera.camera_pos.xyz);
     let underwater = camera.weather_fx.z;
-    let fog_start = mix(70.0, 1.5, underwater);
+    let fog_start = mix(mix(70.0, 40.0, camera.weather_fx.y), 1.5, underwater);
     let fog_end = mix(160.0, 26.0, underwater);
-    let fog_amount = clamp((dist - fog_start) / (fog_end - fog_start), 0.0, 1.0);
+    let fog_linear = clamp((dist - fog_start) / (fog_end - fog_start), 0.0, 1.0);
+    let fog_amount = fog_linear * fog_linear * (3.0 - 2.0 * fog_linear);
 
     let fog_tint = mix(camera.fog_color.rgb, vec3<f32>(0.025, 0.16, 0.28), underwater);
     let tinted = mix(reflected, reflected * vec3<f32>(0.50, 0.78, 0.95) + vec3<f32>(0.01, 0.04, 0.09), underwater);

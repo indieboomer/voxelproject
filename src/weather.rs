@@ -92,13 +92,12 @@ impl Weather {
 
     /// How much of the sky dome the procedural cloud layer covers, 0
     /// (none) to 1 (fully overcast) -- see sky.wgsl's `cloud_density`/
-    /// `App::render`'s `weather_fx.y`. Only storm gets heavy cover for
-    /// now; every other kind (including rain) renders a clear sky above
-    /// its own effect, left at 0 rather than guessed at since it wasn't
-    /// asked for.
+    /// `App::render`'s `weather_fx.y`. Rain brings cloud cover, with
+    /// denser overcast during storms. The renderer smooths transitions.
     pub fn cloud_coverage(self) -> f32 {
         match self {
             Weather::Storm => 0.85,
+            Weather::Rain => 0.65,
             _ => 0.0,
         }
     }
@@ -112,6 +111,24 @@ impl Weather {
             Weather::Rain | Weather::Mist | Weather::Windy => (60.0, 150.0),
             Weather::Storm => (30.0, 90.0),
         }
+    }
+}
+
+/// Visual-only surface moisture and cloud transitions. No mesh rebuild or
+/// network payload is needed when weather changes; each renderer follows it.
+#[derive(Default)]
+pub struct SurfaceWeather {
+    pub wetness: f32,
+    pub clouds: f32,
+}
+
+impl SurfaceWeather {
+    pub fn update(&mut self, weather: Weather, dt: f32) {
+        if !dt.is_finite() || dt <= 0.0 { return; }
+        let target = if weather.has_rain_particles() { 1.0 } else { 0.0 };
+        let seconds = if target > self.wetness { 12.0 } else { 45.0 };
+        self.wetness += (target - self.wetness).clamp(-dt / seconds, dt / seconds);
+        self.clouds += (weather.cloud_coverage() - self.clouds).clamp(-dt / 5.0, dt / 5.0);
     }
 }
 
@@ -257,11 +274,44 @@ mod tests {
     }
 
     #[test]
-    fn only_storm_has_heavy_cloud_coverage() {
+    fn rain_and_storm_have_cloud_coverage() {
         assert!(Weather::Storm.cloud_coverage() > 0.5);
-        for w in [Weather::Sunny, Weather::Rain, Weather::Mist, Weather::Windy] {
+        assert!(Weather::Rain.cloud_coverage() > 0.0);
+        assert!(Weather::Storm.cloud_coverage() > Weather::Rain.cloud_coverage());
+        for w in [Weather::Sunny, Weather::Mist, Weather::Windy] {
             assert_eq!(w.cloud_coverage(), 0.0, "expected {} to have no cloud cover yet", w.name());
         }
+    }
+
+    #[test]
+    fn surfaces_wet_gradually_and_dry_in_every_other_weather() {
+        for rain in [Weather::Rain, Weather::Storm] {
+            for dry in [Weather::Sunny, Weather::Mist, Weather::Windy] {
+                let mut surface = SurfaceWeather::default();
+                surface.update(rain, 6.0);
+                assert!((surface.wetness - 0.5).abs() < 0.0001);
+                surface.update(rain, 20.0);
+                assert_eq!(surface.wetness, 1.0);
+                surface.update(dry, 22.5);
+                assert!((surface.wetness - 0.5).abs() < 0.0001);
+                surface.update(dry, 100.0);
+                assert_eq!(surface.wetness, 0.0);
+                assert_eq!(surface.clouds, 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn surface_weather_is_frame_rate_independent_and_ignores_invalid_time() {
+        let mut fine = SurfaceWeather::default();
+        let mut coarse = SurfaceWeather::default();
+        for _ in 0..360 { fine.update(Weather::Rain, 1.0 / 60.0); }
+        coarse.update(Weather::Rain, 6.0);
+        assert!((fine.wetness - coarse.wetness).abs() < 0.0001);
+        for dt in [f32::NAN, f32::INFINITY, -1.0, 0.0] {
+            coarse.update(Weather::Sunny, dt);
+        }
+        assert_eq!(coarse.wetness, 0.5);
     }
 
     #[test]

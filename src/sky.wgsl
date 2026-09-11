@@ -17,7 +17,7 @@ struct CameraUniform {
     light_params: vec4<f32>,
     // x = lightning_flash, 0..1 -- see shader.wgsl's copy of this struct
     // and App::update_lightning. y = cloud_coverage, 0..1 -- see
-    // Weather::cloud_coverage. z = camera eye underwater, w = reserved.
+    // Weather::cloud_coverage. z = camera eye underwater, w = surface wetness.
     weather_fx: vec4<f32>,
 };
 
@@ -56,11 +56,11 @@ fn aces_tonemap(x: vec3<f32>) -> vec3<f32> {
 // See shader.wgsl's grade() for why this is a partial blend rather than
 // the full tonemap curve -- kept identical here so the sky and the world
 // geometry it's blended with (fog) always agree tonally.
-const TONEMAP_BLEND: f32 = 0.35;
+const TONEMAP_BLEND: f32 = 0.55;
 
 fn grade(color: vec3<f32>) -> vec3<f32> {
     let linear = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
-    let toned = aces_tonemap(color);
+    let toned = aces_tonemap(color * 0.9);
     return mix(linear, toned, TONEMAP_BLEND);
 }
 
@@ -87,14 +87,13 @@ fn value_noise(p: vec2<f32>) -> f32 {
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-// Three octaves of value_noise at increasing frequency/decreasing weight
+// Two octaves of value_noise at increasing frequency/decreasing weight
 // (a small manually-unrolled fbm) -- reads as organic, uneven cloud puffs
 // rather than one layer's obviously-gridded blobs.
 fn cloud_density(p: vec2<f32>) -> f32 {
     let n1 = value_noise(p);
     let n2 = value_noise(p * 2.03 + vec2<f32>(5.2, 1.3));
-    let n3 = value_noise(p * 4.01 + vec2<f32>(1.7, 9.2));
-    return n1 * 0.55 + n2 * 0.3 + n3 * 0.15;
+    return n1 * 0.65 + n2 * 0.35;
 }
 
 @fragment
@@ -120,35 +119,31 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let haze = pow(1.0 - abs(dir.y), 5.0) * 0.2;
     color += camera.fog_color.rgb * haze;
 
-    // Clouds: projected onto the sky dome the same way stars are below
-    // (dir.xz/dir.y -- compresses near the zenith, stretches near the
-    // horizon, same as looking up at a real overcast sky), drifting slowly
-    // via the free-running clock so they visibly scroll rather than
-    // sitting static. cloud_coverage is 0 for every weather except storm
-    // right now (see Weather::cloud_coverage), so this is a no-op cost
-    // elsewhere -- smoothstep's lower/upper bounds collapse to the same
-    // point and cloud_alpha stays 0.
+    // Skip cloud noise in clear weather; blend distant detail into haze
+    // before its projected frequency becomes visible as horizon stripes.
     let cloud_coverage = camera.weather_fx.y;
     var cloud_alpha = 0.0;
-    if dir.y > 0.02 {
+    if cloud_coverage > 0.001 && dir.y > 0.02 {
         let drift = vec2<f32>(camera.light_params.z * 0.015, camera.light_params.z * 0.008);
         let cloud_uv = dir.xz / dir.y * 0.12 + drift;
         let density = cloud_density(cloud_uv);
         // Higher coverage lowers the threshold a puff needs to clear, so
         // more of the noise field reads as cloud instead of clear sky.
         let threshold = 1.0 - cloud_coverage;
-        cloud_alpha = smoothstep(threshold, threshold + 0.3, density);
+        cloud_alpha = smoothstep(threshold, threshold + 0.3, density)
+            * smoothstep(0.02, 0.18, dir.y);
     }
     // Dark, faintly blue-gray overcast tone; dims further at night via the
     // same ambient term the terrain's own lighting uses, so clouds don't
     // read as glowing white at midnight.
-    let cloud_color = vec3<f32>(0.34, 0.35, 0.39) * (0.55 + camera.light_params.x);
+    let cloud_color = vec3<f32>(0.34, 0.35, 0.39) * camera.light_params.x * 2.2;
+    color = mix(color, cloud_color * 1.2, cloud_coverage * 0.65);
     color = mix(color, cloud_color, cloud_alpha);
     // How much of the sun/moon/stars' own light still gets through -- 1
     // where the sky is clear, fading toward 0 under thick cloud so a
     // storm's clouds actually hide the sky behind them instead of just
     // painting over an otherwise-still-visible sun/moon.
-    let sky_visibility = 1.0 - cloud_alpha;
+    let sky_visibility = (1.0 - cloud_alpha) * (1.0 - cloud_coverage * 0.65);
 
     // Sun/moon/star visibility is keyed off sun_height directly (not the
     // scene's own sun_intensity, which daynight.rs already clamps to 0 for
@@ -181,7 +176,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Stars: a sparse hash-thresholded field, only above the horizon and
     // only once night has properly set in, twinkling faintly via a slow
     // per-star phase offset so they aren't perfectly static.
-    if dir.y > 0.05 {
+    if night_amount > 0.001 && dir.y > 0.05 {
         let cell = floor(dir.xz / dir.y * 40.0);
         let n = hash21(cell);
         if n > 0.9975 {

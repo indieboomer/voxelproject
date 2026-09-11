@@ -14,6 +14,8 @@ pub struct Vertex {
     pub normal: [f32; 3],
     pub uv: [f32; 2],
     pub ao: f32,
+    /// Base reflectivity (0..1), plus 2 when the face is exposed to rain.
+    /// Packing the flag here keeps the vertex layout/bandwidth unchanged.
     pub reflectivity: f32,
     /// Self-illumination strength, 0..1 -- see `BlockType::emission`. A
     /// purely visual glow on the block's own surface, not a light source
@@ -361,6 +363,14 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     let (ox, oz) = chunk.world_origin();
+    // One short column scan per mesh build, never per weather change/frame.
+    // A roof, leaves, or water above a face shields it from surface rain.
+    let rain_height: [[i32; CHUNK_Z as usize]; CHUNK_X as usize] = std::array::from_fn(|x| {
+        std::array::from_fn(|z| (0..CHUNK_Y).rev().find(|&y| {
+            let block = chunk.get_local(x as i32, y, z as i32);
+            block.is_solid() || block == BlockType::Water
+        }).unwrap_or(-1))
+    });
 
     for lx in 0..CHUNK_X {
         for ly in 0..CHUNK_Y {
@@ -396,10 +406,12 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                         continue;
                     }
 
-                    let shade = face_shade(face_idx);
+                    let shade = 0.85 + 0.15 * face_shade(face_idx);
                     let color = [shade, shade, shade];
                     let uv_rect = atlas::uv_rect(atlas::tile_for(block, face_idx));
-                    let reflectivity = block.reflectivity();
+                    let rain_exposed = ly >= rain_height[lx as usize][lz as usize]
+                        && normal[1] >= 0 && !def.cutout;
+                    let reflectivity = block.reflectivity() + if rain_exposed { 2.0 } else { 0.0 };
                     let emission = def.emission;
                     // Leaves aren't anchored to anything solid, so (unlike
                     // short grass) the whole block sways rather than just
@@ -657,5 +669,23 @@ mod tests {
             mesh.vertices.iter().all(|v| v.ao == 1.0),
             "leaves should never be AO-darkened"
         );
+    }
+
+    #[test]
+    fn rain_exposure_respects_roofs_and_updates_when_removed() {
+        let mut world = World::new(1);
+        let mut chunk = Chunk::new(0, 0);
+        chunk.set_local(5, 5, 5, BlockType::Stone);
+        chunk.set_local(5, 9, 5, BlockType::Stone);
+        world.chunks.insert((0, 0), chunk);
+        let mesh = build_chunk_mesh(&world, &world.chunks[&(0, 0)]);
+        let top = |y: f32| mesh.vertices.iter().filter(move |v| v.normal == [0.0, 1.0, 0.0] && v.position[1] == y);
+        assert_eq!(top(6.0).count(), 4);
+        assert!(top(6.0).all(|v| v.reflectivity == BlockType::Stone.reflectivity()));
+        assert!(top(10.0).all(|v| v.reflectivity == BlockType::Stone.reflectivity() + 2.0));
+        assert!(mesh.vertices.iter().filter(|v| v.normal[1] < 0.0).all(|v| v.reflectivity < 1.0));
+        world.chunks.get_mut(&(0, 0)).unwrap().set_local(5, 9, 5, BlockType::Air);
+        let mesh = build_chunk_mesh(&world, &world.chunks[&(0, 0)]);
+        assert!(mesh.vertices.iter().filter(|v| v.normal[1] > 0.0).all(|v| v.reflectivity >= 2.0));
     }
 }
