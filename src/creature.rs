@@ -614,6 +614,7 @@ pub enum AttackPolicy {
 }
 
 pub struct Creatures {
+    start_protection: std::collections::BTreeMap<PlayerId,f32>,
     fish_regions: std::collections::BTreeSet<(i32, i32)>,
     fish_scan_timer: f32,
     fish_scan_cursor: usize,
@@ -742,6 +743,7 @@ impl CreatureDraft {
 impl Creatures {
     pub fn new() -> Self {
         Self {
+            start_protection: Default::default(),
             dragon_regions: Default::default(),
             fish_regions: Default::default(),
             fish_scan_timer: 0.0,
@@ -760,15 +762,17 @@ impl Creatures {
     /// including hostile ones, but weighted heavily toward the neutral
     /// grazers (sheep/chicken/cow together are ~65% of the table), with
     /// wolf/stinger/goblin/zombie/skeleton uncommon and stone_golem/sunscorch
-    /// rare (~2% each). This is a deliberate design choice, not a
-    /// left-over default: a fresh world's first minutes can now include a
-    /// hostile encounter, just an infrequent one. See
-    /// `STARTER_KIND_WEIGHTS`'s own doc comment for the exact numbers.
+    /// rare (~2% each). Hostiles start 48-72 blocks away; neutral animals
+    /// remain within 24 blocks so the starting area still feels alive.
     pub fn spawn_around(&mut self, world: &World, center: Vec3, count: usize, seed: u32) {
         let mut rng = SimpleRng::new(seed as u64 ^ 0xC0FFEE);
         for i in 0..count {
             let kind = pick_starter_kind(&mut rng);
-            if let Some((x, z)) = find_land_spot(world, &mut rng, center.x, center.z, 24.0) {
+            let spot = if kind.is_hostile() {
+                (0..12).find_map(|_|find_land_spot(world,&mut rng,center.x,center.z,72.0)
+                    .filter(|&(x,z)|(x-center.x).powi(2)+(z-center.z).powi(2)>=48.0*48.0))
+            } else {find_land_spot(world,&mut rng,center.x,center.z,24.0)};
+            if let Some((x, z)) = spot {
                 let y = world.terrain_height(x.floor() as i32, z.floor() as i32) as f32 + 1.0;
                 self.spawn_with_rng(
                     kind,
@@ -862,12 +866,25 @@ impl Creatures {
     /// unchanged for sheep and chicken. Returns `(player_id, damage)` for
     /// every attack that landed this tick, for the caller to apply via the
     /// same `PlayerEffect::Health` path `api.damage_player` uses.
+    /// Host-owned entry grace, independent of Lua attack policies. New guests
+    /// receive the full interval even when the host has already used theirs.
+    pub fn update_start_protection(&mut self,dt:f32,players:&[(PlayerId,Vec3)]) {
+        self.start_protection.retain(|id,_|players.iter().any(|p|p.0==*id));
+        let elapsed=if dt.is_finite(){dt.max(0.0)}else{0.0};
+        for remaining in self.start_protection.values_mut() {*remaining=(*remaining-elapsed).max(0.0);}
+        for &(id,_) in players {self.start_protection.entry(id).or_insert(60.0);}
+    }
+
     pub fn update(
         &mut self,
         world: &World,
         dt: f32,
         player_targets: &[(PlayerId, Vec3)],
     ) -> Vec<(PlayerId, f32)> {
+        // Filter natural aggro and explicit Lua player targets together.
+        let eligible_players:Vec<_>=player_targets.iter().copied()
+            .filter(|(id,_)|!self.start_protection.get(id).is_some_and(|t|*t>0.0)).collect();
+        let player_targets=eligible_players.as_slice();
         let mut attacks = Vec::new();
         let mut stranded_fish = Vec::new();
         // Collected locally and merged into `self.pending_audio` after the
@@ -930,7 +947,8 @@ impl Creatures {
                     .map(|c| (target, Vec3::from_array(c.2))),
                 BehaviorTarget::Player(id) => player_targets.iter().find(|p| p.0 == id).map(|p| (target, p.1)),
             });
-            if state.target.is_some() && explicit.is_none() { state.target = None; }
+            let entry_protected=matches!(state.target,Some(BehaviorTarget::Player(id)) if self.start_protection.get(&id).is_some_and(|t|*t>0.0));
+            if state.target.is_some() && explicit.is_none() && !entry_protected { state.target = None; }
             let mut aggro = if state.mode == BehaviorMode::Auto && state.aggressive
                 && !wander.hunting && chase.giveup_cooldown <= 0.0 {
                 player_targets
@@ -1360,6 +1378,64 @@ fn find_land_spot(
 mod tests {
     use super::*;
     use std::f32::consts::{FRAC_PI_2, PI};
+
+    #[test]
+    fn starter_hostiles_keep_outside_the_player_start_area() {
+        let mut world=World::new(42);
+        world.generation.shape=crate::worldgen::Shape::Flat;
+        let center=Vec3::new(-30.0,26.0,17.0);
+        for seed in [7,42,2026] {
+            let mut creatures=Creatures::new();
+            creatures.spawn_around(&world,center,100,seed);
+            let snapshot=creatures.snapshot_with_ids();
+            assert!(snapshot.iter().any(|c|CreatureKind::from_u8(c.1).is_hostile()));
+            for (_,kind,pos,_,_) in snapshot {
+                let d=Vec3::new(pos[0]-center.x,0.0,pos[2]-center.z).length();
+                if CreatureKind::from_u8(kind).is_hostile() {assert!(d>=48.0 && d<=72.01);}
+                else {assert!(d<=24.01);}
+            }
+        }
+    }
+
+    #[test]
+    fn entry_grace_blocks_all_creature_player_attacks_including_explicit_targets() {
+        let world=World::new(42);
+        let pos=Vec3::new(0.0,30.0,0.0);
+        for kind in [CreatureKind::Wolf,CreatureKind::Zombie,CreatureKind::Skeleton,
+            CreatureKind::StoneGolem,CreatureKind::DragonGreen,CreatureKind::DragonRed,CreatureKind::Sheep] {
+            let mut creatures=Creatures::new();
+            let id=creatures.spawn_one(kind,pos,1);
+            creatures.behaviors.get_mut(&id).unwrap().mode=BehaviorMode::Attack;
+            creatures.behaviors.get_mut(&id).unwrap().target=Some(BehaviorTarget::Player(7));
+            let players=[(0,pos+Vec3::X),(7,pos+Vec3::Z)];
+            creatures.update_start_protection(0.0,&players);
+            assert!(creatures.update(&world,0.01,&players).is_empty());
+            assert_ne!(creatures.anim_clip_of(id),Some(AnimClip::Attack));
+            assert_eq!(creatures.behaviors[&id].target,Some(BehaviorTarget::Player(7)));
+        }
+    }
+
+    #[test]
+    fn entry_grace_expires_without_resetting_and_late_guests_get_their_own_interval() {
+        let world=World::new(42);let pos=Vec3::new(0.0,30.0,0.0);
+        let mut creatures=Creatures::new();
+        let host=[(0,pos+Vec3::X)];
+        creatures.update_start_protection(0.0,&host);
+        creatures.update_start_protection(59.0,&host);
+        assert_eq!(creatures.start_protection[&0],1.0);
+        let both=[host[0],(7,pos+Vec3::Z)];
+        creatures.update_start_protection(1.0,&both);
+        assert_eq!(creatures.start_protection[&0],0.0);
+        assert_eq!(creatures.start_protection[&7],60.0);
+        creatures.spawn_one(CreatureKind::Zombie,pos,1);
+        assert_eq!(creatures.update(&world,0.01,&both),vec![(0,CreatureKind::Zombie.attack_damage())]);
+        creatures.update_start_protection(1.0,&both);
+        assert_eq!(creatures.start_protection[&0],0.0);
+        assert_eq!(creatures.start_protection[&7],59.0);
+        creatures.update_start_protection(1.0,&host);
+        creatures.update_start_protection(1.0,&both);
+        assert_eq!(creatures.start_protection[&7],60.0);
+    }
 
     #[test]
     fn zombies_queue_repeated_ambient_growls_at_random_intervals() {

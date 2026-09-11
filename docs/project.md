@@ -28,6 +28,20 @@ Networking replicates authoritative results; clients derive cosmetic animation
 and sound locally. Saves preserve block edits, so procedural generation changes
 can affect regenerated unedited terrain while explicit saved edits take priority.
 
+## Safe entry
+
+Fresh-world starter hostiles spawn 48-72 horizontal blocks from the starting
+position; passive animals remain within 24 blocks. Dragon discovery already
+keeps new dragons at least 80 blocks from every player.
+
+The host gives each entering player 60 seconds without creature targeting or
+attacks, including explicit rule-assigned player targets and dragon attacks.
+Late guests receive their own interval. Protection expires normally without
+restarting each frame; disconnected players receive a new interval upon re-entry.
+It is session state rather than saved progress, so opening a saved session also
+grants entry grace. Existing saved creatures are not moved or deleted. This does
+not prevent environmental damage or direct rule-driven player damage.
+
 ## Rule lifecycle
 
 Describe a rule, generate Lua against the current World API, validate it, review

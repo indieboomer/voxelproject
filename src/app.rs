@@ -1821,6 +1821,7 @@ impl App {
                 .map(|p| (p.id, p.pos))
                 .collect();
             self.scripting.sync_attack_policies(&mut self.creatures);
+            self.creatures.update_start_protection(dt,&player_targets);
             self.creatures.discover_dragons(&self.world, &player_targets);
             self.creatures.discover_fish(&self.world, &player_targets, dt);
             let golem_attacks = self.creatures.update(&self.world, dt, &player_targets);

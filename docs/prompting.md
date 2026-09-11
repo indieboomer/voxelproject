@@ -114,6 +114,10 @@ clamp radius to 12. Native-work exhaustion cannot be bypassed by pcall. Use smal
 searches, throttle repeated rules, and handle nil/false/empty results. Do not scan
 the world or nest maximum-radius searches for every creature on every tick.
 All numeric inputs are checked for finiteness and coordinates for supported range.
+Creature AI excludes players during their first 60 seconds in a session, even
+when a rule assigns them as explicit attack targets. Those targets can become
+active after the entry grace expires. Direct damage_player calls remain separate
+rule actions and are not creature attacks.
 
 Campfire spawning still requires suitable terrain; fish still need real water.
 No helper grants filesystem/network access, unlimited spawns, arbitrary light
