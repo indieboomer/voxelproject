@@ -46,6 +46,7 @@ fn render_ui_previews() {
             account.resources[4]=12;
             if panel == "inventory" { account.resources.fill(128); }
             let mut inventory = crate::inventory_ui::Inventory::default();
+            inventory.preview_selection(crate::equipment::Entry::Gear(crate::equipment::Gear::Pickaxe));
             let world = crate::voxel::World::new(1);
             let creatures = crate::creature::Creatures::new();
             let mut craft = crate::crafting_ui::CraftingUi::default();
@@ -81,7 +82,7 @@ fn render_ui_previews() {
                         if panel == "inventory" {
                             let mut requests = crate::ui::UiRequests::default();
                             requests.select_slot = crate::equipment_ui::hotbar(ctx,&account,true,true);
-                            inventory.show(ctx,&account,&mut requests);
+                            inventory.show(ctx,&account,&registry,&mut requests);
                         } else if panel == "hotbar" {
                             crate::equipment_ui::hotbar(ctx,&account,false,true);
                         } else if panel == "crafting" {

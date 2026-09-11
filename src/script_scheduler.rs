@@ -17,6 +17,25 @@ pub(super) enum Event {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn paid_cast_tracks_its_own_success_and_busy_queue() {
+        let mut host = ScriptHost::new();
+        host.modules.push(rule("function on_cast(api,e) if e.player_id==7 then error('failed') end end"));
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        let mut weather = WeatherState::new(1);
+        let mut time = 0.0;
+        assert!(host.can_cast_immediately());
+        let out = host.run_cast(0,&world,&mut creatures,&[],&mut time,&mut weather,0,[0;COLLECTIBLE_BLOCKS.len()]);
+        assert!(out.crashes.is_empty());
+        assert!(host.cast_succeeded(0,0));
+        let out = host.run_cast(0,&world,&mut creatures,&[],&mut time,&mut weather,7,[0;COLLECTIBLE_BLOCKS.len()]);
+        assert!(!out.crashes.is_empty());
+        assert!(!host.cast_succeeded(0,7));
+        assert!(!host.cast_succeeded(0,0));
+        host.enqueue_cast(0,0);
+        assert!(!host.can_cast_immediately());
+    }
 
     fn rule(source: &str) -> Module {
         let mut m = Module::load("test".into(), String::new(), source.into()).unwrap();
@@ -353,6 +372,10 @@ impl ScriptHost {
             self.scheduler.enqueue(module, Event::Cast(caster));
         }
     }
+    pub fn can_cast_immediately(&self) -> bool { self.scheduler.pending == 0 }
+    pub fn cast_succeeded(&self, index: usize, caster: PlayerId) -> bool {
+        self.modules.get(index).is_some_and(|m|self.last_cast_success==Some((m.runtime_id,caster)))
+    }
 
     pub(super) fn dispatch(&mut self, input: &mut TickInput) -> (Vec<String>, Vec<String>) {
         self.dispatch_with_budget(input, DispatchBudget::new())
@@ -399,7 +422,8 @@ impl ScriptHost {
             budget.record(module.last_work);
             match result {
                 Ok(()) => {
-                    if matches!(event, Event::Cast(_)) {
+                    if let Event::Cast(caster) = event {
+                        self.last_cast_success = Some((module.runtime_id,caster));
                         module.error = None;
                     }
                 }

@@ -257,6 +257,7 @@ impl CraftingUi {
                             .collect::<Vec<_>>()
                             .join(", ")
                     ));
+                    ui.label(format!("Decomposition cost: {} mana",self.extraction_amount));
                     let action = Action::Extract {
                         block: self.extraction_block,
                         amount: self.extraction_amount,

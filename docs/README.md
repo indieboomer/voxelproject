@@ -11,6 +11,7 @@ multiplayer simulation, and local-AI-assisted sandboxed Lua rules.
 | [Fish](fish.md) | Habitat, swimming, spawning and rule control |
 | [Wildlife](wildlife.md) | Creature visibility, exploration population, recycling and limits |
 | [Inventory](inventory.md) | Elements, equipment, resources and numbered hotbar assignment |
+| [Mana and recipes](mana.md) | Spell/rule costs, mana recovery and equipment decomposition |
 | [Water](water.md) | Currents, raised tributaries, waterfalls and audio |
 | [Rendering](rendering.md) | Lighting, wetness, effects and performance checks |
 | [Development and testing](development.md) | Build, generation tools and validation |

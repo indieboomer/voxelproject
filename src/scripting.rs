@@ -613,6 +613,7 @@ fn random_offset_in_disk(seed: u64, radius: f32) -> (f32, f32) {
 /// (block edits replicate reliably, creature positions ride the existing
 /// snapshot broadcast).
 pub struct ScriptHost {
+    last_cast_success: Option<(u64, PlayerId)>,
     pub modules: Vec<Module>,
     scheduler: scheduler::Scheduler,
     unloaded_entries: Vec<ModuleSaveEntry>,
@@ -623,6 +624,7 @@ impl ScriptHost {
         Self {
             modules: Vec::new(),
             scheduler: scheduler::Scheduler::default(),
+            last_cast_success: None,
             unloaded_entries: Vec::new(),
         }
     }
@@ -778,6 +780,7 @@ impl ScriptHost {
         host_resources: [u32; COLLECTIBLE_BLOCKS.len()],
     ) -> TickOutcome {
         self.enqueue_cast(index, caster_id);
+        self.last_cast_success = None;
         self.dispatch_world(
             world,
             creatures,

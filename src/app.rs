@@ -649,6 +649,7 @@ pub struct App {
     interaction_states: HashMap<PlayerId, crate::equipment::Mining>,
     use_animation: f32,
     inventory_ready: bool,
+    mana_timer: f32,
     /// Position of the block the player is currently chipping away at with
     /// left-click, and hits landed on it so far -- reset whenever a click
     /// targets a different position. A block breaks once hits reach its
@@ -667,6 +668,33 @@ pub struct App {
 }
 
 impl App {
+    fn sync_guest_mana(&mut self) {
+        if let NetRole::Host(host) = &mut self.net {
+            for (peer,id) in &host.clients {
+                if let Some(player) = host.remote_players.get(id) {
+                    if let Some(account) = self.guest_accounts.get(&peer.account_key(&player.nickname)) {
+                        host.reliable.send(&host.socket,*peer,ReliableMsg::CraftState {account:account.clone(),feedback:None});
+                    }
+                }
+            }
+        }
+    }
+    fn regenerate_mana(&mut self, dt: f32) {
+        if !matches!(self.net,NetRole::Host(_)) { return; }
+        self.mana_timer += dt.max(0.0);
+        if self.mana_timer < 5.0 {return;}
+        self.mana_timer %= 5.0;
+        self.player.crafting.regenerate_mana();
+        let mut changed = false;
+        if let NetRole::Host(host) = &self.net {
+            for (peer,id) in &host.clients {
+                if let Some(player) = host.remote_players.get(id) {
+                    changed |= self.guest_accounts.entry(peer.account_key(&player.nickname)).or_default().regenerate_mana();
+                }
+            }
+        }
+        if changed {self.sync_guest_mana();}
+    }
     fn crafting_save(&self) -> crate::save::CraftingSave {
         crate::save::CraftingSave {
             host: self.player.crafting.clone(),
@@ -1308,6 +1336,7 @@ impl App {
             interaction_states: HashMap::new(),
             use_animation: 0.0,
             inventory_ready: false,
+            mana_timer: 0.0,
             mining_target: None,
             mining_hits: 0,
             cursor_grabbed: false,
@@ -1811,6 +1840,7 @@ impl App {
         self.input.end_frame();
         self.update_chunks();
         self.poll_network(dt);
+        self.regenerate_mana(dt);
         self.poll_generation();
         self.poll_proposals();
 
@@ -2183,6 +2213,10 @@ impl App {
         // write; `poll_generation` validates the generated contract
         // after at most one corrective retry.
         let kind = classify_prompt(&user_request);
+        if kind == PromptKind::Rule && self.player.crafting.mana < crate::crafting::RULE_MANA {
+            self.notify_important(format!("Creating a rule requires {} mana. Mana recovers over time; convert elements in Crafting [C] to refill faster.",crate::crafting::RULE_MANA));
+            return;
+        }
         let noun = generation_noun(kind);
         log::info!("Generating a {noun} from: {user_request}");
         if matches!(self.net, NetRole::Host(_)) {
@@ -2224,7 +2258,12 @@ impl App {
             let name = self.make_rule_name(&proposal.prompt);
             let module = Module::load(name.clone(), proposal.prompt,
                 world_api_validate::tag_with_api_version(&proposal.source))?;
+            let charge = !module.is_instant;
+            let key = connected_account.ok_or("Submitting account unavailable")?;
+            let mut charged = self.guest_accounts.get(&key).cloned().ok_or("Submitting account unavailable")?;
+            if charge {charged.spend_mana(crate::crafting::RULE_MANA)?;}
             let index = self.scripting.add_generated(module)?;
+            if charge {self.guest_accounts.insert(key,charged);self.sync_guest_mana();}
             self.next_rule_id += 1;
             self.last_generated_index = Some(index);
             Ok(format!("'{}' from {} is ready for host review. Nothing has been activated.", name, proposal.nickname))
@@ -2365,6 +2404,12 @@ impl App {
                     return;
                 }
                 let is_instant = module.is_instant;
+                let mut charged = self.player.crafting.clone();
+                if !is_instant {
+                    if let Err(error) = charged.spend_mana(crate::crafting::RULE_MANA) {
+                        self.notify_important(error);return;
+                    }
+                }
                 self.next_rule_id += 1;
                 let idx = match self.scripting.add_generated(module) {
                     Ok(index) => index,
@@ -2374,6 +2419,7 @@ impl App {
                     }
                 };
                 self.last_generated_index = Some(idx);
+                if !is_instant {self.player.crafting = charged;}
                 let (label, action) = if is_instant {
                     ("spell", "click Run to cast it")
                 } else {
@@ -2661,13 +2707,16 @@ impl App {
         if !module.is_instant {
             return;
         }
+        if !self.scripting.can_cast_immediately() {
+            self.notify_important("Rules are busy. Try casting again shortly; no mana spent.".into());return;
+        }
         let name = module.name.clone();
         let caster_account = crate::rule_sharing::caster_account(&module.source);
         let players = self.host_player_positions();
-        let caster_id = if let Some(account) = caster_account {
+        let caster_id = if let Some(ref account) = caster_account {
             let NetRole::Host(host) = &self.net else { return; };
             let Some(id) = host.clients.iter().find_map(|(peer, id)| host.remote_players.get(id)
-                .filter(|p| peer.account_key(&p.nickname) == account).map(|_| *id)) else {
+                .filter(|p| peer.account_key(&p.nickname) == *account).map(|_| *id)) else {
                 self.notify_important("The player who requested this spell is not connected.".into());
                 return;
             };
@@ -2675,6 +2724,11 @@ impl App {
         } else { HOST_PLAYER_ID };
         let Some(caster) = players.iter().find(|player| player.id == caster_id) else { return; };
         let caster_resources = caster.resources;
+        let balance = caster_account.as_ref().and_then(|key|self.guest_accounts.get(key)).unwrap_or(&self.player.crafting);
+        let mut check = balance.clone();
+        if let Err(error) = check.spend_mana(crate::crafting::INSTANT_MANA) {
+            self.notify_important(error);return;
+        }
         let outcome = self.scripting.run_cast(
             index,
             &self.world,
@@ -2685,9 +2739,13 @@ impl App {
             caster_id,
             caster_resources,
         );
-        let had_crash = !outcome.crashes.is_empty();
         self.apply_tick_outcome(outcome);
-        if !had_crash {
+        if self.scripting.cast_succeeded(index, caster_id) {
+            let account = if let Some(key) = caster_account { self.guest_accounts.get_mut(&key).unwrap() } else { &mut self.player.crafting };
+            // Lua cannot edit mana; charge only after its transactional cast succeeds.
+            account.mana -= crate::crafting::INSTANT_MANA;
+            account.revision = account.revision.saturating_add(1);
+            self.sync_guest_mana();
             self.notify_all(format!("Host requested cast '{name}'"));
         }
     }

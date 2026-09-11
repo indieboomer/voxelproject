@@ -4,6 +4,7 @@ use crate::{crafting::{Account, Element}, equipment::{Entry, Gear}, ui::UiReques
 #[derive(Default)]
 pub struct Inventory {
     selected: Option<Entry>,
+    pub feedback: String,
 }
 
 #[cfg(test)]
@@ -15,32 +16,62 @@ mod tests {
             let ctx = egui::Context::default();
             let mut account = Account::default();
             let entry = Entry::Gear(Gear::Pickaxe);
-            let mut inventory = Inventory { selected: Some(entry) };
+            let mut inventory = Inventory { selected: Some(entry), ..Default::default() };
+            let registry = crate::crafting::Registry::load().unwrap();
             let mut requests = UiRequests::default();
             let _ = ctx.run(egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1280.0,720.0))),
                 events: vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }],
                 ..Default::default()
-            }, |ctx|inventory.show(ctx,&account,&mut requests));
+            }, |ctx|inventory.show(ctx,&account,&registry,&mut requests));
             assert_eq!(requests.select_slot,Some(slot));
             assert_eq!(requests.assign_entry,Some(Some(entry)));
             account.gear[Gear::Pickaxe as usize]=0;
             let mut requests = UiRequests {select_slot:Some(4),..Default::default()};
-            let _ = ctx.run(Default::default(), |ctx|inventory.show(ctx,&account,&mut requests));
+            let _ = ctx.run(Default::default(), |ctx|inventory.show(ctx,&account,&registry,&mut requests));
             assert_eq!(requests.assign_entry,None);
-            assert_eq!(inventory.selected,None);
+            assert_eq!(inventory.selected,Some(entry));
         }
     }
 }
 impl Inventory {
-    pub fn show(&mut self, ctx: &egui::Context, account: &Account, requests: &mut UiRequests) {
-        if self.selected.is_some_and(|e| e.count(account) == 0) { self.selected = None; }
+    #[cfg(test)]
+    pub(crate) fn preview_selection(&mut self, entry: Entry) {self.selected=Some(entry);}
+    fn actions(&self, ui: &mut egui::Ui, account: &Account, registry: &crate::crafting::Registry, requests: &mut UiRequests) {
+        use crate::crafting::{Action,ObjectKind};
+        match self.selected {
+            Some(Entry::Gear(g)) => {
+                for salvage in [false,true] {
+                    let (iron,wood,mana) = crate::crafting::gear_formula(g,salvage).unwrap();
+                    let available = if salvage {Entry::Gear(g).count(account)>0} else {
+                        Entry::Resource(crate::voxel::BlockType::Iron).count(account)>=iron && Entry::Resource(crate::voxel::BlockType::OakWood).count(account)>=wood
+                    };
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.add_enabled(available && account.mana>=mana,egui::Button::new(if salvage {"Decompose 1 item"} else {"Create 1 item"})).clicked() {
+                            requests.crafting=Some(if salvage {Action::SalvageGear(g)} else {Action::CraftGear(g)});
+                        }
+                        ui.label(format!("{} {iron} iron + {wood} oak wood; {mana} mana",if salvage {"Returns"} else {"Uses"}));
+                    });
+                }
+            }
+            Some(Entry::Resource(block)) => {
+                let comp = registry.composition(ObjectKind::Resource,block.id());
+                ui.label(format!("Returns: {}",Element::ALL.iter().filter(|e|comp[e.index()]>0).map(|e|format!("{} {e:?}",comp[e.index()])).collect::<Vec<_>>().join(", ")));
+                if ui.add_enabled(account.mana>=1 && comp!=[0;5],egui::Button::new("Decompose 1 resource (1 mana)")).clicked() {
+                    requests.crafting=Some(Action::Extract {block,amount:1});
+                }
+            }
+            None => {ui.small("Select equipment to create or decompose it; select resources to extract elements.");}
+        }
+    }
+    pub fn show(&mut self, ctx: &egui::Context, account: &Account, registry: &crate::crafting::Registry, requests: &mut UiRequests) {
+        if self.selected.is_some_and(|e| matches!(e,Entry::Resource(_)) && e.count(account) == 0) { self.selected = None; }
         let size = ctx.screen_rect().size();
         // Reserve room for the larger fantasy font, window chrome and hotbar.
-        let height = (size.y - 490.0).clamp(60.0, 470.0);
+        let height = (size.y - 610.0).clamp(60.0, 400.0);
         egui::Window::new("Inventory")
             .anchor(egui::Align2::CENTER_TOP, [0.0, 24.0])
-            .fixed_size(egui::vec2((size.x-48.0).clamp(280.0, 880.0), height+170.0))
+            .fixed_size(egui::vec2((size.x-48.0).clamp(280.0, 880.0), height+340.0))
             .collapsible(false).resizable(false)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -50,6 +81,7 @@ impl Inventory {
                     });
                 });
                 ui.horizontal_wrapped(|ui| {
+                    ui.strong(format!("Mana: {}",account.mana)).on_hover_text("+1 every 5 seconds, up to 100. Instant: 5. New rule: 20. Convert elements to mana in Crafting [C].");
                     let colors = [[190,145,75],[245,120,60],[90,165,245],[105,205,100],[180,130,215]];
                     for e in Element::ALL {
                         let [r,g,b] = colors[e.index()];
@@ -76,6 +108,8 @@ impl Inventory {
                 });
                 ui.separator();
                 ui.label(self.selected.map_or("Nothing selected".into(), |e|format!("Selected: {} — press 1–9 or click a hotbar slot",e.name())));
+                self.actions(ui,account,registry,requests);
+                if !self.feedback.is_empty() {ui.label(&self.feedback);}
                 if ui.button(format!("Clear slot {} (empty hand)",account.hotbar.active+1)).clicked() {
                     requests.assign_entry=Some(None);
                     self.selected=None;
@@ -90,7 +124,7 @@ impl Inventory {
     }
     fn row(&mut self, ui: &mut egui::Ui, entry: Entry, account: &Account) {
         let count = entry.count(account);
-        ui.add_enabled_ui(count>0, |ui| {
+        ui.add_enabled_ui(count>0 || matches!(entry,Entry::Gear(_)), |ui| {
             let response = ui.horizontal(|ui| {
                 crate::equipment_ui::icon(ui,entry);
                 ui.selectable_label(self.selected==Some(entry),format!("{}   ×{}",entry.name(),count))

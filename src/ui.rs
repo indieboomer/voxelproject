@@ -260,7 +260,7 @@ impl Ui {
                             }
                             if is_host {
                                 if m.is_instant {
-                                    if ui.small_button("Run").clicked() {
+                                    if ui.small_button("Run (5 mana)").clicked() {
                                         requests.run_index = Some(i);
                                     }
                                 } else {
@@ -305,7 +305,12 @@ impl Ui {
             }
             requests.select_slot=crate::equipment_ui::hotbar(ctx,&player.crafting,self.inventory_open,self.inventory_open || Instant::now()<self.selected_until);
             if self.inventory_open {
-                self.inventory.show(ctx, &player.crafting, &mut requests);
+                self.inventory.feedback = crafting_ui.feedback.clone();
+                self.inventory.show(ctx, &player.crafting, registry, &mut requests);
+                if requests.crafting.is_some() {
+                    if crafting_ui.pending {requests.crafting=None;}
+                    else {crafting_ui.pending=true;}
+                }
             }
 
             // Read-only viewer for one rule's generated Lua -- so you can
@@ -408,6 +413,7 @@ impl Ui {
                         ui.set_min_width(420.0);
                         if can_prompt {
                             ui.label("Describe a rule, or an instant action, then press Enter:");
+                            ui.small("New rule: 20 mana on successful creation. Instant: 5 mana per successful cast. Failed generation/casts are free.");
                             if !is_host { ui.small("Generated on this device; sent to the host for review and activation."); }
                             let response = ui.text_edit_singleline(prompt_input);
                             if !response.has_focus() && !response.lost_focus() {

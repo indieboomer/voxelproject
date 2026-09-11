@@ -4,6 +4,20 @@ use crate::voxel::{BlockType, World, COLLECTIBLE_BLOCKS};
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 
+pub const INSTANT_MANA: u32 = 5;
+pub const RULE_MANA: u32 = 20;
+pub const MANA_REGEN_CAP: u32 = 100;
+/// (iron, oak wood, mana); salvage never exceeds construction inputs.
+pub fn gear_formula(gear: crate::equipment::Gear, salvage: bool) -> Result<(u32,u32,u32), String> {
+    use crate::equipment::Gear::*;
+    match (gear,salvage) {
+        (Sword,false)=>Ok((2,1,4)), (Sword,true)=>Ok((1,1,2)),
+        (Axe,false)=>Ok((3,2,4)), (Axe,true)=>Ok((2,1,2)),
+        (Pickaxe,false)=>Ok((3,2,6)), (Pickaxe,true)=>Ok((2,1,3)),
+        _=>Err("Unavailable equipment".into()),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Element {
     Earth,
@@ -131,6 +145,19 @@ mod resource_counts {
     }
 }
 impl Account {
+    pub fn spend_mana(&mut self, cost: u32) -> Result<(), String> {
+        let mana = self.mana.checked_sub(cost).ok_or_else(||format!("Requires {cost} mana (available: {})",self.mana))?;
+        let revision = self.revision.checked_add(1).ok_or("Revision limit reached")?;
+        self.mana = mana;
+        self.revision = revision;
+        Ok(())
+    }
+    pub fn regenerate_mana(&mut self) -> bool {
+        if self.mana >= MANA_REGEN_CAP || self.revision == u64::MAX { return false; }
+        self.mana += 1;
+        self.revision += 1;
+        true
+    }
     pub fn add_elements(&mut self, composition: Composition) -> Result<(), String> {
         let mut next = self.elements;
         for i in 0..5 {
@@ -374,6 +401,21 @@ impl Registry {
                     .checked_sub(*amount)
                     .ok_or("Insufficient resources")?;
                 account.add_elements(comp)?;
+                account.mana = account.mana.checked_sub(*amount).ok_or("Insufficient mana for decomposition")?;
+                Ok(None)
+            }
+            Action::CraftGear(gear) | Action::SalvageGear(gear) => {
+                let salvage = matches!(action,Action::SalvageGear(_));
+                let (iron,wood,mana) = gear_formula(*gear,salvage)?;
+                account.mana = account.mana.checked_sub(mana).ok_or("Insufficient mana")?;
+                let count = &mut account.gear[*gear as usize];
+                *count = if salvage {count.checked_sub(1).ok_or("Item not owned")?}
+                    else {count.checked_add(1).ok_or("Item inventory full")?};
+                for (id,amount) in [("iron",iron),("oak_wood",wood)] {
+                    let count = &mut account.resources[resource_index(id).ok_or("Unknown material")?];
+                    *count = if salvage {count.checked_add(amount).ok_or("Inventory full")?}
+                        else {count.checked_sub(amount).ok_or_else(||format!("Requires {amount} {id}"))?};
+                }
                 Ok(None)
             }
         }
@@ -474,6 +516,8 @@ pub enum Action {
     Craft(Formula),
     Convert { element: Element, amount: i64 },
     Extract { block: BlockType, amount: u32 },
+    CraftGear(crate::equipment::Gear),
+    SalvageGear(crate::equipment::Gear),
 }
 
 fn spawn_position(
@@ -787,6 +831,7 @@ mod tests {
         let mut creatures = Creatures::new();
         let world = World::new(1);
         a.resources[resource_index("stone").unwrap()] = 2;
+        a.mana = 2;
         execute(
             &r,
             &mut a,
@@ -843,6 +888,46 @@ mod tests {
         )
         .is_err());
         assert_eq!(a, before);
+    }
+    #[test]
+    fn equipment_cycles_spend_mana_and_cannot_create_materials() {
+        let r = registry();
+        let world = World::new(1);
+        let mut creatures = Creatures::new();
+        for gear in crate::equipment::Gear::ALL {
+            let mut a = rich();
+            let iron = resource_index("iron").unwrap();
+            let wood = resource_index("oak_wood").unwrap();
+            a.resources[iron]=10;a.resources[wood]=10;
+            let before = a.clone();
+            execute(&r,&mut a,Action::CraftGear(gear),&world,&mut creatures).unwrap();
+            assert_eq!(a.gear[gear as usize],before.gear[gear as usize]+1);
+            execute(&r,&mut a,Action::SalvageGear(gear),&world,&mut creatures).unwrap();
+            assert_eq!(a.gear,before.gear);
+            assert!(a.resources[iron]<before.resources[iron]);
+            assert!(a.resources[wood]<=before.resources[wood]);
+            assert_eq!(a.mana,before.mana-gear_formula(gear,false).unwrap().2-gear_formula(gear,true).unwrap().2);
+            for action in [Action::CraftGear(gear),Action::SalvageGear(gear),Action::Extract{block:BlockType::Stone,amount:1}] {
+                a.mana=0;let before=a.clone();
+                assert!(execute(&r,&mut a,action,&world,&mut creatures).is_err());
+                assert_eq!(a,before);
+            }
+            a.mana=100;a.resources[iron]=u32::MAX;
+            let before=a.clone();
+            assert!(execute(&r,&mut a,Action::SalvageGear(gear),&world,&mut creatures).is_err());
+            assert_eq!(a,before);
+        }
+    }
+    #[test]
+    fn mana_recovery_and_charges_preserve_inventory() {
+        let mut a=Account::default();
+        let before=a.clone();
+        assert!(a.spend_mana(INSTANT_MANA).is_err());assert_eq!(a,before);
+        for _ in 0..120 {a.regenerate_mana();}
+        assert_eq!(a.mana,MANA_REGEN_CAP);
+        a.spend_mana(RULE_MANA).unwrap();a.spend_mana(INSTANT_MANA).unwrap();
+        assert_eq!(a.mana,75);assert_eq!(a.resources,before.resources);assert_eq!(a.gear,before.gear);
+        a.mana=200;assert!(!a.regenerate_mana());assert_eq!(a.mana,200);
     }
     #[test]
     fn network_requests_cannot_choose_balances_and_replays_cannot_purchase_twice() {
@@ -999,7 +1084,7 @@ mod resource_balance_tests {
                 let mana = registry.mana_cost(&slots);
                 let mut account = Account {
                     elements: initial,
-                    mana,
+                    mana: mana + recipe.output.quantity,
                     ..Default::default()
                 };
                 registry
@@ -1099,6 +1184,9 @@ mod resource_progression_tests {
         let mut account = Account::default();
         account.resources[resource_index("iron_ore").unwrap()] = 1;
         account.resources[resource_index("coal").unwrap()] = 1;
+        // Two recovery ticks fund extraction without gifting starter mana.
+        account.regenerate_mana();
+        account.regenerate_mana();
         let world = World::new(1);
         let mut creatures = Creatures::new();
         for block in [BlockType::IronOre, BlockType::Coal] {

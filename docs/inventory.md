@@ -1,10 +1,14 @@
 # Inventory
 
+Mana appears in the top row. Selecting equipment exposes creation and
+decomposition; selecting a resource exposes elemental extraction. See
+[mana and recipes](mana.md) for costs, recovery and exact tool formulas.
+
 Press **I** to open or close inventory, or **Esc** to close it. Gameplay movement
 and mouse actions are suspended while the cursor is available for inventory.
 
 The top row shows Earth, Fire, Water, Life and Death balances. Items on the left
-include the axe, pickaxe and sword; unavailable equipment is disabled. Resources
+include the axe, pickaxe and sword; selecting unowned equipment shows its creation recipe. Resources
 on the right show owned stacks alphabetically with counts and world-texture icons.
 Both columns scroll independently and impose no inventory slot limit.
 
