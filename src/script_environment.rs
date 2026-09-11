@@ -71,6 +71,34 @@ pub(super) fn populate<'lua, 'scope>(
     )?;
     api.set("campfire_light_radius", 8.0)?;
     api.set("fish_spawn_clearance", 3)?;
+    api.set("place_campfire_near_player",scope.create_function(move|lua,(id,radius):(u32,f32)|{
+        if blocks.get()==0 {return Ok(None);}
+        let players=tx.players();
+        let Some(player)=players.iter().find(|p|p.id==id) else {return Ok(None);};
+        let radius=radius.clamp(2.0,8.0);let r=radius.ceil() as i32;
+        let (cx,cy,cz)=(player.pos.x.floor() as i32,player.pos.y.floor() as i32,player.pos.z.floor() as i32);
+        let mut candidates=Vec::new();
+        for dx in -r..=r {for dz in -r..=r {
+            let distance=(dx*dx+dz*dz) as f32;
+            if distance>radius*radius || distance<4.0 {continue;}
+            for dy in -4i32..=4 {candidates.push((dx*dx+dz*dz+dy*dy,cx+dx,cy+dy,cz+dz));}
+        }}
+        candidates.sort_unstable();
+        for (_,x,y,z) in candidates {
+            lua.app_data_ref::<Rc<ExecutionBudget>>().unwrap().check();
+            if !(1..CHUNK_Y-4).contains(&y) || !tx.world.chunks.contains_key(&world_to_chunk(x,z)) {continue;}
+            let center=Vec3::new(x as f32+0.5,y as f32,z as f32+0.5);
+            if players.iter().any(|p|(p.pos.x-center.x).powi(2)+(p.pos.z-center.z).powi(2)<4.0) {continue;}
+            if !matches!(tx.get_block(x,y-1,z),BlockType::Grass|BlockType::Soil|BlockType::Sand|BlockType::Stone) {continue;}
+            let existing=tx.get_block(x,y,z);
+            if existing!=BlockType::Air && !(existing.def().only_on_top && existing!=BlockType::Campfire) {continue;}
+            if (1..4).any(|dy|tx.get_block(x,y+dy,z)!=BlockType::Air) {continue;}
+            blocks.set(blocks.get()-1);
+            tx.blocks.borrow_mut().push((x,y,z,BlockType::Campfire));
+            return campfire(lua,tx,x,y,z);
+        }
+        Ok(None)
+    })?)?;
     api.set(
         "get_campfire",
         scope.create_function(move |lua, (x, y, z): (i32, i32, i32)| campfire(lua, tx, x, y, z))?,

@@ -3260,6 +3260,7 @@ impl App {
             .filter(|p|p.distance_squared(cam_pos)<48.0*48.0).collect();
         campfires.sort_by(|a,b|a.distance_squared(cam_pos).total_cmp(&b.distance_squared(cam_pos)));
         campfires.truncate(8);
+        self.audio.update_campfires(&campfires);
         let fire_effects=crate::campfire::effects(&campfires,cam_pos,self.water_time);
         self.campfire_mesh.update(&self.device,&self.queue,&fire_effects);
         let uniform = CameraUniform {

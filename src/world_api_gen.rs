@@ -4,7 +4,7 @@
 // Consumed by src/world_api_validate.rs's pre-flight lint, which runs on
 // LLM-generated Lua before it's ever loaded into a real Lua VM.
 
-pub const VERSION: &str = "1.20.0";
+pub const VERSION: &str = "1.21.0";
 
 // Runtime execution limits, shared with the generated documentation.
 pub const SCRIPT_TIME_MS: u64 = 5;
@@ -29,6 +29,7 @@ pub const SCRIPT_MODULES_MAX: usize = 64;
 
 // Zero-based parameter positions used by native argument validation.
 pub const NUMERIC_ARGUMENTS: &[(&str, &[usize])] = &[
+    ("place_campfire_near_player", &[0, 1]),
     ("get_campfire", &[0, 1, 2]),
     ("find_campfires", &[0, 1, 2, 3]),
     ("place_campfire", &[0, 1, 2]),
@@ -96,7 +97,7 @@ pub const COORDINATE_ARGUMENTS: &[(&str, &[usize])] = &[
 ];
 
 /// Every `api.<name>` callable method this World API version defines.
-pub const METHOD_NAMES: &[&str] = &["get_campfire", "find_campfires", "place_campfire", "get_water", "get_waterfalls", "can_spawn_fish", "spawn_fish", "players", "nearest_player", "creatures", "find_creatures", "nearest_creature", "get_block", "find_blocks", "terrain_height", "distance", "chase", "protect_player", "suppress_creature_attacks", "get_behavior", "set_aggressive", "set_target", "select_target", "chase_target", "attack", "ignore", "die", "damage", "destroy", "spawn_creature", "spawn_creature_near_player", "replace_block", "set_weather", "start_rain", "stop_rain", "set_time_of_day", "set_time_dawn", "set_time_night", "broadcast", "give_item", "take_item", "get_resource_count", "get_inventory", "has_resource", "has_item", "damage_player", "heal_player", "set_poisoned", "set_player_speed", "set_player_jump", "teleport_player"];
+pub const METHOD_NAMES: &[&str] = &["place_campfire_near_player", "get_campfire", "find_campfires", "place_campfire", "get_water", "get_waterfalls", "can_spawn_fish", "spawn_fish", "players", "nearest_player", "creatures", "find_creatures", "nearest_creature", "get_block", "find_blocks", "terrain_height", "distance", "chase", "protect_player", "suppress_creature_attacks", "get_behavior", "set_aggressive", "set_target", "select_target", "chase_target", "attack", "ignore", "die", "damage", "destroy", "spawn_creature", "spawn_creature_near_player", "replace_block", "set_weather", "start_rain", "stop_rain", "set_time_of_day", "set_time_dawn", "set_time_night", "broadcast", "give_item", "take_item", "get_resource_count", "get_inventory", "has_resource", "has_item", "damage_player", "heal_player", "set_poisoned", "set_player_speed", "set_player_jump", "teleport_player"];
 
 /// Every read-only `api.<name>` field (not callable) this version defines.
 pub const PROPERTY_NAMES: &[&str] = &["is_raining", "campfire_light_radius", "fish_spawn_clearance", "time_of_day", "is_night", "weather"];

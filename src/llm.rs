@@ -324,7 +324,7 @@ const RULE_PHRASES: &[&str] = &[
 /// prompt's first word, matching how an imperative English sentence reads,
 /// so a rule like "spawning should stop at night" isn't misread as one.
 const INSTANT_FIRST_WORDS: &[&str] = &[
-    "add", "give", "grant", "spawn", "summon", "heal", "clear", "remove",
+    "add", "create", "build", "give", "grant", "spawn", "summon", "heal", "clear", "remove",
     "delete", "kill", "fill", "place", "drop", "make", "set", "teleport",
     "cast", "poison", "cure", "damage", "boost",
     "start", "stop", "begin", "end", "move", "advance", "skip", "change",
@@ -601,6 +601,10 @@ mod tests {
 
     #[test]
     fn classify_prompt_recognizes_imperative_one_shot_actions_as_instant() {
+        for prompt in ["create campfire nearby", "create camfpire nearby", "please build a campfire near me", "place a campfire nearby"] {
+            assert_eq!(classify_prompt(prompt),PromptKind::Instant);
+        }
+        assert_eq!(classify_prompt("create a campfire whenever night begins"),PromptKind::Rule);
         assert_eq!(classify_prompt("add 100 stone"), PromptKind::Instant);
         assert_eq!(
             classify_prompt("spawn 12 chickens around me"),

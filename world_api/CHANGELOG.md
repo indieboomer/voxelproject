@@ -12,6 +12,14 @@ Then update this file by hand with what actually changed and why -- the docs
 regenerate automatically, but "what changed and why" is not mechanically
 derivable from a diff of the schema alone.
 
+## 1.21.0 - Nearby campfire placement
+
+- Added place_campfire_near_player: bounded search over loaded edited terrain,
+  safe player spacing, one shared edit, snapshot/nil result, transaction rollback.
+- Fixed focused block API context dropping campfire/water methods and creature
+  context dropping fish helpers. Create/build commands classify as instant spells.
+- Prompt contracts explain campfire placement and obvious spelling variants.
+
 ## 1.20.0 - Environment prompting
 
 - Added get_campfire, find_campfires, place_campfire, get_water,

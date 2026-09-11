@@ -18,7 +18,7 @@
 # (air, mud, redstone, crystal, campfire), so it can't drift out of sync with the
 # actual block system the way a third hand-copied list would.
 
-version: "1.20.0"
+version: "1.21.0"
 title: World API
 description: >
   The Lua API exposed to sandboxed rule modules as the `api` table passed
@@ -60,7 +60,9 @@ engine:
     units and 20ms cooperative time. Admission reserves the full per-callback
     allowance (plus initialization for a failed VM reload); unstarted work
     waits for a later dispatch without resetting or replaying the callback.
-    Environment queries/actions charge 200 units times (1 + staged block edits);
+    Nearby campfire placement charges (2*ceil(radius)+1)^2 * 72 units times
+    (1 + staged block edits), plus the ordinary snapshot cost; radius is 2..8.
+    Other environment queries/actions charge 200 units times (1 + staged block edits);
     find_campfires charges twice its bounding cube times (1 + staged block edits).
     Creature snapshots also account for staged-block lookups for in_water.
     Native work is limited to 65,536 units per callback: find_blocks charges
@@ -411,6 +413,17 @@ properties:
 # Callable functions on the `api` table.
 # ---------------------------------------------------------------------------
 methods:
+  - name: place_campfire_near_player
+    namespace: world
+    category: action
+    summary: "Preferred for create campfire nearby / near me (including obvious typos such as camfpire). Call once in on_cast with event.player_id and radius 6. Searches real loaded edited ground within radius and +/-4 vertical blocks; avoids players by 2 horizontal blocks, requires support and fire/smoke clearance, may replace a small ground plant. No guessed terrain_height or spawn_creature calls."
+    params:
+      - {name: player_id, type: integer}
+      - {name: radius, type: number, desc: "Clamped to 2..8 blocks; 6 recommended."}
+    returns: {type: "CampfireSnapshot | nil", desc: "Placed campfire position/state, or nil for missing player, no safe site or exhausted block budget. Uses one shared block edit; searches observe staged edits and roll back on callback failure."}
+    errors: []
+    budget_ref: block_edits_per_call
+    since: "1.21.0"
   - name: get_campfire
     namespace: world
     category: query

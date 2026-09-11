@@ -172,23 +172,28 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Procedural fire and stippled smoke cards need no animated textures,
     // offscreen targets, transparency sorting, or per-particle draw calls.
     if in.tex_layer < -0.5 {
-        let uv=in.uv;
-        let t=camera.light_params.z;
+        let grid=select(8.0,12.0,in.tex_layer > -1.5);
+        let cell=floor(in.uv*grid);
+        let uv=(cell+vec2<f32>(0.5))/grid;
+        let t=floor(camera.light_params.z*8.0)/8.0;
         if in.tex_layer > -1.5 {
-            let wobble=sin(uv.y*9.0-t*8.0+in.world_pos.x*2.0)*0.10*uv.y;
+            let wobble=sin(uv.y*9.0-t*8.0)*0.10*uv.y;
             let width=(1.0-uv.y)*0.48;
             if abs(uv.x-0.5+wobble)>width {discard;}
             let core=1.0-abs(uv.x-0.5+wobble)/max(width,0.01);
-            let fire=mix(vec3<f32>(1.6,0.12,0.01),vec3<f32>(2.8,1.7,0.25),core*(1.0-uv.y));
+            let band=floor(core*(1.0-uv.y)*4.0)/3.0;
+            let fire=mix(vec3<f32>(1.6,0.12,0.01),vec3<f32>(2.8,1.7,0.25),clamp(band,0.0,1.0));
             return vec4<f32>(grade(fire),1.0);
         }
         let age=-in.tex_layer-2.0;
-        let roundness=length((uv-vec2<f32>(0.5))*2.0);
-        let alpha=(1.0-smoothstep(0.35,1.0,roundness))*(1.0-age)*0.3;
-        let pixel=vec2<u32>(in.clip_position.xy);
-        let dither=f32((pixel.x*3u+pixel.y*5u)%16u)/16.0;
-        if alpha<=dither {discard;}
-        return vec4<f32>(vec3<f32>(0.14,0.13,0.12)*(0.3+camera.light_params.x),1.0);
+        let edge=abs(uv-vec2<f32>(0.5));
+        if max(edge.x,edge.y)>0.44 || edge.x+edge.y>0.65 {discard;}
+        // Particle-local pixel mask: chunky puffs, not screen-space stippling.
+        let pixel=vec2<u32>(cell);
+        let fade=f32((pixel.x*3u+pixel.y*5u)%16u)/16.0;
+        if age>0.35 && fade<(age-0.35)/0.65 {discard;}
+        let shade=0.28+f32((pixel.x+pixel.y)%3u)*0.035;
+        return vec4<f32>(vec3<f32>(shade)*(0.35+camera.light_params.x),1.0);
     }
     let rain_exposure = step(1.5, in.reflectivity);
     let reflectivity = in.reflectivity - rain_exposure * 2.0;

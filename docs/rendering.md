@@ -17,7 +17,8 @@ foliage, and creature models do not receive this terrain coat.
 River currents reuse the vertex wind scalar for a direction and animate
 world-space ripples. Lake surfaces retain stationary waves. Waterfalls reuse
 the rain line pipeline with a fixed particle budget; see [water](water.md).
-Campfire flames and smoke use procedural cards, excluded from sun shadows.
+Campfire flames and smoke use pixelated procedural cards, excluded from sun
+shadows: 12x12 flame pixels, 8x8 smoke pixels, and eight animation frames per second.
 Up to four nearby campfires add warm local light at night with an eight-block
 range. These local lights do not use shadow maps; see [campfires](campfires.md).
 World API queries describe authoritative blocks and derived features, not a

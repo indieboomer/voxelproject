@@ -6,7 +6,7 @@ multiplayer simulation, and local-AI-assisted sandboxed Lua rules.
 | Guide | Contents |
 | --- | --- |
 | [Project state](project.md) | Implemented systems, architecture, remaining acceptance work |
-| [Prompting](prompting.md) | World API 1.20, examples, transactions and limits |
+| [Prompting](prompting.md) | World API 1.21, examples, transactions and limits |
 | [Campfires](campfires.md) | Generation, visuals, light, persistence, API |
 | [Fish](fish.md) | Habitat, swimming, spawning and rule control |
 | [Water](water.md) | Currents, raised tributaries, waterfalls and audio |

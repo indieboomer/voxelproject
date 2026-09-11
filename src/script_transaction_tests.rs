@@ -1,5 +1,32 @@
 use super::*;
 
+#[test]
+fn nearby_campfire_search_uses_edited_ground_avoids_players_and_rolls_back() {
+    let mut f=environment_fixture();
+    f.players[0].pos=Vec3::new(8.5,32.0,8.5);
+    let mut guest=f.players[0];guest.id=7;guest.pos=Vec3::new(10.5,32.0,8.5);f.players.push(guest);
+    let chunk=f.world.chunks.get_mut(&(0,0)).unwrap();
+    for x in 0..16 {for z in 0..16 {
+        chunk.set_local(x,31,z,BlockType::Stone);
+        chunk.set_local(x,32,z,BlockType::ShortGrass);
+    }}
+    let mut m=module("on_cast",r#"
+        local fire=api.place_campfire_near_player(0,6)
+        assert(fire and fire.y==32 and fire.burning)
+        for _,p in ipairs(api.players()) do
+            assert((p.x-fire.x-0.5)^2+(p.z-fire.z-0.5)^2>=4)
+        end
+        assert(api.get_block(fire.x,fire.y,fire.z)=='campfire')
+    "#);
+    let (out,_)=f.invoke(&mut m,"on_cast");assert!(m.error.is_none(),"{:?}",m.error);
+    assert_eq!(out.block_edits.len(),1);
+    let mut bad=module("on_cast","assert(api.place_campfire_near_player(0,6)); error('rollback')");
+    let (out,_)=f.invoke(&mut bad,"on_cast");assert!(bad.error.is_some());assert!(out.block_edits.is_empty());
+    for x in 0..16 {for z in 0..16 {f.world.chunks.get_mut(&(0,0)).unwrap().set_local(x,32,z,BlockType::Water);}}
+    let mut m=module("on_cast","assert(api.place_campfire_near_player(0,6)==nil); assert(api.place_campfire_near_player(99,2)==nil)");
+    let (out,_)=f.invoke(&mut m,"on_cast");assert!(m.error.is_none(),"{:?}",m.error);assert!(out.block_edits.is_empty());
+}
+
 fn environment_fixture()->Fixture {
     let mut f=Fixture::new();
     let mut chunk=crate::voxel::chunk::Chunk::new(0,0);
@@ -15,7 +42,7 @@ fn environment_fixture()->Fixture {
 #[test]
 fn documented_environment_examples_load_and_execute() {
     let docs=include_str!("../docs/prompting.md");
-    assert_eq!(docs.split("```lua\n").skip(1).count(),3);
+    assert_eq!(docs.split("```lua\n").skip(1).count(),4);
     for (i,part) in docs.split("```lua\n").skip(1).enumerate() {
         let source=part.split("```").next().unwrap();
         let mut m=Module::load(format!("documented-{i}"),"documentation".into(),source.into()).unwrap();

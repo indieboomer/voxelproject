@@ -120,6 +120,8 @@ pub fn lights(positions: &[Vec3], eye: Vec3) -> [[f32; 4]; 4] {
 }
 
 pub fn effects(positions: &[Vec3], eye: Vec3, time: f32) -> MeshData {
+    // Discrete animation frames keep pixel shapes from smoothly stretching.
+    let time=(time*8.0).floor()/8.0;
     let mut mesh = MeshData {
         vertices: Vec::new(),
         indices: Vec::new(),
@@ -132,7 +134,7 @@ pub fn effects(positions: &[Vec3], eye: Vec3, time: f32) -> MeshData {
         }
         for i in 0..3 {
             let offset = (i as f32 - 1.0) * 0.18;
-            let height = 0.65 + 0.13 * (time * 6.0 + phase + i as f32 * 2.0).sin();
+            let height = ((0.65 + 0.13 * (time * 6.0 + phase + i as f32 * 2.0).sin())*16.0).round()/16.0;
             card(
                 &mut mesh,
                 pos + right * offset + Vec3::Y * 0.28,
@@ -280,7 +282,9 @@ mod tests {
         let a = effects(&positions, Vec3::new(3.0, 2.0, 3.0), 0.0);
         let b = effects(&positions, Vec3::new(3.0, 2.0, 3.0), 1.0);
         assert_eq!(a.vertices.len(), 8 * 8 * 4);
-        assert_ne!(a.vertices[2].position, b.vertices[2].position);
+        assert!(a.vertices.iter().zip(&b.vertices).any(|(a,b)|a.position!=b.position));
+        let same_frame=effects(&positions,Vec3::new(3.0,2.0,3.0),0.01);
+        assert!(a.vertices.iter().zip(&same_frame.vertices).all(|(a,b)|a.position==b.position));
         assert!(a
             .vertices
             .iter()

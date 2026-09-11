@@ -1,4 +1,4 @@
-# Prompting with World API 1.20
+# Prompting with World API 1.21
 
 The host generates and reviews sandboxed Lua modules. The model receives the
 generated compact API reference, so schema updates must be regenerated before
@@ -11,7 +11,7 @@ for signatures, supported callbacks, resource limits and existing creature contr
 | Capability | Interface |
 | --- | --- |
 | Inspect/find campfires | get_campfire(x,y,z), find_campfires(x,y,z,radius) |
-| Place a supported fire | place_campfire(x,y,z); remove with replace_block |
+| Place a supported fire | place_campfire_near_player(id,radius), place_campfire(x,y,z); remove with replace_block |
 | Read water depth/current | get_water(x,y,z) |
 | Read drops from a source | get_waterfalls(x,y,z) |
 | Check/spawn fish | can_spawn_fish(x,y,z), spawn_fish(x,y,z) |
@@ -24,6 +24,26 @@ source water, receiving water and obstructions within the normal edit limits.
 Current direction/speed is a read-only visual classification; neither currents
 nor waterfalls physically push players. Renderer flicker and moisture are not
 authoritative gameplay properties. `can_fly` indicates capability, not flight mode.
+
+## Example: create a campfire nearby
+
+"Create campfire nearby", "place a campfire near me", and "create camfpire nearby"
+are one-time spells. The classifier recognizes create/build, and the focused
+block context includes campfire and water helpers.
+
+```lua
+function on_cast(api, event)
+    local fire = api.place_campfire_near_player(event.player_id, 6)
+    if not fire then
+        api.broadcast('No clear, dry spot nearby. Try a more open area.')
+    end
+end
+```
+
+The helper searches actual loaded blocks, avoids players, and can replace a
+small ground plant. It does not require the player to own or craft a campfire.
+It charges a bounded search allowance before scanning and consumes one shared
+block edit only on success. Radius is clamped to 2..8; 6 is recommended.
 
 ## Example: campfires heal nearby players at night
 
@@ -108,7 +128,9 @@ They share existing block/spawn budgets; dedicated helper names do not grant
 additional allowances. Direct fish spawning sees staged habitat; the existing
 near-player fish search searches committed loaded terrain.
 
-Environment queries/actions reserve 200 native-work units times one plus staged
+Nearby campfire placement reserves `(2*ceil(radius)+1)^2 * 72` native-work units
+times one plus staged edits, plus snapshot cost. Other environment queries/actions
+reserve 200 native-work units times one plus staged
 edits. Campfire searches reserve twice the bounding cube times that factor and
 clamp radius to 12. Native-work exhaustion cannot be bypassed by pcall. Use small
 searches, throttle repeated rules, and handle nil/false/empty results. Do not scan

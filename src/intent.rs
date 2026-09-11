@@ -306,9 +306,11 @@ fn focused_prompt(plan: &Plan) -> String {
     for line in super::WORLD_API_COMPACT.lines() {
         let method = line.split('(').next().unwrap_or(line);
         let relevant = !line.starts_with("- api.")
+            || method == "- api.broadcast"
             || plan.api_groups.iter().any(|g| match g.as_str() {
                 "creatures" => [
                     "creature",
+                    "fish",
                     "chase",
                     "attack",
                     "aggress",
@@ -326,7 +328,7 @@ fn focused_prompt(plan: &Plan) -> String {
                     .any(|k| method.contains(k)),
                 "weather" => ["weather", "rain"].iter().any(|k| method.contains(k)),
                 "time" => ["time", "night", "dawn"].iter().any(|k| method.contains(k)),
-                "blocks" => ["block", "terrain", "distance"]
+                "blocks" => ["block", "terrain", "distance", "campfire", "water", "fish"]
                     .iter()
                     .any(|k| method.contains(k)),
                 _ => false,
@@ -669,6 +671,17 @@ pub fn verify_policy(plan: &Plan, code: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn focused_block_context_keeps_campfire_placement_and_water_capabilities() {
+        let mut p=plan();p.api_groups=vec!["blocks".into()];
+        let text=focused_prompt(&p);
+        for method in ["place_campfire_near_player", "place_campfire", "get_campfire", "get_water", "get_waterfalls"] {
+            assert!(text.contains(&format!("- api.{method}(")),"missing {method}");
+        }
+        assert!(text.contains("- api.broadcast("));
+        p.api_groups=vec!["creatures".into()];
+        assert!(focused_prompt(&p).contains("- api.spawn_fish("));
+    }
     fn plan() -> Plan {
         Plan {
             execution: "rule".into(),

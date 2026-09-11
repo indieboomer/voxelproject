@@ -776,7 +776,12 @@ fn populate_api<'lua, 'scope>(
             }
             // Charge candidate scans before entering native code. Even empty
             // queries consume work; returned-result limits alone do not bound it.
-            let native_work = if method_name == "find_campfires" {
+            let native_work = if method_name == "place_campfire_near_player" {
+                let radius=args.get(1).cloned().map(|v|lua.coerce_number(v)).transpose()?.flatten().unwrap_or(2.0);
+                let side=2*(radius as f32).clamp(2.0,8.0).ceil() as u32+1;
+                side.saturating_pow(2).saturating_mul(9*8).saturating_mul(1+tx.blocks.borrow().len() as u32)
+                    .saturating_add(tx.native_scan_cost())
+            } else if method_name == "find_campfires" {
                 let radius=args.get(3).cloned().map(|v|lua.coerce_number(v)).transpose()?.flatten().unwrap_or(0.0);
                 let side=2*(radius as f32).clamp(0.0,12.0).ceil() as u32+1;
                 side.saturating_pow(3).saturating_mul(2).saturating_mul(1+tx.blocks.borrow().len() as u32)

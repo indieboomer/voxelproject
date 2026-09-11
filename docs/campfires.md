@@ -18,7 +18,10 @@ These coordinates depend on the current generator/settings and can be overridden
 by saved block edits.
 
 The base uses existing stone and log textures. Three animated flame cards and
-five rising, stippled smoke puffs provide the effect without new texture assets.
+five rising, pixelated smoke puffs provide the effect without new texture assets.
+Flames use a 12x12 pixel grid and a small color palette; smoke uses an 8x8 grid
+with a particle-local dissolve. Animation advances in eight discrete frames per
+second. The former screen-space stippling has been removed.
 At most eight nearby fires render effects. They use one additional draw in the
 existing terrain pass and do not enter the sunlight shadow pass.
 
@@ -26,7 +29,12 @@ At night, up to four nearby fires illuminate surfaces within eight blocks with
 warm flickering light and smooth distance falloff. This is an inexpensive local
 light approximation without additional shadow maps; intervening walls do not
 occlude the light. Daylight fades out the local illumination while fire continues
-to animate. Smoke uses screen-door transparency rather than a blending pass.
+to animate. Smoke uses cutout pixels rather than a blending pass.
+
+`sounds/campfire.mp3` provides looping positional crackling. At most two nearby
+fires play simultaneously; attenuation/panning follows the listener, fading to
+silence at 24 blocks. Removing a fire, its support, or its loaded chunk stops
+its audio. These loops are independent of rain and waterfall ambience.
 
 There is no fuel consumption, weather extinguishing, damage, crafting recipe,
 or collectible inventory entry. Campfires can be removed like other breakable
@@ -34,7 +42,16 @@ blocks; a missing support suppresses their fire/light effects. Placement and
 edits use the existing authoritative block and save systems, while animation is
 local and requires no effect replication packets.
 
-## Prompting with World API 1.20
+## Prompting with World API 1.21
+
+For "create campfire nearby", use
+`api.place_campfire_near_player(event.player_id,6)` once in `on_cast`. The helper
+searches loaded edited terrain within the requested horizontal radius (clamped
+to 2..8) and four blocks above/below the player's feet. It keeps two horizontal
+blocks away from every player, accepts suitable solid support and clear space,
+and may replace a small ground plant. It returns a CampfireSnapshot or nil when
+no site/player/budget is available. It uses one shared block edit and rolls back
+with the callback. This avoids using procedural terrain_height on edited land.
 
 `api.get_campfire(x,y,z)` returns burning, light_active, light_radius, and
 requires_fuel, or nil for a different block. `api.find_campfires(x,y,z,radius)`
