@@ -7,7 +7,6 @@ use winit::window::Window;
 
 use crate::player::Player;
 use crate::scripting::ScriptHost;
-use crate::voxel::COLLECTIBLE_BLOCKS;
 
 const TOAST_LIFETIME: Duration = Duration::from_secs(6);
 /// Longer-lived than a normal toast, since it flags something the player
@@ -96,12 +95,10 @@ pub struct Ui {
     pub inventory_open: bool,
     last_hotbar: Option<(usize,Option<crate::equipment::Entry>)>,
     selected_until: Instant,
-    resource_search: String,
-    owned_resources_only: bool,
+    inventory: crate::inventory_ui::Inventory,
 }
 
 impl Ui {
-    pub fn wants_keyboard_input(&self)->bool {self.ctx.wants_keyboard_input()}
 
     pub fn new(device: &wgpu::Device, output_format: wgpu::TextureFormat, window: &Window) -> Self {
         let ctx = egui::Context::default();
@@ -117,8 +114,7 @@ impl Ui {
             inventory_open: false,
             last_hotbar: None,
             selected_until: Instant::now(),
-            resource_search: String::new(),
-            owned_resources_only: true,
+            inventory: Default::default(),
         }
     }
 
@@ -192,7 +188,7 @@ impl Ui {
                 .collapsible(false)
                 .interactable(false)
                 .show(ctx, |ui| {
-                    ui.label(format!("{fps:.0} FPS | E: Inventory | C: Craft | F10: Settings"));
+                    ui.label(format!("{fps:.0} FPS | I: Inventory | C: Craft | F10: Settings"));
                 });
 
             egui::Window::new("health")
@@ -309,44 +305,7 @@ impl Ui {
             }
             requests.select_slot=crate::equipment_ui::hotbar(ctx,&player.crafting,self.inventory_open,self.inventory_open || Instant::now()<self.selected_until);
             if self.inventory_open {
-                egui::Window::new("Resources / Inventory")
-                    .default_width(520.0).max_height((ctx.screen_rect().height()-200.0).max(120.0))
-                    .vscroll(true).anchor(egui::Align2::CENTER_TOP,[0.0,32.0]).collapsible(false)
-                    .show(ctx,|ui|{
-                        ui.horizontal(|ui|{
-                            ui.heading("Resources and equipment");
-                            if ui.button("Close (E / Esc)").clicked(){requests.close_inventory=true;}
-                        });
-                        ui.label(format!("Slot {}: {}",active+1,entry.map_or("Empty hand",|e|e.name())));
-                        ui.label("Your hotbar stays below: click a slot, then assign from this list.");
-                        if ui.button("Clear active slot / empty hand").clicked(){requests.assign_entry=Some(None);}
-                        ui.add(egui::TextEdit::singleline(&mut self.resource_search).hint_text("Search items or category (wood, stone, ore, tools, weapons...)"));
-                        ui.horizontal(|ui|{
-                            ui.selectable_value(&mut self.owned_resources_only,true,"Owned only");
-                            ui.selectable_value(&mut self.owned_resources_only,false,"Full resource list");
-                        });
-                        if self.owned_resources_only && !player.crafting.resources.iter().any(|n|*n>0) {
-                            ui.label("No resources collected yet. Your tools are listed below.");
-                            if ui.button("Browse all resources").clicked(){self.owned_resources_only=false;self.resource_search.clear();}
-                        }
-                        let query=self.resource_search.trim().to_lowercase();
-                        let entries=crate::equipment::Gear::ALL.into_iter().map(crate::equipment::Entry::Gear)
-                            .chain(COLLECTIBLE_BLOCKS.iter().copied().map(crate::equipment::Entry::Resource));
-                        for e in entries {
-                            let count=e.count(&player.crafting);
-                            if self.owned_resources_only && count==0 {continue;}
-                            let category=match e {crate::equipment::Entry::Resource(b)=>format!("{} {:?}",crate::voxel::resource_catalog::info(b).category,b.harvest_category()),crate::equipment::Entry::Gear(g)=>if g.categories().is_empty(){"weapons".into()}else{"tools".into()}};
-                            if !format!("{} {category}",e.name()).to_lowercase().contains(&query){continue;}
-                            ui.horizontal(|ui|{
-                                crate::equipment_ui::icon(ui,e);
-                                ui.label(format!("{} x{count}",e.name())).on_hover_text(category);
-                                if ui.add_enabled(count>0,egui::Button::new(format!("Assign to slot {}",active+1))).clicked(){requests.assign_entry=Some(Some(e));}
-                            });
-                        }
-                        ui.separator();ui.label("1-9: select slot. Wheel: cycle assigned slots. E: close inventory.");
-                        ui.small("Empty slot: pick flowers, bushes, mushrooms and pumpkins by hand. Axe: wood. Pickaxe: stone, ores and soil.");
-                        ui.small("Left click: use. Resources can also be placed with right click. F: interact.");
-                    });
+                self.inventory.show(ctx, &player.crafting, &mut requests);
             }
 
             // Read-only viewer for one rule's generated Lua -- so you can

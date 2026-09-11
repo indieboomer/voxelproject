@@ -9,6 +9,7 @@ mod daynight;
 mod input;
 mod equipment;
 mod equipment_ui;
+mod inventory_ui;
 mod held_item;
 mod llm;
 mod llm_server;

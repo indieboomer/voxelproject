@@ -1384,7 +1384,7 @@ impl App {
                     }
                     return;
                 }
-                if code==KeyCode::KeyE && !(self.ui.inventory_open && self.ui.wants_keyboard_input()) && !key_event.repeat && !self.console_open && !self.chat_open && !self.quit_dialog_open && !self.crafting_ui.open {
+                if code==KeyCode::KeyI && !key_event.repeat && !self.console_open && !self.chat_open && !self.quit_dialog_open && !self.crafting_ui.open {
                     self.ui.inventory_open=!self.ui.inventory_open;self.sync_settings_input();return;
                 }
                 if self.ui.inventory_open {
