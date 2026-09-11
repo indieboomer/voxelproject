@@ -4,7 +4,7 @@
 // Consumed by src/world_api_validate.rs's pre-flight lint, which runs on
 // LLM-generated Lua before it's ever loaded into a real Lua VM.
 
-pub const VERSION: &str = "1.19.0";
+pub const VERSION: &str = "1.20.0";
 
 // Runtime execution limits, shared with the generated documentation.
 pub const SCRIPT_TIME_MS: u64 = 5;
@@ -29,6 +29,13 @@ pub const SCRIPT_MODULES_MAX: usize = 64;
 
 // Zero-based parameter positions used by native argument validation.
 pub const NUMERIC_ARGUMENTS: &[(&str, &[usize])] = &[
+    ("get_campfire", &[0, 1, 2]),
+    ("find_campfires", &[0, 1, 2, 3]),
+    ("place_campfire", &[0, 1, 2]),
+    ("get_water", &[0, 1, 2]),
+    ("get_waterfalls", &[0, 1, 2]),
+    ("can_spawn_fish", &[0, 1, 2]),
+    ("spawn_fish", &[0, 1, 2]),
     ("nearest_player", &[0, 1, 2]),
     ("find_creatures", &[1, 2, 3, 4]),
     ("nearest_creature", &[1, 2, 3]),
@@ -68,6 +75,13 @@ pub const NUMERIC_ARGUMENTS: &[(&str, &[usize])] = &[
 ];
 
 pub const COORDINATE_ARGUMENTS: &[(&str, &[usize])] = &[
+    ("get_campfire", &[0, 1, 2]),
+    ("find_campfires", &[0, 1, 2]),
+    ("place_campfire", &[0, 1, 2]),
+    ("get_water", &[0, 1, 2]),
+    ("get_waterfalls", &[0, 1, 2]),
+    ("can_spawn_fish", &[0, 1, 2]),
+    ("spawn_fish", &[0, 1, 2]),
     ("nearest_player", &[0, 1, 2]),
     ("find_creatures", &[1, 2, 3]),
     ("nearest_creature", &[1, 2, 3]),
@@ -82,14 +96,14 @@ pub const COORDINATE_ARGUMENTS: &[(&str, &[usize])] = &[
 ];
 
 /// Every `api.<name>` callable method this World API version defines.
-pub const METHOD_NAMES: &[&str] = &["players", "nearest_player", "creatures", "find_creatures", "nearest_creature", "get_block", "find_blocks", "terrain_height", "distance", "chase", "protect_player", "suppress_creature_attacks", "get_behavior", "set_aggressive", "set_target", "select_target", "chase_target", "attack", "ignore", "die", "damage", "destroy", "spawn_creature", "spawn_creature_near_player", "replace_block", "set_weather", "start_rain", "stop_rain", "set_time_of_day", "set_time_dawn", "set_time_night", "broadcast", "give_item", "take_item", "get_resource_count", "get_inventory", "has_resource", "has_item", "damage_player", "heal_player", "set_poisoned", "set_player_speed", "set_player_jump", "teleport_player"];
+pub const METHOD_NAMES: &[&str] = &["get_campfire", "find_campfires", "place_campfire", "get_water", "get_waterfalls", "can_spawn_fish", "spawn_fish", "players", "nearest_player", "creatures", "find_creatures", "nearest_creature", "get_block", "find_blocks", "terrain_height", "distance", "chase", "protect_player", "suppress_creature_attacks", "get_behavior", "set_aggressive", "set_target", "select_target", "chase_target", "attack", "ignore", "die", "damage", "destroy", "spawn_creature", "spawn_creature_near_player", "replace_block", "set_weather", "start_rain", "stop_rain", "set_time_of_day", "set_time_dawn", "set_time_night", "broadcast", "give_item", "take_item", "get_resource_count", "get_inventory", "has_resource", "has_item", "damage_player", "heal_player", "set_poisoned", "set_player_speed", "set_player_jump", "teleport_player"];
 
 /// Every read-only `api.<name>` field (not callable) this version defines.
-pub const PROPERTY_NAMES: &[&str] = &["time_of_day", "is_night", "weather"];
+pub const PROPERTY_NAMES: &[&str] = &["is_raining", "campfire_light_radius", "fish_spawn_clearance", "time_of_day", "is_night", "weather"];
 
 /// Valid `kind` strings for a block (see get_block/replace_block/find_blocks),
 /// derived from textures/blocks.csv plus the non-CSV extras.
-pub const BLOCK_KINDS: &[&str] = &["amber", "amethyst", "ash", "basalt", "bedrock", "birch_leaves", "birch_wood", "bluebell", "bricks", "bronze", "brown_mushroom", "cattail", "ceramic", "charcoal", "cherry_leaves", "cherry_wood", "clay", "cloth", "clover", "coal", "cobblestone", "copper", "copper_ore", "crystal_dust", "diamond", "diamond_ore", "dry_shrub", "emerald", "emerald_ore", "enchanted_glass", "fern", "flax", "glass", "glowcap", "gold", "gold_ore", "granite", "grass", "iron", "iron_ore", "lavender", "lime", "limestone", "marble", "mithril", "mithril_ore", "moon_silver", "moonstone", "mortar", "oak_leaves", "oak_wood", "obsidian", "peat", "planks", "plant_fiber", "pumpkin", "quartz", "red_poppy", "reeds", "resin", "rock_salt", "ruby", "ruby_ore", "runestone", "sand", "sapphire", "sapphire_ore", "short_grass", "silver", "silver_ore", "snow", "soil", "spruce_leaves", "spruce_wood", "steel", "stone", "sulfur", "thorn_bush", "tin", "tin_ore", "water", "wild_herbs", "wood_pulp", "air", "mud", "redstone", "crystal"];
+pub const BLOCK_KINDS: &[&str] = &["amber", "amethyst", "ash", "basalt", "bedrock", "birch_leaves", "birch_wood", "bluebell", "bricks", "bronze", "brown_mushroom", "cattail", "ceramic", "charcoal", "cherry_leaves", "cherry_wood", "clay", "cloth", "clover", "coal", "cobblestone", "copper", "copper_ore", "crystal_dust", "diamond", "diamond_ore", "dry_shrub", "emerald", "emerald_ore", "enchanted_glass", "fern", "flax", "glass", "glowcap", "gold", "gold_ore", "granite", "grass", "iron", "iron_ore", "lavender", "lime", "limestone", "marble", "mithril", "mithril_ore", "moon_silver", "moonstone", "mortar", "oak_leaves", "oak_wood", "obsidian", "peat", "planks", "plant_fiber", "pumpkin", "quartz", "red_poppy", "reeds", "resin", "rock_salt", "ruby", "ruby_ore", "runestone", "sand", "sapphire", "sapphire_ore", "short_grass", "silver", "silver_ore", "snow", "soil", "spruce_leaves", "spruce_wood", "steel", "stone", "sulfur", "thorn_bush", "tin", "tin_ore", "water", "wild_herbs", "wood_pulp", "air", "mud", "redstone", "crystal", "campfire"];
 
 /// Valid `kind` strings for a creature. Not read by the validator yet --
 /// creature-kind typos already fail soft (silently default to "sheep", see

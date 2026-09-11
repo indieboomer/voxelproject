@@ -60,7 +60,7 @@ impl WorldGeneration {
         use crate::voxel::{chunk::CHUNK_Y, noise::fbm, world::SEA_LEVEL};
         let original = || crate::voxel::terrain::height(x, z, seed);
         if self.shape == Shape::Mainland && self.relief == 100 {
-            return original();
+            return crate::voxel::terrain::tributary(x,z,seed).map(|p|p.0).unwrap_or_else(original);
         }
         let detail = fbm(
             x as f32 * 0.025,
@@ -87,7 +87,10 @@ impl WorldGeneration {
                 ocean.max(SEA_LEVEL as f32 + 6. - radius * 0.5)
             }
         };
-        (h.round() as i32).clamp(5, CHUNK_Y - 12)
+        let h = (h.round() as i32).clamp(5, CHUNK_Y - 12);
+        if self.shape == Shape::Mainland {
+            crate::voxel::terrain::tributary(x,z,seed).map(|p|p.0).unwrap_or(h)
+        } else { h }
     }
 }
 

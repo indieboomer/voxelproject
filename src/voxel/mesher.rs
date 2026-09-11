@@ -383,6 +383,11 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                 let wz = oz + lz;
                 let def = block.def();
 
+                if block == BlockType::Campfire {
+                    crate::campfire::base_mesh(&mut vertices, &mut indices, Vec3::new(wx as f32,ly as f32,wz as f32));
+                    continue;
+                }
+
                 if def.cross {
                     // Billboard decoration (short grass): not part of the
                     // cube grid, never culled against neighbors.
@@ -417,7 +422,13 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                     // short grass) the whole block sways rather than just
                     // its top -- toned down from the grass card's 1.0 since
                     // it's a full cube, not a thin billboard.
-                    let wind = if def.cutout { 0.5 } else { 0.0 };
+                    // Water reuses the otherwise unused wind scalar: negative
+                    // values encode current heading without growing vertices.
+                    let wind = if block == BlockType::Water && normal[1] > 0
+                        && world.generation.shape == crate::worldgen::Shape::Mainland {
+                        let flow = super::terrain::current(wx,wz,world.seed,ly>super::world::SEA_LEVEL);
+                        if flow == [0.0;2] {0.0} else {-(flow[1].atan2(flow[0])+std::f32::consts::PI+1.0)}
+                    } else if def.cutout { 0.5 } else { 0.0 };
                     let base_index = vertices.len() as u32;
 
                     for (corner_idx, corner) in FACE_VERTS[face_idx].iter().enumerate() {

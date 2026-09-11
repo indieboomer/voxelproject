@@ -26,6 +26,8 @@ use crate::world_api_gen::{
 
 #[path = "script_api.rs"]
 mod api;
+#[path = "script_environment.rs"]
+mod environment;
 #[path = "script_scheduler.rs"]
 mod scheduler;
 #[path = "script_transaction.rs"]

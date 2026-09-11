@@ -1,5 +1,84 @@
 use super::*;
 
+fn environment_fixture()->Fixture {
+    let mut f=Fixture::new();
+    let mut chunk=crate::voxel::chunk::Chunk::new(0,0);
+    for x in 0..16 {for z in 0..16 {chunk.set_local(x,24,z,BlockType::Stone);}}
+    for x in 5..=11 {for z in 5..=11 {for y in 30..=32 {chunk.set_local(x,y,z,BlockType::Water);}}}
+    // Isolated source above a lower receiving pool.
+    chunk.set_local(2,35,2,BlockType::Water);
+    chunk.set_local(3,28,2,BlockType::Water);
+    f.world.chunks.insert((0,0),chunk);
+    f
+}
+
+#[test]
+fn documented_environment_examples_load_and_execute() {
+    let docs=include_str!("../docs/prompting.md");
+    assert_eq!(docs.split("```lua\n").skip(1).count(),3);
+    for (i,part) in docs.split("```lua\n").skip(1).enumerate() {
+        let source=part.split("```").next().unwrap();
+        let mut m=Module::load(format!("documented-{i}"),"documentation".into(),source.into()).unwrap();
+        let mut f=environment_fixture();
+        let callback=if source.contains("function on_tick") {"on_tick"}else{"on_cast"};
+        for _ in 0..11 {f.invoke(&mut m,callback);assert!(m.error.is_none(),"example {i}: {:?}",m.error);}
+    }
+}
+
+#[test]
+fn environment_api_reads_staged_edits_and_properties_and_spawns_safe_fish() {
+    let mut f=environment_fixture();
+    let mut m=module("on_cast",r#"
+        assert(api.campfire_light_radius==8 and api.fish_spawn_clearance==3)
+        assert(api.place_campfire(3,25,12))
+        assert(not api.place_campfire(3,25,12))
+        assert(not api.place_campfire(1000,25,1000))
+        api.set_time_night()
+        api.set_weather('storm')
+        assert(api.is_raining)
+        local fire=api.get_campfire(3,25,12)
+        assert(fire.burning and fire.light_active and not fire.requires_fuel)
+        assert(#api.find_campfires(3,25,12,2)==1)
+        local water=api.get_water(8,31,8)
+        assert(water.surface_y==33 and water.depth==3 and water.visual_only)
+        assert(api.get_water(0,25,0)==nil)
+        assert(api.can_spawn_fish(8.5,31.5,8.5))
+        local id=api.spawn_fish(8.5,31.5,8.5)
+        assert(id~=nil)
+        local fish=api.nearest_creature('fish',8,31,8)
+        assert(fish.id==id and fish.can_swim and fish.in_water and not fish.can_fly)
+        assert(api.replace_block(5,31,5,'air'))
+        assert(not api.can_spawn_fish(8.5,31.5,8.5))
+        assert(api.spawn_fish(8.5,31.5,8.5)==nil)
+        local falls=api.get_waterfalls(2,35,2)
+        assert(#falls==1 and falls[1].height==7 and falls[1].bottom_y==29)
+        assert(falls[1].flow_x==1 and falls[1].sound_radius==48)
+        api.replace_block(3,32,2,'stone')
+        assert(#api.get_waterfalls(2,35,2)==0)
+    "#);
+    let (out,_)=f.invoke(&mut m,"on_cast");
+    assert!(m.error.is_none(),"{:?}",m.error);
+    assert!(out.block_edits.iter().any(|b|b.3==BlockType::Campfire));
+    assert_eq!(f.creatures.snapshot_with_ids().iter().filter(|c|c.1==CreatureKind::Fish.to_u8()).count(),1);
+}
+
+#[test]
+fn environment_actions_roll_back_and_scans_cannot_evade_native_budget() {
+    let mut f=environment_fixture();
+    let initial=f.creatures.snapshot_with_ids().len();
+    let mut m=module("on_cast","assert(api.place_campfire(3,25,12)); assert(api.spawn_fish(8.5,31.5,8.5)); error('rollback')");
+    let (out,_)=f.invoke(&mut m,"on_cast");
+    assert!(m.error.is_some());assert!(out.block_edits.is_empty());
+    assert_eq!(f.creatures.snapshot_with_ids().len(),initial);
+    let mut m=module("on_cast","api.broadcast('rollback'); for i=1,10 do pcall(function() api.find_campfires(0,25,0,12) end) end");
+    let (out,_)=f.invoke(&mut m,"on_cast");
+    assert!(m.error.as_deref().unwrap().contains("native work budget"));
+    assert!(out.broadcasts.is_empty());
+    for call in ["api.get_water(0/0,0,0)","api.spawn_fish('1e100',0,0)","api.get_waterfalls(2000000,0,0)"] {
+        let mut m=module("on_cast",call);f.invoke(&mut m,"on_cast");assert!(m.error.is_some());
+    }
+}
+
 #[test]
 fn native_work_exhaustion_cannot_be_caught_and_rolls_back() {
     let mut fixture = Fixture::new();

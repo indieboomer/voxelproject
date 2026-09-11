@@ -14,11 +14,11 @@
 #
 # `block_kinds` (the valid strings for any "block kind" parameter/field) is
 # NOT hardcoded here -- it's derived by the generator from textures/blocks.csv
-# (the block roster's own source of truth) plus the four non-CSV extras
-# (air, mud, redstone, crystal), so it can't drift out of sync with the
+# (the block roster's own source of truth) plus the five non-CSV extras
+# (air, mud, redstone, crystal, campfire), so it can't drift out of sync with the
 # actual block system the way a third hand-copied list would.
 
-version: "1.19.0"
+version: "1.20.0"
 title: World API
 description: >
   The Lua API exposed to sandboxed rule modules as the `api` table passed
@@ -60,6 +60,9 @@ engine:
     units and 20ms cooperative time. Admission reserves the full per-callback
     allowance (plus initialization for a failed VM reload); unstarted work
     waits for a later dispatch without resetting or replaying the callback.
+    Environment queries/actions charge 200 units times (1 + staged block edits);
+    find_campfires charges twice its bounding cube times (1 + staged block edits).
+    Creature snapshots also account for staged-block lookups for in_water.
     Native work is limited to 65,536 units per callback: find_blocks charges
     its bounding cube candidates times (1 + staged block edits); other methods
     charge 1 + creature count + player count + staged player effects + staged
@@ -302,6 +305,44 @@ types:
       - {name: z, type: number}
       - {name: health, type: number}
       - {name: max_health, type: number, desc: "Fixed per kind (sheep 12, chicken 6, stone_golem 40, wolf 18, stinger 14, cow 20, goblin 24, sunscorch 28, zombie 24, skeleton 18, dragon_green/dragon_red 240, fish 4); never changes at runtime."}
+      - {name: can_swim, type: boolean, desc: "True for fish; indicates dedicated swimming behavior, not incidental immersion."}
+      - {name: can_fly, type: boolean, desc: "True for dragons; capability, not current flight state."}
+      - {name: in_water, type: boolean, desc: "Creature center currently occupies water, including staged block edits. Fish may be false during a surface jump."}
+  CampfireSnapshot:
+    desc: "Campfire block and its derived lighting state; queries see staged edits."
+    fields:
+      - {name: x, type: integer}
+      - {name: y, type: integer}
+      - {name: z, type: integer}
+      - {name: burning, type: boolean, desc: "True while supported by solid ground. Rain does not extinguish it."}
+      - {name: light_radius, type: number, desc: "Maximum light range, 8 blocks."}
+      - {name: light_active, type: boolean, desc: "Supported and api.is_night; renderer also fades through twilight."}
+      - {name: requires_fuel, type: boolean, desc: "Always false."}
+  WaterSnapshot:
+    desc: "Contiguous vertical water column at a queried water block. Currents are seeded visual effects, not physics."
+    fields:
+      - {name: x, type: integer}
+      - {name: y, type: integer}
+      - {name: z, type: integer}
+      - {name: surface_y, type: integer, desc: "Top surface coordinate, one above the highest connected water block."}
+      - {name: depth, type: integer, desc: "Number of vertically contiguous water blocks."}
+      - {name: flowing, type: boolean, desc: "True for classified river/stream currents; false in lakes and unclassified water."}
+      - {name: flow_x, type: number, desc: "Unit horizontal current direction, or zero when still."}
+      - {name: flow_z, type: number}
+      - {name: flow_speed, type: number, desc: "Visual animation speed: 1.4 when flowing, otherwise 0. No movement force."}
+      - {name: visual_only, type: boolean, desc: "Always true."}
+  WaterfallSnapshot:
+    desc: "Derived spill from the queried source surface block into an adjacent lower water column."
+    fields:
+      - {name: x, type: integer}
+      - {name: y, type: integer}
+      - {name: z, type: integer}
+      - {name: bottom_y, type: number, desc: "Receiving water surface coordinate."}
+      - {name: height, type: number, desc: "Drop of 2 through 16 blocks."}
+      - {name: flow_x, type: number}
+      - {name: flow_z, type: number}
+      - {name: sound_radius, type: number, desc: "48 blocks; audio remains local and bounded."}
+      - {name: visual_only, type: boolean, desc: "Always true; not a fluid entity or collectible block."}
   CreatureSnapshotWithDistance:
     desc: "CreatureSnapshot plus distance from the query point, as returned by nearest_creature()."
     extends: CreatureSnapshot
@@ -345,6 +386,9 @@ types:
 # Read-only fields on the `api` table itself.
 # ---------------------------------------------------------------------------
 properties:
+  - {name: is_raining, namespace: world, type: boolean, desc: "True in rain or storm; refreshes after set_weather within a callback.", since: "1.20.0"}
+  - {name: campfire_light_radius, namespace: world, type: number, desc: "Campfire maximum illumination radius: 8 blocks.", since: "1.20.0"}
+  - {name: fish_spawn_clearance, namespace: world, type: integer, desc: "Required water cells beyond the fish center in each horizontal direction: 3 (a full 7x7 layer plus body clearance).", since: "1.20.0"}
   - name: time_of_day
     namespace: world
     type: number
@@ -367,6 +411,64 @@ properties:
 # Callable functions on the `api` table.
 # ---------------------------------------------------------------------------
 methods:
+  - name: get_campfire
+    namespace: world
+    category: query
+    summary: "Inspect a campfire block, including burning and night-light state."
+    params: [{name: x, type: integer}, {name: y, type: integer}, {name: z, type: integer}]
+    returns: {type: "CampfireSnapshot | nil", desc: "nil unless this block is a campfire."}
+    errors: []
+    since: "1.20.0"
+  - name: find_campfires
+    namespace: world
+    category: query
+    summary: "Find nearby campfire snapshots; respects callback scan budgets. Prefer small radii and avoid nested scans."
+    params: [{name: x, type: integer}, {name: y, type: integer}, {name: z, type: integer}, {name: radius, type: number, desc: "Clamped to 0..12."}]
+    returns: {type: "CampfireSnapshot[]", desc: "At most find_results_max entries in scan order, not nearest order."}
+    errors: []
+    since: "1.20.0"
+  - name: place_campfire
+    namespace: world
+    category: action
+    summary: "Place an indefinitely burning campfire on loaded grass, soil, sand, or stone with four air blocks above the support. Uses one shared block edit; no recipe or inventory cost."
+    params: [{name: x, type: integer}, {name: y, type: integer}, {name: z, type: integer}]
+    returns: {type: boolean, desc: "False for occupied, unsupported, unloaded, out-of-height, or exhausted-budget sites. To remove, replace_block(x,y,z,'air')."}
+    errors: []
+    budget_ref: block_edits_per_call
+    since: "1.20.0"
+  - name: get_water
+    namespace: world
+    category: query
+    summary: "Inspect water depth, surface elevation, and the visual river/stream current. No fluid simulation or writable flow override."
+    params: [{name: x, type: integer}, {name: y, type: integer}, {name: z, type: integer}]
+    returns: {type: "WaterSnapshot | nil", desc: "nil unless the queried block is water. Reads staged edits."}
+    errors: []
+    since: "1.20.0"
+  - name: get_waterfalls
+    namespace: world
+    category: query
+    summary: "Inspect spills at a source water block. Requires open sky, an adjacent open drop, loaded neighbors, and lower receiving water. Use get_water().surface_y-1 to query its top block."
+    params: [{name: x, type: integer}, {name: y, type: integer}, {name: z, type: integer}]
+    returns: {type: "WaterfallSnapshot[]", desc: "Zero to four directional spills. Changing source, receiving water, or obstructions through replace_block changes the effect; reads staged edits."}
+    errors: []
+    since: "1.20.0"
+  - name: can_spawn_fish
+    namespace: world
+    category: query
+    summary: "Check a submerged fish body and full 7x7 water layer centered at floor(x,y,z). Reads staged edits."
+    params: [{name: x, type: number}, {name: y, type: number}, {name: z, type: number}]
+    returns: {type: boolean}
+    errors: []
+    since: "1.20.0"
+  - name: spawn_fish
+    namespace: world
+    category: action
+    summary: "Spawn a swimming fish only where can_spawn_fish succeeds. Reads staged water edits and shares the normal creature spawn budget, including failed attempts. Use chase(id,x,y,z) each tick to guide it within connected water."
+    params: [{name: x, type: number}, {name: y, type: number}, {name: z, type: number}]
+    returns: {type: "integer | nil", desc: "Stable creature id, or nil when habitat is unsuitable or spawn/entity budget is exhausted."}
+    errors: []
+    budget_ref: creature_spawns_per_call
+    since: "1.20.0"
   # -- Queries --
   - name: players
     namespace: world

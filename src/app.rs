@@ -378,6 +378,7 @@ struct CameraUniform {
     /// `Weather::cloud_coverage` -- how much of sky.wgsl's procedural cloud
     /// layer covers the sky dome). z = camera eye underwater; w = surface wetness.
     weather_fx: [f32; 4],
+    camp_lights: [[f32;4];4],
 }
 
 #[repr(C)]
@@ -548,6 +549,9 @@ pub struct App {
     /// Fixed (x, z, phase) offsets for each rain streak, relative to the
     /// camera -- see `build_rain_particles`.
     rain_particles: Vec<(f32, f32, f32)>,
+    waterfalls: std::collections::HashMap<(i32,i32),Vec<crate::water::Waterfall>>,
+    campfires: std::collections::HashMap<(i32,i32),Vec<Vec3>>,
+    campfire_mesh: DynamicMesh,
 
     bird_pipeline: wgpu::RenderPipeline,
     bird_vertex_buffer: wgpu::Buffer,
@@ -1029,7 +1033,7 @@ impl App {
         });
         let rain_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("rain vertex buffer"),
-            size: (RAIN_PARTICLE_COUNT * 2 * std::mem::size_of::<RainVertex>()) as u64,
+            size: ((RAIN_PARTICLE_COUNT * 2 + crate::water::MAX_VERTICES) * std::mem::size_of::<RainVertex>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1220,6 +1224,7 @@ impl App {
         let block_target = crate::block_target::BlockTarget::new(&device, &camera_bgl, config.format);
         let ui = Ui::new(&device, config.format, &window);
         let entity_mesh = DynamicMesh::new(&device);
+        let campfire_mesh = DynamicMesh::new(&device);
         let held_mesh = DynamicMesh::new(&device);
 
         let mut app = Self {
@@ -1242,6 +1247,9 @@ impl App {
             rain_pipeline,
             rain_vertex_buffer,
             rain_particles,
+            waterfalls: Default::default(),
+            campfires: Default::default(),
+            campfire_mesh,
             bird_pipeline,
             bird_vertex_buffer,
             bird_flock: None,
@@ -3145,6 +3153,8 @@ impl App {
             if rebuilt>0 && (rebuilt>=MESH_BUDGET_PER_FRAME || mesh_start.elapsed()>=CHUNK_MESH_BUDGET){break;}
             let mesh_data = {
                 let chunk = self.world.chunks.get(&key).unwrap();
+                self.waterfalls.insert(key, crate::water::scan_chunk(&self.world,chunk));
+                self.campfires.insert(key, crate::campfire::positions(chunk));
                 build_chunk_mesh(&self.world, chunk)
             };
             match upload_mesh(&self.device, &mesh_data) {
@@ -3178,6 +3188,8 @@ impl App {
         for key in unload {
             self.world.unload_chunk(key.0, key.1);
             self.chunk_meshes.remove(&key);
+            self.waterfalls.remove(&key);
+            self.campfires.remove(&key);
         }
     }
 
@@ -3186,10 +3198,10 @@ impl App {
     /// the already free-running `water_time` clock -- so it never needs its
     /// own per-particle state, just a fixed (x, z, phase) offset from the
     /// camera picked once at load in `build_rain_particles`.
-    fn write_rain_vertices(&self, cam_pos: Vec3) {
+    fn write_rain_vertices(&self, cam_pos: Vec3, raining: bool, falls: &[crate::water::Waterfall]) -> u32 {
         let half_h = RAIN_HEIGHT * 0.5;
         let mut verts: Vec<RainVertex> = Vec::with_capacity(self.rain_particles.len() * 2);
-        for &(ox, oz, phase) in &self.rain_particles {
+        for &(ox, oz, phase) in self.rain_particles.iter().take(if raining {self.rain_particles.len()} else {0}) {
             let y = (phase - self.water_time * RAIN_FALL_SPEED).rem_euclid(RAIN_HEIGHT) - half_h;
             // Fade out near the top/bottom of the volume so a streak
             // doesn't visibly pop in/out of existence as it wraps.
@@ -3205,8 +3217,16 @@ impl App {
                 alpha,
             });
         }
+        for fall in falls.iter().take(crate::water::MAX_VISIBLE_FALLS) {
+            let fade = ((64.0-fall.sound_position().distance(cam_pos))/16.0).clamp(0.0,1.0);
+            for (p,q,alpha) in fall.lines(self.water_time) {
+                verts.push(RainVertex {position:p.to_array(),alpha:alpha*fade});
+                verts.push(RainVertex {position:q.to_array(),alpha:alpha*fade});
+            }
+        }
         self.queue
             .write_buffer(&self.rain_vertex_buffer, 0, bytemuck::cast_slice(&verts));
+        verts.len() as u32
     }
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -3235,7 +3255,14 @@ impl App {
         } else {
             [sky[0], sky[1], sky[2]]
         };
+        let mut campfires:Vec<_>=self.campfires.values().flatten().copied()
+            .filter(|p|p.distance_squared(cam_pos)<48.0*48.0).collect();
+        campfires.sort_by(|a,b|a.distance_squared(cam_pos).total_cmp(&b.distance_squared(cam_pos)));
+        campfires.truncate(8);
+        let fire_effects=crate::campfire::effects(&campfires,cam_pos,self.water_time);
+        self.campfire_mesh.update(&self.device,&self.queue,&fire_effects);
         let uniform = CameraUniform {
+            camp_lights: crate::campfire::lights(&campfires,cam_pos),
             view_proj: view_proj.to_cols_array_2d(),
             light_view_proj: light_view_proj.to_cols_array_2d(),
             inv_view_proj: view_proj.inverse().to_cols_array_2d(),
@@ -3286,12 +3313,12 @@ impl App {
 
         self.wind.prepare(&self.queue,cam_pos,self.camera.right(),self.camera.right().cross(self.camera.forward()),&self.world,underwater,self.weather.current);
         let raining = self.weather.current.has_rain_particles() && !underwater;
-        let rain_vertex_count = if raining {
-            self.write_rain_vertices(cam_pos);
-            (self.rain_particles.len() * 2) as u32
-        } else {
-            0
-        };
+        let mut falls: Vec<_> = self.waterfalls.values().flatten().copied()
+            .filter(|f|f.sound_position().distance_squared(cam_pos)<64.0*64.0).collect();
+        falls.sort_by(|a,b|a.sound_position().distance_squared(cam_pos).total_cmp(&b.sound_position().distance_squared(cam_pos)));
+        falls.truncate(crate::water::MAX_VISIBLE_FALLS);
+        self.audio.update_waterfalls(&falls);
+        let rain_vertex_count = self.write_rain_vertices(cam_pos,raining,&falls);
         let bird_vertex_count = if underwater { 0 } else if let Some(flock) = &self.bird_flock {
             let count = (flock.birds.len() * BIRD_VERTICES_PER_BIRD) as u32;
             self.write_bird_vertices();
@@ -3387,6 +3414,13 @@ impl App {
                 rpass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                 rpass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 rpass.draw_indexed(0..mesh.index_count, 0, 0..1);
+            }
+            // Fire/smoke use the main material pipeline but never cast sun shadows.
+            if self.campfire_mesh.index_count > 0 {
+                let mesh=&self.campfire_mesh;
+                rpass.set_vertex_buffer(0,mesh.vertex_buffer.slice(..));
+                rpass.set_index_buffer(mesh.index_buffer.slice(..),wgpu::IndexFormat::Uint32);
+                rpass.draw_indexed(0..mesh.index_count,0,0..1);
             }
             if rain_vertex_count > 0 {
                 rpass.set_pipeline(&self.rain_pipeline);

@@ -41,16 +41,78 @@ fn river_z(x: f32, row: i32, seed: u32) -> f32 {
         + (fbm(x * 0.006, row as f32 * 13.0, seed ^ 0xA711, 2, 2.0, 0.5) - 0.5) * 55.0
 }
 
-fn lake(column: i32, row: i32, seed: u32) -> (f32, f32, f32, f32) {
-    let x = column as f32 * LAKE_SPACING
+fn lake_x(column: i32, row: i32, seed: u32) -> f32 {
+    column as f32 * LAKE_SPACING
         + 140.0
-        + (column_rand(column, row, seed, 0xA712) - 0.5) * 110.0;
+        + (column_rand(column, row, seed, 0xA712) - 0.5) * 110.0
+}
+fn lake(column: i32, row: i32, seed: u32) -> (f32, f32, f32, f32) {
+    let x = lake_x(column,row,seed);
     (
         x,
         river_z(x, row, seed),
         32.0 + column_rand(column, row, seed, 0xA713) * 20.0,
         24.0 + column_rand(column, row, seed, 0xA714) * 18.0,
     )
+}
+
+/// Sparse raised tributaries between lakes. World coordinates keep banks and
+/// water levels identical across chunk boundaries and generation order.
+/// Returns bed/bank height and local water level; the vertical spill is visual.
+pub fn tributary(wx: i32, wz: i32, seed: u32) -> Option<(i32, i32, bool)> {
+    let c = (wx as f32 / LAKE_SPACING).floor() as i32;
+    let r = (wz as f32 / RIVER_SPACING).floor() as i32;
+    for row in r-1..=r+1 { for column in c-1..=c+1 {
+        if column_rand(column,row,seed,0xFA110) > 0.55 { continue; }
+        let a = lake_x(column,row,seed);
+        let b = lake_x(column+1,row,seed);
+        let center = ((a+b)*0.5).round();
+        let x = (wx as f32-center).abs();
+        if x > 12.0 { continue; }
+        let z = wz as f32-river_z(center,row,seed).round();
+        if !(0.0..=43.0).contains(&z) { continue; }
+        let high = SEA_LEVEL + 5 + (column_rand(column,row,seed,0xFA111)*4.0) as i32;
+        // Lower receiving pool reaches back into the existing river.
+        if z < 14.0 {
+            let radius = if z < 4.0 { 3.0 } else { 5.0 };
+            if x <= radius { return Some((SEA_LEVEL-3,SEA_LEVEL,false)); }
+            continue;
+        }
+        let pool_distance = (x*x+(z-32.0).powi(2)).sqrt();
+        if (x <= 2.0 && z <= 32.0) || pool_distance <= 7.0 {
+            return Some((high-2,high,z<26.0));
+        }
+        // Solid raised rim contains the pool; a narrow opening faces the drop.
+        let rim_distance = if z <= 32.0 { (x-2.0).max(0.0).min(pool_distance-7.0) } else { pool_distance-7.0 };
+        if rim_distance < 5.0 && pool_distance < 12.0 || (z <= 32.0 && x < 7.0) {
+            return Some((high+1-(rim_distance-2.0).max(0.0) as i32,SEA_LEVEL,false));
+        }
+    } }
+    None
+}
+
+/// Analytic current tangent. Lake interiors and non-channel water have no drift.
+pub fn current(wx: i32, wz: i32, seed: u32, elevated: bool) -> [f32;2] {
+    if elevated {
+        if let Some((bed,level,flow)) = tributary(wx,wz,seed) {
+            if flow && level > SEA_LEVEL && bed < level { return [0.0,-1.0]; }
+        }
+        return [0.0;2];
+    }
+    let (x,z)=(wx as f32,wz as f32);
+    let row=(z/RIVER_SPACING).floor() as i32;
+    let column=(x/LAKE_SPACING).floor() as i32;
+    for r in row-1..=row+1 {
+        if (z-river_z(x,r,seed)).abs()>4.0 {continue;}
+        for c in column-1..=column+1 {
+            let (lx,lz,rx,rz)=lake(c,r,seed);
+            if ((x-lx)/rx).powi(2)+((z-lz)/rz).powi(2)<1.25 {return [0.0;2];}
+        }
+        let slope=(river_z(x+1.0,r,seed)-river_z(x-1.0,r,seed))*0.5;
+        let length=(1.0+slope*slope).sqrt();
+        return [1.0/length,slope/length];
+    }
+    [0.0;2]
 }
 
 pub fn height(wx: i32, wz: i32, seed: u32) -> i32 {
@@ -105,8 +167,62 @@ pub fn height(wx: i32, wz: i32, seed: u32) -> i32 {
 }
 
 #[cfg(test)]
+pub fn tributary_preview(seed: u32) -> (i32,i32) {
+    let c=(-4..4).find(|&c|column_rand(c,0,seed,0xFA110)<=0.55).unwrap();
+    let x=((lake_x(c,0,seed)+lake_x(c+1,0,seed))*0.5).round() as i32;
+    (x,river_z(x as f32,0,seed).round() as i32+14)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn currents_follow_channels_but_stop_inside_lakes_and_upper_pools() {
+        for seed in [7,42,2026] { for row in [-1,0,1] {
+            for c in -1..=1 {
+                let (x,z,_,_)=lake(c,row,seed);
+                assert_eq!(current(x.round() as i32,z.round() as i32,seed,false),[0.0;2]);
+            }
+            let mut moving=0;
+            for x in -350..350 {
+                let z=river_z(x as f32,row,seed).round() as i32;
+                let flow=current(x,z,seed,false);
+                if flow!=[0.0;2] {
+                    moving+=1;
+                    assert!(flow[0]>0.0);
+                    assert!((flow[0]*flow[0]+flow[1]*flow[1]-1.0).abs()<0.001);
+                }
+            }
+            assert!(moving>100);
+        } }
+    }
+
+    #[test]
+    fn generated_tributaries_have_contained_pools_and_real_spills_across_chunks() {
+        use super::super::{World,BlockType,chunk::world_to_chunk};
+        for seed in [7,42,2026] {
+            let column=(-4..4).find(|&c|column_rand(c,0,seed,0xFA110)<=0.55).unwrap();
+            let x=((lake_x(column,0,seed)+lake_x(column+1,0,seed))*0.5).round() as i32;
+            let z=river_z(x as f32,0,seed).round() as i32;
+            let (_,level,_)=tributary(x,z+14,seed).unwrap();
+            assert_eq!(current(x,z+32,seed,true),[0.0;2]);
+            assert_eq!(current(x,z+18,seed,true),[0.0,-1.0]);
+            let mut world=World::new(seed);
+            let (cx,cz)=world_to_chunk(x,z+14);
+            // Deliberately load neighbors in reverse order.
+            for dx in (-1..=1).rev() {for dz in (-1..=2).rev() {world.ensure_chunk_loaded(cx+dx,cz+dz);}}
+            assert_eq!(world.get_block(x,level,z+14),BlockType::Water);
+            assert_eq!(world.get_block(x,SEA_LEVEL,z+13),BlockType::Water);
+            assert_eq!(world.get_block(x,level,z+13),BlockType::Air);
+            let falls:Vec<_>=world.chunks.values().flat_map(|chunk|crate::water::scan_chunk(&world,chunk)).collect();
+            assert!(falls.iter().any(|f|(f.lip.x-x as f32).abs()<3.0 && (f.lip.z-(z+14) as f32).abs()<1.0));
+            // The rim is higher than pool water, preventing side spills.
+            assert!(world.get_block(x+8,level,z+32).is_solid());
+            world.unload_chunk(cx,cz);
+            world.ensure_chunk_loaded(cx,cz);
+            assert_eq!(world.get_block(x,level,z+14),BlockType::Water);
+        }
+    }
     #[test]
     fn snowy_summits_have_solid_caps_and_preserve_player_edits() {
         use super::super::{World,BlockType,chunk::world_to_chunk};

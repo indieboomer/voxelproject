@@ -92,6 +92,7 @@ fn populate_api<'lua, 'scope>(
     let time_of_day = *tx.time.borrow();
     let night = is_night(time_of_day);
     let weather_name = tx.weather.borrow().current.name();
+    super::environment::populate(lua,scope,api,tx,block_budget,spawn_budget)?;
     api.set("time_of_day", time_of_day)?;
     api.set("is_night", night)?;
     api.set("weather", weather_name)?;
@@ -124,6 +125,7 @@ fn populate_api<'lua, 'scope>(
                 c.set("z", pos[2])?;
                 c.set("health", *health)?;
                 c.set("max_health", *max_health)?;
+                super::environment::creature_fields(&c,tx,*kind,*pos)?;
                 t.set(i + 1, c)?;
             }
             Ok(t)
@@ -161,6 +163,7 @@ fn populate_api<'lua, 'scope>(
                     e.set("z", pos[2])?;
                     e.set("health", *health)?;
                     e.set("max_health", *max_health)?;
+                    super::environment::creature_fields(&e,tx,*k,*pos)?;
                     count += 1;
                     t.set(count, e)?;
                 }
@@ -195,6 +198,7 @@ fn populate_api<'lua, 'scope>(
             e.set("z", pos[2])?;
             e.set("health", *health)?;
             e.set("max_health", *max_health)?;
+            super::environment::creature_fields(&e,tx,*k,*pos)?;
             e.set("distance", dist)?;
             Ok(Some(e))
         })?,
@@ -363,6 +367,10 @@ fn populate_api<'lua, 'scope>(
             let kind = parse_creature_kind(&kind);
             let seed = spawn_seed.get();
             spawn_seed.set(seed.wrapping_add(0x9E37_79B9_7F4A_7C15));
+            if kind==CreatureKind::Fish {
+                let pos=Vec3::new(x,y,z);
+                return Ok(if super::environment::fish_clear(tx,pos) {creatures_cell.borrow_mut().spawn(kind,pos,seed)}else{None});
+            }
             let id = creatures_cell
                 .borrow_mut()
                 .spawn_in_world(world, kind, Vec3::new(x, y, z), seed);
@@ -768,20 +776,29 @@ fn populate_api<'lua, 'scope>(
             }
             // Charge candidate scans before entering native code. Even empty
             // queries consume work; returned-result limits alone do not bound it.
-            let native_work = if method_name == "find_blocks" {
+            let native_work = if method_name == "find_campfires" {
+                let radius=args.get(3).cloned().map(|v|lua.coerce_number(v)).transpose()?.flatten().unwrap_or(0.0);
+                let side=2*(radius as f32).clamp(0.0,12.0).ceil() as u32+1;
+                side.saturating_pow(3).saturating_mul(2).saturating_mul(1+tx.blocks.borrow().len() as u32)
+            } else if matches!(method_name.as_str(),"get_campfire"|"place_campfire"|"get_water"|"get_waterfalls"|"can_spawn_fish"|"spawn_fish"|"spawn_creature") {
+                200u32.saturating_mul(1+tx.blocks.borrow().len() as u32)
+            } else if method_name == "find_blocks" {
                 let radius = args.get(4).cloned().map(|v| lua.coerce_number(v)).transpose()?.flatten().unwrap_or(0.0);
                 let side = 2 * (radius as f32).clamp(0.0, MAX_FIND_RADIUS).ceil() as u32 + 1;
                 side.saturating_pow(3).saturating_mul(1 + tx.blocks.borrow().len() as u32)
             } else {
                 // Conservative charge covers creature/player scans and staged
                 // effect lookups, including methods with constant-time fast paths.
-                tx.native_scan_cost().saturating_mul(if method_name == "get_inventory" { COLLECTIBLE_BLOCKS.len() as u32 } else { 1 })
+                tx.native_scan_cost().saturating_mul(if method_name == "get_inventory" { COLLECTIBLE_BLOCKS.len() as u32 }
+                    else if matches!(method_name.as_str(),"creatures"|"find_creatures"|"nearest_creature") {1+tx.blocks.borrow().len() as u32}
+                    else { 1 })
             };
             budget.charge_native_work(native_work);
             let result = function.call::<_, MultiValue>(args);
             properties.raw_set("time_of_day", *tx.time.borrow())?;
             properties.raw_set("is_night", is_night(*tx.time.borrow()))?;
             properties.raw_set("weather", tx.weather.borrow().current.name())?;
+            properties.raw_set("is_raining",tx.weather.borrow().current.has_rain_particles())?;
             budget.check();
             result
         })?)?;

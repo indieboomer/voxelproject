@@ -32,7 +32,7 @@ COMPACT_OUT = ROOT / "world_api" / "world_api_compact.md"
 STUBS_OUT = ROOT / "world_api" / "world_api_stubs.lua"
 RUST_OUT = ROOT / "src" / "world_api_gen.rs"
 
-NON_CSV_BLOCK_EXTRAS = ["air", "mud", "redstone", "crystal"]
+NON_CSV_BLOCK_EXTRAS = ["air", "mud", "redstone", "crystal", "campfire"]
 
 LUA_TYPE = {
     "integer": "integer",

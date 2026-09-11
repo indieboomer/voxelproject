@@ -34,6 +34,7 @@ const COW: &[u8] = include_bytes!("../sounds/cow.mp3");
 const CREATURE_DEATH: &[u8] = include_bytes!("../sounds/creature_generic_death.mp3");
 const DRAGON_ATTACK: &[u8] = include_bytes!("../sounds/dragon_attack.mp3");
 const DRAGON_FLY: &[u8] = include_bytes!("../sounds/dragon_fly.mp3");
+const WATERFALL: &[u8] = include_bytes!("../sounds/waterfall.mp3");
 const GOBLIN_ATTACK: &[u8] = include_bytes!("../sounds/goblin_attack.mp3");
 const HUMAN_STEP: &[u8] = include_bytes!("../sounds/human_step.mp3");
 const HUMAN_STEP_2: &[u8] = include_bytes!("../sounds/human_step_2.mp3");
@@ -216,6 +217,7 @@ pub struct AudioEngine {
     /// Reused spatial loops, one per audible flying dragon. Keeping the sinks
     /// alive avoids restarting or stacking the recording on every frame.
     flight_sinks: Vec<SpatialSink>,
+    waterfall_sinks: Vec<SpatialSink>,
     /// Kept alive for as long as the engine exists -- dropping it stops
     /// all playback. Never read otherwise, hence the leading underscore.
     _stream: Option<OutputStream>,
@@ -256,6 +258,7 @@ impl AudioEngine {
         match OutputStream::try_default() {
             Ok((stream, handle)) => Self {
                 flight_sinks: Vec::new(),
+                waterfall_sinks: Vec::new(),
                 _stream: Some(stream),
                 handle: Some(handle),
                 rng: Rng(0x9E3779B97F4A7C15),
@@ -273,6 +276,7 @@ impl AudioEngine {
                 log::warn!("No audio output device available, sounds disabled: {err}");
                 Self {
                     flight_sinks: Vec::new(),
+                    waterfall_sinks: Vec::new(),
                     _stream: None,
                     handle: None,
                     rng: Rng(1),
@@ -421,6 +425,38 @@ impl AudioEngine {
             sink.set_left_ear_position(left);
             sink.set_right_ear_position(right);
             sink.set_volume(0.45);
+        }
+    }
+
+    /// Merge adjacent spill columns into one source, with at most two loops.
+    /// Smooth distance attenuation reaches zero before a loop leaves earshot.
+    pub fn update_waterfalls(&mut self, falls: &[crate::water::Waterfall]) {
+        let mut positions: Vec<Vec3> = Vec::new();
+        for fall in falls {
+            let pos = fall.sound_position();
+            if pos.distance_squared(self.listener_pos) < 48.0*48.0
+                && positions.iter().all(|p|p.distance_squared(pos)>8.0*8.0) {
+                positions.push(pos);
+                if positions.len()==2 {break;}
+            }
+        }
+        self.waterfall_sinks.truncate(positions.len());
+        let Some(handle) = &self.handle else {return};
+        while self.waterfall_sinks.len()<positions.len() {
+            let Ok(decoder)=Decoder::new(Cursor::new(WATERFALL)) else {break};
+            let Ok(sink)=SpatialSink::try_new(handle,[0.0;3],[-0.1,0.0,0.0],[0.1,0.0,0.0]) else {break};
+            sink.set_volume(0.0);
+            sink.append(decoder.repeat_infinite());
+            self.waterfall_sinks.push(sink);
+        }
+        for (i,pos) in positions.into_iter().enumerate().take(self.waterfall_sinks.len()) {
+            let (emitter,left,right)=self.spatial_positions(pos,12.0);
+            let sink=&self.waterfall_sinks[i];
+            sink.set_emitter_position(emitter);
+            sink.set_left_ear_position(left);
+            sink.set_right_ear_position(right);
+            let fade=((48.0-pos.distance(self.listener_pos))/16.0).clamp(0.0,1.0);
+            sink.set_volume(0.5*fade*fade);
         }
     }
 
@@ -652,6 +688,7 @@ mod tests {
     fn silent_engine() -> AudioEngine {
         AudioEngine {
             flight_sinks: Vec::new(),
+            waterfall_sinks: Vec::new(),
             _stream: None,
             handle: None,
             rng: Rng(42),
@@ -665,6 +702,16 @@ mod tests {
             listener_pos: Vec3::ZERO,
             listener_right: Vec3::X,
         }
+    }
+
+    #[test]
+    fn waterfall_clip_decodes_and_silent_output_handles_source_removal() {
+        assert!(Decoder::new(Cursor::new(WATERFALL)).unwrap().next().is_some());
+        let mut engine=silent_engine();
+        let fall=crate::water::Waterfall {lip:Vec3::new(1.0,8.0,0.0),bottom:1.0,direction:Vec3::X};
+        engine.update_waterfalls(&[fall]);
+        engine.update_waterfalls(&[]);
+        assert!(engine.waterfall_sinks.is_empty());
     }
 
     /// A degenerate/missing audio device (as in a headless test run) must

@@ -106,6 +106,8 @@ pub enum BlockType {
     ThornBush,
     DryShrub,
     Snow,
+    /// Generated world feature; append-only to preserve save discriminants.
+    Campfire,
 }
 
 /// Per-block static properties, transcribed 1:1 from `textures/blocks.csv`
@@ -254,6 +256,12 @@ impl BlockType {
         }
         use BlockType::*;
         match self {
+            Campfire => BlockDef {
+                display_name: "Campfire", resource_type: "world_feature",
+                opacity: 0.0, roughness: 1.0, emission: 0.0, hardness: 2,
+                tile_top: TILE_WHITE, tile_side: TILE_WHITE, tile_bottom: TILE_WHITE,
+                only_on_top: true, single_item: true, cutout: false, cross: false,
+            },
             Air => BlockDef {
                 display_name: "Air",
                 resource_type: "air",
@@ -409,6 +417,7 @@ impl BlockType {
         }
         match self {
             BlockType::Air => "air",
+            BlockType::Campfire => "campfire",
             BlockType::Crystal => "crystal",
             BlockType::Mud => "mud",
             BlockType::RedStone => "redstone",
@@ -428,6 +437,7 @@ impl BlockType {
         }
         match lower.as_str() {
             "air" => Some(BlockType::Air),
+            "campfire" => Some(BlockType::Campfire),
             "crystal" => Some(BlockType::Crystal),
             "mud" => Some(BlockType::Mud),
             "redstone" => Some(BlockType::RedStone),

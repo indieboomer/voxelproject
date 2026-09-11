@@ -12,6 +12,16 @@ Then update this file by hand with what actually changed and why -- the docs
 regenerate automatically, but "what changed and why" is not mechanically
 derivable from a diff of the schema alone.
 
+## 1.20.0 - Environment prompting
+
+- Added get_campfire, find_campfires, place_campfire, get_water,
+  get_waterfalls, can_spawn_fish, and spawn_fish.
+- Added is_raining, campfire_light_radius, and fish_spawn_clearance properties.
+- Creature snapshots expose can_swim, can_fly, and in_water.
+- Environment methods read staged block edits and share native-work, block-edit,
+  and spawn budgets. Direct fish spawns also validate staged water changes.
+- Campfire generation tries eight clearings per eligible region.
+
 ## 1.19.0 -- 2026-09-11 (fish and water habitats)
 
 - Added `fish` (4 health), using its animated model for swimming. Fish spawn

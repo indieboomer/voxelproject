@@ -16,6 +16,7 @@ struct CameraUniform {
     // toward white in fs_main below during a storm's lightning strike.
     // y = cloud coverage, z = camera eye underwater, w = surface wetness.
     weather_fx: vec4<f32>,
+    camp_lights: array<vec4<f32>,4>,
 };
 
 @group(0) @binding(0)
@@ -60,12 +61,18 @@ struct VertexOutput {
     @location(6) emission: f32,
     @location(7) tex_layer: f32,
     @location(8) glimmer: f32,
+    @location(9) flow: vec2<f32>,
 };
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     var pos = in.position;
+    out.flow = vec2<f32>(0.0);
+    if in.wind < -0.5 {
+        let angle = -in.wind - 4.14159265;
+        out.flow = vec2<f32>(cos(angle), sin(angle));
+    }
     if (in.wind > 0.0) {
         // Gentle per-tuft sway: only the top of a cross-billboard card
         // (short grass) moves -- the base stays planted -- and each tuft's
@@ -162,6 +169,27 @@ fn grade(color: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    // Procedural fire and stippled smoke cards need no animated textures,
+    // offscreen targets, transparency sorting, or per-particle draw calls.
+    if in.tex_layer < -0.5 {
+        let uv=in.uv;
+        let t=camera.light_params.z;
+        if in.tex_layer > -1.5 {
+            let wobble=sin(uv.y*9.0-t*8.0+in.world_pos.x*2.0)*0.10*uv.y;
+            let width=(1.0-uv.y)*0.48;
+            if abs(uv.x-0.5+wobble)>width {discard;}
+            let core=1.0-abs(uv.x-0.5+wobble)/max(width,0.01);
+            let fire=mix(vec3<f32>(1.6,0.12,0.01),vec3<f32>(2.8,1.7,0.25),core*(1.0-uv.y));
+            return vec4<f32>(grade(fire),1.0);
+        }
+        let age=-in.tex_layer-2.0;
+        let roundness=length((uv-vec2<f32>(0.5))*2.0);
+        let alpha=(1.0-smoothstep(0.35,1.0,roundness))*(1.0-age)*0.3;
+        let pixel=vec2<u32>(in.clip_position.xy);
+        let dither=f32((pixel.x*3u+pixel.y*5u)%16u)/16.0;
+        if alpha<=dither {discard;}
+        return vec4<f32>(vec3<f32>(0.14,0.13,0.12)*(0.3+camera.light_params.x),1.0);
+    }
     let rain_exposure = step(1.5, in.reflectivity);
     let reflectivity = in.reflectivity - rain_exposure * 2.0;
     let is_water = reflectivity > WATER_REFLECTIVITY_THRESHOLD;
@@ -175,13 +203,26 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // to sit next to it there, showing up as flickering white margins. This
     // keeps water reading as one smooth, undistorted surface.
     var shading_normal = in.normal;
+    var current_foam = 0.0;
     if is_water {
         let t = camera.light_params.z;
+        let moving = dot(in.flow, in.flow) > 0.25;
         let wx = in.world_pos.x * 0.6 + t * 1.3;
         let wz = in.world_pos.z * 0.5 + t * 1.7;
         shading_normal = normalize(
             in.normal + vec3<f32>(cos(wx) * 0.6, 0.0, -sin(wz) * 0.6) * 0.15
         );
+        if moving {
+            // A continuous world-space phase avoids seams when neighboring
+            // blocks have slightly different river tangents, even far from origin.
+            let river = in.flow.x > 0.1;
+            let along = select(-in.world_pos.z, in.world_pos.x, river) - t * 1.4;
+            let across = select(in.world_pos.x, in.world_pos.z, river);
+            let wave = cos(along * 2.0 + sin(across * 0.5)) * 0.10;
+            shading_normal = normalize(in.normal + vec3<f32>(-in.flow.x * wave, 0.0, -in.flow.y * wave));
+            let ripple = sin(along * 5.0 + sin(across * 2.0));
+            current_foam = smoothstep(0.86, 1.0, ripple) * 0.10;
+        }
     }
 
     // A skinned creature's real texture lives in its own array layer
@@ -216,7 +257,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let fill = fill_tint * ambient * mix(0.65, 1.15, hemisphere) * in.ao;
     let sun_tint = mix(vec3<f32>(1.0, 0.79, 0.60), vec3<f32>(1.0, 0.98, 0.93), smoothstep(0.0, 0.45, camera.sun_dir.w));
     let direct = sun_tint * sun_intensity * ndotl * shadow * mix(0.8, 1.0, in.ao);
-    let lit = base * (fill + direct);
+    var local_light=vec3<f32>(0.0);
+    let night=1.0-smoothstep(-0.1,0.25,camera.sun_dir.w);
+    if night>0.001 && camera.camp_lights[0].w>0.0 {
+        for (var i=0u;i<4u;i=i+1u) {
+            let light=camera.camp_lights[i];
+            if light.w<=0.0 {continue;}
+            let delta=light.xyz-in.world_pos;
+            let distance2=dot(delta,delta);
+            if distance2<light.w*light.w {
+                let fade=1.0-distance2/(light.w*light.w);
+                let facing=max(dot(shading_normal,delta*inverseSqrt(max(distance2,0.01))),0.0);
+                let flicker=0.92+0.08*sin(camera.light_params.z*7.0+light.x);
+                local_light+=vec3<f32>(1.0,0.38,0.09)*fade*fade*(0.2+facing)*night*flicker*1.8;
+            }
+        }
+    }
+    let lit = base * (fill + direct + local_light * in.ao);
 
     // View-dependent sky reflection and roughness-dependent sun highlights.
     // Dry matte blocks stay diffuse; rain adds a reflective surface coat.
@@ -274,7 +331,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         glimmer = mix(vec3<f32>(1.0), tex.rgb, 0.25) * in.glimmer
             * clamp(inclusion, 0.0, 1.0) * (sparkle * visibility * illumination + sheen);
     }
-    let reflected = lit + sky_reflection + sun_tint * specular + glow + glimmer;
+    let reflected = lit + sky_reflection + sun_tint * specular + glow + glimmer
+        + vec3<f32>(0.65, 0.85, 0.92) * current_foam * (ambient + sun_intensity * ndotl * shadow);
 
     let dist = distance(in.world_pos, camera.camera_pos.xyz);
     let underwater = camera.weather_fx.z;

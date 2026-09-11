@@ -282,15 +282,7 @@ fn submerged(world: &World, pos: Vec3) -> bool {
 /// Three cells beyond the center in every horizontal direction, with no
 /// dry corners or thin cross-shaped puddles. This also checks the model's body.
 pub(super) fn spawn_clear(world: &World, pos: Vec3) -> bool {
-    if !submerged(world, pos) {
-        return false;
-    }
-    let (x, y, z) = (
-        pos.x.floor() as i32,
-        pos.y.floor() as i32,
-        pos.z.floor() as i32,
-    );
-    (-3..=3).all(|dx| (-3..=3).all(|dz| world.get_block(x + dx, y, z + dz) == BlockType::Water))
+    crate::water::fish_spawn_clear(|x,y,z|world.get_block(x,y,z),pos)
 }
 
 fn water_path(world: &World, from: Vec3, to: Vec3) -> bool {

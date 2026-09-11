@@ -165,6 +165,102 @@ fn render_weather_previews() {
             world.chunks.insert((cx, cz), chunk);
         }
     }
+    let water_preview = std::env::var_os("VOXEL_WATER_PREVIEW").is_some();
+    let camp_preview = std::env::var_os("VOXEL_CAMPFIRE_PREVIEW").is_some();
+    let mut target = Vec3::new(3.0, 7.0, 0.0);
+    if water_preview {
+        world = World::new(42);
+        let (x, z) = crate::voxel::terrain::tributary_preview(42);
+        target = Vec3::new(x as f32, 23.0, z as f32);
+        let (cx, cz) = crate::voxel::chunk::world_to_chunk(x, z);
+        for dx in -3..=3 {
+            for dz in -3..=3 {
+                world.ensure_chunk_loaded(cx + dx, cz + dz);
+            }
+        }
+        println!("Waterfall preview near {x}, {z}");
+    }
+    if camp_preview {
+        world
+            .chunks
+            .get_mut(&(0, 0))
+            .unwrap()
+            .set_local(3, 7, 12, BlockType::Campfire);
+        target = Vec3::new(3.5, 7.5, 12.5);
+    }
+    let camps: Vec<_> = world
+        .chunks
+        .values()
+        .flat_map(crate::campfire::positions)
+        .collect();
+    let camp_eye = target + Vec3::new(-3.0, 1.3, 4.5);
+    let camp_fx = upload_mesh(&device, &crate::campfire::effects(&camps, camp_eye, 10.0));
+    let falls: Vec<_> = world
+        .chunks
+        .values()
+        .flat_map(|c| crate::water::scan_chunk(&world, c))
+        .collect();
+    let streaks: Vec<RainVertex> = falls
+        .iter()
+        .take(crate::water::MAX_VISIBLE_FALLS)
+        .flat_map(|f| f.lines(10.0))
+        .flat_map(|(p, q, alpha)| {
+            [
+                RainVertex {
+                    position: p.to_array(),
+                    alpha,
+                },
+                RainVertex {
+                    position: q.to_array(),
+                    alpha,
+                },
+            ]
+        })
+        .collect();
+    let streak_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: if streaks.is_empty() {
+            &[0; 16]
+        } else {
+            bytemuck::cast_slice(&streaks)
+        },
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+    let streak_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: None,
+        source: wgpu::ShaderSource::Wgsl(include_str!("rain.wgsl").into()),
+    });
+    let streak_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: None,
+        layout: Some(&sky_layout),
+        vertex: wgpu::VertexState {
+            module: &streak_shader,
+            entry_point: "vs_main",
+            buffers: &[RainVertex::layout()],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &streak_shader,
+            entry_point: "fs_main",
+            targets: &[Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::LineList,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: false,
+            depth_compare: wgpu::CompareFunction::LessEqual,
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: Default::default(),
+        multiview: None,
+    });
     let mut meshes = Vec::new();
     let mut old_meshes = Vec::new();
     for chunk in world.chunks.values() {
@@ -222,14 +318,20 @@ fn render_weather_previews() {
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let eye = Vec3::new(-18.0, 15.0, 27.0);
+    let eye = if camp_preview {
+        camp_eye
+    } else if water_preview {
+        target + Vec3::new(-15.0, 7.0, -20.0)
+    } else {
+        Vec3::new(-18.0, 15.0, 27.0)
+    };
     let vp = glam::Mat4::perspective_rh(
         65.0f32.to_radians(),
         width as f32 / height as f32,
         0.1,
         200.0,
-    ) * glam::Mat4::look_at_rh(eye, Vec3::new(3.0, 7.0, 0.0), Vec3::Y);
-    let lighting = crate::daynight::sky_lighting(0.14);
+    ) * glam::Mat4::look_at_rh(eye, target, Vec3::Y);
+    let lighting = crate::daynight::sky_lighting(if camp_preview { 0.75 } else { 0.14 });
     let light_vp = light_view_proj(lighting.sun_dir, eye);
     queue.write_buffer(
         &shadow.light_buffer,
@@ -260,6 +362,7 @@ fn render_weather_previews() {
             &camera,
             0,
             bytemuck::bytes_of(&CameraUniform {
+                camp_lights: crate::campfire::lights(&camps, eye),
                 view_proj: vp.to_cols_array_2d(),
                 inv_view_proj: vp.inverse().to_cols_array_2d(),
                 light_view_proj: light_vp.to_cols_array_2d(),
@@ -349,6 +452,17 @@ fn render_weather_previews() {
                 pass.set_bind_group(1, &atlas_bg, &[]);
                 pass.set_bind_group(2, &shadow.sample_bind_group, &[]);
                 for mesh in meshes {
+                    pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                    pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                }
+                if !streaks.is_empty() && !old {
+                    pass.set_pipeline(&streak_pipeline);
+                    pass.set_vertex_buffer(0, streak_buffer.slice(..));
+                    pass.draw(0..streaks.len() as u32, 0..1);
+                }
+                if let Some(mesh) = camp_fx.as_ref().filter(|_| !old) {
+                    pass.set_pipeline(main);
                     pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                     pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..mesh.index_count, 0, 0..1);

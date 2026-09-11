@@ -36,6 +36,8 @@ mod ui;
 mod voxel;
 mod visibility;
 mod weather;
+mod water;
+mod campfire;
 mod wind;
 mod world_api_gen;
 mod world_api_validate;
