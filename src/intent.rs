@@ -29,6 +29,7 @@ const SPECIES: &[&str] = &[
     "skeleton",
     "dragon_green",
     "dragon_red",
+    "fish",
 ];
 const GROUPS: &[&str] = &[
     "creatures",
@@ -45,7 +46,7 @@ fn schema() -> Value {
         "execution":{"type":"string","enum":["rule","instant"]},
         "summary":{"type":"string"},
         "condition":{"type":"string","enum":["always","rain","sunny","storm","mist","night","day","custom"]},
-        "actor_kind":{"type":"string","enum":["none","sheep","chicken","cow","wolf","stone_golem","goblin","stinger","sunscorch","zombie","skeleton","dragon_green","dragon_red"]},
+        "actor_kind":{"type":"string","enum":["none","sheep","chicken","cow","wolf","stone_golem","goblin","stinger","sunscorch","zombie","skeleton","dragon_green","dragon_red","fish"]},
         "effect":{"type":"string","enum":["protect_players","suppress_attacks","custom"]},
         "targets":{"type":"string","enum":["players","all","custom"]},
         "api_groups":{"type":"array","items":{"type":"string","enum":GROUPS},"maxItems":6},
@@ -572,6 +573,7 @@ pub fn verify_policy(plan: &Plan, code: &str) -> Result<(), String> {
         "skeleton" => 9,
         "dragon_green" => 10,
         "dragon_red" => 11,
+        "fish" => 12,
         _ => return Err("Unknown policy species".into()),
     };
     let world = World::new(1);

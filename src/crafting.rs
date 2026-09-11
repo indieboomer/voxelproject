@@ -203,6 +203,7 @@ pub fn creature_kind(id: &str) -> Option<CreatureKind> {
         "skeleton" => CreatureKind::Skeleton,
         "dragon_green" => CreatureKind::DragonGreen,
         "dragon_red" => CreatureKind::DragonRed,
+        "fish" => CreatureKind::Fish,
         _ => return None,
     })
 }
@@ -422,11 +423,15 @@ impl Registry {
                 let mut d = CreatureDraft::new(creatures);
                 let mut occupied = players.to_vec();
                 for _ in 0..o.quantity {
-                    let pos = spawn_position(world, creatures, position, &occupied).ok_or(
+                    let kind = creature_kind(&o.id).ok_or("Unknown creature")?;
+                    let pos = if kind == CreatureKind::Fish {
+                        Creatures::fish_spawn_near(world, position, 8.0, account.revision)
+                            .ok_or("Fish need a nearby pool with three water blocks in every horizontal direction")?
+                    } else { spawn_position(world, creatures, position, &occupied).ok_or(
                         "Invalid spawn location: clear a nearby 3 x 3 x 3 space on solid ground",
-                    )?;
-                    d.spawn(
-                        creature_kind(&o.id).ok_or("Unknown creature")?,
+                    )? };
+                    d.spawn_in_world(
+                        world, kind,
                         pos,
                         account.revision,
                     )

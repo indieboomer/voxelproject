@@ -65,7 +65,7 @@ fn attack_sound(kind: CreatureKind) -> Option<&'static [u8]> {
         CreatureKind::Zombie => Some(ZOMBIE_GROWL),
         CreatureKind::Skeleton => Some(SKELETON),
         CreatureKind::DragonGreen | CreatureKind::DragonRed => Some(DRAGON_ATTACK),
-        CreatureKind::Sheep | CreatureKind::Chicken | CreatureKind::Cow => None,
+        CreatureKind::Sheep | CreatureKind::Chicken | CreatureKind::Cow | CreatureKind::Fish => None,
     }
 }
 

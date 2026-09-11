@@ -12,6 +12,22 @@ Then update this file by hand with what actually changed and why -- the docs
 regenerate automatically, but "what changed and why" is not mechanically
 derivable from a diff of the schema alone.
 
+## 1.19.0 -- 2026-09-11 (fish and water habitats)
+
+- Added `fish` (4 health), using its animated model for swimming. Fish spawn
+  naturally in loaded pools as players explore, including player-built water areas.
+- Spawn sites require a complete 7x7 water footprint: three water blocks in
+  each horizontal direction, plus enough submerged space for the fish's body.
+  Small puddles, narrow channels and land are rejected by natural and rule spawns.
+- Fish choose nearby underwater destinations and check the whole movement path;
+  scripted chases cannot pull them through banks or between disconnected pools.
+- Every 20–55 seconds, when unobstructed, fish approach the surface and make a
+  short vertical jump that returns to the same water column. Low ceilings prevent jumps.
+- Save/reload preserves fish and active jumps. Unloaded habitats pause movement;
+  fish are removed if their occupied water is drained or filled in.
+- `spawn_creature_near_player("fish")` searches nearby water instead of land.
+  Multiplayer protocol 16 adds the fish species; host positions and animation are replicated.
+
 ## 1.18.0 -- 2026-09-11 (solitary ground and flying dragons)
 
 - Added `dragon_green` and `dragon_red`, both with 240 health, ground and aerial

@@ -493,6 +493,7 @@ fn creature_kind_filter(kind: &str) -> Option<u8> {
         "skeleton" => Some(9),
         "dragon_green" => Some(10),
         "dragon_red" => Some(11),
+        "fish" => Some(12),
         _ => None,
     }
 }
@@ -514,6 +515,7 @@ fn creature_kind_name(kind_u8: u8) -> &'static str {
         9 => "skeleton",
         10 => "dragon_green",
         11 => "dragon_red",
+        12 => "fish",
         _ => "sheep",
     }
 }
@@ -545,6 +547,8 @@ fn parse_creature_kind(kind: &str) -> CreatureKind {
         CreatureKind::DragonGreen
     } else if kind.eq_ignore_ascii_case("dragon_red") {
         CreatureKind::DragonRed
+    } else if kind.eq_ignore_ascii_case("fish") {
+        CreatureKind::Fish
     } else {
         CreatureKind::Sheep
     }

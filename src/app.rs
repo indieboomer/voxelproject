@@ -665,6 +665,7 @@ impl App {
             creatures: Some(self.creatures.snapshot_with_ids()),
             behaviors: self.creatures.behaviors.clone(),
             dragons: self.creatures.save_dragons(),
+            fish: self.creatures.save_fish(),
         }
     }
 
@@ -1204,6 +1205,7 @@ impl App {
             creatures.spawn_around(&world, spawn_pos, CREATURE_COUNT, world.seed);
         }
         creatures.restore_dragons(crafting_save.dragons);
+        creatures.restore_fish(crafting_save.fish);
         let weather = WeatherState::new(world.seed);
         let rain_particles = build_rain_particles(world.seed);
         let lightning_seed = world.seed;
@@ -1805,6 +1807,7 @@ impl App {
                 .collect();
             self.scripting.sync_attack_policies(&mut self.creatures);
             self.creatures.discover_dragons(&self.world, &player_targets);
+            self.creatures.discover_fish(&self.world, &player_targets, dt);
             let golem_attacks = self.creatures.update(&self.world, dt, &player_targets);
             for (player_id, damage) in golem_attacks {
                 self.apply_player_effect(PlayerEffect::Health {

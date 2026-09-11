@@ -365,7 +365,7 @@ fn populate_api<'lua, 'scope>(
             spawn_seed.set(seed.wrapping_add(0x9E37_79B9_7F4A_7C15));
             let id = creatures_cell
                 .borrow_mut()
-                .spawn(kind, Vec3::new(x, y, z), seed);
+                .spawn_in_world(world, kind, Vec3::new(x, y, z), seed);
             Ok(id)
         })?,
     )?;
@@ -385,12 +385,16 @@ fn populate_api<'lua, 'scope>(
             let seed = spawn_seed.get();
             spawn_seed.set(seed.wrapping_add(0x9E37_79B9_7F4A_7C15));
             let (dx, dz) = random_offset_in_disk(seed, radius);
+            if kind == CreatureKind::Fish {
+                let Some(pos) = Creatures::fish_spawn_near(world, target.pos, radius, seed) else { return Ok(None); };
+                return Ok(creatures_cell.borrow_mut().spawn_in_world(world, kind, pos, seed));
+            }
             let sx = target.pos.x + dx;
             let sz = target.pos.z + dz;
             let sy = world.terrain_height(sx.floor() as i32, sz.floor() as i32) as f32 + 1.0;
             let id = creatures_cell
                 .borrow_mut()
-                .spawn(kind, Vec3::new(sx, sy, sz), seed);
+                .spawn_in_world(world, kind, Vec3::new(sx, sy, sz), seed);
             Ok(id)
         })?,
     )?;

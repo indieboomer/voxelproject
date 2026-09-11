@@ -146,6 +146,7 @@ pub struct Models {
     zombies: [AnimatedModel; 4],
     skeletons: [AnimatedModel; 4],
     dragons: [AnimatedModel; 2],
+    fish: [AnimatedModel; 1],
 }
 
 impl Models {
@@ -187,6 +188,7 @@ impl Models {
                 include_bytes!("../models/dragon_green.glb"),
                 include_bytes!("../models/dragon_red.glb"),
             ], 25),
+            fish: load_variants([include_bytes!("../models/fish.glb")], 27),
         }
     }
 
@@ -204,6 +206,7 @@ impl Models {
             CreatureKind::Skeleton => &self.skeletons[0],
             CreatureKind::DragonGreen => &self.dragons[0],
             CreatureKind::DragonRed => &self.dragons[1],
+            CreatureKind::Fish => &self.fish[0],
         }
     }
 
@@ -212,7 +215,7 @@ impl Models {
     /// (see this module's doc comment). `app.rs`'s `create_atlas_bind_group`
     /// uploads these once at startup into the `tex_layer`-indexed
     /// `creature_texture` array `emit_skinned_mesh`'s vertices sample from.
-    pub fn creature_texture_layers(&self) -> [Option<&image::RgbaImage>; 26] {
+    pub fn creature_texture_layers(&self) -> [Option<&image::RgbaImage>; 27] {
         [
             self.sheep.texture.as_ref(),
             self.chicken.texture.as_ref(),
@@ -240,6 +243,7 @@ impl Models {
             self.skeletons[3].texture.as_ref(),
             self.dragons[0].texture.as_ref(),
             self.dragons[1].texture.as_ref(),
+            self.fish[0].texture.as_ref(),
         ]
     }
 
@@ -964,6 +968,25 @@ pub fn push_model(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fish_model_animates_and_fits_its_water_clearance() {
+        let models = Models::load();
+        let model = models.for_kind(CreatureKind::Fish);
+        assert!(model.texture.is_some());
+        assert!(model.animations.contains_key("idle"));
+        let mut first = Vec::new();
+        for time in [0.0, 0.2, 0.6, 1.0] {
+            let mut vertices = Vec::new();
+            let mut indices = Vec::new();
+            push_model(&mut vertices, &mut indices, model, CreatureKind::Fish, "idle", time, Vec3::ZERO, 0.0);
+            assert!(!indices.is_empty());
+            assert!(vertices.iter().all(|v| v.tex_layer == 27.0));
+            assert!(vertices.iter().all(|v| v.position[0].abs() <= 0.7 && v.position[2].abs() <= 0.7
+                && v.position[1].abs() <= 0.35), "fish mesh must fit inside the checked water volume");
+            if first.is_empty() { first = vertices.iter().map(|v| v.position).collect(); }
+            else { assert!(vertices.iter().zip(&first).any(|(v, p)| v.position != *p)); }
+        }
+    }
     #[test]
     fn dragon_models_have_all_ground_and_flight_clips_at_seven_human_heights() {
         let models = Models::load();

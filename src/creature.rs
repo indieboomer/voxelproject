@@ -3,6 +3,9 @@ use glam::Vec3;
 #[path = "dragon.rs"]
 mod dragon;
 pub use dragon::DragonSave;
+#[path = "fish.rs"]
+mod fish;
+pub use fish::FishSave;
 
 use crate::model::{push_model, Models};
 use crate::net::PlayerId;
@@ -67,6 +70,7 @@ pub enum CreatureKind {
     Skeleton,
     DragonGreen,
     DragonRed,
+    Fish,
 }
 
 impl CreatureKind {
@@ -96,6 +100,7 @@ impl CreatureKind {
             CreatureKind::Zombie => 1.2,
             CreatureKind::Skeleton => 1.5,
             CreatureKind::DragonGreen | CreatureKind::DragonRed => 2.4,
+            CreatureKind::Fish => 1.1,
         }
     }
 
@@ -112,6 +117,7 @@ impl CreatureKind {
             CreatureKind::Zombie => 24.0,
             CreatureKind::Skeleton => 18.0,
             CreatureKind::DragonGreen | CreatureKind::DragonRed => 240.0,
+            CreatureKind::Fish => 4.0,
         }
     }
 
@@ -257,6 +263,7 @@ impl CreatureKind {
             CreatureKind::Skeleton => 9,
             CreatureKind::DragonGreen => 10,
             CreatureKind::DragonRed => 11,
+            CreatureKind::Fish => 12,
         }
     }
 
@@ -272,6 +279,7 @@ impl CreatureKind {
             9 => CreatureKind::Skeleton,
             10 => CreatureKind::DragonGreen,
             11 => CreatureKind::DragonRed,
+            12 => CreatureKind::Fish,
             6 => CreatureKind::Goblin,
             _ => CreatureKind::Sheep,
         }
@@ -606,6 +614,9 @@ pub enum AttackPolicy {
 }
 
 pub struct Creatures {
+    fish_regions: std::collections::BTreeSet<(i32, i32)>,
+    fish_scan_timer: f32,
+    fish_scan_cursor: usize,
     dragon_regions: std::collections::BTreeSet<(i32, i32)>,
     ecs: hecs::World,
     next_id: u32,
@@ -635,6 +646,10 @@ enum CreatureCommand {
 }
 
 impl CreatureDraft {
+    pub fn spawn_in_world(&mut self, world: &World, kind: CreatureKind, pos: Vec3, seed: u64) -> Option<u32> {
+        if kind == CreatureKind::Fish && !fish::spawn_clear(world, pos) { return None; }
+        self.spawn(kind, pos, seed)
+    }
     pub fn new(creatures: &Creatures) -> Self {
         let mut snapshot = creatures.snapshot_with_ids();
         snapshot.sort_by_key(|entry| entry.0);
@@ -728,6 +743,9 @@ impl Creatures {
     pub fn new() -> Self {
         Self {
             dragon_regions: Default::default(),
+            fish_regions: Default::default(),
+            fish_scan_timer: 0.0,
+            fish_scan_cursor: 0,
             ecs: hecs::World::new(),
             next_id: 1,
             pending_audio: CreatureAudioEvents::default(),
@@ -802,6 +820,9 @@ impl Creatures {
         if kind.is_dragon() {
             self.ecs.insert_one(entity, dragon::Dragon::new(pos, rng_seed)).unwrap();
         }
+        if kind == CreatureKind::Fish {
+            self.ecs.insert_one(entity, fish::Fish::new(pos, &mut SimpleRng::new(rng_seed))).unwrap();
+        }
         id
     }
 
@@ -817,7 +838,7 @@ impl Creatures {
         let mut next_id = self.next_id;
         for &(id, kind, pos, health, _) in entries {
             if id == u32::MAX
-                || kind > 11
+                || kind > 12
                 || !seen.insert(id)
                 || !Vec3::from_array(pos).is_finite()
                 || !health.is_finite()
@@ -848,6 +869,7 @@ impl Creatures {
         player_targets: &[(PlayerId, Vec3)],
     ) -> Vec<(PlayerId, f32)> {
         let mut attacks = Vec::new();
+        let mut stranded_fish = Vec::new();
         // Collected locally and merged into `self.pending_audio` after the
         // loop, rather than pushed to it directly, since the loop already
         // holds `self.ecs` borrowed via `query_mut`.
@@ -857,7 +879,7 @@ impl Creatures {
         let mut attack_sound_events = Vec::new();
         let mut ambient_events = Vec::new();
 
-        for (_, (pos, wander, kind, rng, facing, cooldown, atk_anim, anim, chase, steps, ambient_call, cid, dragon)) in
+        for (_, (pos, wander, kind, rng, facing, cooldown, atk_anim, anim, chase, steps, ambient_call, cid, dragon, fish)) in
             self.ecs.query_mut::<(
                 &mut Pos,
                 &mut Wander,
@@ -872,8 +894,20 @@ impl Creatures {
                 &mut AmbientCall,
                 &CreatureId,
                 Option<&mut dragon::Dragon>,
+                Option<&mut fish::Fish>,
             )>()
         {
+            if let Some(fish) = fish {
+                let state = self.behaviors.get(&cid.0).unwrap();
+                let target = state.target.and_then(|target| match target {
+                    BehaviorTarget::Creature(id) => targets.iter().find(|c| c.0 == id).map(|c| Vec3::from_array(c.2)),
+                    BehaviorTarget::Player(id) => player_targets.iter().find(|p| p.0 == id).map(|p| p.1),
+                });
+                if !fish::update(world, dt, fish, pos, facing, anim, wander, rng, target) {
+                    stranded_fish.push(cid.0);
+                }
+                continue;
+            }
             cooldown.0 = (cooldown.0 - dt).max(0.0);
             atk_anim.0 = (atk_anim.0 - dt).max(0.0);
             chase.giveup_cooldown = (chase.giveup_cooldown - dt).max(0.0);
@@ -1067,6 +1101,7 @@ impl Creatures {
             if let Some(death) = self.damage(id, amount) { self.combat_deaths.push(death); }
         }
         self.pending_audio.attacks.extend(attack_sound_events);
+        for id in stranded_fish { self.destroy(id); }
         self.pending_audio.steps.extend(step_events);
         self.pending_audio.ambient_calls.extend(ambient_events);
 
@@ -1110,7 +1145,7 @@ impl Creatures {
             let hit = if kind.0.is_dragon() {
                 dragon::body_hit(eye - pos.0, dir, facing.0, reach)
             } else {
-                let center = pos.0 + Vec3::Y * 0.65;
+                let center = pos.0 + Vec3::Y * if kind.0 == CreatureKind::Fish { 0.0 } else { 0.65 };
                 let t = (center - eye).dot(dir);
                 (t >= 0.0 && (eye + dir * t).distance(center) < 0.8).then_some(t)
             };
@@ -1496,7 +1531,7 @@ mod tests {
 
     #[test]
     fn creature_kind_u8_round_trips_for_every_kind() {
-        for v in 0..=11u8 {
+        for v in 0..=12u8 {
             assert_eq!(CreatureKind::from_u8(v).to_u8(), v);
         }
         assert_eq!(CreatureKind::StoneGolem.to_u8(), 2);
