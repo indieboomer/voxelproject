@@ -1,5 +1,8 @@
 # Mana and decomposition
 
+World API 1.22 exposes complete inventory snapshots, balance queries/rewards,
+and the same paid crafting/decomposition actions; see [inventory scripting](inventory-api.md).
+
 Mana is shown beside the five elements in inventory [I]. The host grants one
 mana every five seconds of play, up to 100, to each connected player. Element
 conversion in Crafting [C] can raise the balance above 100; recovery never lowers

@@ -1,4 +1,4 @@
-# Prompting with World API 1.21
+# Prompting with World API 1.22
 
 The host generates and reviews sandboxed Lua modules. The model receives the
 generated compact API reference, so schema updates must be regenerated before

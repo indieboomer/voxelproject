@@ -93,6 +93,7 @@ fn populate_api<'lua, 'scope>(
     let night = is_night(time_of_day);
     let weather_name = tx.weather.borrow().current.name();
     super::environment::populate(lua,scope,api,tx,block_budget,spawn_budget)?;
+    super::inventory::populate(lua,scope,api,tx)?;
     api.set("time_of_day", time_of_day)?;
     api.set("is_night", night)?;
     api.set("weather", weather_name)?;
@@ -550,6 +551,7 @@ fn populate_api<'lua, 'scope>(
         "give_item",
         scope.create_function(
             move |_, (player_id, kind, amount): (PlayerId, String, u32)| {
+                if let Some(g)=super::inventory::gear(&kind) {return Ok(super::inventory::equipment_change(tx,player_id,g,amount,false));}
                 if !tx.players().iter().any(|p| p.id == player_id) {
                     return Ok(false);
                 }
@@ -579,6 +581,7 @@ fn populate_api<'lua, 'scope>(
         "take_item",
         scope.create_function(
             move |_, (player_id, kind, amount): (PlayerId, String, u32)| {
+                if let Some(g)=super::inventory::gear(&kind) {return Ok(super::inventory::equipment_change(tx,player_id,g,amount,true));}
                 // The transaction includes prior accepted give/take
                 // commands, so two removals cannot spend the same funds.
                 // All inventories come from authoritative account snapshots.
@@ -634,6 +637,7 @@ fn populate_api<'lua, 'scope>(
         api.set(name, scope.create_function(move |_, (player_id, kind, amount): (PlayerId, String, Option<u32>)| {
             let amount = amount.unwrap_or(1);
             if amount == 0 { return Ok(None); }
+            if name=="has_item" {if let Some(g)=super::inventory::gear(&kind) {return Ok(tx.inventory(player_id).map(|a|a.gear[g as usize]>=amount));}}
             let Some(block) = BlockType::from_name(&kind) else { return Ok(None); };
             let Some(i) = COLLECTIBLE_BLOCKS.iter().position(|b| *b == block) else { return Ok(None); };
             Ok(tx.resource_count(player_id, i).map(|count| count >= amount))
@@ -808,9 +812,9 @@ fn populate_api<'lua, 'scope>(
             } else {
                 // Conservative charge covers creature/player scans and staged
                 // effect lookups, including methods with constant-time fast paths.
-                tx.native_scan_cost().saturating_mul(if method_name == "get_inventory" { COLLECTIBLE_BLOCKS.len() as u32 }
+                tx.native_scan_cost().saturating_mul(if method_name=="get_inventory" { COLLECTIBLE_BLOCKS.len() as u32 }
                     else if matches!(method_name.as_str(),"creatures"|"find_creatures"|"nearest_creature") {1+tx.blocks.borrow().len() as u32}
-                    else { 1 })
+                    else { 1 }).saturating_add(if ["inventory","mana","element","item","decompose"].iter().any(|s|method_name.contains(s)) {COLLECTIBLE_BLOCKS.len() as u32} else {0})
             };
             budget.charge_native_work(native_work);
             let result = function.call::<_, MultiValue>(args);

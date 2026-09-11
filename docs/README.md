@@ -6,12 +6,13 @@ multiplayer simulation, and local-AI-assisted sandboxed Lua rules.
 | Guide | Contents |
 | --- | --- |
 | [Project state](project.md) | Implemented systems, architecture, remaining acceptance work |
-| [Prompting](prompting.md) | World API 1.21, examples, transactions and limits |
+| [Prompting](prompting.md) | World API 1.22, examples, transactions and limits |
 | [Campfires](campfires.md) | Generation, visuals, light, persistence, API |
 | [Fish](fish.md) | Habitat, swimming, spawning and rule control |
 | [Wildlife](wildlife.md) | Creature visibility, exploration population, recycling and limits |
 | [Inventory](inventory.md) | Elements, equipment, resources and numbered hotbar assignment |
 | [Mana and recipes](mana.md) | Spell/rule costs, mana recovery and equipment decomposition |
+| [Inventory scripting](inventory-api.md) | Transactional resource, equipment, element and mana APIs |
 | [Water](water.md) | Currents, raised tributaries, waterfalls and audio |
 | [Rendering](rendering.md) | Lighting, wetness, effects and performance checks |
 | [Development and testing](development.md) | Build, generation tools and validation |

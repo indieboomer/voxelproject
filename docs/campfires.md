@@ -47,7 +47,7 @@ effects. Placement and
 edits use the existing authoritative block and save systems, while animation is
 local and requires no effect replication packets.
 
-## Prompting with World API 1.21
+## Prompting with World API 1.22
 
 For "create campfire nearby", use
 `api.place_campfire_near_player(event.player_id,6)` once in `on_cast`. The helper

@@ -524,7 +524,7 @@ impl DynamicMesh {
 pub struct App {
     #[cfg(feature = "steam")]
     notified_invite: Option<u64>,
-    crafting_registry: crate::crafting::Registry,
+    crafting_registry: std::sync::Arc<crate::crafting::Registry>,
     crafting_ui: crate::crafting_ui::CraftingUi,
     guest_accounts: HashMap<String, crate::crafting::Account>,
     window: Arc<Window>,
@@ -1260,7 +1260,7 @@ impl App {
         let mut app = Self {
             #[cfg(feature = "steam")]
             notified_invite: None,
-            crafting_registry: crate::crafting::Registry::load()?,
+            crafting_registry: std::sync::Arc::new(crate::crafting::Registry::load()?),
             crafting_ui: crate::crafting_ui::CraftingUi::default(),
             guest_accounts: crafting_save.guests,
             window,
@@ -1840,6 +1840,7 @@ impl App {
         self.input.end_frame();
         self.update_chunks();
         self.poll_network(dt);
+        self.scripting.inventory_registry = self.crafting_registry.clone();
         self.regenerate_mana(dt);
         self.poll_generation();
         self.poll_proposals();
@@ -2163,6 +2164,7 @@ impl App {
             return Vec::new();
         };
         let mut players = vec![PlayerSnapshot {
+                finances: crate::scripting::InventoryBalances::from_account(&self.player.crafting),
                 resources: self.player.resources_snapshot(),
             id: HOST_PLAYER_ID,
             pos: self.player.position,
@@ -2179,6 +2181,7 @@ impl App {
         }];
         for (&id, rp) in host.remote_players.iter() {
             players.push(PlayerSnapshot {
+                finances: host.clients.iter().find(|(_,pid)|**pid==id).and_then(|(peer,_)|self.guest_accounts.get(&peer.account_key(&rp.nickname))).map(crate::scripting::InventoryBalances::from_account).unwrap_or_default(),
                 resources: host.clients.iter().find(|(_, pid)| **pid == id)
                     .and_then(|(peer, _)| self.guest_accounts.get(&peer.account_key(&rp.nickname)))
                     .map(|a| a.resources).unwrap_or([0; crate::voxel::COLLECTIBLE_BLOCKS.len()]),
@@ -2505,6 +2508,17 @@ impl App {
     /// doesn't ride the snapshot.
     fn apply_player_effect(&mut self, effect: PlayerEffect) {
         match effect {
+            PlayerEffect::Inventory {player_id,balances,resources} => {
+                let account = if player_id==HOST_PLAYER_ID {&mut self.player.crafting} else {
+                    let NetRole::Host(host)=&self.net else {return;};
+                    let Some((peer,_))=host.clients.iter().find(|(_,id)|**id==player_id) else {return;};
+                    let Some(player)=host.remote_players.get(&player_id) else {return;};
+                    self.guest_accounts.entry(peer.account_key(&player.nickname)).or_default()
+                };
+                account.resources=resources;account.elements=balances.elements;account.mana=balances.mana;account.gear=balances.items;
+                account.revision=account.revision.saturating_add(1);
+                self.sync_guest_mana();
+            }
             PlayerEffect::GiveItem { player_id, block, amount } => {
                 if player_id == HOST_PLAYER_ID {
                     self.player.add_resources(block, amount);
@@ -2729,6 +2743,11 @@ impl App {
         if let Err(error) = check.spend_mana(crate::crafting::INSTANT_MANA) {
             self.notify_important(error);return;
         }
+        // Reserve the cast fee before Lua observes or spends the caster's mana.
+        let account = if let Some(ref key)=caster_account {self.guest_accounts.get_mut(key).unwrap()} else {&mut self.player.crafting};
+        account.mana-=crate::crafting::INSTANT_MANA;
+        account.revision=account.revision.saturating_add(1);
+        let players=self.host_player_positions();
         let outcome = self.scripting.run_cast(
             index,
             &self.world,
@@ -2741,13 +2760,13 @@ impl App {
         );
         self.apply_tick_outcome(outcome);
         if self.scripting.cast_succeeded(index, caster_id) {
-            let account = if let Some(key) = caster_account { self.guest_accounts.get_mut(&key).unwrap() } else { &mut self.player.crafting };
-            // Lua cannot edit mana; charge only after its transactional cast succeeds.
-            account.mana -= crate::crafting::INSTANT_MANA;
-            account.revision = account.revision.saturating_add(1);
-            self.sync_guest_mana();
             self.notify_all(format!("Host requested cast '{name}'"));
+        } else {
+            let account = if let Some(key)=caster_account {self.guest_accounts.get_mut(&key).unwrap()} else {&mut self.player.crafting};
+            account.mana=account.mana.saturating_add(crate::crafting::INSTANT_MANA);
+            account.revision=account.revision.saturating_add(1);
         }
+        self.sync_guest_mana();
     }
 
     fn poll_network(&mut self, dt: f32) {
@@ -2914,7 +2933,7 @@ impl App {
                             if let Some(old) = self.guest_accounts.remove(&nickname) { self.guest_accounts.insert(key.clone(), old); }
                         }
                         let account = self.guest_accounts.entry(key).or_default().clone();
-                        host.reliable.send(&host.socket, from, ReliableMsg::CraftRegistry(self.crafting_registry.clone()));
+                        host.reliable.send(&host.socket, from, ReliableMsg::CraftRegistry((*self.crafting_registry).clone()));
                         host.reliable.send(&host.socket, from, ReliableMsg::CraftState { account, feedback: None });
                         log::info!("Player {player_id} ('{nickname}') joined from {from}");
                         self.notify_all(format!("{nickname} joined"));
@@ -3070,7 +3089,7 @@ impl App {
                     }
 
                     ReliableMsg::CraftRegistry(registry) => {
-                        if registry.validate().is_ok() { self.crafting_registry = registry; }
+                        if registry.validate().is_ok() { self.crafting_registry = std::sync::Arc::new(registry); }
                     }
                     ReliableMsg::CraftState { account, feedback } => {
                         if account.revision >= self.player.crafting.revision || !self.inventory_ready {

@@ -353,7 +353,7 @@ impl Registry {
         }
     }
     // Run on a private account; the caller commits only after output preparation succeeds.
-    fn prepare(&self, account: &mut Account, action: &Action) -> Result<Option<Output>, String> {
+    pub(crate) fn prepare(&self, account: &mut Account, action: &Action) -> Result<Option<Output>, String> {
         match action {
             Action::Craft(slots) => {
                 let r = self.matched(slots)?;

@@ -18,7 +18,7 @@
 # (air, mud, redstone, crystal, campfire), so it can't drift out of sync with the
 # actual block system the way a third hand-copied list would.
 
-version: "1.21.0"
+version: "1.22.0"
 title: World API
 description: >
   The Lua API exposed to sandboxed rule modules as the `api` table passed
@@ -278,6 +278,7 @@ types:
     desc: "One connected player's state, as returned by players()/nearest_player()."
     fields:
       - {name: id, type: integer, desc: "Stable per-connection player id; 0 is always the host."}
+      - {name: mana, type: integer, desc: "Available mana including staged changes; use get_player_inventory for equipment and element tables."}
       - {name: x, type: number}
       - {name: y, type: number}
       - {name: z, type: number}
@@ -388,6 +389,9 @@ types:
 # Read-only fields on the `api` table itself.
 # ---------------------------------------------------------------------------
 properties:
+  - {name: instant_mana_cost, type: integer, desc: "Engine cost per successful instant cast: 5, reserved before on_cast and refunded on failure. Do not charge again in Lua."}
+  - {name: rule_mana_cost, type: integer, desc: "Engine cost for successful generated rule creation: 20, charged once to its author, no ongoing upkeep."}
+  - {name: mana_regen_cap, type: integer, desc: "Passive recovery cap: 100. Connected players gain 1 mana every 5 seconds. Explicit grants/conversion may exceed the cap."}
   - {name: is_raining, namespace: world, type: boolean, desc: "True in rain or storm; refreshes after set_weather within a callback.", since: "1.20.0"}
   - {name: campfire_light_radius, namespace: world, type: number, desc: "Campfire maximum illumination radius: 8 blocks.", since: "1.20.0"}
   - {name: fish_spawn_clearance, namespace: world, type: integer, desc: "Required water cells beyond the fish center in each horizontal direction: 3 (a full 7x7 layer plus body clearance).", since: "1.20.0"}
@@ -413,6 +417,162 @@ properties:
 # Callable functions on the `api` table.
 # ---------------------------------------------------------------------------
 methods:
+  - name: get_player_inventory
+    namespace: world
+    category: query
+    summary: "Complete detached inventory: resources maps resource IDs to counts, items maps axe/pickaxe/sword to counts, elements maps earth/fire/water/life/death to counts, and mana is an integer. Includes zeros, staged changes and earlier committed callbacks; nil for missing player."
+    params:
+      - {name: player_id, type: integer}
+    returns: {type: "table | nil"}
+    errors: []
+    since: "1.22.0"
+
+  - name: get_mana
+    namespace: world
+    category: query
+    summary: "Available mana, including staged changes. During an instant, the engine has already reserved its 5 mana cast fee; do not subtract that fee again."
+    params:
+      - {name: player_id, type: integer}
+    returns: {type: "integer | nil"}
+    errors: []
+    since: "1.22.0"
+
+  - name: get_element_count
+    namespace: world
+    category: query
+    summary: "Element count; names earth, fire, water, life, death are case insensitive. nil for missing player/unknown element."
+    params:
+      - {name: player_id, type: integer}
+      - {name: element, type: string}
+    returns: {type: "integer | nil"}
+    errors: []
+    since: "1.22.0"
+
+  - name: get_item_count
+    namespace: world
+    category: query
+    summary: "Count an equipment item (axe, pickaxe, sword) or collectible resource ID. nil for unknown player/ID."
+    params:
+      - {name: player_id, type: integer}
+      - {name: kind, type: string}
+    returns: {type: "integer | nil"}
+    errors: []
+    since: "1.22.0"
+
+  - name: give_mana
+    namespace: world
+    category: action
+    summary: "Grant mana as an explicit rule reward. Not automatic recovery. Amount must be 1..item_grant_max; false on invalid player, amount or overflow."
+    params:
+      - {name: player_id, type: integer}
+      - {name: amount, type: integer}
+    returns: {type: "boolean"}
+    errors: []
+    since: "1.22.0"
+
+  - name: take_mana
+    namespace: world
+    category: action
+    summary: "Reserve an additional custom mana cost; false leaves balances unchanged if insufficient. Do not charge the engine instant/rule fee again. Amount 1..item_grant_max."
+    params:
+      - {name: player_id, type: integer}
+      - {name: amount, type: integer}
+    returns: {type: "boolean"}
+    errors: []
+    since: "1.22.0"
+
+  - name: give_element
+    namespace: world
+    category: action
+    summary: "Grant an explicit elemental reward. Names earth/fire/water/life/death are case insensitive. Amount 1..item_grant_max; invalid input/overflow returns false."
+    params:
+      - {name: player_id, type: integer}
+      - {name: element, type: string}
+      - {name: amount, type: integer}
+    returns: {type: "boolean"}
+    errors: []
+    since: "1.22.0"
+
+  - name: take_element
+    namespace: world
+    category: action
+    summary: "Consume elements atomically; false if invalid input or insufficient balance. Amount 1..item_grant_max."
+    params:
+      - {name: player_id, type: integer}
+      - {name: element, type: string}
+      - {name: amount, type: integer}
+    returns: {type: "boolean"}
+    errors: []
+    since: "1.22.0"
+
+  - name: craft_item
+    namespace: world
+    category: action
+    summary: "Create one axe, pickaxe or sword using the same iron/oak_wood/mana formula as inventory. Optional amount defaults to 1 and must equal 1. No free gear grant. Read get_item_recipe first."
+    params:
+      - {name: player_id, type: integer}
+      - {name: kind, type: string}
+      - {name: amount, type: integer, optional: true}
+    returns: {type: "boolean"}
+    errors: []
+    since: "1.22.0"
+
+  - name: decompose_item
+    namespace: world
+    category: action
+    summary: "Consume one owned axe/pickaxe/sword and its mana cost; return salvaged iron and oak_wood per get_item_recipe. Optional amount must equal 1."
+    params:
+      - {name: player_id, type: integer}
+      - {name: kind, type: string}
+      - {name: amount, type: integer, optional: true}
+    returns: {type: "boolean"}
+    errors: []
+    since: "1.22.0"
+
+  - name: decompose_resource
+    namespace: world
+    category: action
+    summary: "Consume 1..item_grant_max resource units and the same amount of mana, granting their catalog elements. Optional amount defaults to 1. False on invalid inputs, missing resources/mana or overflow; no partial changes."
+    params:
+      - {name: player_id, type: integer}
+      - {name: kind, type: string}
+      - {name: amount, type: integer, optional: true}
+    returns: {type: "boolean"}
+    errors: []
+    since: "1.22.0"
+
+  - name: convert_elements_to_mana
+    namespace: world
+    category: action
+    summary: "Convert elements into mana at the host crafting registry conversion rate. Amount 1..item_grant_max, default 1. No additional mana fee. False if invalid/insufficient/overflow."
+    params:
+      - {name: player_id, type: integer}
+      - {name: element, type: string}
+      - {name: amount, type: integer, optional: true}
+    returns: {type: "boolean"}
+    errors: []
+    since: "1.22.0"
+
+  - name: get_resource_elements
+    namespace: world
+    category: query
+    summary: "Per-unit composition from the host crafting catalog, keyed by earth/fire/water/life/death including zeros. nil for non-resource ID; a zero composition cannot be decomposed."
+    params:
+      - {name: kind, type: string}
+    returns: {type: "table | nil"}
+    errors: []
+    since: "1.22.0"
+
+  - name: get_item_recipe
+    namespace: world
+    category: query
+    summary: "For axe/pickaxe/sword returns create and decompose tables. Each has resources={iron=count, oak_wood=count} and mana=cost. Create consumes listed materials; decompose returns them. nil for unknown equipment."
+    params:
+      - {name: kind, type: string}
+    returns: {type: "table | nil"}
+    errors: []
+    since: "1.22.0"
+
   - name: place_campfire_near_player
     namespace: world
     category: action
@@ -845,12 +1005,12 @@ methods:
   - name: give_item
     namespace: world
     category: action
-    summary: "Grants items straight into a player's Resources inventory (the panel populated by hand-gathering blocks), bypassing the world entirely. Only use this when the request explicitly asks to add to a player's inventory/resources -- for everything else (\"add 100 stone\", \"fill this area with water\"), prefer replace_block to place blocks in the world instead."
+    summary: "Grants collectible resources or equipment IDs axe/pickaxe/sword into a connected player inventory, bypassing crafting costs. Equipment amounts must be 1..item_grant_max and overflow is rejected; legacy resource grants clamp the amount and saturate balances. Only use this when the request explicitly asks to add to a player's inventory/resources -- for everything else (\"add 100 stone\", \"fill this area with water\"), prefer replace_block to place blocks in the world instead."
     params:
       - {name: player_id, type: integer, desc: "Target player (matches PlayerSnapshot.id)."}
-      - {name: kind, type: string, desc: "A block id from block_kinds, but only the ones gatherable by hand (a resource, not e.g. \"air\" or \"water\") count -- anything else is rejected."}
-      - {name: amount, type: integer, desc: "Clamped into [0, item_grant_max]."}
-    returns: {type: boolean, desc: "false if kind isn't a grantable resource, player_id isn't connected, or amount clamped to 0 -- these failure cases are indistinguishable from Lua. true otherwise."}
+      - {name: kind, type: string, desc: "A collectible resource ID or equipment ID axe/pickaxe/sword. Air, water and campfire are not inventory stacks."}
+      - {name: amount, type: integer, desc: "Resource grants clamp into [0, item_grant_max]; equipment requires 1..item_grant_max."}
+    returns: {type: boolean, desc: "false for invalid ID/player/amount or equipment overflow. True stages the grant."}
     errors: []
     budget_ref: item_grant_max
     since: "1.1.0"
@@ -858,7 +1018,7 @@ methods:
   - name: take_item
     namespace: world
     category: action
-    summary: "Atomically remove resources from any connected player's authoritative inventory, including guests. Staged grants/removals and earlier committed callbacks are included; failed callbacks roll back."
+    summary: "Atomically remove collectible resources or equipment IDs axe/pickaxe/sword from any connected player. Includes staged changes; failure rolls back. Equipment amounts must be 1..item_grant_max. This consumes items without decomposition returns."
     params:
       - {name: player_id, type: integer}
       - {name: kind, type: string}
@@ -881,7 +1041,7 @@ methods:
   - name: get_inventory
     namespace: world
     category: query
-    summary: "Return a detached table mapping all collectible resource IDs to counts, including zeros, for any connected player. Includes staged changes. Editing this table does not modify inventory. Equipment/items outside the resource catalog are not implemented."
+    summary: "Legacy resource-only inventory map, including zeros and staged changes. Use get_player_inventory for resources, equipment, elements and mana together. Editing returned tables changes nothing."
     params:
       - {name: player_id, type: integer}
     returns: {type: "table | nil", desc: "Resource ID to count table, or nil for a missing player."}
@@ -903,7 +1063,7 @@ methods:
   - name: has_item
     namespace: world
     category: query
-    summary: "Alias of has_resource for the current resource inventory. No separate equipment-item system exists. Omitted amount defaults to 1; compare result to false to check absence without confusing nil with empty inventory."
+    summary: "Checks equipment IDs axe/pickaxe/sword or collectible resource IDs. Omitted amount defaults to 1; false means insufficient count, nil means missing player or invalid ID/amount. Includes staged changes."
     params:
       - {name: player_id, type: integer}
       - {name: kind, type: string}

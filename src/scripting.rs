@@ -28,6 +28,8 @@ use crate::world_api_gen::{
 mod api;
 #[path = "script_environment.rs"]
 mod environment;
+#[path = "script_inventory.rs"]
+mod inventory;
 #[path = "script_scheduler.rs"]
 mod scheduler;
 #[path = "script_transaction.rs"]
@@ -68,6 +70,7 @@ const MAX_ITEM_GRANT_AMOUNT: u32 = 500;
 /// see `App::host_player_positions`.
 #[derive(Clone, Copy)]
 pub struct PlayerSnapshot {
+    pub finances: InventoryBalances,
     pub resources: [u32; COLLECTIBLE_BLOCKS.len()],
     pub id: PlayerId,
     pub pos: Vec3,
@@ -84,6 +87,18 @@ pub struct PlayerSnapshot {
     /// `player::OXYGEN_DRAIN_PER_SEC`/`_REGEN_PER_SEC`. Read-only from Lua;
     /// there's no `api.set_player_oxygen`, since submersion alone drives it.
     pub oxygen: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct InventoryBalances {
+    pub mana: u32,
+    pub elements: [u32; 5],
+    pub items: [u32; 4],
+}
+impl InventoryBalances {
+    pub fn from_account(account: &crate::crafting::Account) -> Self {
+        Self {mana:account.mana,elements:account.elements,items:account.gear}
+    }
 }
 
 /// A player-caused block break (mining, not a rule's own `replace_block`),
@@ -123,6 +138,7 @@ pub struct InteractEvent {
 /// growing a new field for every future player-targeted action.
 #[derive(Debug, PartialEq)]
 pub enum PlayerEffect {
+    Inventory { player_id: PlayerId, balances: InventoryBalances, resources: [u32; COLLECTIBLE_BLOCKS.len()] },
     /// `api.give_item` -- always succeeds once accepted (there's no
     /// "insufficient inventory" failure mode for adding), so nothing else
     /// needs to observe the outcome.
@@ -307,6 +323,7 @@ impl Module {
     }
 
     fn execute(&mut self, input: &mut TickInput, event: Callback) -> mlua::Result<()> {
+        let registry = self.lua.app_data_ref::<std::sync::Arc<crate::crafting::Registry>>().map(|r|r.clone()).unwrap_or_else(default_inventory_registry);
         self.last_work = WorkUsage::default();
         let initialization_work = if self.needs_reload {
             crate::world_api_gen::SCRIPT_INSTRUCTIONS
@@ -326,6 +343,7 @@ impl Module {
             replacement.activation_epoch = self.activation_epoch;
             *self = replacement;
         }
+        self.lua.set_app_data(registry);
         let result = self.budget.run(|| {
             let mut tx = CallbackTransaction::new(input, self.spawn_seed.get());
             if matches!(event, Callback::Tick) { tx.policy_owner = Some((self.runtime_id, self.activation_epoch)); }
@@ -567,6 +585,7 @@ fn horizontal_speed(v: Vec3) -> f32 {
 /// -- factored out so the two don't drift out of sync (`nearest_player`
 /// just adds its own `distance` on top).
 fn set_player_fields<'lua>(e: &Table<'lua>, p: &PlayerSnapshot) -> mlua::Result<()> {
+    e.set("mana",p.finances.mana)?;
     e.set("id", p.id)?;
     e.set("x", p.pos.x)?;
     e.set("y", p.pos.y)?;
@@ -613,6 +632,7 @@ fn random_offset_in_disk(seed: u64, radius: f32) -> (f32, f32) {
 /// (block edits replicate reliably, creature positions ride the existing
 /// snapshot broadcast).
 pub struct ScriptHost {
+    pub inventory_registry: std::sync::Arc<crate::crafting::Registry>,
     last_cast_success: Option<(u64, PlayerId)>,
     pub modules: Vec<Module>,
     scheduler: scheduler::Scheduler,
@@ -622,6 +642,7 @@ pub struct ScriptHost {
 impl ScriptHost {
     pub fn new() -> Self {
         Self {
+            inventory_registry: default_inventory_registry(),
             modules: Vec::new(),
             scheduler: scheduler::Scheduler::default(),
             last_cast_success: None,
@@ -826,6 +847,11 @@ impl ScriptHost {
     }
 }
 
+fn default_inventory_registry() -> std::sync::Arc<crate::crafting::Registry> {
+    static REGISTRY: std::sync::OnceLock<std::sync::Arc<crate::crafting::Registry>> = std::sync::OnceLock::new();
+    REGISTRY.get_or_init(||std::sync::Arc::new(crate::crafting::Registry::parse(include_str!("../data/crafting.json")).expect("embedded crafting registry"))).clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -855,6 +881,7 @@ mod tests {
     /// id/pos/carrying_crystal, matching the old 3-tuple's shape.
     fn snapshot(id: PlayerId, pos: Vec3, carrying_crystal: bool) -> PlayerSnapshot {
         PlayerSnapshot {
+                finances: Default::default(),
                 resources: [0; COLLECTIBLE_BLOCKS.len()],
             id,
             pos,
@@ -1655,6 +1682,7 @@ mod tests {
         let world = World::new(1);
         let mut creatures = Creatures::new();
         let players = vec![PlayerSnapshot {
+                finances: Default::default(),
                 resources: [0; COLLECTIBLE_BLOCKS.len()],
             id: 3,
             pos: Vec3::new(0.0, 0.0, 0.0),
@@ -1881,6 +1909,7 @@ mod tests {
         let mut creatures = Creatures::new();
         let target_pos = Vec3::new(4.0, 5.0, 4.0);
         let players = vec![PlayerSnapshot {
+                finances: Default::default(),
                 resources: [0; COLLECTIBLE_BLOCKS.len()],
             id: 9,
             pos: target_pos,
@@ -1946,6 +1975,7 @@ mod tests {
         let world = World::new(1);
         let mut creatures = Creatures::new();
         let players = vec![PlayerSnapshot {
+                finances: Default::default(),
                 resources: [0; COLLECTIBLE_BLOCKS.len()],
             id: 9,
             pos: Vec3::new(4.0, 5.0, 4.0),
@@ -2012,6 +2042,7 @@ mod tests {
         module.enabled = true;
 
         let grounded = PlayerSnapshot {
+                finances: Default::default(),
                 resources: [0; COLLECTIBLE_BLOCKS.len()],
             id: 0,
             pos: Vec3::new(0.0, 0.0, 0.0),
@@ -2046,6 +2077,7 @@ mod tests {
         );
 
         let jumping = PlayerSnapshot {
+                finances: Default::default(),
                 resources: [0; COLLECTIBLE_BLOCKS.len()],
             id: 0,
             pos: Vec3::new(0.0, 1.0, 0.0),
@@ -2094,6 +2126,7 @@ mod tests {
         module.enabled = true;
 
         let already_airborne = PlayerSnapshot {
+                finances: Default::default(),
                 resources: [0; COLLECTIBLE_BLOCKS.len()],
             id: 0,
             pos: Vec3::new(0.0, 3.0, 0.0),
@@ -3669,6 +3702,7 @@ mod behavior_api_tests {
             "function on_cast(api,e) assert(api.set_target({a}, 'player', 7)); assert(api.attack({a})) end"
         )).unwrap());
         let players=[PlayerSnapshot {
+                finances: Default::default(),
                 resources: [0; COLLECTIBLE_BLOCKS.len()], id: 7, pos, carrying_crystal: false, health: 20.0,
             sprinting: false, on_ground: true, velocity: Vec3::ZERO, in_water: false, poisoned: false,
             speed_multiplier: 1.0, jump_multiplier: 1.0, oxygen: 100.0 }];
@@ -3690,7 +3724,7 @@ mod behavior_api_tests {
                 "function on_tick(api) if api.weather=='rain' then api.protect_player(7,'wolf') end end".into()).unwrap();
             m.enabled=true;host.modules.push(m);
         }
-        let players=[PlayerSnapshot { resources:[0;COLLECTIBLE_BLOCKS.len()], id:7,pos,carrying_crystal:false,velocity:Vec3::ZERO,
+        let players=[PlayerSnapshot { finances: Default::default(), resources:[0;COLLECTIBLE_BLOCKS.len()], id:7,pos,carrying_crystal:false,velocity:Vec3::ZERO,
             on_ground:true,sprinting:false,in_water:false,health:20.0,poisoned:false,speed_multiplier:1.0,jump_multiplier:1.0,oxygen:100.0 }];
         let mut weather=WeatherState::new(1);weather.set(Weather::Rain);
         let out=host.run_tick(&world,&mut creatures,&players,&mut 0.25,&mut weather,&[],&[],[0;COLLECTIBLE_BLOCKS.len()]);
@@ -3719,7 +3753,7 @@ mod behavior_api_tests {
         let mut m=Module::load("fails".into(),String::new(),
             "local n=0 function on_tick(api) n=n+1 api.protect_player(7,'wolf') if n>1 then error('failed') end end".into()).unwrap();
         m.enabled=true;host.modules.push(m);
-        let players=[PlayerSnapshot { resources:[0;COLLECTIBLE_BLOCKS.len()],id:7,pos,carrying_crystal:false,velocity:Vec3::ZERO,
+        let players=[PlayerSnapshot { finances: Default::default(), resources:[0;COLLECTIBLE_BLOCKS.len()],id:7,pos,carrying_crystal:false,velocity:Vec3::ZERO,
             on_ground:true,sprinting:false,in_water:false,health:20.0,poisoned:false,speed_multiplier:1.0,jump_multiplier:1.0,oxygen:100.0 }];
         for n in 0..2 {
             host.run_tick(&world,&mut creatures,&players,&mut 0.25,&mut WeatherState::new(1),&[],&[],[0;COLLECTIBLE_BLOCKS.len()]);

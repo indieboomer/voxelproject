@@ -1,6 +1,75 @@
 use super::*;
 
 #[test]
+fn inventory_economy_reads_staged_balances_for_host_and_guest_and_rolls_back() {
+    let mut f=Fixture::new();
+    f.players[0].finances=InventoryBalances {mana:100,elements:[0;5],items:[1,1,1,0]};
+    let mut guest=f.players[0];guest.id=7;guest.resources=[0;COLLECTIBLE_BLOCKS.len()];f.players.push(guest);
+    let body=r#"
+        for _,id in ipairs({0,7}) do
+            assert(api.give_item(id,'iron',3)); assert(api.give_item(id,'oak_wood',2))
+            assert(api.craft_item(id,'pickaxe')); assert(api.get_item_count(id,'pickaxe')==2)
+            assert(api.has_item(id,'pickaxe',2)); assert(api.get_mana(id)==94)
+            assert(api.decompose_item(id,'pickaxe')); assert(api.get_mana(id)==91)
+            assert(api.get_inventory(id).iron==2 and api.get_resource_count(id,'oak_wood')==1)
+            assert(api.give_item(id,'stone',2)); assert(api.decompose_resource(id,'stone',2))
+            assert(api.get_element_count(id,'Earth')==2)
+            assert(api.convert_elements_to_mana(id,'earth',2))
+            assert(api.take_mana(id,1)); assert(api.give_element(id,'fire',4)); assert(api.take_element(id,'Fire',1))
+            local inventory=api.get_player_inventory(id)
+            assert(inventory.mana==90 and inventory.elements.fire==3 and inventory.elements.earth==0)
+            assert(inventory.items.pickaxe==1 and inventory.items.sword==1)
+            inventory.mana=999;inventory.elements.fire=999
+            assert(api.get_mana(id)==90 and api.get_element_count(id,'fire')==3)
+            local recipe=api.get_item_recipe('pickaxe')
+            assert(recipe.create.mana==6 and recipe.decompose.resources.iron==2)
+            assert(api.get_resource_elements('stone').earth==1)
+            assert(not api.take_mana(id,100)); assert(not api.craft_item(id,'pickaxe'))
+            assert(api.get_mana(id)==90)
+        end
+        assert(api.get_mana(99)==nil and api.get_item_count(7,'bow')==nil)
+        assert(not api.give_element(7,'light',1) and not api.give_mana(7,0))
+    "#;
+    let mut m=module("on_cast",body);
+    let (out,_)=f.invoke(&mut m,"on_cast");assert!(m.error.is_none(),"{:?}",m.error);
+    assert!(out.player_effects.iter().any(|e|matches!(e,PlayerEffect::Inventory{player_id:7,..})));
+    let mut m=module("on_cast",&format!("{body}\nerror('rollback')"));
+    let (out,_)=f.invoke(&mut m,"on_cast");assert!(m.error.is_some());assert!(out.player_effects.is_empty());
+}
+
+#[test]
+fn inventory_uses_configured_registry_and_rejects_overflow() {
+    let mut f=Fixture::new();
+    f.players[0].finances=InventoryBalances{mana:u32::MAX,elements:[2,0,0,0,0],items:[0;4]};
+    let mut registry=crate::crafting::Registry::parse(include_str!("../data/crafting.json")).unwrap();registry.conversion_rate=3;
+    let mut m=module("on_cast",r#"
+        assert(not api.give_mana(0,1))
+        assert(not api.convert_elements_to_mana(0,'earth',2))
+        assert(api.get_element_count(0,'earth')==2)
+        assert(api.take_mana(0,6))
+        assert(api.convert_elements_to_mana(0,'earth',2))
+        assert(api.get_mana(0)==4294967295 and api.get_element_count(0,'earth')==0)
+        assert(not api.decompose_item(0,'sword'))
+    "#);
+    m.lua.set_app_data(std::sync::Arc::new(registry));
+    let (_,_) = f.invoke(&mut m,"on_cast");assert!(m.error.is_none(),"{:?}",m.error);
+}
+
+#[test]
+fn inventory_balances_flow_between_committed_callbacks() {
+    let mut f=Fixture::new();
+    let mut guest=f.players[0];guest.id=7;guest.finances=InventoryBalances{mana:10,..Default::default()};f.players.push(guest);
+    let mut host=ScriptHost::new();
+    host.modules.push(module("on_tick","assert(api.give_mana(7,2)); assert(api.give_item(7,'axe',1)); assert(api.give_element(7,'life',3))"));
+    host.modules.push(module("on_tick","assert(api.get_player_inventory(7).mana==12); assert(api.has_item(7,'axe')); assert(api.get_element_count(7,'life')==3); assert(api.take_item(7,'axe',1)); assert(api.take_mana(7,2))"));
+    for m in &mut host.modules {m.enabled=true;assert!(crate::world_api_validate::validate_source(&m.source).is_empty());}
+    let out=host.run_tick(&f.world,&mut f.creatures,&f.players,&mut f.time,&mut f.weather,&[],&[],f.resources);
+    assert!(out.crashes.is_empty(),"{:?}",out.crashes);
+    let last=out.player_effects.iter().rev().find_map(|e|match e {PlayerEffect::Inventory{player_id:7,balances,..}=>Some(balances),_=>None}).unwrap();
+    assert_eq!(last.mana,10);assert_eq!(last.items[0],0);assert_eq!(last.elements[3],3);
+}
+
+#[test]
 fn nearby_campfire_search_uses_edited_ground_avoids_players_and_rolls_back() {
     let mut f=environment_fixture();
     f.players[0].pos=Vec3::new(8.5,32.0,8.5);
@@ -182,6 +251,7 @@ impl Fixture {
             time: 0.25,
             resources,
             players: vec![PlayerSnapshot {
+                finances: Default::default(),
                 resources: [0; COLLECTIBLE_BLOCKS.len()],
                 id: HOST_PLAYER_ID,
                 pos: Vec3::ZERO,

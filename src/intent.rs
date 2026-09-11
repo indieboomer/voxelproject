@@ -324,7 +324,7 @@ fn focused_prompt(plan: &Plan) -> String {
                 .iter()
                 .any(|k| method.contains(k)),
                 "players" => method.contains("player") || method.contains("poison"),
-                "inventory" => ["inventory", "resource", "item"]
+                "inventory" => ["inventory", "resource", "item", "mana", "element", "decompose"]
                     .iter()
                     .any(|k| method.contains(k)),
                 "weather" => ["weather", "rain"].iter().any(|k| method.contains(k)),
@@ -509,6 +509,7 @@ fn smoke_code(code: &str, kind: PromptKind) -> Result<(), String> {
         ("sunny", 0.75),
     ] {
         let players = [0, 7].map(|id| PlayerSnapshot {
+            finances: crate::scripting::InventoryBalances {mana:100,elements:[20;5],items:[1,1,1,0]},
             id,
             pos,
             resources: [1; COLLECTIBLE_BLOCKS.len()],
@@ -592,6 +593,7 @@ pub fn verify_policy(plan: &Plan, code: &str) -> Result<(), String> {
     let mut creatures = Creatures::new();
     let id = creatures.spawn_one(CreatureKind::from_u8(species), pos, 1);
     let players = [0, 7].map(|id| PlayerSnapshot {
+        finances: crate::scripting::InventoryBalances {mana:100,elements:[20;5],items:[1,1,1,0]},
         id,
         pos,
         resources: [0; COLLECTIBLE_BLOCKS.len()],
@@ -780,6 +782,15 @@ mod tests {
         let prompt = focused_prompt(&p);
         assert!(prompt.contains("- api.protect_player("));
         assert!(!prompt.contains("- api.give_item("));
+    }
+    #[test]
+    fn focused_inventory_context_contains_current_economy() {
+        let mut p=plan();p.api_groups=vec!["inventory".into()];
+        let prompt=focused_prompt(&p);
+        for name in ["get_player_inventory","get_mana","give_element","craft_item","decompose_resource","convert_elements_to_mana","get_item_recipe"] {
+            assert!(prompt.contains(&format!("- api.{name}(")),"missing {name}");
+        }
+        assert!(!prompt.contains("There is no separate equipment-item catalog yet"));
     }
     #[test]
     #[ignore = "live preflight timing and semantic checks; requires local llama-server"]

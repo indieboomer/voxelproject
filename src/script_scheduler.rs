@@ -418,6 +418,7 @@ impl ScriptHost {
             if !queue.events.is_empty() {
                 self.scheduler.ready.push_back(queue);
             }
+            module.lua.set_app_data(self.inventory_registry.clone());
             let result = module.execute(input, event.callback());
             budget.record(module.last_work);
             match result {

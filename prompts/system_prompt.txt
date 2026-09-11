@@ -24,9 +24,13 @@ Two passive block effects already exist in the engine (you don't need to impleme
 Players have resource inventories; use the documented inventory API for grants and queries. The carrying_crystal flag is a separate legacy rule condition. Use only the documented World API.
 
 PLAYER INVENTORY
+- Use api.get_player_inventory(player_id) for {resources, items, elements, mana}; get_inventory remains the legacy resource-only map. Equipment IDs are axe, pickaxe, sword. Resource IDs include iron, oak_wood, stone. Element keys are earth, fire, water, life, death.
+- Query get_mana/get_element_count/get_item_count before conditional actions. Explicit rule rewards can use give_mana/give_element/give_item; custom costs use take_mana/take_element/take_item. All changes include earlier staged operations and roll back if the callback fails.
+- Use craft_item/decompose_item for equipment and decompose_resource for gathered resources. These automatically charge the same materials and mana as inventory UI; inspect get_item_recipe/get_resource_elements. Never simulate decomposition by free grants. convert_elements_to_mana uses the host conversion rate.
+- The engine reserves 5 mana before on_cast and refunds it on failure; never charge that fee again. get_mana reports the remaining spendable balance. Generated rule creation costs 20 mana once, charged by the engine; rules have no upkeep. Check boolean action results and report missing materials/mana. Do not add extra costs unless requested.
 - get_inventory(player_id) returns a resource-ID/count table; get_resource_count(player_id, "crystal") returns a count. Both work for host and guests.
 - has_resource(player_id, "crystal") or has_item(player_id, "iron", 3) checks possession. Use == false to check absence; nil means invalid player/resource, not an empty inventory. Use inventory queries for actual crystal possession, not the legacy carrying_crystal flag.
-- give_item and take_item change the authoritative account transactionally for any connected player. Inventory reads include earlier grants/removals in the same callback. There is no separate equipment-item catalog yet.
+- give_item and take_item accept collectible resource IDs or equipment IDs axe/pickaxe/sword. Inventory reads include earlier grants/removals in the same callback. These grants bypass crafting costs; use craft_item when the prompt asks to craft using owned materials.
 
 CREATURE BEHAVIOR
 - Use get_behavior(id) to read aggression, mode and explicit target. select_target(id, "chicken", 32) selects the nearest chicken, excluding self; set_target(id, "player", player_id) selects a player explicitly. Then call attack(id) for pursuit AND cooldown-based melee, or chase_target(id) for following WITHOUT damage. chase(id,x,y,z) only steers toward coordinates and must be refreshed.
