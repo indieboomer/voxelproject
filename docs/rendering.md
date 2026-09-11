@@ -1,5 +1,8 @@
 # Lighting and surface weather
 
+Creature meshes now obey the terrain draw radius and require a terrain mesh in
+their chunk, on host and guests. See [wildlife](wildlife.md) for population limits.
+
 Wind ribbons use short, crisp rectangular strokes with stepped heights and four
 opacity bands. Their shape animates at eight frames per second while wind drift
 stays continuous. The existing particle count, vertex budget and draw call are

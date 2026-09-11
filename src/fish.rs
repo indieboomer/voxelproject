@@ -370,6 +370,7 @@ impl Creatures {
             return;
         }
         for offset in 0..regions.len().min(8) {
+            if !self.has_population_room() || self.ecs.query::<&Fish>().iter().count() >= 32 { break; }
             let cell = regions[(self.fish_scan_cursor + offset) % regions.len()];
             let seed = world.seed as u64
                 ^ (cell.0 as u64).wrapping_mul(0x9E3779B185EBCA87)
@@ -391,7 +392,8 @@ impl Creatures {
             {
                 continue;
             }
-            self.spawn_one(CreatureKind::Fish, pos, seed);
+            let id = self.spawn_one(CreatureKind::Fish, pos, seed);
+            self.wildlife.insert(id, Some(cell));
             self.fish_regions.insert(cell);
         }
         self.fish_scan_cursor = (self.fish_scan_cursor + 8) % regions.len();

@@ -9,6 +9,7 @@ multiplayer simulation, and local-AI-assisted sandboxed Lua rules.
 | [Prompting](prompting.md) | World API 1.21, examples, transactions and limits |
 | [Campfires](campfires.md) | Generation, visuals, light, persistence, API |
 | [Fish](fish.md) | Habitat, swimming, spawning and rule control |
+| [Wildlife](wildlife.md) | Creature visibility, exploration population, recycling and limits |
 | [Water](water.md) | Currents, raised tributaries, waterfalls and audio |
 | [Rendering](rendering.md) | Lighting, wetness, effects and performance checks |
 | [Development and testing](development.md) | Build, generation tools and validation |

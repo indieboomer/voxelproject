@@ -19,6 +19,7 @@ pub struct CraftingSave {
     pub behaviors: std::collections::BTreeMap<u32, crate::creature::CreatureBehavior>,
     pub dragons: crate::creature::DragonSave,
     pub fish: crate::creature::FishSave,
+    pub wildlife: std::collections::BTreeMap<u32, Option<(i32, i32)>>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SaveV2 {

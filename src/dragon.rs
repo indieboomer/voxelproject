@@ -82,6 +82,7 @@ impl Creatures {
     /// Called only by the host as players explore. No dragon belongs to the
     /// ordinary starter scatter. Marked regions stay consumed even after death.
     pub fn discover_dragons(&mut self, world: &World, players: &[(PlayerId, Vec3)]) {
+        if !self.has_population_room() || self.ecs.query::<&Dragon>().iter().count() >= 8 { return; }
         for &(_, player) in players {
             if !player.is_finite() || player.abs().max_element() > 1_000_000.0 {
                 continue;
@@ -120,6 +121,7 @@ impl Creatures {
                         continue;
                     }
                     home.y = surface(world, home, 6.0);
+                    if !self.has_population_room() || self.ecs.query::<&Dragon>().iter().count() >= 8 { return; }
                     self.spawn_one(kind, home, seed);
                     self.dragon_regions.insert(cell);
                 }

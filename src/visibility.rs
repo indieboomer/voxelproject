@@ -1,5 +1,8 @@
 //! Conservative chunk culling for separate camera and sun frusta.
 use glam::{Mat4, Vec3, Vec4};
+pub fn within_terrain_range(cell: (i32, i32), center: (i32, i32), radius: i32) -> bool {
+    (cell.0 - center.0).abs() <= radius && (cell.1 - center.1).abs() <= radius
+}
 pub struct Frustum {
     planes: [Vec4; 6],
 }
@@ -38,6 +41,14 @@ impl Frustum {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn creatures_share_terrain_boundary_after_travel() {
+        for center in [(0,0),(-100,83),(1000,-900)] {
+            assert!(within_terrain_range((center.0+5,center.1-5),center,5));
+            assert!(!within_terrain_range((center.0+6,center.1),center,5));
+            assert!(!within_terrain_range((center.0,center.1-6),center,5));
+        }
+    }
     #[test]
     fn retained_ring_does_not_expand_camera_draws_after_travel() {
         for center in [0, 128, 1024] {

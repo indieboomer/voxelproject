@@ -614,6 +614,9 @@ pub enum AttackPolicy {
 }
 
 pub struct Creatures {
+    pub(crate) wildlife: std::collections::BTreeMap<u32, Option<(i32, i32)>>,
+    population_timer: f32,
+    population_sequence: u64,
     start_protection: std::collections::BTreeMap<PlayerId,f32>,
     fish_regions: std::collections::BTreeSet<(i32, i32)>,
     fish_scan_timer: f32,
@@ -626,6 +629,9 @@ pub struct Creatures {
     pub combat_deaths: Vec<DeathEvent>,
     pub attack_policies: std::collections::BTreeMap<(u64, u64), Vec<AttackPolicy>>,
 }
+
+#[path = "wildlife.rs"]
+mod wildlife;
 
 /// A callback's private creature view and ordered commands. No live ECS
 /// mutation occurs until commit, so discarded drafts also preserve AI,
@@ -744,6 +750,9 @@ impl Creatures {
     pub fn new() -> Self {
         Self {
             start_protection: Default::default(),
+            wildlife: Default::default(),
+            population_timer: 0.0,
+            population_sequence: 0,
             dragon_regions: Default::default(),
             fish_regions: Default::default(),
             fish_scan_timer: 0.0,
@@ -774,11 +783,12 @@ impl Creatures {
             } else {find_land_spot(world,&mut rng,center.x,center.z,24.0)};
             if let Some((x, z)) = spot {
                 let y = world.terrain_height(x.floor() as i32, z.floor() as i32) as f32 + 1.0;
-                self.spawn_with_rng(
+                let id = self.spawn_with_rng(
                     kind,
                     Vec3::new(x, y, z),
                     (seed as u64).wrapping_add(i as u64 * 7919) ^ 0xA5A5A5,
                 );
+                self.wildlife.insert(id, None);
             }
         }
     }
@@ -1135,6 +1145,7 @@ impl Creatures {
         std::mem::take(&mut self.pending_audio)
     }
 
+    #[cfg(test)]
     pub fn build_mesh(&self, models: &Models) -> MeshData {
         let mut vertices = Vec::new();
         let mut indices = Vec::new();

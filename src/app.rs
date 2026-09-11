@@ -675,6 +675,7 @@ impl App {
             behaviors: self.creatures.behaviors.clone(),
             dragons: self.creatures.save_dragons(),
             fish: self.creatures.save_fish(),
+            wildlife: self.creatures.wildlife.clone(),
         }
     }
 
@@ -1215,6 +1216,7 @@ impl App {
         }
         creatures.restore_dragons(crafting_save.dragons);
         creatures.restore_fish(crafting_save.fish);
+        creatures.wildlife.extend(crafting_save.wildlife);
         let weather = WeatherState::new(world.seed);
         let rain_particles = build_rain_particles(world.seed);
         let lightning_seed = world.seed;
@@ -1822,6 +1824,7 @@ impl App {
                 .collect();
             self.scripting.sync_attack_policies(&mut self.creatures);
             self.creatures.update_start_protection(dt,&player_targets);
+            self.creatures.populate_wildlife(&self.world, &player_targets, dt);
             self.creatures.discover_dragons(&self.world, &player_targets);
             self.creatures.discover_fish(&self.world, &player_targets, dt);
             let golem_attacks = self.creatures.update(&self.world, dt, &player_targets);
@@ -1890,10 +1893,17 @@ impl App {
             NetRole::Host(_) => self.audio.update_creature_flight(&self.creatures.snapshot()),
             NetRole::Joined(client) => self.audio.update_creature_flight(&client.creature_snapshot),
         }
-        let mut mesh = match &self.net {
-            NetRole::Host(_) => self.creatures.build_mesh(&self.models),
-            NetRole::Joined(client) => mesh_for_snapshot(&client.creature_snapshot, &self.models),
+        let mut visible_creatures = match &self.net {
+            NetRole::Host(_) => self.creatures.snapshot(),
+            NetRole::Joined(client) => client.creature_snapshot.clone(),
         };
+        let center = chunk_of(self.player.position);
+        visible_creatures.retain(|entry| {
+            let cell = chunk_of(Vec3::from_array(entry.0));
+            crate::visibility::within_terrain_range(cell, center, RENDER_RADIUS)
+                && self.chunk_meshes.contains_key(&cell)
+        });
+        let mut mesh = mesh_for_snapshot(&visible_creatures, &self.models);
         let remote_players = match &self.net {
             NetRole::Host(host) => &host.remote_players,
             NetRole::Joined(client) => &client.remote_players,
@@ -3133,11 +3143,23 @@ impl App {
         let pcx = (self.player.position.x.floor() as i32).div_euclid(CHUNK_X);
         let pcz = (self.player.position.z.floor() as i32).div_euclid(CHUNK_Z);
 
+        // The authoritative world needs spawn terrain around distant guests too.
+        let remote_chunks: Vec<_> = match &self.net {
+            NetRole::Host(host) => host.remote_players.values()
+                .filter(|p| p.pos.is_finite() && p.pos.abs().max_element() < 1_000_000.0)
+                .map(|p| chunk_of(p.pos)).collect(),
+            NetRole::Joined(_) => Vec::new(),
+        };
+        let mut centers = vec![(pcx,pcz)];
+        centers.extend(remote_chunks.iter().copied());
         let mut missing=Vec::new();
-        for cx in pcx-RENDER_RADIUS..=pcx+RENDER_RADIUS {for cz in pcz-RENDER_RADIUS..=pcz+RENDER_RADIUS {
+        for &(center_x,center_z) in &centers {
+        for cx in center_x-RENDER_RADIUS..=center_x+RENDER_RADIUS {for cz in center_z-RENDER_RADIUS..=center_z+RENDER_RADIUS {
             if !self.world.chunks.contains_key(&(cx,cz)){missing.push((cx,cz));}
-        }}
-        missing.sort_unstable_by_key(|&(x,z)|((x-pcx).pow(2)+(z-pcz).pow(2),x,z));
+        }}}
+        missing.sort_unstable();
+        missing.dedup();
+        missing.sort_unstable_by_key(|&(x,z)|(centers.iter().map(|&(cx,cz)|(i64::from(x)-i64::from(cx)).pow(2)+(i64::from(z)-i64::from(cz)).pow(2)).min().unwrap(),x,z));
         let generation_start=Instant::now();
         for (i,(cx,cz)) in missing.into_iter().enumerate() {
             if i>0 && (i>=2 || generation_start.elapsed()>=CHUNK_GENERATION_BUDGET){break;}
@@ -3173,17 +3195,12 @@ impl App {
         }
         let _ = rebuilt;
 
-        let remote_chunks: Vec<_> = match &self.net {
-            NetRole::Host(host) => host.remote_players.values().filter(|p| p.pos.is_finite() && p.pos.abs().max_element() < 1_000_000.0)
-                .map(|p| chunk_of(p.pos)).collect(),
-            NetRole::Joined(_) => Vec::new(),
-        };
         let unload: Vec<(i32, i32)> = self
             .world
             .chunks
             .keys()
             .filter(|(cx, cz)| ((cx - pcx).abs() > UNLOAD_RADIUS || (cz - pcz).abs() > UNLOAD_RADIUS)
-                && !remote_chunks.iter().any(|(rx, rz)| (cx - rx).abs() <= 1 && (cz - rz).abs() <= 1))
+                && !remote_chunks.iter().any(|(rx, rz)| (cx - rx).abs() <= UNLOAD_RADIUS && (cz - rz).abs() <= UNLOAD_RADIUS))
             .copied()
             .collect();
         for key in unload {
@@ -3406,7 +3423,7 @@ impl App {
             rpass.set_bind_group(1, &self.texture_bind_group, &[]);
             rpass.set_bind_group(2, &self.shadow_sample_bind_group, &[]);
             for (&(cx,cz),mesh) in &self.chunk_meshes {
-                if (cx-render_cx).abs()>RENDER_RADIUS || (cz-render_cz).abs()>RENDER_RADIUS || !camera_frustum.chunk(cx,cz){continue;}
+                if !crate::visibility::within_terrain_range((cx,cz),(render_cx,render_cz),RENDER_RADIUS) || !camera_frustum.chunk(cx,cz){continue;}
                 rpass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                 rpass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 rpass.draw_indexed(0..mesh.index_count, 0, 0..1);
