@@ -402,7 +402,7 @@ function api.spawn_creature(kind, x, y, z) end
 
 --- Spawns a new creature at a random point within radius blocks of a player (horizontally; height snaps to terrain). For fish, searches nearby loaded water instead, requiring the same pool-size check as spawn_creature; returns nil if no suitable pool is found. Prefer this over spawn_creature plus your own random offset when the rule is about spawning near a specific player.
 ---@param player_id integer
----@param kind string Same silent-default-to-sheep behavior as spawn_creature.
+---@param kind string Same kinds as spawn_creature, including zombie, skeleton, dragon_green and dragon_red. Use these exact singular identifiers, not model variant filenames, plurals or dragon. Unknown strings silently spawn sheep.
 ---@param radius number Clamped into [1, find_radius_max] -- note the floor is 1, not 0, unlike the find_* methods.
 ---@return integer|nil
 function api.spawn_creature_near_player(player_id, kind, radius) end

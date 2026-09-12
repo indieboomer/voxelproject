@@ -1,5 +1,8 @@
 use glam::Vec3;
 
+#[path = "creature_collision.rs"]
+mod collision;
+
 #[path = "dragon.rs"]
 mod dragon;
 pub use dragon::DragonSave;
@@ -307,6 +310,7 @@ const STARTER_KIND_WEIGHTS: &[(CreatureKind, u32)] = &[
 /// `STARTER_KIND_WEIGHTS`. The final entry is the fallback for any rounding
 /// slack in `next_f32`'s range, so this always returns *some* kind rather
 /// than needing an `Option`.
+#[cfg(test)]
 fn pick_starter_kind(rng: &mut SimpleRng) -> CreatureKind {
     let total: u32 = STARTER_KIND_WEIGHTS.iter().map(|&(_, w)| w).sum();
     let mut roll = (rng.next_f32() * total as f32) as u32;
@@ -317,6 +321,19 @@ fn pick_starter_kind(rng: &mut SimpleRng) -> CreatureKind {
         roll -= weight;
     }
     STARTER_KIND_WEIGHTS.last().unwrap().0
+}
+
+fn pick_world_kind(rng: &mut SimpleRng, world: &World) -> Option<CreatureKind> {
+    let weight = |kind: CreatureKind, base: u32| base * world.generation.abundance(crate::worldgen::CREATURE_SPECIES[kind.to_u8() as usize]) as u32;
+    let total: u32 = STARTER_KIND_WEIGHTS.iter().map(|&(k, w)| weight(k, w)).sum();
+    if total == 0 { return None; }
+    let mut roll = (rng.next_f32() * total as f32) as u32;
+    for &(kind, base) in STARTER_KIND_WEIGHTS {
+        let w = weight(kind, base);
+        if roll < w { return Some(kind); }
+        roll -= w;
+    }
+    None
 }
 
 /// Which animation clip a creature is currently posed with. Not every model
@@ -623,6 +640,7 @@ pub struct Creatures {
     fish_scan_timer: f32,
     fish_scan_cursor: usize,
     dragon_regions: std::collections::BTreeSet<(i32, i32)>,
+    dragon_candidates: std::collections::BTreeMap<(i32, i32), Option<(CreatureKind, Vec3, u64)>>,
     ecs: hecs::World,
     next_id: u32,
     pending_audio: CreatureAudioEvents,
@@ -755,6 +773,7 @@ impl Creatures {
             population_timer: 0.0,
             population_sequence: 0,
             dragon_regions: Default::default(),
+            dragon_candidates: Default::default(),
             fish_regions: Default::default(),
             fish_scan_timer: 0.0,
             fish_scan_cursor: 0,
@@ -778,7 +797,7 @@ impl Creatures {
     pub fn spawn_around(&mut self, world: &World, center: Vec3, count: usize, seed: u32) {
         let mut rng = SimpleRng::new(seed as u64 ^ 0xC0FFEE);
         for i in 0..count {
-            let kind = pick_starter_kind(&mut rng);
+            let Some(kind) = pick_world_kind(&mut rng, world) else { break; };
             let spot = if kind.is_hostile() {
                 (0..12).find_map(|_|find_land_spot(world,&mut rng,center.x,center.z,72.0)
                     .filter(|&(x,z)|(x-center.x).powi(2)+(z-center.z).powi(2)>=48.0*48.0))
@@ -893,6 +912,7 @@ impl Creatures {
         dt: f32,
         player_targets: &[(PlayerId, Vec3)],
     ) -> Vec<(PlayerId, f32)> {
+        let collision_players = player_targets;
         // Filter natural aggro and explicit Lua player targets together.
         let eligible_players:Vec<_>=player_targets.iter().copied()
             .filter(|(id,_)|!self.start_protection.get(id).is_some_and(|t|*t>0.0)).collect();
@@ -1033,11 +1053,16 @@ impl Creatures {
                 // whatever wander/Lua-chase target it had.
                 let to_target = Vec3::new(player_pos.x - pos.0.x, 0.0, player_pos.z - pos.0.z);
                 let horiz_dist = to_target.length();
-                if horiz_dist > 0.05 {
+                let target_radius = match player_id {
+                    BehaviorTarget::Player(_) => 0.3,
+                    BehaviorTarget::Creature(id) => targets.iter().find(|c|c.0==id)
+                        .map(|c|collision::body(CreatureKind::from_u8(c.1)).0).unwrap_or(0.3),
+                };
+                let contact = collision::body(kind.0).0 + target_radius + 0.15;
+                if horiz_dist > contact {
                     let dir = to_target / horiz_dist;
-                    let step = (kind.0.aggro_speed() * dt).min(horiz_dist);
-                    pos.0.x += dir.x * step;
-                    pos.0.z += dir.z * step;
+                    let step = (kind.0.aggro_speed() * dt).min(horiz_dist-contact);
+                    pos.0 = collision::ground_move(world, pos.0, dir*step, kind.0);
                     facing.0 = turn_toward(facing.0, dir.z.atan2(dir.x), TURN_RATE * dt);
                     moving = true;
                     fast = true;
@@ -1047,7 +1072,11 @@ impl Creatures {
                     AttackPolicy::SuppressCreature(id) => id == cid.0,
                     AttackPolicy::ProtectPlayer(id, species) => player_id == BehaviorTarget::Player(id) && kind.0.to_u8() == species,
                 });
-                if !protected && state.mode != BehaviorMode::Chase && dist <= attack_range && cooldown.0 <= 0.0 {
+                let strike_from = pos.0 + Vec3::Y * collision::body(kind.0).1.min(1.0);
+                let strike_delta = player_pos + Vec3::Y * 0.8 - strike_from;
+                let unobstructed = crate::raycast::raycast(world, strike_from,
+                    strike_delta.normalize_or_zero(), strike_delta.length()).is_none();
+                if !protected && state.mode != BehaviorMode::Chase && dist <= attack_range.max(contact+0.1) && cooldown.0 <= 0.0 && unobstructed {
                     let damage = kind.0.attack_damage().max(2.0);
                     match player_id {
                         BehaviorTarget::Player(id) => attacks.push((id, damage)),
@@ -1086,8 +1115,7 @@ impl Creatures {
                             1.0
                         };
                     let step = (speed * dt).min(dist);
-                    pos.0.x += dir.x * step;
-                    pos.0.z += dir.z * step;
+                    pos.0 = collision::ground_move(world, pos.0, dir*step, kind.0);
                     facing.0 = turn_toward(facing.0, dir.z.atan2(dir.x), TURN_RATE * dt);
                     moving = true;
                     fast = wander.hunting;
@@ -1107,8 +1135,7 @@ impl Creatures {
                 }
             }
 
-            let ground = world.terrain_height(pos.0.x.floor() as i32, pos.0.z.floor() as i32);
-            pos.0.y = ground as f32 + 1.0;
+            pos.0 = collision::ground_move(world, pos.0, Vec3::ZERO, kind.0);
 
             let clip = if atk_anim.0 > 0.0 {
                 AnimClip::Attack
@@ -1127,6 +1154,7 @@ impl Creatures {
             }
         }
 
+        self.separate_bodies(world, collision_players);
         for (id, amount) in creature_hits {
             if let Some(death) = self.damage(id, amount) { self.combat_deaths.push(death); }
         }

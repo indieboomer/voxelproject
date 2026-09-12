@@ -377,7 +377,7 @@ impl Creatures {
                 ^ (cell.1 as u64).wrapping_mul(0xC2B2AE3D27D4EB4F)
                 ^ 0xF15B1234;
             let mut rng = SimpleRng::new(seed);
-            if rng.next_f32() > 0.6 {
+            if rng.next_f32() >= (0.6 * world.generation.abundance("fish") as f32 / 100.0).min(1.0) {
                 continue;
             }
             let center = Vec3::new(cell.0 as f32 * 16.0 + 8.0, 0.0, cell.1 as f32 * 16.0 + 8.0);

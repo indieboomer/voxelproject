@@ -206,6 +206,7 @@ mod tests {
     fn prompted_terrain_survives_save_and_invalid_settings_are_rejected() {
         let config = crate::worldgen::WorldGeneration {
             description: "Sandy islands".into(),
+            creatures: [("sheep".into(),1000), ("cow".into(),0)].into_iter().collect(),
             shape: crate::worldgen::Shape::Islands,
             surface: crate::worldgen::Surface::Sand,
             trees: 0,

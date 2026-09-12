@@ -21,9 +21,10 @@ This is a side project and technical experiment. Prioritize a working end-to-end
 
 - Start a new procedural world and enter it immediately, similar to Minecraft or Valheim.
 - Play alone or host a session for up to four players.
-- Multiplayer players receive a random model from `models/player/player1..4.glb` and a random hat from `hat1..4.glb` or no hat. The host assigns unique model/hat combinations among connected players and replicates them to everyone; appearances stay fixed until disconnect. Assets are embedded in the executable. All peers must use the same build (protocol 13).
+- Multiplayer players receive a random model from `models/player/player1..4.glb` and a random hat from `hat1..4.glb` or no hat. The host assigns unique model/hat combinations among connected players and replicates them to everyone; appearances stay fixed until disconnect. Assets are embedded in the executable. All peers must use the same build (protocol 21).
 - Hosts can enable guest prompting in Settings. Guests generate locally and submit disabled proposals for host review; only the host activates world rules.
 - Move in first person, run, jump, collide with terrain, and respawn.
+- Use comma to dance, period for angry, and slash for a jump gesture. Multiplayer characters animate movement, combat, and work, with held items attached to the right hand. Chat includes eight original emoticons, a picker, and overhead bubbles. See [PLAYER_ANIMATIONS.md](PLAYER_ANIMATIONS.md).
 - Break, collect, select, and place voxel blocks.
 - Explore one biome with terrain, water, trees, a day/night cycle, and 2–3 simple creatures.
 - Open a prompt console and describe a new rule for the world.

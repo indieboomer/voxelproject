@@ -19,6 +19,30 @@ pub struct Input {
     pub interact_clicked: bool,
     pub hotbar_select: Option<usize>,
     pub save_requested: bool,
+    pub gesture: Option<crate::player_animation::Clip>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn gesture_keys_are_edges_and_clear_with_gameplay_input() {
+        let mut input = Input::new();
+        for (key,clip) in [(KeyCode::Comma,crate::player_animation::Clip::Dance),
+            (KeyCode::Period,crate::player_animation::Clip::Angry),
+            (KeyCode::Slash,crate::player_animation::Clip::Jump)] {
+            input.key_event(key,ElementState::Pressed);
+            assert_eq!(input.gesture,Some(clip));
+            input.end_frame();
+            input.key_event(key,ElementState::Pressed);
+            assert_eq!(input.gesture,None);
+            input.key_event(key,ElementState::Released);
+            input.key_event(key,ElementState::Pressed);
+            assert_eq!(input.gesture,Some(clip));
+            input.release_all();
+            assert_eq!(input.gesture,None);
+        }
+    }
 }
 
 impl Input {
@@ -29,7 +53,15 @@ impl Input {
     pub fn key_event(&mut self, key: KeyCode, state: ElementState) {
         match state {
             ElementState::Pressed => {
-                self.keys_down.insert(key);
+                let first_press = self.keys_down.insert(key);
+                if first_press {
+                    self.gesture = match key {
+                        KeyCode::Comma => Some(crate::player_animation::Clip::Dance),
+                        KeyCode::Period => Some(crate::player_animation::Clip::Angry),
+                        KeyCode::Slash => Some(crate::player_animation::Clip::Jump),
+                        _ => self.gesture,
+                    };
+                }
                 match key {
                     KeyCode::Digit1 => self.hotbar_select = Some(0),
                     KeyCode::Digit2 => self.hotbar_select = Some(1),
@@ -72,6 +104,7 @@ impl Input {
     /// stuck WASD key doesn't keep moving the player while typing.
     pub fn release_all(&mut self) {
         self.keys_down.clear();
+        self.gesture = None;
     }
 
     /// Clears the per-frame edge-triggered state. Call once per frame after
@@ -84,5 +117,6 @@ impl Input {
         self.interact_clicked = false;
         self.hotbar_select = None;
         self.save_requested = false;
+        self.gesture = None;
     }
 }

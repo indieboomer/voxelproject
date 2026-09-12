@@ -2159,6 +2159,35 @@ mod tests {
     }
 
     #[test]
+    fn undead_and_dragons_spawn_near_casting_player_through_world_api() {
+        for kind in ["zombie","skeleton","dragon_green","dragon_red"] {
+            let world=World::new(1);
+            let mut creatures=Creatures::new();
+            let players=vec![snapshot(5,Vec3::new(10.0,40.0,10.0),false)];
+            let mut host=ScriptHost::new();
+            let source=format!(r#"
+                function on_cast(api,event)
+                    local id=api.spawn_creature_near_player(event.player_id,"{kind}",6)
+                    assert(id ~= nil)
+                    local found=api.nearest_creature("{kind}",10,40,10)
+                    assert(found.id==id and found.kind=="{kind}")
+                    if found.can_fly then
+                        assert(api.spawn_creature_near_player(event.player_id,"dragon_red",6)==nil)
+                    end
+                end
+            "#);
+            host.modules.push(Module::load("near_spawn".into(),String::new(),source).unwrap());
+            let result=host.run_cast(0,&world,&mut creatures,&players,&mut 0.5,&mut WeatherState::new(1),5,[0;COLLECTIBLE_BLOCKS.len()]);
+            assert!(result.crashes.is_empty(),"{kind}: {:?}",result.crashes);
+            let spawned=creatures.snapshot_with_ids();
+            assert_eq!(spawned.len(),1,"{kind}");
+            assert_eq!(CreatureKind::from_u8(spawned[0].1),parse_creature_kind(kind));
+            let pos=Vec3::from_array(spawned[0].2);
+            assert!(Vec3::new(pos.x-players[0].pos.x,0.0,pos.z-players[0].pos.z).length()<=6.001);
+            assert_eq!(pos.y,world.terrain_height(pos.x.floor() as i32,pos.z.floor() as i32) as f32+1.0);
+        }
+    }
+    #[test]
     fn spawn_creature_near_player_spawns_within_radius_of_the_target_player() {
         let world = World::new(1);
         let mut creatures = Creatures::new();

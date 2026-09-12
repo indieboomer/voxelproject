@@ -13,7 +13,8 @@ fn render_ui_previews() {
             .unwrap();
     let width = 1280;
     for (theme, name) in [(UiTheme::Generic, "generic"), (UiTheme::Fantasy, "fantasy")] {
-        for panel in ["settings", "crafting", "resources", "hotbar", "inventory"] {
+        for panel in ["settings", "crafting", "resources", "hotbar", "inventory", "chat"] {
+            if std::env::var("UI_PREVIEW_PANEL").is_ok_and(|filter|filter!=panel) { continue; }
             let height = if panel == "resources" { 1024 } else { 720 };
             let ctx = egui::Context::default();
             ui_theme::apply(&ctx, theme);
@@ -79,7 +80,28 @@ fn render_ui_previews() {
                                 ui_theme::menu_backdrop(ui);
                             }
                         });
-                        if panel == "inventory" {
+                        if panel == "chat" {
+                            egui::Window::new("Chat").fixed_pos(egui::pos2(80.0,100.0)).show(ctx,|ui| {
+                                ui.set_width(360.0);
+                                for text in ["Mira: Hello! :smile: :wink:","Bram: :laugh: :sad: :angry: :surprised:",
+                                    "Mira: Great work! :heart: :thumbsup:","Bram: Unicode works too: żółw 猫 :) <3",
+                                    "A longer chat line with icons :smile: between the words that wraps cleanly onto the next line :thumbsup:"] {
+                                    crate::emoticons::label(ui,text,crate::ui::CHAT_MESSAGE_COLOR);
+                                }
+                                ui.separator();
+                                let mut draft = "Hello friends! ".to_string();
+                                ui.text_edit_singleline(&mut draft);
+                                crate::emoticons::picker(ui,&mut draft);
+                            });
+                            let painter = ctx.debug_painter();
+                            for (y,alpha) in [(130.0,1.0),(260.0,0.4)] {
+                                let line = crate::emoticons::layout(&painter,"Great work! :heart: :thumbsup:",egui::Color32::WHITE.linear_multiply(alpha),240.0);
+                                let origin = egui::pos2(720.0,y);
+                                painter.rect_filled(egui::Rect::from_min_size(origin,line.galley.size()).expand(8.0),6.0,
+                                    egui::Color32::from_rgba_unmultiplied(20,25,32,225).linear_multiply(alpha));
+                                line.paint(&painter,origin,alpha);
+                            }
+                        } else if panel == "inventory" {
                             let mut requests = crate::ui::UiRequests::default();
                             requests.select_slot = crate::equipment_ui::hotbar(ctx,&account,true,true);
                             inventory.show(ctx,&account,&registry,&mut requests);

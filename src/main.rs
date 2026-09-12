@@ -7,6 +7,7 @@ mod crafting_ui;
 mod resource_ui;
 mod daynight;
 mod input;
+mod emoticons;
 mod equipment;
 mod equipment_ui;
 mod inventory_ui;
@@ -25,6 +26,7 @@ mod transport;
 #[cfg(feature = "steam")]
 mod steam_transport;
 mod player;
+mod player_animation;
 mod raycast;
 mod block_target;
 mod remote_player;

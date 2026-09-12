@@ -43,7 +43,7 @@ impl Creatures {
                 && distance(center, Vec3::from_array(c.2)) < 88.0*88.0).count();
             for _ in 0..2 {
                 if nearby >= 20 || !self.has_population_room() { break; }
-                let kind = pick_starter_kind(&mut rng);
+                let Some(kind) = pick_world_kind(&mut rng, world) else { break; };
                 for _ in 0..12 {
                     let angle = rng.next_f32()*std::f32::consts::TAU;
                     let radius = 48.0 + rng.next_f32()*24.0;

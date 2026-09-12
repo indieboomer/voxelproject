@@ -417,8 +417,8 @@ impl MenuApp {
                                 ui.label("World description (optional)");
                                 ui.add(egui::TextEdit::multiline(&mut world_description)
                                     .desired_rows(3).desired_width(360.0).char_limit(512)
-                                    .hint_text("A sandy desert, small tropical islands, snowy mountains..."));
-                                ui.label("Leave empty for normal terrain. Descriptions use the local AI.");
+                                    .hint_text("Snowy hills full of sheep but no cows..."));
+                                ui.label("Describe terrain and creature abundance, or leave empty for defaults. Uses local AI.");
                                 ui.label("Shapes, sand/snow/rock, relief and trees; no buildings or new assets.");
                                 if world_job.is_some() { ui.label("Waiting for the cancelled AI request to finish..."); }
                             }

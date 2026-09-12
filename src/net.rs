@@ -9,7 +9,7 @@ use crate::voxel::block::BlockType;
 pub type PlayerId = u32;
 pub type WorldEdit = ((i32, i32, i32), BlockType);
 pub const MAX_PLAYERS: usize = 4;
-pub const PROTOCOL_VERSION: u32 = 18;
+pub const PROTOCOL_VERSION: u32 = 21;
 pub const HOST_PLAYER_ID: PlayerId = 0;
 pub const DEFAULT_PORT: u16 = 7878;
 pub const RELIABLE_RESEND_INTERVAL: Duration = Duration::from_millis(200);
@@ -91,7 +91,7 @@ pub enum ReliableMsg {
     /// A client's typed chat message, not yet attributed to a sender -- the
     /// host fills that in from the connection it arrived on (so a client
     /// can't spoof another player's identity) and relays the formatted
-    /// result to everyone as `Notify`.
+    /// result to everyone as `PlayerChat` with the authenticated player ID.
     ChatMessage(String),
     /// Credits `amount` of `block` into the receiving client's own
     /// Resources inventory -- the network side of `api.give_item`
@@ -128,6 +128,8 @@ pub enum ReliableMsg {
     DisplayName(String),
     /// Host -> collector only. Inventory balances travel separately in CraftState.
     LootCollected(Vec<(BlockType,u32)>),
+    /// Host-attributed chat for both scrollback and the speaker's overhead bubble.
+    PlayerChat { player_id: PlayerId, name: String, text: String },
 }
 
 /// One player's position/status as carried in a `Snapshot` -- see
@@ -139,6 +141,7 @@ pub enum ReliableMsg {
 /// another player's copy of these yet).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SnapshotPlayer {
+    pub animation: crate::player_animation::Animation,
     pub name: String,
     pub appearance: crate::remote_player::Appearance,
     pub held: Option<crate::equipment::Entry>,
@@ -158,6 +161,7 @@ pub struct SnapshotPlayer {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UnreliableMsg {
     PlayerState {
+        animation: crate::player_animation::Animation,
         pos: [f32; 3],
         yaw: f32,
         carrying_crystal: bool,
@@ -320,8 +324,10 @@ pub fn join_rejection(protocol: u32, guests: usize) -> Option<&'static str> {
         None
     }
 }
+pub const MAX_CHAT_LEN: usize = 512;
+
 pub fn chat_text(text: &str) -> Option<String> {
-    let text: String = text.chars().filter(|c| !c.is_control()).take(512).collect();
+    let text: String = text.chars().filter(|c| !c.is_control()).take(MAX_CHAT_LEN).collect();
     let text = text.trim();
     if text.is_empty() {
         None
@@ -451,6 +457,7 @@ mod tests {
     #[test]
     fn snapshot_round_trips_through_encode_decode() {
         let player = SnapshotPlayer {
+            animation: crate::player_animation::Animation { clip:crate::player_animation::Clip::Work, time:0.4, sequence:7 },
             name:"Sir Turnip".into(),
             appearance: crate::remote_player::Appearance { model: 3, hat: Some(2) },
             held: Some(crate::equipment::Entry::Gear(crate::equipment::Gear::Pickaxe)),
@@ -782,12 +789,14 @@ mod multiplayer_tests {
                 panic!("chat")
             };
             assert!(members.contains(&peer));
+            let expected_player_id = members.iter().position(|p|*p==peer).unwrap() as PlayerId+1;
             for guest in &guests {
                 reliable.send(
                     &host,
                     guest.local_peer(),
-                    ReliableMsg::Notify {
-                        kind: NotifyKind::Chat,
+                    ReliableMsg::PlayerChat {
+                        player_id:expected_player_id,
+                        name:"Guest".into(),
                         text: chat_text(&text).unwrap(),
                     },
                 );
@@ -797,8 +806,9 @@ mod multiplayer_tests {
                     Packet::Reliable {
                         id,
                         msg:
-                            ReliableMsg::Notify {
-                                kind: NotifyKind::Chat,
+                            ReliableMsg::PlayerChat {
+                                player_id,
+                                name,
                                 text,
                             },
                     },
@@ -808,6 +818,8 @@ mod multiplayer_tests {
                     panic!("relay")
                 };
                 assert_eq!(text, "hello friends");
+                assert_eq!(player_id,expected_player_id);
+                assert_eq!(name,"Guest");
                 assert_eq!(peer, host.local_peer());
                 ReliableChannel::ack_reply(guest, peer, id);
                 let (Packet::Ack { id }, peer) = receive(&host) else {
@@ -864,6 +876,7 @@ mod multiplayer_tests {
             .collect();
         let generation = crate::worldgen::WorldGeneration {
             description: "Sandy islands".into(), shape: crate::worldgen::Shape::Islands,
+            creatures: [("sheep".into(),1000), ("cow".into(),0)].into_iter().collect(),
             surface: crate::worldgen::Surface::Sand, trees: 0, ..Default::default()
         };
         let mut messages = welcome_messages(3, 42, generation.clone(), 0.5, [1., 2., 3.], edits.clone()).unwrap();

@@ -24,6 +24,9 @@ pub enum Surface {
 #[serde(deny_unknown_fields)]
 pub struct WorldGeneration {
     pub description: String,
+    /// Natural population percentages; omitted species retain their defaults.
+    #[serde(default)]
+    pub creatures: std::collections::BTreeMap<String, u16>,
     pub shape: Shape,
     pub surface: Surface,
     /// Percentage of the normal tree density (0..=300).
@@ -37,6 +40,7 @@ impl Default for WorldGeneration {
     fn default() -> Self {
         Self {
             description: String::new(),
+            creatures: Default::default(),
             shape: Shape::Mainland,
             surface: Surface::Natural,
             trees: 100,
@@ -45,9 +49,16 @@ impl Default for WorldGeneration {
         }
     }
 }
+// Keep aligned with CreatureKind's stable wire IDs.
+pub const CREATURE_SPECIES: &[&str] = &["sheep", "chicken", "stone_golem", "wolf", "stinger", "cow", "goblin", "sunscorch", "zombie", "skeleton", "dragon_green", "dragon_red", "fish"];
+
 impl WorldGeneration {
+    pub fn abundance(&self, species: &str) -> u16 {
+        self.creatures.get(species).copied().unwrap_or(100)
+    }
     pub fn validate(&self) -> Result<(), String> {
-        if self.description.len() > 2048
+        if self.creatures.iter().any(|(key, value)| !CREATURE_SPECIES.contains(&key.as_str()) || *value > 1000)
+            || self.description.len() > 2048
             || self.trees > 300
             || self.relief > 200
             || !(64..=512).contains(&self.island_size)
@@ -110,6 +121,24 @@ pub fn resolve(description: &str, base_url: &str) -> Result<WorldGeneration, Str
 mod tests {
     use super::*;
     #[test]
+    fn creature_settings_are_bounded_and_old_worlds_keep_defaults() {
+        let mut config = WorldGeneration::default();
+        config.creatures.insert("sheep".into(), 1000);
+        config.creatures.insert("cow".into(), 0);
+        assert!(config.validate().is_ok());
+        let restored: WorldGeneration = serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+        assert_eq!(restored, config);
+        let mut old = serde_json::to_value(&config).unwrap();
+        old.as_object_mut().unwrap().remove("creatures");
+        let old: WorldGeneration = serde_json::from_value(old).unwrap();
+        assert_eq!(old.abundance("cow"), 100);
+        config.creatures.insert("cow".into(), 1001);
+        assert!(config.validate().is_err());
+        config.creatures.remove("cow");
+        config.creatures.insert("unicorn".into(), 100);
+        assert!(config.validate().is_err());
+    }
+    #[test]
     fn blank_description_needs_no_model_and_preserves_terrain() {
         let config = resolve("  \n ", "invalid://no-model").unwrap();
         for x in -100..100 {
@@ -158,6 +187,17 @@ mod tests {
         }
         .validate()
         .is_err());
+    }
+
+    #[test]
+    #[ignore = "requires the local llama server and bundled model"]
+    fn live_creature_description() {
+        let url = std::env::var("WORLDGEN_TEST_URL")
+            .unwrap_or_else(|_| crate::net::DEFAULT_LLM_URL.into());
+        let config = resolve("This world is full of sheep but no cows", &url).unwrap();
+        assert_eq!(config.abundance("cow"), 0, "{config:?}");
+        assert!(config.abundance("sheep") >= 500, "{config:?}");
+        assert_eq!(config.abundance("chicken"), 100, "{config:?}");
     }
 
     #[test]

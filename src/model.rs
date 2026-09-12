@@ -120,6 +120,7 @@ pub struct AnimatedModel {
     /// Optional texture slot for visual variants, after the player/hat slots.
     texture_layer: Option<f32>,
     hat_socket: Option<usize>,
+    right_grip: Option<usize>,
     nodes: Vec<ModelNode>,
     roots: Vec<usize>,
     animations: HashMap<String, AnimationClip>,
@@ -677,21 +678,49 @@ fn load_glb(bytes: &[u8]) -> AnimatedModel {
 
     let texture = texture.or_else(|| material_base_color_image(&json, bin, Some(0)));
     let hat_socket = nodes_json.iter().position(|n| n["name"] == "hat_socket");
-    AnimatedModel { nodes, roots, animations, skin, texture, hat_socket, texture_layer: None }
+    let right_grip = nodes_json.iter().position(|n| n["name"] == "grip_R")
+        .or_else(|| nodes_json.iter().position(|n| n["name"] == "hand_R"));
+    AnimatedModel { nodes, roots, animations, skin, texture, hat_socket, right_grip, texture_layer: None }
 }
 
 impl Models {
     /// Player assets are authored in meters, facing +Z, with a named hat socket.
+    #[cfg(test)]
     pub fn push_player(&self, vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>,
         appearance: crate::remote_player::Appearance, origin: Vec3, yaw: f32,
         speed: f32, time: f32) {
+        use crate::player_animation::Clip;
+        self.push_player_animated(vertices,indices,appearance,origin,yaw,
+            if speed > 5.0 { Clip::Run } else if speed > 0.2 { Clip::Walk } else { Clip::Idle }, time,None);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_player_animated(&self, vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>,
+        appearance: crate::remote_player::Appearance, origin: Vec3, yaw: f32,
+        animation: crate::player_animation::Clip, time: f32, held: Option<crate::equipment::Entry>) {
         let model_index = usize::from(appearance.model).min(3);
         let model = &self.players[model_index];
-        let clip = model.animations.get(if speed > 5.0 { "run" } else if speed > 0.2 { "walk" } else { "idle" });
-        let t = clip.filter(|c| c.duration > 0.0).map_or(0.0, |c| time.rem_euclid(c.duration));
+        let clip = model.animations.get(animation.name());
+        let t = clip.filter(|c| c.duration > 0.0).map_or(0.0, |c|
+            if animation.duration().is_some() { time.clamp(0.0,c.duration) }
+            else { time.rem_euclid(c.duration) });
         let matrices = compute_world_matrices(model, clip, t);
         let (s, c) = yaw.sin_cos();
         let rotate = |x: f32, z: f32| (x * s + z * c, -x * c + z * s);
+        if let Some((entry, grip)) = held.zip(model.right_grip) {
+            // Use the exact same animated pose and yaw as the skinned hand.
+            let rotation = Mat3::from_rotation_y(std::f32::consts::FRAC_PI_2-yaw);
+            let socket = matrices[grip];
+            let basis = rotation * Mat3::from_mat4(socket);
+            let grip_pos = origin + rotation * socket.transform_point3(Vec3::ZERO);
+            let scale = 0.55;
+            // Mesh handles are authored along +Y with their grip above the origin.
+            let grip_height = if matches!(entry,crate::equipment::Entry::Resource(_)) { 0.48 } else { 0.22 };
+            let item = crate::held_item::mesh(Some(entry),grip_pos-basis*Vec3::Y*grip_height*scale,basis,scale);
+            let base = vertices.len() as u32;
+            vertices.extend(item.vertices);
+            indices.extend(item.indices.into_iter().map(|i|i+base));
+        }
         if let Some(skin) = &model.skin {
             emit_skinned_mesh(skin, &matrices, vertices, indices, origin, &rotate, 9.0 + model_index as f32);
         }
@@ -983,7 +1012,9 @@ pub fn loot_bag_mesh() -> &'static crate::voxel::mesher::MeshData {
         for v in &mut mesh.vertices {
             // Keep the bag readable at pickup size and center it on the bobbing origin.
             v.position=(Vec3::from_array(v.position)*1.5-Vec3::Y*0.2).to_array();
-            v.emission=0.15;
+            // The white atlas sample makes emission add white over the vertex
+            // colors. Keep the bag normally lit so its colors stay saturated.
+            v.emission=0.0;
         }
         mesh
     })
@@ -991,6 +1022,46 @@ pub fn loot_bag_mesh() -> &'static crate::voxel::mesher::MeshData {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn player_actions_keep_resources_on_the_animated_right_grip() {
+        use super::*;
+        use crate::player_animation::Clip;
+        let models = Models::load();
+        for index in 0..4 {
+            let model = &models.players[index];
+            let grip = model.right_grip.expect("player requires a right grip socket");
+            for animation in [Clip::Idle,Clip::Walk,Clip::Run,Clip::Attack,Clip::Work,Clip::Jump,Clip::Dance,Clip::Angry] {
+                let clip = model.animations.get(animation.name()).expect("required player animation");
+                if let Some(duration) = animation.duration() {
+                    assert!((clip.duration-duration).abs()<0.001);
+                }
+                let mut positions = Vec::new();
+                for time in [0.0,clip.duration*0.3,clip.duration*0.6] {
+                    let matrices = compute_world_matrices(model,Some(clip),time);
+                    for yaw in [0.0,1.1,-2.0] {
+                        let origin = Vec3::new(17.0,26.0,-11.0);
+                        let rotation = Mat3::from_rotation_y(std::f32::consts::FRAC_PI_2-yaw);
+                        let expected = origin+rotation*matrices[grip].transform_point3(Vec3::ZERO);
+                        let mut vertices = Vec::new();
+                        let mut indices = Vec::new();
+                        models.push_player_animated(&mut vertices,&mut indices,
+                            crate::remote_player::Appearance {model:index as u8,hat:Some(1)},origin,yaw,
+                            animation,time,Some(crate::equipment::Entry::Resource(crate::voxel::BlockType::Stone)));
+                        let held: Vec<_> = vertices.iter().filter(|v|v.tex_layer==0.0).collect();
+                        assert!(!held.is_empty());
+                        let center = held.iter().map(|v|Vec3::from_array(v.position)).sum::<Vec3>()/held.len() as f32;
+                        assert!(center.distance(expected)<0.0001,"{index} {animation:?}: {center:?} != {expected:?}");
+                        assert!(vertices.iter().all(|v|Vec3::from_array(v.position).is_finite()));
+                        assert!(indices.iter().all(|&i|(i as usize)<vertices.len()));
+                    }
+                    positions.push(matrices[grip].transform_point3(Vec3::ZERO));
+                }
+                if matches!(animation,Clip::Work|Clip::Attack|Clip::Dance) {
+                    assert!(positions[0].distance(positions[1])>0.01,"hand must move during {animation:?}");
+                }
+            }
+        }
+    }
     #[test]
     fn loot_bag_preserves_vertex_colors_and_valid_geometry() {
         let mesh=super::loot_bag_mesh();

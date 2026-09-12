@@ -64,7 +64,9 @@ mod tests {
         assert!(fx.collect(&world,feet,&mut account).is_empty());
         assert_eq!(account,before);
         assert_eq!(fx.drops.len(),1);
-        assert!(fx.mesh(|_|true).vertices.iter().all(|v|v.emission>0.0));
+        let mesh = fx.mesh(|_|true);
+        assert!(mesh.vertices.iter().any(|v|v.emission==0.0)); // Normally lit bags.
+        assert!(mesh.vertices.iter().any(|v|v.emission>0.0)); // Pickup sparkles.
         account.resources[iron]=0;
         assert_eq!(fx.collect(&world,feet,&mut account),rewards(CreatureKind::StoneGolem));
         let mut other=crate::crafting::Account::default();

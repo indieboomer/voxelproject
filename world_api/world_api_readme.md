@@ -806,10 +806,10 @@ Spawns a new creature at a random point within radius blocks of a player (horizo
 
 Parameters:
   - `player_id` (integer)
-  - `kind` (string) -- Same silent-default-to-sheep behavior as spawn_creature.
+  - `kind` (string) -- Same kinds as spawn_creature, including zombie, skeleton, dragon_green and dragon_red. Use these exact singular identifiers, not model variant filenames, plurals or dragon. Unknown strings silently spawn sheep.
   - `radius` (number) -- Clamped into [1, find_radius_max] -- note the floor is 1, not 0, unlike the find_* methods.
 
-Returns: `integer | nil` -- The new creature's id, or nil if player_id isn't connected OR the spawn budget is used up -- these two failure cases are indistinguishable from Lua.
+Returns: `integer | nil` -- The new creature's id, or nil for a missing player, exhausted spawn budget, creature population cap, insufficient fish habitat, or dragon territory overlap. Both dragon colors share a 320-block minimum home spacing, including spawns staged in this callback; nearby dragon packs cannot be spawned. Check for nil before using the id.
 Budget: see `creature_spawns_per_call` above.
 
 ### `api.replace_block(x, y, z, kind)`

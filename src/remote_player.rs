@@ -1,13 +1,24 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use glam::{Vec3, Vec3Swizzles};
+use glam::Vec3;
 
 use crate::net::PlayerId;
 use crate::voxel::atlas::white_uv;
 use crate::voxel::mesher::{push_cuboid, MeshData, Vertex};
 
 const CRYSTAL_MARKER_COLOR: [f32; 3] = [0.55, 0.85, 0.95];
+
+pub struct ChatBubble {
+    pub text: String,
+    pub started: Instant,
+}
+
+impl ChatBubble {
+    pub fn opacity(&self, now: Instant) -> f32 {
+        ((4.0 - now.saturating_duration_since(self.started).as_secs_f32()) / 0.75).clamp(0.0, 1.0)
+    }
+}
 
 /// Host-selected combination. Model/hat indices are zero-based; None is bareheaded.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -29,7 +40,8 @@ impl Appearance {
 }
 pub struct RemotePlayer {
     pub appearance: Appearance,
-    pub animation_started: Instant,
+    pub animation: crate::player_animation::Animation,
+    pub animation_received: Instant,
     pub held: Option<crate::equipment::Entry>,
     pub pos: Vec3,
     pub yaw: f32,
@@ -64,6 +76,9 @@ pub struct RemotePlayer {
 }
 
 impl RemotePlayer {
+    pub fn receive_animation(&mut self, animation: crate::player_animation::Animation) {
+        if self.animation.accept(animation) { self.animation_received = Instant::now(); }
+    }
     /// Constructs a fresh entry with the same defaults `Player::new` uses --
     /// full health, unpoisoned, 1.0 multipliers, full oxygen -- so a newly
     /// joined player starts identically whether the host is looking at its
@@ -71,7 +86,8 @@ impl RemotePlayer {
     pub fn new(pos: Vec3, yaw: f32, carrying_crystal: bool, nickname: String) -> Self {
         Self {
             appearance: Appearance::default(),
-            animation_started: Instant::now(),
+            animation: Default::default(),
+            animation_received: Instant::now(),
             held:None,
             pos,
             yaw,
@@ -100,12 +116,9 @@ pub fn build_mesh(players: &HashMap<PlayerId, RemotePlayer>, exclude: PlayerId, 
         if id == exclude {
             continue;
         }
-        let held=crate::held_item::mesh(rp.held,rp.pos+Vec3::new(0.4,0.65,0.0),glam::Mat3::from_rotation_y(-rp.yaw),0.55);
-        let offset=vertices.len() as u32;vertices.extend(held.vertices);indices.extend(held.indices.into_iter().map(|i|i+offset));
         let feet = rp.pos;
-        models.push_player(&mut vertices, &mut indices, rp.appearance, feet, rp.yaw,
-            if rp.last_seen.elapsed().as_secs_f32() < 0.25 { rp.velocity.xz().length() } else { 0.0 },
-            rp.animation_started.elapsed().as_secs_f32());
+        models.push_player_animated(&mut vertices, &mut indices, rp.appearance, feet, rp.yaw,
+            rp.animation.clip, rp.animation.time + rp.animation_received.elapsed().as_secs_f32().min(0.25), rp.held);
         // Small floating marker above crystal carriers, so "sheep hunt
         // players carrying a crystal" is something you can actually see
         // happening, not just trust the log for.
@@ -129,6 +142,17 @@ pub fn build_mesh(players: &HashMap<PlayerId, RemotePlayer>, exclude: PlayerId, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn chat_bubble_fades_expires_and_new_messages_restart_the_timer() {
+        let now = Instant::now();
+        let mut bubble = ChatBubble { text:"hello".into(), started:now };
+        assert_eq!(bubble.opacity(now+std::time::Duration::from_secs(3)),1.0);
+        let fading = now+std::time::Duration::from_millis(3625);
+        assert!((bubble.opacity(fading)-0.5).abs()<0.001);
+        assert_eq!(bubble.opacity(now+std::time::Duration::from_secs(4)),0.0);
+        bubble = ChatBubble { text:"another message".into(), started:fading };
+        assert_eq!(bubble.opacity(fading),1.0);
+    }
 
     #[test]
     fn assignments_are_unique_including_host_and_bare_heads() {

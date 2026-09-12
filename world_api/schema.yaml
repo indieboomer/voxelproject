@@ -915,9 +915,9 @@ methods:
     summary: "Spawns a new creature at a random point within radius blocks of a player (horizontally; height snaps to terrain). For fish, searches nearby loaded water instead, requiring the same pool-size check as spawn_creature; returns nil if no suitable pool is found. Prefer this over spawn_creature plus your own random offset when the rule is about spawning near a specific player."
     params:
       - {name: player_id, type: integer}
-      - {name: kind, type: string, enum_ref: creature_kinds, desc: "Same silent-default-to-sheep behavior as spawn_creature."}
+      - {name: kind, type: string, enum_ref: creature_kinds, desc: "Same kinds as spawn_creature, including zombie, skeleton, dragon_green and dragon_red. Use these exact singular identifiers, not model variant filenames, plurals or dragon. Unknown strings silently spawn sheep."}
       - {name: radius, type: number, desc: "Clamped into [1, find_radius_max] -- note the floor is 1, not 0, unlike the find_* methods."}
-    returns: {type: "integer | nil", desc: "The new creature's id, or nil if player_id isn't connected OR the spawn budget is used up -- these two failure cases are indistinguishable from Lua."}
+    returns: {type: "integer | nil", desc: "The new creature's id, or nil for a missing player, exhausted spawn budget, creature population cap, insufficient fish habitat, or dragon territory overlap. Both dragon colors share a 320-block minimum home spacing, including spawns staged in this callback; nearby dragon packs cannot be spawned. Check for nil before using the id."}
     errors: []
     budget_ref: creature_spawns_per_call
     since: "1.0.0"

@@ -1,12 +1,13 @@
 # Describing a new world
 
-Choose **New World**, enter your nickname, and optionally describe the terrain.
+Choose **New World**, enter your nickname, and optionally describe the terrain and creature abundance.
 For example:
 
 - `A sandy desert with no trees`
 - `Small tropical islands in a vast ocean`
 - `A flat snow-covered world`
 - `Rugged mountains with dense forests`
+- `This world is full of sheep but no cows`
 
 Leave the description empty to use the original generator immediately. A description
 uses the configured local model; the full Windows and macOS packages already include
@@ -28,7 +29,7 @@ keep your text so you can retry or clear it to create a normal world.
    island around the origin.
 4. Save the settings in the existing JSON save wrapper and include them in the
    reliable multiplayer welcome transfer. Old JSON and binary saves default to
-   the original terrain. Protocol 13 requires peers to use the updated build.
+   the original terrain. Protocol 21 requires peers to use the updated build.
 
 Shapes are mainland, islands, flat terrain, and mountains. Surfaces are natural,
 sand, snow, and stone. Tree density ranges from zero to three times normal; relief
@@ -54,3 +55,5 @@ Run `cargo test --offline` or `cargo test --offline --features steam`.
 For the opt-in real-model test, run
 `cargo test --offline live_world_descriptions -- --ignored --nocapture`.
 It uses the normal local endpoint, or `WORLDGEN_TEST_URL` when set.
+
+Creature abundance is saved per species: 0 disables natural spawning, 100 is normal, and 1000 is abundant. Unspecified species retain their normal weights. Starting animals and replenished wildlife use the same settings; fish and both dragon colors also respect exclusions. Scripted spawns remain available. Dragons occupy most large territories, selecting high ground with at least 128 blocks between homes and at most eight living dragons.

@@ -87,6 +87,7 @@ pub struct Ui {
     pickup_rows: Vec<(crate::voxel::BlockType,u32)>,
     pickup_started: Instant,
     pub nameplates: Vec<(egui::Pos2,String)>,
+    pub chat_bubbles: Vec<(egui::Pos2,String,f32)>,
     pub settings: crate::settings::SettingsPanel,
     ctx: egui::Context,
     state: State,
@@ -125,6 +126,7 @@ impl Ui {
             pickup_rows:Vec::new(),
             pickup_started:Instant::now(),
             nameplates:Vec::new(),
+            chat_bubbles:Vec::new(),
             settings,
             ctx,
             state,
@@ -221,6 +223,14 @@ impl Ui {
                 painter.text(*pos+egui::vec2(1.0,1.0),egui::Align2::CENTER_BOTTOM,name,egui::FontId::proportional(16.0),egui::Color32::BLACK);
                 painter.text(*pos,egui::Align2::CENTER_BOTTOM,name,egui::FontId::proportional(16.0),egui::Color32::WHITE);
             }
+            for (anchor,text,opacity) in &self.chat_bubbles {
+                let color = egui::Color32::WHITE.linear_multiply(*opacity);
+                let line = crate::emoticons::layout(&painter,text,color,240.0);
+                let top_left = *anchor-egui::vec2(line.galley.size().x*0.5,line.galley.size().y);
+                let rect = egui::Rect::from_min_size(top_left,line.galley.size()).expand2(egui::vec2(8.0,6.0));
+                painter.rect_filled(rect,6.0,egui::Color32::from_rgba_unmultiplied(20,25,32,225).linear_multiply(*opacity));
+                line.paint(&painter,top_left,*opacity);
+            }
             if self.settings.open {
                 // No underlying controls run while the settings panel owns input.
                 self.settings.draw(ctx);
@@ -234,7 +244,8 @@ impl Ui {
                 .collapsible(false)
                 .interactable(false)
                 .show(ctx, |ui| {
-                    ui.label(format!("{fps:.0} FPS | I: Inventory | C: Craft | F10: Settings"));
+                      ui.label(format!("{fps:.0} FPS | I: Inventory | C: Craft | F10: Settings"));
+                      ui.label("Gestures: , Dance | . Angry | / Jump");
                 });
 
             egui::Window::new("health")
@@ -408,7 +419,7 @@ impl Ui {
                     .interactable(false)
                     .show(ctx, |ui| {
                         for t in toasts {
-                            ui.colored_label(t.color, &t.text);
+                            crate::emoticons::label(ui,&t.text,t.color);
                         }
                     });
             }
@@ -430,12 +441,20 @@ impl Ui {
                             .stick_to_bottom(true)
                             .show(ui, |ui| {
                                 for entry in chat_log {
-                                    ui.colored_label(entry.color, &entry.text);
+                                    crate::emoticons::label(ui,&entry.text,entry.color);
                                 }
                             });
                         if chat_open {
                             ui.separator();
                             let response = ui.text_edit_singleline(chat_input);
+                            if crate::emoticons::picker(ui,chat_input) {
+                                response.request_focus();
+                                if let Some(mut state) = egui::TextEdit::load_state(ctx,response.id) {
+                                    state.cursor.set_char_range(Some(egui::text::CCursorRange::one(
+                                        egui::text::CCursor::new(chat_input.chars().count()))));
+                                    state.store(ctx,response.id);
+                                }
+                            }
                             if !response.has_focus() && !response.lost_focus() {
                                 response.request_focus();
                             }
@@ -443,7 +462,7 @@ impl Ui {
                             if submitted && !chat_input.trim().is_empty() {
                                 requests.send_chat = Some(chat_input.trim().to_string());
                             }
-                            ui.label("Enter to send, Esc to close");
+                            ui.label("Click an emoticon or type :smile: / :) — Enter to send, Esc to close");
                         } else {
                             ui.label("T to chat");
                         }

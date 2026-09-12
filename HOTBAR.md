@@ -19,3 +19,5 @@ Validation: equipment tests cover semantic categories, forbidden mining, hit cou
 The E inventory panel sits above the hotbar, keeping assignments visible and clickable. Use **Full resource list** to browse unowned resources, or **Owned only** for your inventory. The original held-item pose and use motion are rotated together 90 degrees counterclockwise around the vertical grip axis (viewed from above). Inventory icons and remote models retain their original orientation.
 
 The axe additionally twists 1270 degrees around its local handle axis (equivalent to 190 degrees, including the additional 90-degree counterclockwise adjustment), before the shared held animation transform.
+
+Multiplayer held tools and resources now follow the animated right-hand grip, including work and attack poses. Empty/depleted selections show no held mesh. See [PLAYER_ANIMATIONS.md](PLAYER_ANIMATIONS.md) for gestures, action animations, and protocol compatibility.

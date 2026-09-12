@@ -633,6 +633,7 @@ pub struct App {
     /// generated/crashed/etc.) plus real player chat, capped at
     /// `CHAT_LOG_CAPACITY`. See `log_message`.
     chat_log: Vec<ChatEntry>,
+    chat_bubbles: HashMap<PlayerId, remote_player::ChatBubble>,
     chat_open: bool,
     chat_input: String,
     pending_egui_output: Option<egui::FullOutput>,
@@ -648,6 +649,7 @@ pub struct App {
     /// Host-owned mining progress and cooldowns, shared by local and remote interactions.
     interaction_states: HashMap<PlayerId, crate::equipment::Mining>,
     use_animation: f32,
+    player_animation: crate::player_animation::Animation,
     inventory_ready: bool,
     loot: crate::loot::Effects,
     mana_timer: f32,
@@ -709,6 +711,7 @@ impl App {
     }
 
     fn submit_crafting(&mut self, action: crate::crafting::Action) {
+        self.player_animation.start(crate::player_animation::Clip::Work);
         let revision = self.player.crafting.revision;
         if let NetRole::Joined(client) = &mut self.net {
             client.reliable.send(
@@ -1326,6 +1329,7 @@ impl App {
             prompt_input: String::new(),
             toasts: Vec::new(),
             chat_log: Vec::new(),
+            chat_bubbles: HashMap::new(),
             chat_open: false,
             chat_input: String::new(),
             pending_egui_output: None,
@@ -1336,6 +1340,7 @@ impl App {
             held_mesh,
             interaction_states: HashMap::new(),
             use_animation: 0.0,
+            player_animation: Default::default(),
             inventory_ready: false,
             loot: Default::default(),
             mana_timer: 0.0,
@@ -1704,12 +1709,12 @@ impl App {
     /// Sends a chat message from the local player. The host logs and
     /// broadcasts it directly; a joined client hands it to the host, which
     /// attributes it to the sender and relays it back to everyone
-    /// (including the sender) as a `Notify` -- so there's no separate local
+    /// (including the sender) as `PlayerChat` -- so there's no separate local
     /// echo path to keep in sync with the relayed one.
     fn send_chat(&mut self, text: String) {
         let Some(text) = net::chat_text(&text) else { return; };
         if matches!(self.net, NetRole::Host(_)) {
-            self.broadcast_chat(format!("{}: {text}", self.local_nickname));
+            self.broadcast_chat(self.local_player_id, self.local_nickname.clone(), text);
         } else if let NetRole::Joined(client) = &mut self.net {
             client.reliable.send(
                 &client.socket,
@@ -1772,6 +1777,12 @@ impl App {
         }
 
         self.use_animation=(self.use_animation-dt).max(0.0);
+        self.player_animation.advance(dt,
+            glam::Vec2::new(self.player.velocity.x, self.player.velocity.z).length(),
+            self.player.on_ground);
+        if self.cursor_grabbed {
+            if let Some(gesture) = self.input.gesture { self.player_animation.start(gesture); }
+        }
         if let Some(i)=self.input.hotbar_select.filter(|_| matches!(self.net,NetRole::Host(_)) || self.inventory_ready) {
             self.player.crafting.hotbar.select(i);self.publish_hotbar();
         }
@@ -1781,7 +1792,12 @@ impl App {
             if self.input.left_clicked || self.input.right_clicked {
                 let action=if self.input.right_clicked {Action::Place} else {match entry {Some(Entry::Resource(_))=>Action::Place,Some(Entry::Gear(Gear::Sword))=>Action::Attack,_=>Action::Mine}};
                 let intent=Intent{hotbar:self.player.crafting.hotbar.clone(),item:entry,target:raycast(&self.world,self.camera.eye_position(),self.camera.forward(),REACH).map(|h|h.target),direction:self.camera.forward().to_array(),action};
-                if entry.is_none() || entry.is_some_and(|e|e.count(&self.player.crafting)>0) {self.use_animation=0.28;self.audio.play_player_attack();}
+                if entry.is_none() || entry.is_some_and(|e|e.count(&self.player.crafting)>0) {
+                    self.use_animation=0.28;self.audio.play_player_attack();
+                    self.player_animation.start(if matches!(action, Action::Attack) {
+                        crate::player_animation::Clip::Attack
+                    } else { crate::player_animation::Clip::Work });
+                }
                 if let NetRole::Joined(client)=&mut self.net {client.reliable.send(&client.socket,client.server_addr,ReliableMsg::ItemAction(intent));}
                 else {self.perform_item_action(None,intent);}
             }
@@ -1796,6 +1812,7 @@ impl App {
             let origin = self.camera.eye_position();
             let dir = self.camera.forward();
             if let Some(hit) = raycast(&self.world, origin, dir, REACH) {
+                self.player_animation.start(crate::player_animation::Clip::Work);
                 match &mut self.net {
                     NetRole::Host(_) => {
                         let block = self
@@ -2171,13 +2188,21 @@ impl App {
         self.log_message(text, IMPORTANT_TOAST_COLOR);
     }
 
-    /// Broadcasts one already-formatted chat line (e.g. "P2: hello") to the
-    /// chat log/toasts and every connected client. Used for both the
-    /// host's own chat messages and ones relayed from a joined client.
-    fn broadcast_chat(&mut self, formatted: String) {
+    fn show_player_chat(&mut self, player_id: PlayerId, name: &str, text: String) {
+        let formatted = format!("{name}: {text}");
         self.toasts.push(Toast::new(formatted.clone()));
-        self.log_message(formatted.clone(), CHAT_MESSAGE_COLOR);
-        self.broadcast_notify(NotifyKind::Chat, &formatted);
+        self.log_message(formatted, CHAT_MESSAGE_COLOR);
+        self.chat_bubbles.insert(player_id, remote_player::ChatBubble { text, started: Instant::now() });
+    }
+
+    /// The host attributes chat by connection, never by parsing display names.
+    fn broadcast_chat(&mut self, player_id: PlayerId, name: String, text: String) {
+        self.show_player_chat(player_id, &name, text.clone());
+        if let NetRole::Host(host) = &mut self.net {
+            for &peer in host.clients.keys() {
+                host.reliable.send(&host.socket,peer,ReliableMsg::PlayerChat { player_id, name:name.clone(), text:text.clone() });
+            }
+        }
     }
 
     /// All known player state, host included. Used for the Lua World API.
@@ -2844,6 +2869,7 @@ impl App {
         if host.broadcast_timer >= SNAPSHOT_INTERVAL {
             host.broadcast_timer = 0.0;
             let mut players: Vec<SnapshotPlayer> = vec![SnapshotPlayer {
+                animation: self.player_animation,
                 name:self.local_nickname.clone(),
                 appearance: host.appearance,
                 id: HOST_PLAYER_ID,
@@ -2862,6 +2888,7 @@ impl App {
                     if let Some(account)=self.guest_accounts.get(&peer.account_key(&rp.nickname)) {rp.held=account.hotbar.entry().filter(|e|e.count(account)>0);}
                 }
                 players.push(SnapshotPlayer {
+                    animation: rp.animation,
                     name:rp.display_name.clone(),
                     appearance: rp.appearance,
                     id,
@@ -2986,10 +3013,9 @@ impl App {
                         let sender = host
                             .clients
                             .get(&from)
-                            .and_then(|player_id| host.remote_players.get(player_id))
-                            .map(|rp| rp.nickname.clone());
-                        if let (Some(nickname), Some(text)) = (sender, net::chat_text(&text)) {
-                            self.broadcast_chat(format!("{nickname}: {text}"));
+                            .and_then(|player_id| host.remote_players.get(player_id).map(|rp|(*player_id,rp.display_name.clone())));
+                        if let (Some((player_id,nickname)), Some(text)) = (sender, net::chat_text(&text)) {
+                            self.broadcast_chat(player_id,nickname,text);
                         }
                     }
                     ReliableMsg::DisplayName(name) => {
@@ -3020,6 +3046,7 @@ impl App {
                 host.reliable.ack(id, from);
             },
             Packet::Unreliable(UnreliableMsg::PlayerState {
+                animation,
                 pos,
                 yaw,
                 carrying_crystal,
@@ -3032,6 +3059,7 @@ impl App {
                         rp.pos = new_pos;
                         rp.yaw = yaw;
                         rp.carrying_crystal = carrying_crystal;
+                        rp.receive_animation(animation);
                         rp.last_seen = Instant::now();
                     }
                 }
@@ -3086,6 +3114,7 @@ impl App {
         if client.send_timer >= SNAPSHOT_INTERVAL {
             client.send_timer = 0.0;
             let msg = UnreliableMsg::PlayerState {
+                animation: self.player_animation,
                 pos: self.player.position.to_array(),
                 yaw: self.camera.yaw,
                 carrying_crystal: self.player.carrying_crystal,
@@ -3167,6 +3196,11 @@ impl App {
                         });
                         self.log_message(text, color);
                     }
+                    ReliableMsg::PlayerChat { player_id, name, text } => {
+                        if let Some(text) = net::chat_text(&text) {
+                            self.show_player_chat(player_id, &sanitize_nickname(&name), text);
+                        }
+                    }
                     ReliableMsg::GrantItem { block, amount } => {
                         self.player.add_resources(block, amount);
                     }
@@ -3230,6 +3264,7 @@ impl App {
                             rp.jump_multiplier = sp.jump_multiplier;
                             rp.oxygen = sp.oxygen;
                             rp.held = sp.held;
+                            rp.receive_animation(sp.animation);
                             rp.last_seen = now;
                         })
                         .or_insert_with(|| {
@@ -3249,6 +3284,7 @@ impl App {
                             rp.jump_multiplier = sp.jump_multiplier;
                             rp.oxygen = sp.oxygen;
                             rp.held = sp.held;
+                            rp.receive_animation(sp.animation);
                             rp
                         });
                 }
@@ -3269,6 +3305,9 @@ impl App {
             NetRole::Joined(_) => Vec::new(),
         };
         self.ui.nameplates.clear();
+        self.ui.chat_bubbles.clear();
+        let now = Instant::now();
+        self.chat_bubbles.retain(|_,bubble|bubble.opacity(now)>0.0);
         let remote_players=match &self.net {NetRole::Host(host)=>&host.remote_players,NetRole::Joined(client)=>&client.remote_players};
         let eye=self.camera.eye_position();let matrix=self.camera.view_proj();
         let screen=self.window.inner_size();let scale=self.window.scale_factor() as f32;
@@ -3277,7 +3316,11 @@ impl App {
             if id==self.local_player_id || distance>48.0 || crate::raycast::raycast(&self.world,eye,target-eye,(distance-0.3).max(0.0)).is_some() {continue;}
             let clip=matrix*target.extend(1.0);if clip.w<=0.0 {continue;}
             let ndc=clip.truncate()/clip.w;if ndc.x.abs()>1.0 || ndc.y.abs()>1.0 || !(0.0..=1.0).contains(&ndc.z) {continue;}
-            self.ui.nameplates.push((egui::pos2((ndc.x+1.0)*0.5*screen.width as f32/scale,(1.0-ndc.y)*0.5*screen.height as f32/scale),p.display_name.clone()));
+            let screen_pos = egui::pos2((ndc.x+1.0)*0.5*screen.width as f32/scale,(1.0-ndc.y)*0.5*screen.height as f32/scale);
+            self.ui.nameplates.push((screen_pos,p.display_name.clone()));
+            if let Some(bubble) = self.chat_bubbles.get(&id) {
+                self.ui.chat_bubbles.push((screen_pos-egui::vec2(0.0,26.0),bubble.text.clone(),bubble.opacity(now)));
+            }
         }
         let mut centers = vec![(pcx,pcz)];
         centers.extend(remote_chunks.iter().copied());

@@ -2,8 +2,8 @@
 use super::*;
 use serde::{Deserialize, Serialize};
 
-pub(super) const MIN_HOME_SPACING: f32 = 320.0;
-const REGION_SIZE: f32 = 384.0;
+pub(super) const MIN_HOME_SPACING: f32 = 128.0;
+const REGION_SIZE: f32 = 256.0;
 const HOME_RADIUS: f32 = 64.0;
 const FLIGHT_SPEED: f32 = 7.0;
 const VERTICAL_SPEED: f32 = 5.0;
@@ -53,29 +53,48 @@ pub(super) fn horizontal_distance(a: Vec3, b: Vec3) -> f32 {
     Vec3::new(a.x - b.x, 0.0, a.z - b.z).length()
 }
 
-/// One possible home per region, jittered inside a 64-block square. Adjacent
-/// regions therefore cannot put homes closer than 384 - 64 = 320 blocks.
+/// One solitary resident on the highest sampled hill in most territories.
+/// Search the central half so neighboring homes remain at least 128 blocks apart.
 fn candidate(world: &World, region: (i32, i32)) -> Option<(CreatureKind, Vec3, u64)> {
     let seed = (world.seed as u64)
         ^ (region.0 as u64).wrapping_mul(0x9E3779B185EBCA87)
         ^ (region.1 as u64).wrapping_mul(0xC2B2AE3D27D4EB4F)
         ^ 0xD4A60A;
     let mut rng = SimpleRng::new(seed);
-    if rng.next_f32() >= 0.3 {
+    let green = world.generation.abundance("dragon_green") as f32;
+    let red = world.generation.abundance("dragon_red") as f32;
+    if rng.next_f32() >= (0.8 * (green + red) / 200.0).min(1.0) {
         return None;
     }
-    let x = (region.0 as f32 + 0.5) * REGION_SIZE + (rng.next_f32() - 0.5) * 64.0;
-    let z = (region.1 as f32 + 0.5) * REGION_SIZE + (rng.next_f32() - 0.5) * 64.0;
-    let ground = world.terrain_height(x.floor() as i32, z.floor() as i32);
+    let cx = (region.0 as f32 + 0.5) * REGION_SIZE;
+    let cz = (region.1 as f32 + 0.5) * REGION_SIZE;
+    let mut peak = (world.terrain_height(cx as i32, cz as i32), cx as i32, cz as i32);
+    for dx in (-64..=64).step_by(8) {
+        for dz in (-64..=64).step_by(8) {
+            let x = cx as i32 + dx;
+            let z = cz as i32 + dz;
+            let h = world.terrain_height(x, z);
+            if h > peak.0 { peak = (h, x, z); }
+        }
+    }
+    let coarse = peak;
+    for x in coarse.1-7..=coarse.1+7 {
+        for z in coarse.2-7..=coarse.2+7 {
+            if (x-cx as i32).abs() > 64 || (z-cz as i32).abs() > 64 { continue; }
+            let h = world.terrain_height(x,z);
+            if h > peak.0 { peak = (h,x,z); }
+        }
+    }
+    let (ground, x, z) = peak;
     if ground <= SEA_LEVEL {
         return None;
     }
-    let kind = if rng.next_f32() < 0.5 {
+    let kind = if rng.next_f32() * (green + red) < green {
         CreatureKind::DragonGreen
     } else {
         CreatureKind::DragonRed
     };
-    Some((kind, Vec3::new(x, ground as f32 + 1.0, z), seed))
+    Some((kind, Vec3::new(x as f32, ground as f32 + 1.0, z as f32), seed))
 }
 
 impl Creatures {
@@ -97,7 +116,8 @@ impl Creatures {
                     if self.dragon_regions.contains(&cell) {
                         continue;
                     }
-                    let Some((kind, mut home, seed)) = candidate(world, cell) else {
+                    let Some((kind, mut home, seed)) = *self.dragon_candidates.entry(cell)
+                        .or_insert_with(|| candidate(world, cell)) else {
                         self.dragon_regions.insert(cell);
                         continue;
                     };
@@ -268,7 +288,8 @@ pub(super) fn update(
         if dragon.phase == Phase::Land {
             dragon.home
         } else {
-            target.map(|(_, p)| p).or(scripted).unwrap_or(patrol)
+            target.map(|(_, p)| p).or(scripted).unwrap_or(
+                if dragon.phase == Phase::Ground { dragon.home } else { patrol })
         },
     );
     let distance = horizontal_distance(pos.0, goal);
@@ -477,7 +498,7 @@ mod tests {
             }
         }
         assert!(
-            (60..180).contains(&homes.len()),
+            (280..360).contains(&homes.len()),
             "expected rare occupied regions: {}",
             homes.len()
         );
@@ -488,6 +509,27 @@ mod tests {
                 assert!(horizontal_distance(*a, *b) >= MIN_HOME_SPACING);
             }
         }
+    }
+
+    #[test]
+    fn homes_choose_high_ground_and_respect_color_exclusions() {
+        let mut world = World::new(71);
+        world.generation.creatures.insert("dragon_red".into(),0);
+        world.generation.creatures.insert("dragon_green".into(),200);
+        let mut count = 0;
+        for rx in -2..=2 { for rz in -2..=2 {
+            let Some((kind, home, _)) = candidate(&world,(rx,rz)) else { continue; };
+            assert_eq!(kind,CreatureKind::DragonGreen);
+            let cx = rx*256+128;
+            let cz = rz*256+128;
+            for dx in (-64..=64).step_by(8) { for dz in (-64..=64).step_by(8) {
+                assert!(home.y >= world.terrain_height(cx+dx,cz+dz) as f32+1.0);
+            }}
+            count += 1;
+        }}
+        assert!(count > 0);
+        world.generation.creatures.insert("dragon_green".into(),0);
+        assert!(candidate(&world,(0,0)).is_none());
     }
 
     #[test]
@@ -502,9 +544,14 @@ mod tests {
         for _ in 0..10 {
             creatures.discover_dragons(&world, &players);
         }
-        assert_eq!(creatures.snapshot_with_ids().len(), 1);
-        let id = creatures.snapshot_with_ids()[0].0;
-        creatures.destroy(id);
+        let residents = creatures.snapshot_with_ids();
+        assert!(!residents.is_empty());
+        for (i, a) in residents.iter().enumerate() {
+            for b in &residents[i+1..] {
+                assert!(horizontal_distance(Vec3::from_array(a.2), Vec3::from_array(b.2)) >= MIN_HOME_SPACING);
+            }
+            creatures.destroy(a.0);
+        }
         let save: DragonSave =
             serde_json::from_str(&serde_json::to_string(&creatures.save_dragons()).unwrap())
                 .unwrap();
