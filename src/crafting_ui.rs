@@ -84,6 +84,7 @@ impl CraftingUi {
             .vscroll(true)
             .show(ctx, |ui| {
                 ui.heading(format!("Mana: {}", account.mana));
+                if registry.mana_free {ui.label("Mana-free actions enabled by host (testing)");}
                 ui.horizontal_wrapped(|ui| {
                     let colors = [
                         [190, 145, 75],
@@ -257,7 +258,7 @@ impl CraftingUi {
                             .collect::<Vec<_>>()
                             .join(", ")
                     ));
-                    ui.label(format!("Decomposition cost: {} mana",self.extraction_amount));
+                    ui.label(format!("Decomposition cost: {} mana",registry.mana_charge(self.extraction_amount)));
                     let action = Action::Extract {
                         block: self.extraction_block,
                         amount: self.extraction_amount,
@@ -296,7 +297,7 @@ impl CraftingUi {
                                         if let Some(block) = block {
                                             crate::resource_ui::icon(ui, block);
                                         }
-                                        let cost = registry.mana_costs[r.inputs.len() - 1];
+                                        let cost = registry.mana_charge(registry.mana_costs[r.inputs.len() - 1]);
                                         let label = format!(
                                             "{}: {} ({} mana)",
                                             name,

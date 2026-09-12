@@ -34,7 +34,9 @@ pub fn hotbar(
     account: &crate::crafting::Account,
     interactive: bool,
     show_name: bool,
+    disabled: bool,
 ) -> Option<usize> {
+    let interactive = interactive && !disabled;
     let active = account.hotbar.active.min(8);
     let entry = account.hotbar.entry();
     let mut selected_slot = None;
@@ -44,12 +46,12 @@ pub fn hotbar(
         .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -12.0])
         .show(ctx, |ui| {
             ui.set_width(width);
-            if show_name {
+            if show_name || disabled {
                 let (r, _) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::hover());
                 ui.painter().text(
                     r.center(),
                     egui::Align2::CENTER_CENTER,
-                    entry.map_or("Empty hand", |e| e.name()),
+                    if disabled { "Tools paused — exit machine mode to restore" } else { entry.map_or("Empty hand", |e| e.name()) },
                     egui::FontId::proportional(18.0),
                     egui::Color32::from_rgb(245, 232, 199),
                 );
@@ -57,7 +59,7 @@ pub fn hotbar(
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 for i in 0..9 {
-                    let selected = i == active;
+                    let selected = !disabled && i == active;
                     let (r, response) = ui.allocate_exact_size(
                         egui::vec2(slot_width, 68.0),
                         if interactive {
@@ -103,6 +105,9 @@ pub fn hotbar(
                             },
                         );
                         response.clone().on_hover_text(e.name());
+                    }
+                    if disabled {
+                        ui.painter().rect_filled(r, 0.0, egui::Color32::from_rgba_unmultiplied(65, 65, 65, 190));
                     }
                     if interactive && response.clicked() {
                         selected_slot = Some(i);

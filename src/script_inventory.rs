@@ -24,8 +24,9 @@ fn balance_table<'lua>(lua: &'lua Lua, values: &[u32;5]) -> mlua::Result<Table<'
     Ok(table)
 }
 pub(super) fn populate<'lua,'scope>(_lua: &'lua Lua, scope: &mlua::Scope<'lua,'scope>, api: &Table<'lua>, tx: &'scope CallbackTransaction) -> mlua::Result<()> where 'lua:'scope {
-    api.set("instant_mana_cost",crate::crafting::INSTANT_MANA)?;
-    api.set("rule_mana_cost",crate::crafting::RULE_MANA)?;
+    let mana_free=_lua.app_data_ref::<std::sync::Arc<Registry>>().unwrap().mana_free;
+    api.set("instant_mana_cost",if mana_free {0} else {crate::crafting::INSTANT_MANA})?;
+    api.set("rule_mana_cost",if mana_free {0} else {crate::crafting::RULE_MANA})?;
     api.set("mana_regen_cap",crate::crafting::MANA_REGEN_CAP)?;
     api.set("get_player_inventory",scope.create_function(move |lua,id:PlayerId| {
         let Some(a)=tx.inventory(id) else {return Ok(None);};
@@ -46,7 +47,7 @@ pub(super) fn populate<'lua,'scope>(_lua: &'lua Lua, scope: &mlua::Scope<'lua,'s
         api.set(name,scope.create_function(move |_,(id,amount):(PlayerId,u32)| {
             if amount==0 || amount>MAX_ITEM_GRANT_AMOUNT {return Ok(false);}
             let Some(mut a)=tx.inventory(id) else {return Ok(false);};
-            let next=if name=="take_mana" {a.mana.checked_sub(amount)} else {a.mana.checked_add(amount)};
+            let next=if name=="take_mana" {a.mana.checked_sub(if mana_free {0} else {amount})} else {a.mana.checked_add(amount)};
             let Some(next)=next else {return Ok(false);};a.mana=next;tx.stage_inventory(id,&a);Ok(true)
         })?)?;
     }
@@ -88,6 +89,7 @@ pub(super) fn populate<'lua,'scope>(_lua: &'lua Lua, scope: &mlua::Scope<'lua,'s
         let result=lua.create_table()?;
         for (label,salvage) in [("create",false),("decompose",true)] {
             let (iron,wood,mana)=crate::crafting::gear_formula(g,salvage).unwrap();
+            let mana=if mana_free {0} else {mana};
             let part=lua.create_table()?;let resources=lua.create_table()?;
             resources.set("iron",iron)?;resources.set("oak_wood",wood)?;part.set("resources",resources)?;part.set("mana",mana)?;result.set(label,part)?;
         }

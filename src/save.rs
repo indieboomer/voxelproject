@@ -12,6 +12,12 @@ use crate::voxel::World;
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct CraftingSave {
+    pub player: Option<PlayerSave>,
+    pub weather: Option<crate::weather::WeatherState>,
+    pub loot: Option<Vec<crate::loot::Drop>>,
+    pub underground_discovered: std::collections::BTreeSet<(i32, i32)>,
+    pub automation: crate::automation::State,
+    pub machine_loot: Vec<crate::loot::Drop>,
     pub host: crate::crafting::Account,
     // Nicknames are the existing session identity; there are no accounts in the MVP.
     pub guests: std::collections::HashMap<String, crate::crafting::Account>,
@@ -21,13 +27,55 @@ pub struct CraftingSave {
     pub fish: crate::creature::FishSave,
     pub wildlife: std::collections::BTreeMap<u32, Option<(i32, i32)>>,
 }
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PlayerSave {
+    pub health: f32,
+    pub oxygen: f32,
+    pub poisoned: bool,
+    pub speed: f32,
+    pub jump: f32,
+}
+impl PlayerSave {
+    pub fn capture(player: &Player) -> Self {
+        Self {
+            health: player.health,
+            oxygen: player.oxygen,
+            poisoned: player.poisoned,
+            speed: player.speed_multiplier,
+            jump: player.jump_multiplier,
+        }
+    }
+    fn valid(&self) -> bool {
+        self.health.is_finite()
+            && (0.0..=crate::player::MAX_HEALTH).contains(&self.health)
+            && self.oxygen.is_finite()
+            && (0.0..=crate::player::MAX_OXYGEN).contains(&self.oxygen)
+            && self.speed.is_finite()
+            && self.speed >= 0.0
+            && self.jump.is_finite()
+            && self.jump >= 0.0
+    }
+    pub fn restore(&self, player: &mut Player) {
+        player.health = self.health;
+        player.oxygen = self.oxygen;
+        player.poisoned = self.poisoned;
+        player.speed_multiplier = self.speed;
+        player.jump_multiplier = self.jump;
+    }
+}
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SaveV2 {
-    #[serde(default)]
+    #[serde(default = "legacy_generation")]
     generation: crate::worldgen::WorldGeneration,
     world: WorldSave,
     #[serde(default)]
     crafting: CraftingSave,
+}
+fn legacy_generation() -> crate::worldgen::WorldGeneration {
+    crate::worldgen::WorldGeneration {
+        underground: false,
+        ..Default::default()
+    }
 }
 const MAGIC: &[u8] = b"VOXEL_SAVE_2\n";
 fn encode_save(
@@ -54,18 +102,138 @@ fn decode_save(
 ) -> Option<(WorldSave, CraftingSave, crate::worldgen::WorldGeneration)> {
     if let Some(json) = bytes.strip_prefix(MAGIC) {
         let save: SaveV2 = serde_json::from_slice(json).ok()?;
+        if !valid_world(&save.world)
+            || save.crafting.player.as_ref().is_some_and(|p| !p.valid())
+            || save
+                .crafting
+                .weather
+                .as_ref()
+                .is_some_and(|w| !w.valid_save())
+            || save
+                .crafting
+                .loot
+                .as_ref()
+                .is_some_and(|drops| drops.len() > 48 || drops.iter().any(|d| !d.valid_saved()))
+        {
+            return None;
+        }
         save.generation.validate().ok()?;
+        let recipes = crate::crafting::Registry::load().ok()?;
+        save.crafting
+            .automation
+            .validate(crate::automation::balance(), &recipes)
+            .ok()?;
+        if save.crafting.machine_loot.len() > 48
+            || save
+                .crafting
+                .machine_loot
+                .iter()
+                .any(|d| !d.valid_machine())
+        {
+            return None;
+        }
+        crate::automation::validate_account(
+            &save.crafting.host,
+            crate::automation::balance(),
+            &recipes,
+        )
+        .ok()?;
+        for account in save.crafting.guests.values() {
+            crate::automation::validate_account(account, crate::automation::balance(), &recipes)
+                .ok()?;
+        }
         Some((save.world, save.crafting, save.generation))
     } else {
-        Some((
-            bincode::deserialize(bytes).ok()?,
-            CraftingSave::default(),
-            Default::default(),
-        ))
+        let world = bincode::deserialize(bytes).ok()?;
+        if !valid_world(&world) {
+            return None;
+        }
+        Some((world, CraftingSave::default(), legacy_generation()))
     }
 }
+fn valid_world(world: &WorldSave) -> bool {
+    world
+        .player_pos
+        .iter()
+        .all(|p| p.is_finite() && p.abs() < 1_000_000.0)
+        && world.player_yaw.is_finite()
+        && world.player_pitch.is_finite()
+        && world.time_of_day.is_finite()
+        && (0.0..=1.0).contains(&world.time_of_day)
+        && world.edits.iter().all(|((x, y, z), b)| {
+            x.unsigned_abs() < 1_000_000
+                && z.unsigned_abs() < 1_000_000
+                && (0..crate::voxel::chunk::CHUNK_Y).contains(y)
+                && *b != crate::voxel::BlockType::AutomationDevice
+        })
+}
 
-const SAVE_PATH: &str = "saves/world.bin";
+pub fn valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && name == name.trim()
+        && name.chars().count() <= 48
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || " -_".contains(c))
+}
+pub fn world_path(name: &str) -> Result<std::path::PathBuf, String> {
+    if !valid_name(name) {
+        return Err(
+            "Use 1-48 letters, numbers, spaces, hyphens or underscores for the world name".into(),
+        );
+    }
+    Ok(if name == "world" {
+        "saves/world.bin".into()
+    } else {
+        std::path::PathBuf::from("saves").join(format!("world-{name}.bin"))
+    })
+}
+pub fn saved_worlds() -> Vec<String> {
+    saved_worlds_in(Path::new("saves"))
+}
+fn saved_worlds_in(root: &Path) -> Vec<String> {
+    let mut names = Vec::new();
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            if !entry.file_type().is_ok_and(|t| t.is_file()) {
+                continue;
+            }
+            let file = entry.file_name();
+            let Some(file) = file.to_str() else {
+                continue;
+            };
+            let name = if file == "world.bin" {
+                Some("world")
+            } else {
+                file.strip_prefix("world-")
+                    .and_then(|s| s.strip_suffix(".bin"))
+            };
+            if let Some(name) = name.filter(|n| valid_name(n)) {
+                names.push(name.to_owned());
+            }
+        }
+    }
+    names.sort_by_key(|n| n.to_lowercase());
+    names
+}
+
+fn write_save(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temp = path.with_extension("bin.tmp");
+    let backup = path.with_extension("bin.bak");
+    let mut file = fs::File::create(&temp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    // Retain the previous complete save; never delete it before replacement succeeds.
+    if path.exists() {
+        fs::copy(path, &backup)?;
+    }
+    fs::rename(&temp, path)
+}
 
 pub struct LoadedWorld {
     pub crafting: CraftingSave,
@@ -84,7 +252,7 @@ pub fn save_world(
     time_of_day: f32,
     modules: Vec<ModuleSaveEntry>,
     crafting: &CraftingSave,
-) {
+) -> Result<(), String> {
     let save = WorldSave {
         seed: world.seed,
         player_pos: player.position.to_array(),
@@ -95,38 +263,25 @@ pub fn save_world(
         modules,
     };
 
-    if let Some(parent) = Path::new(SAVE_PATH).parent() {
-        if let Err(e) = fs::create_dir_all(parent) {
-            log::error!("Failed to create saves directory: {e}");
-            return;
-        }
-    }
-
-    let edit_count = save.edits.len();
-    match encode_save(save, crafting, &world.generation) {
-        Ok(bytes) => {
-            if let Err(e) = fs::write("saves/world.bin.tmp", bytes)
-                .and_then(|()| fs::rename("saves/world.bin.tmp", SAVE_PATH))
-            {
-                log::error!("Failed to write save file: {e}");
-            } else {
-                log::info!("World saved ({} edited blocks).", edit_count);
-            }
-        }
-        Err(e) => log::error!("Failed to serialize save: {e}"),
-    }
+    let path = world_path(&world.name)?;
+    let bytes = encode_save(save, crafting, &world.generation).map_err(|e| e.to_string())?;
+    write_save(&path, &bytes).map_err(|e| format!("Could not save {}: {e}", world.name))
 }
 
-/// Whether a save file exists, for the main menu to decide whether "Load
-/// World" should be selectable at all.
 pub fn save_exists() -> bool {
-    Path::new(SAVE_PATH).exists()
+    !saved_worlds().is_empty()
 }
 
-pub fn load_world() -> Option<LoadedWorld> {
-    let bytes = fs::read(SAVE_PATH).ok()?;
+pub fn load_world(name: &str) -> Option<LoadedWorld> {
+    load_path(&world_path(name).ok()?, name)
+}
+fn load_path(path: &Path, name: &str) -> Option<LoadedWorld> {
+    let bytes = fs::read(path).ok()?;
     let (save, crafting, generation) = decode_save(&bytes)?;
     let mut world = World::new(save.seed);
+    world.name = name.to_owned();
+    world.underground_discovered = crafting.underground_discovered.clone();
+    world.automation = crafting.automation.clone();
     world.generation = generation;
     for (pos, block) in save.edits {
         world.edits.insert(pos, block);
@@ -151,6 +306,87 @@ pub fn load_world() -> Option<LoadedWorld> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn named_files_replace_safely_and_keep_previous_complete_save() {
+        let dir = std::path::PathBuf::from(format!("target/save-test-{}", std::process::id()));
+        let path = dir.join("world-First World.bin");
+        let second = dir.join("world-Second World.bin");
+        let old = encode_save(world_save(), &CraftingSave::default(), &Default::default()).unwrap();
+        write_save(&path, &old).unwrap();
+        write_save(&second, &old).unwrap();
+        let mut crafting = CraftingSave::default();
+        let p = (0, 30, 0);
+        let mut chest = crate::automation::Device::new(crate::automation::Kind::Chest, p, 0);
+        chest.items.insert("resource:stone".into(), 2_000_000);
+        crafting.automation.devices.insert(p, chest);
+        crafting.underground_discovered.insert((-1, 2));
+        let mut weather = crate::weather::WeatherState::new(42);
+        weather.set(crate::weather::Weather::Storm);
+        crafting.weather = Some(weather);
+        let mut player = Player::new(Vec3::ZERO);
+        player.health = 31.0;
+        player.poisoned = true;
+        crafting.player = Some(PlayerSave::capture(&player));
+        crafting.loot = Some(vec![crate::loot::Drop {
+            pos: [1., 2., 3.],
+            contents: vec![(crate::voxel::BlockType::Stone, 2)],
+            age: 1.,
+            cargo: Default::default(),
+            machine: false,
+            launch: None,
+        }]);
+        let bytes = encode_save(world_save(), &crafting, &Default::default()).unwrap();
+        write_save(&path, &bytes).unwrap();
+        assert_eq!(fs::read(path.with_extension("bin.bak")).unwrap(), old);
+        assert_eq!(fs::read(&second).unwrap(), old);
+        let mut loaded = load_path(&path, "First World").unwrap();
+        assert_eq!(loaded.world.name, "First World");
+        assert_eq!(loaded.player_pos, Vec3::new(1., 2., 3.));
+        loaded.world.ensure_chunk_loaded(0, 0);
+        assert_eq!(
+            loaded.world.get_block(1, 2, 3),
+            crate::voxel::BlockType::Bricks
+        );
+        assert_eq!(
+            loaded.world.get_block(0, 30, 0),
+            crate::voxel::BlockType::AutomationDevice
+        );
+        assert!(loaded.world.underground_discovered.contains(&(-1, 2)));
+        assert_eq!(saved_worlds_in(&dir), vec!["First World", "Second World"]);
+        let restored = loaded.crafting;
+        assert_eq!(restored.automation, crafting.automation);
+        assert_eq!(
+            restored.underground_discovered,
+            crafting.underground_discovered
+        );
+        assert_eq!(restored.weather, crafting.weather);
+        assert_eq!(restored.player, crafting.player);
+        assert_eq!(
+            restored.loot.unwrap()[0].contents,
+            crafting.loot.unwrap()[0].contents
+        );
+        for name in ["../escape", "a/b", "a\\b", "", " world", "world."] {
+            assert!(world_path(name).is_err());
+        }
+        assert_eq!(
+            world_path("First World").unwrap(),
+            Path::new("saves/world-First World.bin")
+        );
+        assert_eq!(world_path("world").unwrap(), Path::new("saves/world.bin"));
+    }
+    #[test]
+    fn legacy_generation_stays_unchanged_and_bad_positions_are_rejected() {
+        let mut config = serde_json::to_value(crate::worldgen::WorldGeneration::default()).unwrap();
+        config.as_object_mut().unwrap().remove("underground");
+        assert!(
+            !serde_json::from_value::<crate::worldgen::WorldGeneration>(config)
+                .unwrap()
+                .underground
+        );
+        let mut world = world_save();
+        world.player_pos[0] = f32::INFINITY;
+        assert!(decode_save(&bincode::serialize(&world).unwrap()).is_none());
+    }
     fn world_save() -> WorldSave {
         WorldSave {
             seed: 42,
@@ -169,6 +405,47 @@ mod tests {
         assert_eq!(world.seed, 42);
         assert_eq!(crafting.host, crate::crafting::Account::default());
         assert!(crafting.creatures.is_none());
+    }
+    #[test]
+    fn automation_save_preserves_paid_batches_and_packed_devices() {
+        use crate::automation::*;
+        let mut crafting = CraftingSave::default();
+        let p = (0, 30, 0);
+        let mut d = Device::new(Kind::Condenser, p, 0);
+        d.mana = 60;
+        crafting.automation.devices.insert(p, d);
+        crafting
+            .automation
+            .step(balance(), &crate::crafting::Registry::load().unwrap());
+        crafting
+            .host
+            .packed_devices
+            .push(crafting.automation.devices[&p].clone());
+        crafting
+            .host
+            .production_goods
+            .insert("creature:sheep".into(), 2);
+        crafting.machine_loot.push(crate::loot::Drop {
+            pos: [3.0, 30.3, 0.0],
+            contents: vec![(crate::voxel::BlockType::Stone, 2)],
+            age: 0.4,
+            cargo: Default::default(),
+            machine: true,
+            launch: Some([0.5, 31.25, 0.5]),
+        });
+        let bytes = encode_save(world_save(), &crafting, &Default::default()).unwrap();
+        let (_, loaded, _) = decode_save(&bytes).unwrap();
+        assert_eq!(loaded.automation, crafting.automation);
+        assert_eq!(loaded.host, crafting.host);
+        assert_eq!(
+            serde_json::to_string(&loaded.machine_loot).unwrap(),
+            serde_json::to_string(&crafting.machine_loot).unwrap()
+        );
+        crafting.host.packed_devices[0].mana = u32::MAX;
+        assert!(
+            decode_save(&encode_save(world_save(), &crafting, &Default::default()).unwrap())
+                .is_none()
+        );
     }
     #[test]
     fn new_saves_round_trip_host_guests_resources_and_creatures() {
@@ -198,7 +475,7 @@ mod tests {
         let mut bytes = MAGIC.to_vec();
         bytes.extend(serde_json::to_vec(&serde_json::json!({"world":world_save()})).unwrap());
         assert_eq!(decode_save(&bytes).unwrap().1.host, account);
-        assert_eq!(decode_save(&bytes).unwrap().2, Default::default());
+        assert_eq!(decode_save(&bytes).unwrap().2, legacy_generation());
         assert!(decode_save(b"not a save").is_none());
     }
 
@@ -206,7 +483,9 @@ mod tests {
     fn prompted_terrain_survives_save_and_invalid_settings_are_rejected() {
         let config = crate::worldgen::WorldGeneration {
             description: "Sandy islands".into(),
-            creatures: [("sheep".into(),1000), ("cow".into(),0)].into_iter().collect(),
+            creatures: [("sheep".into(), 1000), ("cow".into(), 0)]
+                .into_iter()
+                .collect(),
             shape: crate::worldgen::Shape::Islands,
             surface: crate::worldgen::Surface::Sand,
             trees: 0,

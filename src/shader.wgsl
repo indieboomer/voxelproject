@@ -264,17 +264,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let direct = sun_tint * sun_intensity * ndotl * shadow * mix(0.8, 1.0, in.ao);
     var local_light=vec3<f32>(0.0);
     let night=1.0-smoothstep(-0.1,0.25,camera.sun_dir.w);
-    if night>0.001 && camera.camp_lights[0].w>0.0 {
+    if night>0.001 && camera.camp_lights[0].w!=0.0 {
         for (var i=0u;i<4u;i=i+1u) {
             let light=camera.camp_lights[i];
-            if light.w<=0.0 {continue;}
+            if light.w==0.0 {continue;}
             let delta=light.xyz-in.world_pos;
             let distance2=dot(delta,delta);
             if distance2<light.w*light.w {
                 let fade=1.0-distance2/(light.w*light.w);
                 let facing=max(dot(shading_normal,delta*inverseSqrt(max(distance2,0.01))),0.0);
-                let flicker=0.92+0.08*sin(camera.light_params.z*7.0+light.x);
-                local_light+=vec3<f32>(1.0,0.38,0.09)*fade*fade*(0.2+facing)*night*flicker*1.8;
+                let cool=light.w<0.0;
+                let flicker=select(0.92+0.08*sin(camera.light_params.z*7.0+light.x),1.0,cool);
+                let tint=select(vec3<f32>(1.0,0.38,0.09),vec3<f32>(0.72,0.86,1.0),cool);
+                local_light+=tint*fade*fade*(0.2+facing)*night*flicker*1.8;
             }
         }
     }
@@ -308,7 +310,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // faintly alive look even without a real bloom pass -- `grade` below
     // gives the boosted highlight a soft rolloff instead of just clipping.
     let pulse = 0.85 + 0.15 * sin(camera.light_params.z * 2.2 + in.world_pos.x * 0.3 + in.world_pos.z * 0.3);
-    let glow = tex.rgb * in.emission * 1.6 * pulse;
+    // Procedural props/particles use a white atlas texel with vertex tint.
+    // Their glow must retain that tint rather than washing every cue white.
+    let glow = tex.rgb * in.color * in.emission * 1.6 * pulse;
     // Sparse world-anchored pixel facets catch light as the camera moves.
     // Derivatives fade subpixel detail before it can shimmer at a distance.
     let face_uv = vec2<f32>(

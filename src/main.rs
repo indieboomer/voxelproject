@@ -1,5 +1,6 @@
 mod app;
 mod audio;
+mod machine_feedback;
 mod camera;
 mod creature;
 mod crafting;
@@ -18,6 +19,7 @@ mod llm;
 mod llm_server;
 mod menu;
 mod worldgen;
+mod underground;
 mod model;
 mod runtime_paths;
 mod rule_sharing;
@@ -26,6 +28,10 @@ mod transport;
 #[cfg(feature = "steam")]
 mod steam_transport;
 mod player;
+mod automation;
+mod automation_net;
+mod automation_ui;
+mod automation_mesh;
 mod player_animation;
 mod raycast;
 mod block_target;
@@ -146,16 +152,16 @@ fn main() {
                                             let port = menu.port;
                                             let llm_url = menu.llm_url.clone();
                                             let cfg = match action {
-                                                MenuAction::NewWorld { nickname, generation } => LaunchConfig {
-                                                    connect: None,
+                                                MenuAction::NewWorld { nickname, generation, world_name } => LaunchConfig {
+                                                    world_name,                                                    connect: None,
                                                     port,
                                                     llm_url: llm_url.clone(),
                                                     fresh: true,
                                                     generation,
                                                     nickname,
                                                 },
-                                                MenuAction::LoadWorld { nickname } => LaunchConfig {
-                                                    connect: None,
+                                                MenuAction::LoadWorld { nickname, world_name } => LaunchConfig {
+                                                    world_name,                                                    connect: None,
                                                     port,
                                                     llm_url: llm_url.clone(),
                                                     fresh: false,
@@ -163,7 +169,7 @@ fn main() {
                                                     nickname,
                                                 },
                                                 MenuAction::Join { addr, nickname } => LaunchConfig {
-                                                    connect: Some(addr),
+                                                    world_name: "world".into(),                                                    connect: Some(addr),
                                                     port,
                                                     llm_url: llm_url.clone(),
                                                     fresh: false,
@@ -183,6 +189,7 @@ fn main() {
                                                 Ok(app) => stage = Stage::Game(app),
                                                 Err(e) => {
                                                     let fallback = LaunchConfig {
+                                                        world_name: "world".into(),
                                                         connect: None,
                                                         port,
                                                         llm_url,
@@ -231,6 +238,7 @@ fn main() {
                                         let menu = pollster::block_on(MenuApp::new(
                                             window.clone(),
                                             LaunchConfig {
+                                                world_name: "world".into(),
                                                 connect: None,
                                                 port: net::DEFAULT_PORT,
                                                 llm_url: net::DEFAULT_LLM_URL.to_string(),

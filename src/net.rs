@@ -9,7 +9,7 @@ use crate::voxel::block::BlockType;
 pub type PlayerId = u32;
 pub type WorldEdit = ((i32, i32, i32), BlockType);
 pub const MAX_PLAYERS: usize = 4;
-pub const PROTOCOL_VERSION: u32 = 21;
+pub const PROTOCOL_VERSION: u32 = 28;
 pub const HOST_PLAYER_ID: PlayerId = 0;
 pub const DEFAULT_PORT: u16 = 7878;
 pub const RELIABLE_RESEND_INTERVAL: Duration = Duration::from_millis(200);
@@ -130,6 +130,9 @@ pub enum ReliableMsg {
     LootCollected(Vec<(BlockType,u32)>),
     /// Host-attributed chat for both scrollback and the speaker's overhead bubble.
     PlayerChat { player_id: PlayerId, name: String, text: String },
+    AutomationAction(crate::automation::Action),
+    AutomationState(crate::automation_net::Chunk),
+    AutomationResult {ok:bool,feedback:String},
 }
 
 /// One player's position/status as carried in a `Snapshot` -- see
@@ -628,6 +631,7 @@ mod tests {
 pub const DEFAULT_LLM_URL: &str = "http://127.0.0.1:8090";
 
 pub struct LaunchConfig {
+    pub world_name: String,
     pub generation: crate::worldgen::WorldGeneration,
     /// Join this host instead of hosting our own game.
     pub connect: Option<JoinTarget>,
@@ -704,7 +708,7 @@ pub fn parse_args() -> LaunchConfig {
     }
 
     LaunchConfig {
-        connect,
+        world_name: "world".into(),        connect,
         port,
         llm_url,
         fresh: false,

@@ -217,7 +217,7 @@ impl Models {
     /// (see this module's doc comment). `app.rs`'s `create_atlas_bind_group`
     /// uploads these once at startup into the `tex_layer`-indexed
     /// `creature_texture` array `emit_skinned_mesh`'s vertices sample from.
-    pub fn creature_texture_layers(&self) -> [Option<&image::RgbaImage>; 27] {
+    pub fn creature_texture_layers(&self) -> [Option<&image::RgbaImage>; 28] {
         [
             self.sheep.texture.as_ref(),
             self.chicken.texture.as_ref(),
@@ -246,6 +246,7 @@ impl Models {
             self.dragons[0].texture.as_ref(),
             self.dragons[1].texture.as_ref(),
             self.fish[0].texture.as_ref(),
+            chest_model().texture.as_ref(),
         ]
     }
 
@@ -876,12 +877,12 @@ fn emit_rigid_parts(
                     position: [origin.x + wx, origin.y + world_pos.y, origin.z + wz],
                     color: (Vec3::from_array(prim.color)*Vec3::from_array(prim.colors.get(i).copied().unwrap_or([1.0;3]))).to_array(),
                     normal: [nx, world_normal.y, nz],
-                    uv: [uv[0], uv[1]],
+                    uv: if model.texture_layer.is_some() {prim.uvs.get(i).copied().unwrap_or([0.0;2])} else {[uv[0], uv[1]]},
                     ao: 1.0,
                     reflectivity: 0.0,
                     emission: 0.0,
                     wind: 0.0,
-                    tex_layer: 0.0,
+                    tex_layer: model.texture_layer.unwrap_or(0.0),
                 glimmer: 0.0,
                 });
             }
@@ -1001,6 +1002,28 @@ pub fn push_model(
     }
 }
 
+fn chest_model() -> &'static AnimatedModel {
+    static MODEL: std::sync::OnceLock<AnimatedModel> = std::sync::OnceLock::new();
+    MODEL.get_or_init(|| {let mut model=load_glb(include_bytes!("../models/chest.glb"));model.texture_layer=Some(28.0);model})
+}
+
+/// Bundled chest, normalized without distortion into one occupied voxel.
+pub fn chest_mesh() -> &'static crate::voxel::mesher::MeshData {
+    static MESH: std::sync::OnceLock<crate::voxel::mesher::MeshData> = std::sync::OnceLock::new();
+    MESH.get_or_init(|| {
+        let model=chest_model();
+        let mut mesh=crate::voxel::mesher::MeshData {vertices:Vec::new(),indices:Vec::new()};
+        let matrices=compute_world_matrices(&model,None,0.0);
+        emit_rigid_parts(&model,&matrices,&mut mesh.vertices,&mut mesh.indices,Vec3::ZERO,&|x,z|(x,z),white_uv());
+        let mut lo=Vec3::splat(f32::INFINITY); let mut hi=Vec3::splat(f32::NEG_INFINITY);
+        for v in &mesh.vertices {let p=Vec3::from_array(v.position);lo=lo.min(p);hi=hi.max(p);}
+        let scale=0.9/(hi-lo).max_element().max(0.001);
+        let origin=Vec3::new((lo.x+hi.x)*0.5,lo.y,(lo.z+hi.z)*0.5);
+        for v in &mut mesh.vertices {v.position=((Vec3::from_array(v.position)-origin)*scale+Vec3::new(0.5,0.02,0.5)).to_array();}
+        mesh
+    })
+}
+
 /// Cache the static bag geometry once; instances only translate these vertices.
 pub fn loot_bag_mesh() -> &'static crate::voxel::mesher::MeshData {
     static MESH: std::sync::OnceLock<crate::voxel::mesher::MeshData> = std::sync::OnceLock::new();
@@ -1022,6 +1045,14 @@ pub fn loot_bag_mesh() -> &'static crate::voxel::mesher::MeshData {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn chest_has_its_embedded_texture_and_fits_one_voxel() {
+        let mesh=super::chest_mesh();
+        assert!(!mesh.vertices.is_empty());assert!(!mesh.indices.is_empty());
+        assert!(super::chest_model().texture.is_some());
+        assert!(mesh.vertices.iter().all(|v|v.tex_layer==28.0 && v.position.iter().all(|n|*n>=0.0 && *n<=1.0)));
+        assert!(mesh.vertices.windows(2).any(|v|v[0].uv!=v[1].uv));
+    }
     #[test]
     fn player_actions_keep_resources_on_the_animated_right_grip() {
         use super::*;

@@ -94,6 +94,7 @@ fn populate_api<'lua, 'scope>(
     let weather_name = tx.weather.borrow().current.name();
     super::environment::populate(lua,scope,api,tx,block_budget,spawn_budget)?;
     super::inventory::populate(lua,scope,api,tx)?;
+    super::automation_api::populate(lua,scope,api,tx,block_budget)?;
     api.set("time_of_day", time_of_day)?;
     api.set("is_night", night)?;
     api.set("weather", weather_name)?;
@@ -466,6 +467,7 @@ fn populate_api<'lua, 'scope>(
     api.set(
         "replace_block",
         scope.create_function(move |_, (x, y, z, kind): (i32, i32, i32, String)| {
+            if tx.automation.borrow().device_at((x,y,z)).is_some() {return Ok(false);}
             if !(0..crate::voxel::chunk::CHUNK_Y).contains(&y) {
                 return Ok(false);
             }

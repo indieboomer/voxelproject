@@ -26,7 +26,7 @@ including its rotation during work, attack, walking, and gestures. Resources are
 centered at the grip and tools are aligned by their handle. Empty/depleted slots
 show no extra held mesh. Hats continue following their own animated socket.
 
-Multiplayer protocol **21** carries the animation clip, playback time, and restart
+Multiplayer protocol **26** carries the animation clip, playback time, and restart
 sequence in player state and host snapshots. The host relays each guest's cosmetic
 state and broadcasts its own state. Repeated actions restart even when the clip
 name stays the same; stale or invalid animation samples are ignored. Every peer
@@ -67,5 +67,5 @@ shortcodes. The picker respects the existing 512-character message limit.
 
 The eight icons are original vector artwork implemented in `src/emoticons.rs`.
 No third-party artwork, external downloads, or platform emoji fonts are used.
-Messages still travel as ordinary text through protocol 21; peers with this build
+Messages still travel as ordinary text through protocol 26; peers with this build
 render the icons, while older rendering code shows the shortcodes as text.

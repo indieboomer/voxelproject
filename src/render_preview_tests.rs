@@ -165,9 +165,23 @@ fn render_weather_previews() {
             world.chunks.insert((cx, cz), chunk);
         }
     }
+    let underground_preview = std::env::var_os("VOXEL_UNDERGROUND_PREVIEW").is_some();
     let water_preview = std::env::var_os("VOXEL_WATER_PREVIEW").is_some();
     let camp_preview = std::env::var_os("VOXEL_CAMPFIRE_PREVIEW").is_some();
+    let aura_preview = std::env::var_os("VOXEL_AURA_PREVIEW").is_some();
+    let machine_preview = std::env::var_os("VOXEL_MACHINE_PREVIEW").is_some() || aura_preview;
     let mut target = Vec3::new(3.0, 7.0, 0.0);
+    let mut underground_creatures=Creatures::new();
+    if underground_preview {
+        world=World::new(42);
+        let site=(-5..5).flat_map(|x|(-5..5).map(move|z|(x,z)))
+            .find_map(|(x,z)|crate::underground::site(&world,x,z).filter(|s|s.dungeon)).unwrap();
+        let (cx,cz)=crate::voxel::chunk::world_to_chunk(site.x,site.z);
+        for dx in -1..=2 {for dz in -1..=1 {world.ensure_chunk_loaded(cx+dx,cz+dz);}}
+        crate::underground::discover(&mut world,&mut underground_creatures);
+        target=Vec3::new(site.x as f32-1.0,site.floor as f32+2.0,site.z as f32+1.0);
+        println!("Dungeon preview at {}, {}, {}",site.x,site.floor,site.z);
+    }
     if water_preview {
         world = World::new(42);
         let (x, z) = crate::voxel::terrain::tributary_preview(42);
@@ -188,13 +202,51 @@ fn render_weather_previews() {
             .set_local(3, 7, 12, BlockType::Campfire);
         target = Vec3::new(3.5, 7.5, 12.5);
     }
+    if machine_preview {target=Vec3::new(4.5,7.5,12.5);}
+    if aura_preview {target.y=8.3;}
     let camps: Vec<_> = world
         .chunks
         .values()
         .flat_map(crate::campfire::positions)
         .collect();
-    let camp_eye = target + Vec3::new(-3.0, 1.3, 4.5);
-    let camp_fx = upload_mesh(&device, &crate::campfire::effects(&camps, camp_eye, 10.0));
+    let camp_eye = target + Vec3::new(-3.0, 1.3, if machine_preview {-4.5} else {4.5});
+    let mut effect_mesh=crate::campfire::effects(&camps, camp_eye, 10.0);
+    let mut feedback=crate::machine_feedback::Feedback::default();
+    if machine_preview {
+        use crate::automation::{State,Device,Kind,Activity};
+        let mut state=State::default();
+        let parts=if aura_preview {[(2,Kind::Lantern),(4,Kind::DarkAltar),(6,Kind::Shrine)]} else {[(2,Kind::Smelter),(4,Kind::Chest),(6,Kind::Valve)]};
+        for (x,kind) in parts {
+            state.devices.insert((x,7,12),Device::new(kind,(x,7,12),0));
+        }
+        feedback.synchronize(&state);
+        if aura_preview {
+            for d in state.devices.values_mut() {d.activity=Activity::Working;d.mana=10;}
+        } else {
+        state.devices.get_mut(&(2,7,12)).unwrap().feedback(0);
+        state.devices.get_mut(&(4,7,12)).unwrap().feedback(1);
+        let valve=state.devices.get_mut(&(6,7,12)).unwrap();valve.feedback(2);valve.activity=Activity::Closed;
+        }
+        feedback.update(&state,0.1,camp_eye);feedback.update(&state,0.2,camp_eye);
+        for d in state.devices.values() {
+            let mut prop=crate::automation_mesh::device(d,1.0,None,&state);
+            feedback.decorate(d.cell,&mut prop);effect_mesh.extend(prop);
+        }
+        effect_mesh.extend(feedback.particles());
+        if !aura_preview {
+        let mut loot=crate::loot::Effects::default();
+        assert!(loot.eject(&world,(4,7,12),"resource:stone",2,0));
+        loot.update(0.35,true);effect_mesh.extend(loot.mesh(|_|true));
+        }
+    }
+    if underground_preview {
+        for d in world.automation.devices.values() {effect_mesh.extend(crate::automation_mesh::device(d,1.0,None,&world.automation));}
+        for (_,kind,pos,_,_) in underground_creatures.snapshot_with_ids() {
+            let kind=crate::creature::CreatureKind::from_u8(kind);
+            crate::model::push_model(&mut effect_mesh.vertices,&mut effect_mesh.indices,models.for_kind(kind),kind,"idle",0.0,Vec3::from_array(pos),0.0);
+        }
+    }
+    let camp_fx = upload_mesh(&device, &effect_mesh);
     let falls: Vec<_> = world
         .chunks
         .values()
@@ -318,7 +370,9 @@ fn render_weather_previews() {
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let eye = if camp_preview {
+    let eye = if underground_preview {
+        target+Vec3::new(6.0,0.6,-5.0)
+    } else if camp_preview || machine_preview {
         camp_eye
     } else if water_preview {
         target + Vec3::new(-15.0, 7.0, -20.0)
@@ -331,7 +385,7 @@ fn render_weather_previews() {
         0.1,
         200.0,
     ) * glam::Mat4::look_at_rh(eye, target, Vec3::Y);
-    let lighting = crate::daynight::sky_lighting(if camp_preview { 0.75 } else { 0.14 });
+    let lighting = crate::daynight::sky_lighting(if camp_preview || std::env::var_os("VOXEL_MACHINE_NIGHT_PREVIEW").is_some() { 0.75 } else { 0.14 });
     let light_vp = light_view_proj(lighting.sun_dir, eye);
     queue.write_buffer(
         &shadow.light_buffer,
@@ -362,7 +416,7 @@ fn render_weather_previews() {
             &camera,
             0,
             bytemuck::bytes_of(&CameraUniform {
-                camp_lights: crate::campfire::lights(&camps, eye),
+                camp_lights: feedback.lights(&camps, eye),
                 view_proj: vp.to_cols_array_2d(),
                 inv_view_proj: vp.inverse().to_cols_array_2d(),
                 light_view_proj: light_vp.to_cols_array_2d(),

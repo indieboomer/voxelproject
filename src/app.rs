@@ -650,6 +650,11 @@ pub struct App {
     interaction_states: HashMap<PlayerId, crate::equipment::Mining>,
     use_animation: f32,
     player_animation: crate::player_animation::Animation,
+    automation_clock: crate::automation::Clock,
+    automation_timer: f32,
+    automation_revision: u64,
+    automation_transfer: crate::automation_net::Transfer,
+    machine_feedback: crate::machine_feedback::Feedback,
     inventory_ready: bool,
     loot: crate::loot::Effects,
     mana_timer: f32,
@@ -700,6 +705,12 @@ impl App {
     }
     fn crafting_save(&self) -> crate::save::CraftingSave {
         crate::save::CraftingSave {
+            player: Some(crate::save::PlayerSave::capture(&self.player)),
+            weather: Some(self.weather.clone()),
+            loot: Some(self.loot.drops.clone()),
+            underground_discovered: self.world.underground_discovered.clone(),
+            automation: self.world.automation.clone(),
+            machine_loot: self.loot.drops.iter().filter(|d|d.machine).cloned().collect(),
             host: self.player.crafting.clone(),
             guests: self.guest_accounts.clone(),
             creatures: Some(self.creatures.snapshot_with_ids()),
@@ -789,6 +800,60 @@ impl App {
         let feedback=crate::equipment::accept_hotbar(account,&hotbar).err();
         rp.held=account.hotbar.entry().filter(|e|e.count(account)>0);
         host.reliable.send(&host.socket,from,ReliableMsg::CraftState{account:account.clone(),feedback});
+    }
+
+    fn all_player_positions(&self)->Vec<Vec3> {
+        let remote=match &self.net {NetRole::Host(h)=>&h.remote_players,NetRole::Joined(c)=>&c.remote_players};
+        std::iter::once(self.player.position).chain(remote.values().map(|p|p.pos)).collect()
+    }
+
+    fn submit_automation(&mut self,action:crate::automation::Action) {
+        self.player_animation.start(crate::player_animation::Clip::Work);
+        if let NetRole::Joined(client)=&mut self.net {
+            if !self.inventory_ready {self.ui.automation.feedback="Waiting for host inventory".into();return;}
+            client.reliable.send(&client.socket,client.server_addr,ReliableMsg::AutomationAction(action));
+        }else{self.perform_automation(None,action);}
+    }
+
+    fn perform_automation(&mut self,from:Option<Peer>,action:crate::automation::Action) {
+        let (feet,key)=if let Some(peer)=from {
+            let NetRole::Host(host)=&self.net else{return;};
+            let Some(rp)=host.clients.get(&peer).and_then(|id|host.remote_players.get(id))else{return;};
+            (rp.pos,Some(peer.account_key(&rp.nickname)))
+        }else{(self.player.position,None)};
+        crate::crafting::load_interaction_area(&mut self.world,feet);
+        let players=self.all_player_positions();let mut state=self.world.automation.clone();
+        let account=if let Some(key)=key {self.guest_accounts.entry(key).or_default()}else{&mut self.player.crafting};
+        let result=if let crate::automation::Action::Release{cell,item}=&action {
+            crate::automation::release(&self.world,&mut self.creatures,account,feet,&players,*cell,item)
+        }else{crate::automation::apply(&self.world,&mut state,account,feet,&players,&action,crate::automation::balance(),&self.crafting_registry)};
+        let ok=result.is_ok();let feedback=result.err().unwrap_or_else(||"Device updated".into());
+        if ok {self.world.automation=state;self.automation_timer=1.0;}
+        if let Some(peer)=from {
+            if let NetRole::Host(host)=&mut self.net {
+                host.reliable.send(&host.socket,peer,ReliableMsg::CraftState{account:account.clone(),feedback:None});
+                host.reliable.send(&host.socket,peer,ReliableMsg::AutomationResult{ok,feedback});
+            }
+        }else{
+            self.ui.automation.feedback=feedback;
+            if ok && matches!(action,crate::automation::Action::Place{packed:Some(_),..}) {self.ui.automation.build=None;}
+        }
+    }
+
+    fn update_automation(&mut self,dt:f32) {
+        if !matches!(self.net,NetRole::Host(_)) {return;}
+        crate::underground::discover(&mut self.world,&mut self.creatures);
+        self.automation_clock.advance_with(dt,&mut self.world.automation,crate::automation::balance(),&self.crafting_registry,
+            |auras|crate::automation::apply_auras(&mut self.creatures,auras));
+        let players=self.all_player_positions();
+        crate::automation::eject_chests(&mut self.world,&mut self.creatures,&mut self.loot,&players);
+        let NetRole::Host(host)=&mut self.net else{return;};
+        self.automation_timer+=dt;
+        if self.automation_timer>=0.5 {
+            self.automation_timer=0.0;self.automation_revision+=1;
+            let chunks=crate::automation_net::chunks(&self.world.automation,self.automation_revision);
+            for &peer in host.clients.keys(){for chunk in &chunks {host.reliable.send(&host.socket,peer,ReliableMsg::AutomationState(chunk.clone()));}}
+        }
     }
 
     fn perform_item_action(&mut self, from:Option<Peer>, intent:crate::equipment::Intent) {
@@ -1141,7 +1206,7 @@ impl App {
             scripting,
         ) = match launch.connect {
             None => {
-                let loaded = if launch.fresh { None } else { load_world() };
+                let loaded = if launch.fresh { None } else { Some(load_world(&launch.world_name).ok_or_else(||format!("Could not load world {}. The save is missing, corrupt or incompatible.",launch.world_name))?) };
                 let (world, spawn_pos, yaw, pitch, time_of_day, scripting) = match loaded {
                     Some(loaded) => {
                         crafting_save = loaded.crafting;
@@ -1158,6 +1223,8 @@ impl App {
                         let seed = random_world_seed();
                         let mut world = World::new(seed);
                         world.generation = launch.generation.clone();
+                        world.generation.underground = true;
+                        world.name = launch.world_name.clone();
                         let h = world.terrain_height(0, 0) as f32 + 2.0;
                         (
                             world,
@@ -1236,6 +1303,7 @@ impl App {
         crate::equipment::remove_bow(&mut crafting_save.host);
         for account in crafting_save.guests.values_mut(){crate::equipment::remove_bow(account);}
         player.crafting = crafting_save.host;
+        if let Some(saved)=crafting_save.player {saved.restore(&mut player);}
 
         let mut creatures = Creatures::new();
         if let Some(saved) = crafting_save.creatures {
@@ -1249,7 +1317,7 @@ impl App {
         creatures.restore_dragons(crafting_save.dragons);
         creatures.restore_fish(crafting_save.fish);
         creatures.wildlife.extend(crafting_save.wildlife);
-        let weather = WeatherState::new(world.seed);
+        let weather = crafting_save.weather.unwrap_or_else(||WeatherState::new(world.seed));
         let rain_particles = build_rain_particles(world.seed);
         let lightning_seed = world.seed;
 
@@ -1341,8 +1409,13 @@ impl App {
             interaction_states: HashMap::new(),
             use_animation: 0.0,
             player_animation: Default::default(),
+            automation_clock: Default::default(),
+            automation_timer: 0.0,
+            automation_revision: 0,
+            automation_transfer: Default::default(),
+            machine_feedback: Default::default(),
             inventory_ready: false,
-            loot: Default::default(),
+            loot: crate::loot::Effects::restore_machine(crafting_save.loot.unwrap_or(crafting_save.machine_loot)),
             mana_timer: 0.0,
             mining_target: None,
             mining_hits: 0,
@@ -1408,11 +1481,28 @@ impl App {
                 let PhysicalKey::Code(code) = key_event.physical_key else {
                     return;
                 };
+                if code == KeyCode::F5 && !key_event.repeat {
+                    self.input.save_requested = true;
+                    return;
+                }
                 if code == KeyCode::F10 && !key_event.repeat {
                     self.ui.settings.open = !self.ui.settings.open;
                     self.sync_settings_input();
                     return;
                 }
+                if code==KeyCode::KeyB && !key_event.repeat && !self.console_open && !self.chat_open && !self.quit_dialog_open && !self.crafting_ui.open && !self.ui.inventory_open && !self.ui.settings.open {
+                    if self.ui.automation.build.take().is_some() {self.ui.automation.open=false;}
+                    else {self.ui.automation.open=!self.ui.automation.open;}
+                    self.ui.automation.selected=None;self.sync_settings_input();return;
+                }
+                if self.ui.automation.open {
+                    if code==KeyCode::Escape {self.ui.automation.open=false;self.ui.automation.build=None;self.sync_settings_input();}
+                    return;
+                }
+                if self.cursor_grabbed && code==KeyCode::KeyR && !key_event.repeat {
+                    if let Some((_,rotation,_))=&mut self.ui.automation.build {*rotation=(*rotation+1)%4;return;}
+                }
+                if self.cursor_grabbed && code==KeyCode::Escape && self.ui.automation.build.is_some() {self.ui.automation.build=None;return;}
                 if self.ui.settings.open {
                     if code == KeyCode::Escape {
                         self.ui.settings.open = false;
@@ -1480,7 +1570,7 @@ impl App {
             }
             WindowEvent::MouseWheel {delta,..} if self.cursor_grabbed && (matches!(self.net,NetRole::Host(_)) || self.inventory_ready) => {
                 let y=match delta {winit::event::MouseScrollDelta::LineDelta(_,y)=>*y,winit::event::MouseScrollDelta::PixelDelta(p)=>p.y as f32};
-                if y.abs()>0.01 {self.player.crafting.hotbar.cycle(if y>0.0 {-1}else{1});self.publish_hotbar();}
+                if y.abs()>0.01 && !self.ui.automation.tools_suspended() {self.player.crafting.hotbar.cycle(if y>0.0 {-1}else{1});self.publish_hotbar();}
             }
             _ => {}
         }
@@ -1489,7 +1579,7 @@ impl App {
     fn sync_settings_input(&mut self) {
         self.input.release_all();self.input.end_frame();
         self.grab_cursor(!self.ui.inventory_open && !self.ui.settings.open && !self.console_open && !self.chat_open
-            && !self.crafting_ui.open && !self.quit_dialog_open);
+            && !self.crafting_ui.open && !self.quit_dialog_open && !self.ui.automation.open);
     }
 
     fn toggle_console(&mut self) {
@@ -1734,6 +1824,18 @@ impl App {
     }
 
     pub fn update(&mut self) {
+        // Only the host chooses the testing policy; clients receive it with
+        // the crafting registry so previews and authoritative charges agree.
+        if let NetRole::Host(host)=&mut self.net {
+            let mana_free=self.ui.settings.values.gameplay.mana_free;
+            if self.crafting_registry.mana_free!=mana_free {
+                std::sync::Arc::make_mut(&mut self.crafting_registry).mana_free=mana_free;
+                self.scripting.inventory_registry=self.crafting_registry.clone();
+                for &peer in host.clients.keys() {
+                    host.reliable.send(&host.socket,peer,ReliableMsg::CraftRegistry((*self.crafting_registry).clone()));
+                }
+            }
+        }
         #[cfg(feature = "steam")]
         {
             crate::steam_transport::poll_runtime();
@@ -1745,7 +1847,8 @@ impl App {
             }
         }
         let now = Instant::now();
-        let dt = (now - self.last_frame).as_secs_f32().min(0.1);
+        let elapsed = (now - self.last_frame).as_secs_f32();
+        let dt = elapsed.min(0.1);
         self.last_frame = now;
         // Wrap well before f32 precision would start eating into a sine's
         // period -- the animation is periodic anyway so this is seamless.
@@ -1777,16 +1880,38 @@ impl App {
         }
 
         self.use_animation=(self.use_animation-dt).max(0.0);
+        let machine_input=self.ui.automation.tools_suspended();
+        if self.cursor_grabbed {
+            if let Some(hit)=raycast(&self.world,self.camera.eye_position(),self.camera.forward(),REACH) {
+                if self.input.left_clicked || self.input.right_clicked {
+                    if let Some((kind,rotation,packed))=self.ui.automation.build {
+                        self.submit_automation(crate::automation::Action::Place{kind,cell:hit.place,rotation,packed});
+                        self.input.left_clicked=false;
+                        self.input.right_clicked=false;
+                    }
+                }
+                if let Some(base)=self.world.automation.device_at(hit.target).map(|d|d.cell) {
+                    if !machine_input && self.input.left_clicked {self.submit_automation(crate::automation::Action::Pack{cell:base});self.input.left_clicked=false;}
+                    if self.input.interact_clicked {
+                        if let Some(d)=self.world.automation.devices.get(&base) {self.ui.automation.inspect(d);}
+                        self.sync_settings_input();
+                    }
+                }
+            }
+            // Capture the mode before placing: placing the last packed machine
+            // can exit it, but that same click must never reach a restored tool.
+            if machine_input {self.input.left_clicked=false;self.input.right_clicked=false;}
+        }
         self.player_animation.advance(dt,
             glam::Vec2::new(self.player.velocity.x, self.player.velocity.z).length(),
             self.player.on_ground);
         if self.cursor_grabbed {
             if let Some(gesture) = self.input.gesture { self.player_animation.start(gesture); }
         }
-        if let Some(i)=self.input.hotbar_select.filter(|_| matches!(self.net,NetRole::Host(_)) || self.inventory_ready) {
+        if let Some(i)=self.input.hotbar_select.filter(|_| !machine_input && (matches!(self.net,NetRole::Host(_)) || self.inventory_ready)) {
             self.player.crafting.hotbar.select(i);self.publish_hotbar();
         }
-        if self.cursor_grabbed && (matches!(self.net,NetRole::Host(_)) || self.inventory_ready) {
+        if self.cursor_grabbed && !machine_input && (matches!(self.net,NetRole::Host(_)) || self.inventory_ready) {
             use crate::equipment::{Entry,Gear,Action,Intent};
             let entry=self.player.crafting.hotbar.entry();
             if self.input.left_clicked || self.input.right_clicked {
@@ -1843,7 +1968,7 @@ impl App {
 
         if self.input.save_requested {
             if matches!(self.net, NetRole::Host(_)) {
-                save_world(
+                let result = save_world(
                     &self.world,
                     &self.player,
                     &self.camera,
@@ -1851,6 +1976,7 @@ impl App {
                     self.scripting.save_entries(),
                     &self.crafting_save(),
                 );
+                match result {Ok(())=>self.notify_important(format!("Saved world: {}",self.world.name)),Err(e)=>self.notify_important(e)}
             } else {
                 log::warn!("Only the host can save the world.");
             }
@@ -1865,6 +1991,7 @@ impl App {
         }
         self.update_chunks();
         self.poll_network(dt);
+        self.update_automation(elapsed);
         self.scripting.inventory_registry = self.crafting_registry.clone();
         self.regenerate_mana(dt);
         self.poll_generation();
@@ -1947,19 +2074,23 @@ impl App {
                 self.audio.play_creature_death(pos);
             }
             for death in self.creatures.player_kills.drain(..) {self.loot.spawn(&self.world,death.kind,death.pos);}
+            let inventory_revision=self.player.crafting.revision;
             let acquired=self.loot.collect(&self.world,self.player.position,&mut self.player.crafting);
-            if !acquired.is_empty() {self.audio.play_loot();}
+            if self.player.crafting.revision!=inventory_revision {self.audio.play_loot();}
             self.ui.show_pickup(acquired);
             let mut changed=false;
             if let NetRole::Host(host)=&mut self.net {for (peer,id) in &host.clients {
                 if let Some(p)=host.remote_players.get(id) {let account=self.guest_accounts.entry(peer.account_key(&p.nickname)).or_default();let rev=account.revision;
                     let acquired=self.loot.collect(&self.world,p.pos,account);changed|=rev!=account.revision;
-                    if !acquired.is_empty() {host.reliable.send(&host.socket,*peer,ReliableMsg::LootCollected(acquired));}
+                    if rev!=account.revision {host.reliable.send(&host.socket,*peer,ReliableMsg::LootCollected(acquired));}
                 }
             }}
             if changed {self.sync_guest_mana();}
         }
         self.loot.update(dt,matches!(self.net,NetRole::Host(_)));
+        for (cell,cue) in self.machine_feedback.update(&self.world.automation,dt,self.camera.eye_position()) {
+            self.audio.play_machine(crate::automation::center(cell),cue);
+        }
 
         match &self.net {
             NetRole::Host(_) => self.audio.update_creature_flight(&self.creatures.snapshot()),
@@ -1976,6 +2107,27 @@ impl App {
                 && self.chunk_meshes.contains_key(&cell)
         });
         let mut mesh = mesh_for_snapshot(&visible_creatures, &self.models);
+        for d in self.world.automation.devices.values() {
+            let cell=chunk_of(crate::automation::center(d.cell));
+            if crate::visibility::within_terrain_range(cell,center,RENDER_RADIUS) && self.chunk_meshes.contains_key(&cell) {
+                let mut prop=crate::automation_mesh::device(d,self.water_time,None,&self.world.automation);
+                self.machine_feedback.decorate(d.cell,&mut prop);
+                mesh.extend(prop);
+            }
+        }
+        mesh.extend(self.machine_feedback.particles());
+        if let Some((kind,rotation,packed))=self.ui.automation.build {
+            if let Some(hit)=raycast(&self.world,self.camera.eye_position(),self.camera.forward(),REACH) {
+                let mut preview=packed.and_then(|i|self.player.crafting.packed_devices.get(i)).cloned()
+                    .unwrap_or_else(||crate::automation::Device::new(kind,hit.place,rotation));
+                preview.cell=hit.place;preview.rotation=rotation;
+                let mut state=self.world.automation.clone();let mut account=self.player.crafting.clone();
+                let positions=self.all_player_positions();
+                let valid=crate::automation::apply(&self.world,&mut state,&mut account,self.player.position,&positions,
+                    &crate::automation::Action::Place{kind,cell:hit.place,rotation,packed},crate::automation::balance(),&self.crafting_registry).is_ok();
+                mesh.extend(crate::automation_mesh::device(&preview,self.water_time,Some(valid),&self.world.automation));
+            }
+        }
         mesh.extend(self.loot.mesh(|pos|{let cell=chunk_of(pos);crate::visibility::within_terrain_range(cell,center,RENDER_RADIUS)&&self.chunk_meshes.contains_key(&cell)}));
         let remote_players = match &self.net {
             NetRole::Host(host) => &host.remote_players,
@@ -1987,7 +2139,7 @@ impl App {
             &self.models,
         ));
         self.entity_mesh.update(&self.device, &self.queue, &mesh);
-        let entry=self.player.crafting.hotbar.entry().filter(|e|e.count(&self.player.crafting)>0);
+        let entry=self.player.crafting.hotbar.entry().filter(|e|!self.ui.automation.tools_suspended() && e.count(&self.player.crafting)>0);
         let forward=self.camera.forward();let right=self.camera.right();let up=right.cross(forward);
         let swing=(self.use_animation/0.28*std::f32::consts::PI).sin();
         let camera_basis=glam::Mat3::from_cols(right,up,-forward);
@@ -2030,6 +2182,7 @@ impl App {
             NetRole::Joined(client) => client.socket.lobby_code(),
         };
         let settings_was_open = self.ui.settings.open;
+        let automation_was_open=self.ui.automation.open;
         let (full_output, requests) = self.ui.draw(
             &self.window,
             self.console_open,
@@ -2054,6 +2207,8 @@ impl App {
             lobby_code.as_deref(),
         );
         self.pending_egui_output = Some(full_output);
+        if automation_was_open!=self.ui.automation.open {self.sync_settings_input();}
+        if let Some(action)=requests.automation {self.submit_automation(action);}
         if settings_was_open != self.ui.settings.open { self.sync_settings_input(); }
         if requests.close_inventory {self.ui.inventory_open=false;self.sync_settings_input();}
         if let Some(action) = requests.crafting {
@@ -2063,8 +2218,8 @@ impl App {
         if requests.invite_friends {
             match &self.net { NetRole::Host(host) => host.socket.invite_friends(), NetRole::Joined(client) => client.socket.invite_friends() }
         }
-        if let Some(slot)=requests.select_slot.filter(|_|matches!(self.net,NetRole::Host(_)) || self.inventory_ready) {self.player.crafting.hotbar.select(slot);self.publish_hotbar();}
-        if let Some(entry)=requests.assign_entry.filter(|_|matches!(self.net,NetRole::Host(_)) || self.inventory_ready) {
+        if let Some(slot)=requests.select_slot.filter(|_|!self.ui.automation.tools_suspended() && (matches!(self.net,NetRole::Host(_)) || self.inventory_ready)) {self.player.crafting.hotbar.select(slot);self.publish_hotbar();}
+        if let Some(entry)=requests.assign_entry.filter(|_|!self.ui.automation.tools_suspended() && (matches!(self.net,NetRole::Host(_)) || self.inventory_ready)) {
             if entry.is_none() || entry.is_some_and(|e|e.count(&self.player.crafting)>0) {
                 self.player.crafting.hotbar.assign(entry);self.publish_hotbar();
             }
@@ -2266,8 +2421,8 @@ impl App {
         // write; `poll_generation` validates the generated contract
         // after at most one corrective retry.
         let kind = classify_prompt(&user_request);
-        if kind == PromptKind::Rule && self.player.crafting.mana < crate::crafting::RULE_MANA {
-            self.notify_important(format!("Creating a rule requires {} mana. Mana recovers over time; convert elements in Crafting [C] to refill faster.",crate::crafting::RULE_MANA));
+        if kind == PromptKind::Rule && self.player.crafting.mana < self.crafting_registry.mana_charge(crate::crafting::RULE_MANA) {
+            self.notify_important(format!("Creating a rule requires {} mana. Mana recovers over time; convert elements in Crafting [C] to refill faster.",self.crafting_registry.mana_charge(crate::crafting::RULE_MANA)));
             return;
         }
         let noun = generation_noun(kind);
@@ -2314,7 +2469,7 @@ impl App {
             let charge = !module.is_instant;
             let key = connected_account.ok_or("Submitting account unavailable")?;
             let mut charged = self.guest_accounts.get(&key).cloned().ok_or("Submitting account unavailable")?;
-            if charge {charged.spend_mana(crate::crafting::RULE_MANA)?;}
+            if charge {charged.spend_mana(self.crafting_registry.mana_charge(crate::crafting::RULE_MANA))?;}
             let index = self.scripting.add_generated(module)?;
             if charge {self.guest_accounts.insert(key,charged);self.sync_guest_mana();}
             self.next_rule_id += 1;
@@ -2459,7 +2614,7 @@ impl App {
                 let is_instant = module.is_instant;
                 let mut charged = self.player.crafting.clone();
                 if !is_instant {
-                    if let Err(error) = charged.spend_mana(crate::crafting::RULE_MANA) {
+                    if let Err(error) = charged.spend_mana(self.crafting_registry.mana_charge(crate::crafting::RULE_MANA)) {
                         self.notify_important(error);return;
                     }
                 }
@@ -2558,6 +2713,7 @@ impl App {
     /// doesn't ride the snapshot.
     fn apply_player_effect(&mut self, effect: PlayerEffect) {
         match effect {
+            PlayerEffect::AutomationState{state}=> {self.world.automation=*state;self.automation_timer=1.0;}
             PlayerEffect::Inventory {player_id,balances,resources} => {
                 let account = if player_id==HOST_PLAYER_ID {&mut self.player.crafting} else {
                     let NetRole::Host(host)=&self.net else {return;};
@@ -2790,12 +2946,12 @@ impl App {
         let caster_resources = caster.resources;
         let balance = caster_account.as_ref().and_then(|key|self.guest_accounts.get(key)).unwrap_or(&self.player.crafting);
         let mut check = balance.clone();
-        if let Err(error) = check.spend_mana(crate::crafting::INSTANT_MANA) {
+        if let Err(error) = check.spend_mana(self.crafting_registry.mana_charge(crate::crafting::INSTANT_MANA)) {
             self.notify_important(error);return;
         }
         // Reserve the cast fee before Lua observes or spends the caster's mana.
         let account = if let Some(ref key)=caster_account {self.guest_accounts.get_mut(key).unwrap()} else {&mut self.player.crafting};
-        account.mana-=crate::crafting::INSTANT_MANA;
+        account.mana-=self.crafting_registry.mana_charge(crate::crafting::INSTANT_MANA);
         account.revision=account.revision.saturating_add(1);
         let players=self.host_player_positions();
         let outcome = self.scripting.run_cast(
@@ -2813,7 +2969,7 @@ impl App {
             self.notify_all(format!("Host requested cast '{name}'"));
         } else {
             let account = if let Some(key)=caster_account {self.guest_accounts.get_mut(&key).unwrap()} else {&mut self.player.crafting};
-            account.mana=account.mana.saturating_add(crate::crafting::INSTANT_MANA);
+            account.mana=account.mana.saturating_add(self.crafting_registry.mana_charge(crate::crafting::INSTANT_MANA));
             account.revision=account.revision.saturating_add(1);
         }
         self.sync_guest_mana();
@@ -3007,6 +3163,7 @@ impl App {
                     }
                     ReliableMsg::Hotbar(hotbar)=>self.handle_remote_hotbar(from,hotbar),
                     ReliableMsg::ItemAction(intent)=>self.perform_item_action(Some(from),intent),
+                    ReliableMsg::AutomationAction(action)=>self.perform_automation(Some(from),action),
                     // BlockEdit is host-to-client only. Never accept claimed destruction.
                     ReliableMsg::BlockEdit { .. } => {}
                     ReliableMsg::ChatMessage(text) => {
@@ -3155,7 +3312,7 @@ impl App {
                         for pos in positions.into_iter().take(16).map(Vec3::from_array).filter(|p|p.is_finite()) {self.loot.puff(pos);}
                     }
                     ReliableMsg::LootCollected(contents) => {
-                        if !contents.is_empty() {self.audio.play_loot();}
+                        self.audio.play_loot();
                         self.ui.show_pickup(contents);
                     }
                     ReliableMsg::CraftState { account, feedback } => {
@@ -3199,6 +3356,20 @@ impl App {
                     ReliableMsg::PlayerChat { player_id, name, text } => {
                         if let Some(text) = net::chat_text(&text) {
                             self.show_player_chat(player_id, &sanitize_nickname(&name), text);
+                        }
+                    }
+                    ReliableMsg::AutomationResult{ok,feedback}=> {
+                        self.ui.automation.feedback=feedback;
+                        if ok && self.ui.automation.build.is_some_and(|b|b.2.is_some()){self.ui.automation.build=None;}
+                    }
+                    ReliableMsg::AutomationState(chunk) => {
+                        let initial=!self.automation_transfer.has_snapshot();
+                        match self.automation_transfer.accept(chunk,&self.crafting_registry) {
+                            Ok(Some(state))=>{
+                                if initial {self.machine_feedback.synchronize(&state);}
+                                self.world.automation=state;
+                            },
+                            Ok(None)=>(),Err(e)=>log::warn!("Automation sync: {e}"),
                         }
                     }
                     ReliableMsg::GrantItem { block, amount } => {
@@ -3450,10 +3621,11 @@ impl App {
         campfires.sort_by(|a,b|a.distance_squared(cam_pos).total_cmp(&b.distance_squared(cam_pos)));
         campfires.truncate(8);
         self.audio.update_campfires(&campfires);
+        self.audio.update_auras(&self.world.automation);
         let fire_effects=crate::campfire::effects(&campfires,cam_pos,self.water_time);
         self.campfire_mesh.update(&self.device,&self.queue,&fire_effects);
         let uniform = CameraUniform {
-            camp_lights: crate::campfire::lights(&campfires,cam_pos),
+            camp_lights: self.machine_feedback.lights(&campfires,cam_pos),
             view_proj: view_proj.to_cols_array_2d(),
             light_view_proj: light_view_proj.to_cols_array_2d(),
             inv_view_proj: view_proj.inverse().to_cols_array_2d(),
@@ -3487,7 +3659,7 @@ impl App {
             bytemuck::bytes_of(&LightUniform { view_proj: light_view_proj.to_cols_array_2d() }),
         );
 
-        let target = if self.cursor_grabbed && self.ui.settings.values.gameplay.show_block_target {
+        let target = if self.cursor_grabbed && !self.ui.automation.tools_suspended() && self.ui.settings.values.gameplay.show_block_target {
             raycast(&self.world, cam_pos, self.camera.forward(), REACH).map(|hit| {
                 let breakable = crate::equipment::can_mine(self.player.crafting.hotbar.entry(),self.world.get_block(hit.target.0,hit.target.1,hit.target.2),&self.player.crafting);
                 let mut account=self.player.crafting.clone();
@@ -3665,14 +3837,14 @@ impl App {
             NetRole::Joined(client) => { let _ = client.socket.send_to(&goodbye,client.server_addr); }
         }
         if matches!(self.net, NetRole::Host(_)) {
-            save_world(
+            if let Err(error) = save_world(
                 &self.world,
                 &self.player,
                 &self.camera,
                 self.time_of_day,
                 self.scripting.save_entries(),
                 &self.crafting_save(),
-            );
+            ) { log::error!("{error}"); }
         }
     }
 

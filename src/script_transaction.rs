@@ -5,6 +5,8 @@ use std::collections::HashMap;
 
 pub(super) struct CallbackTransaction<'a> {
     pub world: &'a World,
+    pub automation: RefCell<crate::automation::State>,
+    pub automation_changed: Cell<bool>,
     pub creatures: RefCell<CreatureDraft>,
     pub weather: RefCell<WeatherState>,
     pub time: RefCell<f32>,
@@ -36,6 +38,10 @@ impl<'a> CallbackTransaction<'a> {
         }
         Self {
             world: input.world,
+            automation: RefCell::new(input.player_effects.iter().rev().find_map(|e|match e {
+                PlayerEffect::AutomationState{state}=>Some((**state).clone()),_=>None,
+            }).unwrap_or_else(||input.world.automation.clone())),
+            automation_changed: Cell::new(false),
             creatures: RefCell::new(CreatureDraft::new(input.creatures)),
             weather: RefCell::new(input.weather.clone()),
             time: RefCell::new(*input.time_of_day),
@@ -57,6 +63,7 @@ impl<'a> CallbackTransaction<'a> {
     }
 
     pub fn get_block(&self, x: i32, y: i32, z: i32) -> BlockType {
+        if self.automation.borrow().device_at((x,y,z)).is_some() {return BlockType::AutomationDevice;}
         self.blocks
             .borrow()
             .iter()
@@ -120,6 +127,7 @@ impl<'a> CallbackTransaction<'a> {
         *input.time_of_day = self.time.into_inner();
         input.block_edits.extend(self.blocks.into_inner());
         input.player_effects.extend(self.effects.into_inner());
+        if self.automation_changed.get() {input.player_effects.push(PlayerEffect::AutomationState{state:Box::new(self.automation.into_inner())});}
         if emit_deaths {
             input.death_events.extend(self.deaths.into_inner());
         }

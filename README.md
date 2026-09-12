@@ -11,6 +11,12 @@ New World accepts an optional AI terrain description, such as a sandy desert or
 an island world. Blank descriptions keep the original terrain. See
 [WORLD_GENERATION.md](WORLD_GENERATION.md) for supported options and behavior.
 
+Magical automation includes sixteen devices, typed mana/matter/signal ports,
+ordered recipe production, stock sensors, multiplayer state, and saved progress.
+Press **B** to build, **R** to rotate, and **F** to configure. See
+[AUTOMATION_GUIDE.md](docs/AUTOMATION_GUIDE.md) for the verified production loop,
+World API capabilities, balance settings, and replacement model requirements.
+
 ## MVP Goal
 
 Build a small but playable first-person voxel game that proves one idea: a local LLM can translate a player's prompt into sandboxed game code, activate it at runtime, and change the same authoritative world for every connected player.
@@ -21,7 +27,7 @@ This is a side project and technical experiment. Prioritize a working end-to-end
 
 - Start a new procedural world and enter it immediately, similar to Minecraft or Valheim.
 - Play alone or host a session for up to four players.
-- Multiplayer players receive a random model from `models/player/player1..4.glb` and a random hat from `hat1..4.glb` or no hat. The host assigns unique model/hat combinations among connected players and replicates them to everyone; appearances stay fixed until disconnect. Assets are embedded in the executable. All peers must use the same build (protocol 21).
+- Multiplayer players receive a random model from `models/player/player1..4.glb` and a random hat from `hat1..4.glb` or no hat. The host assigns unique model/hat combinations among connected players and replicates them to everyone; appearances stay fixed until disconnect. Assets are embedded in the executable. All peers must use the same build (protocol 27).
 - Hosts can enable guest prompting in Settings. Guests generate locally and submit disabled proposals for host review; only the host activates world rules.
 - Move in first person, run, jump, collide with terrain, and respawn.
 - Use comma to dance, period for angry, and slash for a jump gesture. Multiplayer characters animate movement, combat, and work, with held items attached to the right hand. Chat includes eight original emoticons, a picker, and overhead bubbles. See [PLAYER_ANIMATIONS.md](PLAYER_ANIMATIONS.md).
@@ -151,3 +157,7 @@ The game now has 82 stackable resources, natural deposits, short elemental formu
 ## Landscape
 
 Winding rivers connect large lakes, occasional mountains have rocky summits, and submerged views have a blue tint. See [terrain behavior and compatibility](TERRAIN.md).
+
+### Storage and underground exploration
+
+New worlds include caves, dungeons, skeleton guards, and loot chests. Build storage chests with **B**, inspect with **F**, and save the named world with **F5**. **Load World** now offers a saved-world selector. See [Storage and underground guide](docs/STORAGE_AND_UNDERGROUND.md) for transfers, mana, save compatibility, and backups.

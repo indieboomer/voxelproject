@@ -14,10 +14,12 @@ use crate::ui::Ui;
 /// nickname screen.
 pub enum MenuAction {
     NewWorld {
+        world_name: String,
         nickname: String,
         generation: crate::worldgen::WorldGeneration,
     },
     LoadWorld {
+        world_name: String,
         nickname: String,
     },
     Join {
@@ -65,6 +67,8 @@ pub struct MenuApp {
     screen: Screen,
     join_input: String,
     nickname_input: String,
+    world_name: String,
+    saved_worlds: Vec<String>,
     world_description: String,
     world_job: Option<(
         Option<String>,
@@ -142,6 +146,8 @@ impl MenuApp {
             screen: Screen::Main,
             join_input: String::new(),
             nickname_input: String::new(),
+            world_name: "My World".into(),
+            saved_worlds: save::saved_worlds(),
             world_description: String::new(),
             world_job: None,
             error: None,
@@ -241,6 +247,8 @@ impl MenuApp {
         let mut screen = std::mem::replace(&mut self.screen, Screen::Main);
         let mut join_input = std::mem::take(&mut self.join_input);
         let mut nickname_input = std::mem::take(&mut self.nickname_input);
+        let mut world_name = self.world_name.clone();
+        let saved_worlds = self.saved_worlds.clone();
         let mut world_description = std::mem::take(&mut self.world_description);
         let mut world_job = self.world_job.take();
         let llm_url = self.llm_url.clone();
@@ -259,6 +267,7 @@ impl MenuApp {
                         Ok(generation) => {
                             action = Some(MenuAction::NewWorld {
                                 nickname: nickname.clone(),
+                                world_name: world_name.clone(),
                                 generation,
                             })
                         }
@@ -318,6 +327,7 @@ impl MenuApp {
                                     .add_sized(button_size, egui::Button::new("Load World"))
                                     .clicked()
                                 {
+                                    world_name = saved_worlds.first().cloned().unwrap_or_default();
                                     screen = Screen::Nickname(PendingAction::LoadWorld);
                                     nickname_input = saved_player_name.clone();
                                     error = None;
@@ -414,6 +424,8 @@ impl MenuApp {
                             let submitted = (resp.has_focus() || resp.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
                             if matches!(pending, PendingAction::NewWorld) {
                                 ui.add_space(10.0);
+                                ui.label("World name");
+                                ui.add(egui::TextEdit::singleline(&mut world_name).char_limit(48));
                                 ui.label("World description (optional)");
                                 ui.add(egui::TextEdit::multiline(&mut world_description)
                                     .desired_rows(3).desired_width(360.0).char_limit(512)
@@ -423,6 +435,11 @@ impl MenuApp {
                                 if world_job.is_some() { ui.label("Waiting for the cancelled AI request to finish..."); }
                             }
 
+                            if matches!(pending,PendingAction::LoadWorld) {
+                                egui::ComboBox::from_label("Saved world").selected_text(&world_name).show_ui(ui,|ui| {
+                                    for name in &saved_worlds {ui.selectable_value(&mut world_name,name.clone(),name);}
+                                });
+                            }
                             ui.add_space(10.0);
                             if ui
                                 .add_sized(button_size, egui::Button::new("Continue"))
@@ -432,6 +449,8 @@ impl MenuApp {
                                 let nickname = nickname_input.trim().to_string();
                                 if nickname.is_empty() {
                                     error = Some("Enter a nickname".to_string());
+                                } else if matches!(pending, PendingAction::NewWorld) && (!save::valid_name(&world_name) || save::world_path(&world_name).is_ok_and(|p|p.exists())) {
+                                    error=Some("Choose a unique world name: 1-48 letters, numbers, spaces, hyphens or underscores.".into());
                                 } else if matches!(pending, PendingAction::NewWorld) && !world_description.trim().is_empty() {
                                     if world_job.is_none() {
                                         let (sender, receiver) = std::sync::mpsc::channel();
@@ -444,10 +463,10 @@ impl MenuApp {
                                 } else {
                                     action = Some(match pending {
                                         PendingAction::NewWorld => {
-                                            MenuAction::NewWorld { nickname, generation: Default::default() }
+                                            MenuAction::NewWorld { nickname, world_name: world_name.clone(), generation: Default::default() }
                                         }
                                         PendingAction::LoadWorld => {
-                                            MenuAction::LoadWorld { nickname }
+                                            MenuAction::LoadWorld { nickname, world_name: world_name.clone() }
                                         }
                                         PendingAction::Join(addr) => {
                                             MenuAction::Join { addr, nickname }
@@ -476,10 +495,11 @@ impl MenuApp {
         self.screen = screen;
         self.join_input = join_input;
         self.nickname_input = nickname_input;
+        self.world_name = world_name;
         self.world_description = world_description;
         self.world_job = world_job;
         if let Some(action)=&mut action {
-            let nickname=match action {MenuAction::NewWorld{nickname,..}|MenuAction::LoadWorld{nickname}|MenuAction::Join{nickname,..}=>Some(nickname),_=>None};
+            let nickname=match action {MenuAction::NewWorld{nickname,..}|MenuAction::LoadWorld{nickname,..}|MenuAction::Join{nickname,..}=>Some(nickname),_=>None};
             if let Some(nickname)=nickname {
                 self.ui.settings.values.player_name=crate::fantasy_name::clean(nickname);
                 if self.ui.settings.values.connection_name.is_empty() {self.ui.settings.values.connection_name=nickname.clone();}

@@ -37,6 +37,12 @@ const DRAGON_FLY: &[u8] = include_bytes!("../sounds/dragon_fly.mp3");
 const WATERFALL: &[u8] = include_bytes!("../sounds/waterfall.mp3");
 const CAMPFIRE: &[u8] = include_bytes!("../sounds/campfire.mp3");
 const LOOT: &[u8] = include_bytes!("../sounds/loot.mp3");
+const MACHINE_TRANSFER: &[u8] = include_bytes!("../sounds/machine/silent_clunk.mp3");
+const MACHINE_CHANGED: &[u8] = include_bytes!("../sounds/machine/clunk1.mp3");
+const MACHINE_BLOCKED: &[u8] = include_bytes!("../sounds/machine/clunk2.mp3");
+const MACHINE_BUILT: &[u8] = include_bytes!("../sounds/machine/medium_loud_clunk.mp3");
+const MACHINE_REMOVED: &[u8] = include_bytes!("../sounds/machine/clunk4.mp3");
+const MACHINE_PRODUCED: &[u8] = include_bytes!("../sounds/machine/clunk3.mp3");
 const GOBLIN_ATTACK: &[u8] = include_bytes!("../sounds/goblin_attack.mp3");
 const HUMAN_STEP: &[u8] = include_bytes!("../sounds/human_step.mp3");
 const HUMAN_STEP_2: &[u8] = include_bytes!("../sounds/human_step_2.mp3");
@@ -221,6 +227,7 @@ pub struct AudioEngine {
     flight_sinks: Vec<SpatialSink>,
     waterfall_sinks: Vec<SpatialSink>,
     campfire_sinks: Vec<SpatialSink>,
+    aura_sinks: Vec<(crate::automation::Cell, crate::automation::Kind, SpatialSink)>,
     /// Kept alive for as long as the engine exists -- dropping it stops
     /// all playback. Never read otherwise, hence the leading underscore.
     _stream: Option<OutputStream>,
@@ -263,6 +270,7 @@ impl AudioEngine {
                 flight_sinks: Vec::new(),
                 waterfall_sinks: Vec::new(),
                 campfire_sinks: Vec::new(),
+                aura_sinks: Vec::new(),
                 _stream: Some(stream),
                 handle: Some(handle),
                 rng: Rng(0x9E3779B97F4A7C15),
@@ -282,6 +290,7 @@ impl AudioEngine {
                     flight_sinks: Vec::new(),
                     waterfall_sinks: Vec::new(),
                     campfire_sinks: Vec::new(),
+                    aura_sinks: Vec::new(),
                     _stream: None,
                     handle: None,
                     rng: Rng(1),
@@ -392,6 +401,16 @@ impl AudioEngine {
     pub fn play_loot(&mut self) {
         self.play_varied(LOOT,0.55,0.0,0.0);
     }
+    pub fn play_machine(&mut self,pos:Vec3,cue:crate::machine_feedback::Cue) {
+        use crate::machine_feedback::Cue;
+        let (bytes,volume)=match cue {
+            Cue::Transfer=>(MACHINE_TRANSFER,0.16),Cue::Changed=>(MACHINE_CHANGED,0.25),
+            Cue::Blocked=>(MACHINE_BLOCKED,0.22),Cue::Built=>(MACHINE_BUILT,0.3),
+            Cue::Removed=>(MACHINE_REMOVED,0.25),Cue::Produced=>(MACHINE_PRODUCED,0.38),
+            Cue::DarkAltar | Cue::Shrine=>return,
+        };
+        self.play_spatial(bytes,volume,0.06,0.08,pos,3.0);
+    }
 
     /// One creature footstep at `pos`, any kind -- a single generic clip
     /// (see `ANIMAL_STEP`), since the engine doesn't ship per-kind step
@@ -488,6 +507,33 @@ impl AudioEngine {
             sink.set_emitter_position(emitter);sink.set_left_ear_position(left);sink.set_right_ear_position(right);
             let fade=((24.0-pos.distance(self.listener_pos))/8.0).clamp(0.0,1.0);
             sink.set_volume(0.45*fade*fade);
+        }
+    }
+
+    /// Working loops are bounded, spatialized, and stopped when power is lost.
+    pub fn update_auras(&mut self, state: &crate::automation::State) {
+        use crate::automation::{center, Activity, Kind};
+        let mut nearby:Vec<_>=state.devices.values().filter(|d|
+            matches!(d.kind,Kind::DarkAltar|Kind::Shrine) && d.config.enabled
+            && d.activity==Activity::Working && center(d.cell).distance_squared(self.listener_pos)<24.0*24.0).collect();
+        nearby.sort_by(|a,b|center(a.cell).distance_squared(self.listener_pos).total_cmp(&center(b.cell).distance_squared(self.listener_pos)));
+        nearby.truncate(4);
+        self.aura_sinks.retain(|(p,k,_)|nearby.iter().any(|d|d.cell==*p && d.kind==*k));
+        let Some(handle)=&self.handle else{return};
+        for d in nearby {
+            if self.aura_sinks.iter().any(|(p,_,_)|*p==d.cell) {continue;}
+            let bytes:&[u8]=if d.kind==Kind::DarkAltar {include_bytes!("../sounds/dark_altar.mp3")} else {include_bytes!("../sounds/shrine.mp3")};
+            let Ok(decoder)=Decoder::new(Cursor::new(bytes)) else {continue};
+            let Ok(sink)=SpatialSink::try_new(handle,[0.0;3],[-0.1,0.0,0.0],[0.1,0.0,0.0]) else {continue};
+            sink.set_volume(0.0);sink.append(decoder.repeat_infinite());
+            self.aura_sinks.push((d.cell,d.kind,sink));
+        }
+        for (p,_,sink) in &self.aura_sinks {
+            let pos=center(*p);
+            let (emitter,left,right)=self.spatial_positions(pos,3.0);
+            sink.set_emitter_position(emitter);sink.set_left_ear_position(left);sink.set_right_ear_position(right);
+            let fade=((24.0-pos.distance(self.listener_pos))/8.0).clamp(0.0,1.0);
+            sink.set_volume(0.25*fade*fade);
         }
     }
 
@@ -635,6 +681,13 @@ mod tests {
         assert!(pitches.iter().all(|&p| (0.82..=1.18).contains(&p)));
         assert!(pitches.windows(2).any(|p| (p[0] - p[1]).abs() > 0.05));
     }
+    #[test]
+    fn machine_recordings_decode_and_have_audible_samples() {
+        for bytes in [MACHINE_TRANSFER,MACHINE_CHANGED,MACHINE_BLOCKED,MACHINE_BUILT,MACHINE_REMOVED,MACHINE_PRODUCED,include_bytes!("../sounds/dark_altar.mp3").as_slice(),include_bytes!("../sounds/shrine.mp3").as_slice()] {
+            let decoder=Decoder::new(Cursor::new(bytes)).expect("machine MP3 must decode");
+            assert!(decoder.into_iter().any(|sample|sample!=0));
+        }
+    }
 
     #[test]
     fn flight_audio_tracks_airborne_dragons_and_stops_for_grounded_or_removed_ones() {
@@ -726,6 +779,7 @@ mod tests {
             flight_sinks: Vec::new(),
             waterfall_sinks: Vec::new(),
             campfire_sinks: Vec::new(),
+            aura_sinks: Vec::new(),
             _stream: None,
             handle: None,
             rng: Rng(42),

@@ -43,6 +43,7 @@ impl Inventory {
             Some(Entry::Gear(g)) => {
                 for salvage in [false,true] {
                     let (iron,wood,mana) = crate::crafting::gear_formula(g,salvage).unwrap();
+                    let mana = registry.mana_charge(mana);
                     let available = if salvage {Entry::Gear(g).count(account)>0} else {
                         Entry::Resource(crate::voxel::BlockType::Iron).count(account)>=iron && Entry::Resource(crate::voxel::BlockType::OakWood).count(account)>=wood
                     };
@@ -57,7 +58,8 @@ impl Inventory {
             Some(Entry::Resource(block)) => {
                 let comp = registry.composition(ObjectKind::Resource,block.id());
                 ui.label(format!("Returns: {}",Element::ALL.iter().filter(|e|comp[e.index()]>0).map(|e|format!("{} {e:?}",comp[e.index()])).collect::<Vec<_>>().join(", ")));
-                if ui.add_enabled(account.mana>=1 && comp!=[0;5],egui::Button::new("Decompose 1 resource (1 mana)")).clicked() {
+                let mana=registry.mana_charge(1);
+                if ui.add_enabled(account.mana>=mana && comp!=[0;5],egui::Button::new(format!("Decompose 1 resource ({mana} mana)"))).clicked() {
                     requests.crafting=Some(Action::Extract {block,amount:1});
                 }
             }

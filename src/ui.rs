@@ -66,6 +66,7 @@ pub struct ChatEntry {
 /// state directly.
 #[derive(Default)]
 pub struct UiRequests {
+    pub automation: Option<crate::automation::Action>,
     pub close_inventory: bool,
     pub invite_friends: bool,
     pub crafting: Option<crate::crafting::Action>,
@@ -84,6 +85,7 @@ pub struct UiRequests {
 }
 
 pub struct Ui {
+    pub automation: crate::automation_ui::Panel,
     pickup_rows: Vec<(crate::voxel::BlockType,u32)>,
     pickup_started: Instant,
     pub nameplates: Vec<(egui::Pos2,String)>,
@@ -124,6 +126,7 @@ impl Ui {
         let renderer = Renderer::new(device, output_format, None, 1);
         Self {
             pickup_rows:Vec::new(),
+            automation: Default::default(),
             pickup_started:Instant::now(),
             nameplates:Vec::new(),
             chat_bubbles:Vec::new(),
@@ -237,6 +240,7 @@ impl Ui {
                 return;
             }
             requests.crafting = crafting_ui.draw(ctx, registry, &player.crafting, world, creatures, player.position, players);
+            requests.automation = self.automation.draw(ctx,&world.automation,&player.crafting,registry);
             egui::Window::new("fps")
                 .title_bar(false)
                 .anchor(egui::Align2::RIGHT_TOP, [-8.0, 8.0])
@@ -246,6 +250,7 @@ impl Ui {
                 .show(ctx, |ui| {
                       ui.label(format!("{fps:.0} FPS | I: Inventory | C: Craft | F10: Settings"));
                       ui.label("Gestures: , Dance | . Angry | / Jump");
+                      ui.label("B: Automation · F: Configure device");
                 });
 
             egui::Window::new("health")
@@ -317,7 +322,7 @@ impl Ui {
                             }
                             if is_host {
                                 if m.is_instant {
-                                    if ui.small_button("Run (5 mana)").clicked() {
+                                    if ui.small_button(format!("Run ({} mana)",registry.mana_charge(crate::crafting::INSTANT_MANA))).clicked() {
                                         requests.run_index = Some(i);
                                     }
                                 } else {
@@ -360,7 +365,7 @@ impl Ui {
             if self.last_hotbar!=Some((active,entry)) {
                 self.last_hotbar=Some((active,entry));self.selected_until=Instant::now()+Duration::from_secs(2);
             }
-            requests.select_slot=crate::equipment_ui::hotbar(ctx,&player.crafting,self.inventory_open,self.inventory_open || Instant::now()<self.selected_until);
+            requests.select_slot=crate::equipment_ui::hotbar(ctx,&player.crafting,self.inventory_open,self.inventory_open || Instant::now()<self.selected_until,self.automation.tools_suspended());
             if self.inventory_open {
                 self.inventory.feedback = crafting_ui.feedback.clone();
                 self.inventory.show(ctx, &player.crafting, registry, &mut requests);
@@ -478,7 +483,7 @@ impl Ui {
                         ui.set_min_width(420.0);
                         if can_prompt {
                             ui.label("Describe a rule, or an instant action, then press Enter:");
-                            ui.small("New rule: 20 mana on successful creation. Instant: 5 mana per successful cast. Failed generation/casts are free.");
+                            ui.small(format!("New rule: {} mana on successful creation. Instant: {} mana per successful cast. Failed generation/casts are free.",registry.mana_charge(crate::crafting::RULE_MANA),registry.mana_charge(crate::crafting::INSTANT_MANA)));
                             if !is_host { ui.small("Generated on this device; sent to the host for review and activation."); }
                             let response = ui.text_edit_singleline(prompt_input);
                             if !response.has_focus() && !response.lost_focus() {

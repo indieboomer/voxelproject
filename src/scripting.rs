@@ -30,6 +30,8 @@ mod api;
 mod environment;
 #[path = "script_inventory.rs"]
 mod inventory;
+#[path = "script_automation.rs"]
+mod automation_api;
 #[path = "script_scheduler.rs"]
 mod scheduler;
 #[path = "script_transaction.rs"]
@@ -138,6 +140,7 @@ pub struct InteractEvent {
 /// growing a new field for every future player-targeted action.
 #[derive(Debug, PartialEq)]
 pub enum PlayerEffect {
+    AutomationState { state: Box<crate::automation::State> },
     Inventory { player_id: PlayerId, balances: InventoryBalances, resources: [u32; COLLECTIBLE_BLOCKS.len()] },
     /// `api.give_item` -- always succeeds once accepted (there's no
     /// "insufficient inventory" failure mode for adding), so nothing else

@@ -123,6 +123,9 @@ struct SurfaceResource { block: BlockType, habitat: &'static str, chance: f32, s
 const SURFACE_RESOURCES: &[SurfaceResource] = include!("resource_surface.rs");
 
 pub struct World {
+    pub name: String,
+    pub underground_discovered: std::collections::BTreeSet<(i32,i32)>,
+    pub automation: crate::automation::State,
     pub generation: crate::worldgen::WorldGeneration,
     pub seed: u32,
     pub chunks: HashMap<(i32, i32), Chunk>,
@@ -139,7 +142,10 @@ impl World {
     pub fn new(seed: u32) -> Self {
         Self {
             seed,
+            automation: Default::default(),
             generation: Default::default(),
+            name: "world".into(),
+            underground_discovered: Default::default(),
             chunks: HashMap::new(),
             edits: HashMap::new(),
             redstone_positions: Vec::new(),
@@ -274,6 +280,7 @@ impl World {
             if chunk.get_local(lx,h,lz)==BlockType::Snow {chunk.set_local(lx,h-1,lz,BlockType::Stone);}
         }}
 
+        crate::underground::carve(self, &mut chunk);
         chunk.dirty = true;
         chunk
     }
@@ -487,6 +494,7 @@ impl World {
     }
 
     pub fn get_block(&self, wx: i32, wy: i32, wz: i32) -> BlockType {
+        if self.automation.device_at((wx,wy,wz)).is_some() { return BlockType::AutomationDevice; }
         if wy < 0 || wy >= CHUNK_Y {
             return BlockType::Air;
         }
@@ -499,6 +507,8 @@ impl World {
     }
 
     pub fn set_block(&mut self, wx: i32, wy: i32, wz: i32, block: BlockType) {
+        // Devices are packed transactionally; ordinary edits cannot erase cargo.
+        if block==BlockType::AutomationDevice || self.automation.device_at((wx,wy,wz)).is_some() { return; }
         if wy < 0 || wy >= CHUNK_Y {
             return;
         }

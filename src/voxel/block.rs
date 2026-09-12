@@ -108,6 +108,8 @@ pub enum BlockType {
     Snow,
     /// Generated world feature; append-only to preserve save discriminants.
     Campfire,
+    /// Occupancy only; its folk-workshop mesh is rendered by automation_mesh.
+    AutomationDevice,
 }
 
 /// Per-block static properties, transcribed 1:1 from `textures/blocks.csv`
@@ -256,6 +258,11 @@ impl BlockType {
         }
         use BlockType::*;
         match self {
+            AutomationDevice => BlockDef {
+                display_name:"Automation device",resource_type:"automation",opacity:0.0,
+                roughness:1.0,emission:0.0,hardness:0,tile_top:TILE_WHITE,tile_side:TILE_WHITE,tile_bottom:TILE_WHITE,
+                only_on_top:false,single_item:true,cutout:false,cross:false,
+            },
             Campfire => BlockDef {
                 display_name: "Campfire", resource_type: "world_feature",
                 opacity: 0.0, roughness: 1.0, emission: 0.0, hardness: 2,
@@ -417,6 +424,7 @@ impl BlockType {
         }
         match self {
             BlockType::Air => "air",
+            BlockType::AutomationDevice => "automation_device",
             BlockType::Campfire => "campfire",
             BlockType::Crystal => "crystal",
             BlockType::Mud => "mud",

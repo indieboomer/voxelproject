@@ -4,7 +4,7 @@
 // Consumed by src/world_api_validate.rs's pre-flight lint, which runs on
 // LLM-generated Lua before it's ever loaded into a real Lua VM.
 
-pub const VERSION: &str = "1.22.0";
+pub const VERSION: &str = "1.26.0";
 
 // Runtime execution limits, shared with the generated documentation.
 pub const SCRIPT_TIME_MS: u64 = 5;
@@ -42,6 +42,10 @@ pub const NUMERIC_ARGUMENTS: &[(&str, &[usize])] = &[
     ("decompose_resource", &[0, 2]),
     ("convert_elements_to_mana", &[0, 2]),
     ("place_campfire_near_player", &[0, 1]),
+    ("get_device", &[0, 1, 2]),
+    ("set_device_enabled", &[0, 1, 2]),
+    ("configure_device", &[0, 1, 2]),
+    ("place_device", &[0, 2, 3, 4, 5]),
     ("get_campfire", &[0, 1, 2]),
     ("find_campfires", &[0, 1, 2, 3]),
     ("place_campfire", &[0, 1, 2]),
@@ -88,6 +92,10 @@ pub const NUMERIC_ARGUMENTS: &[(&str, &[usize])] = &[
 ];
 
 pub const COORDINATE_ARGUMENTS: &[(&str, &[usize])] = &[
+    ("get_device", &[0, 1, 2]),
+    ("set_device_enabled", &[0, 1, 2]),
+    ("configure_device", &[0, 1, 2]),
+    ("place_device", &[2, 3, 4]),
     ("get_campfire", &[0, 1, 2]),
     ("find_campfires", &[0, 1, 2]),
     ("place_campfire", &[0, 1, 2]),
@@ -109,7 +117,7 @@ pub const COORDINATE_ARGUMENTS: &[(&str, &[usize])] = &[
 ];
 
 /// Every `api.<name>` callable method this World API version defines.
-pub const METHOD_NAMES: &[&str] = &["get_player_inventory", "get_mana", "get_element_count", "get_item_count", "give_mana", "take_mana", "give_element", "take_element", "craft_item", "decompose_item", "decompose_resource", "convert_elements_to_mana", "get_resource_elements", "get_item_recipe", "place_campfire_near_player", "get_campfire", "find_campfires", "place_campfire", "get_water", "get_waterfalls", "can_spawn_fish", "spawn_fish", "players", "nearest_player", "creatures", "find_creatures", "nearest_creature", "get_block", "find_blocks", "terrain_height", "distance", "chase", "protect_player", "suppress_creature_attacks", "get_behavior", "set_aggressive", "set_target", "select_target", "chase_target", "attack", "ignore", "die", "damage", "destroy", "spawn_creature", "spawn_creature_near_player", "replace_block", "set_weather", "start_rain", "stop_rain", "set_time_of_day", "set_time_dawn", "set_time_night", "broadcast", "give_item", "take_item", "get_resource_count", "get_inventory", "has_resource", "has_item", "damage_player", "heal_player", "set_poisoned", "set_player_speed", "set_player_jump", "teleport_player"];
+pub const METHOD_NAMES: &[&str] = &["get_player_inventory", "get_mana", "get_element_count", "get_item_count", "give_mana", "take_mana", "give_element", "take_element", "craft_item", "decompose_item", "decompose_resource", "convert_elements_to_mana", "get_resource_elements", "get_item_recipe", "place_campfire_near_player", "get_devices", "get_device", "set_device_enabled", "configure_device", "place_device", "get_campfire", "find_campfires", "place_campfire", "get_water", "get_waterfalls", "can_spawn_fish", "spawn_fish", "players", "nearest_player", "creatures", "find_creatures", "nearest_creature", "get_block", "find_blocks", "terrain_height", "distance", "chase", "protect_player", "suppress_creature_attacks", "get_behavior", "set_aggressive", "set_target", "select_target", "chase_target", "attack", "ignore", "die", "damage", "destroy", "spawn_creature", "spawn_creature_near_player", "replace_block", "set_weather", "start_rain", "stop_rain", "set_time_of_day", "set_time_dawn", "set_time_night", "broadcast", "give_item", "take_item", "get_resource_count", "get_inventory", "has_resource", "has_item", "damage_player", "heal_player", "set_poisoned", "set_player_speed", "set_player_jump", "teleport_player"];
 
 /// Every read-only `api.<name>` field (not callable) this version defines.
 pub const PROPERTY_NAMES: &[&str] = &["instant_mana_cost", "rule_mana_cost", "mana_regen_cap", "is_raining", "campfire_light_radius", "fish_spawn_clearance", "time_of_day", "is_night", "weather"];

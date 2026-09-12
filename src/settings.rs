@@ -25,11 +25,13 @@ pub struct Settings {
 #[serde(default)]
 pub struct Gameplay {
     pub show_block_target: bool,
+    pub mana_free: bool,
 }
 impl Default for Gameplay {
     fn default() -> Self {
         Self {
             show_block_target: true,
+            mana_free: false,
         }
     }
 }
@@ -162,6 +164,8 @@ impl SettingsPanel {
                 ui.small("Applies immediately while hosting. Guests use their local AI; you review and activate their proposals.");
                 ui.separator();
                 ui.heading("Gameplay");
+                ui.checkbox(&mut self.values.gameplay.mana_free, "Mana-free actions (testing)");
+                ui.small("Applies to everyone when you host. Joined games use the host's setting. Materials are still required.");
                 ui.checkbox(&mut self.values.gameplay.show_block_target, "Show block targeting outlines");
                 ui.small("Gold: compatible tool. Green: build. Red: cannot harvest with the active item.");
                 ui.small("Build preview appears for an active resource when placement is valid.");
@@ -235,6 +239,10 @@ mod tests {
         let values: Settings = serde_json::from_str(r#"{"audio":{"volume":42}}"#).unwrap();
         assert_eq!(values.appearance.ui_theme, UiTheme::Generic);
         assert!(values.gameplay.show_block_target);
+        assert!(!values.gameplay.mana_free);
+        let testing:Settings=serde_json::from_str(r#"{"gameplay":{"mana_free":true}}"#).unwrap();
+        assert!(testing.gameplay.mana_free);
+        assert_eq!(serde_json::from_str::<Settings>(&serde_json::to_string(&testing).unwrap()).unwrap(),testing);
         assert!(!values.multiplayer.allow_guest_prompting);
         let shared: Settings = serde_json::from_str(r#"{"multiplayer":{"allow_guest_prompting":true}}"#).unwrap();
         assert!(shared.multiplayer.allow_guest_prompting);

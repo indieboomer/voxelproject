@@ -2,7 +2,36 @@
 use glam::Vec3;
 use crate::{creature::CreatureKind, voxel::{World,BlockType,atlas,mesher::{MeshData,push_cuboid}}};
 #[derive(Clone,Debug,serde::Serialize,serde::Deserialize)]
-pub struct Drop {pub pos:[f32;3],pub contents:Vec<(BlockType,u32)>,pub age:f32}
+pub struct Drop {
+    pub pos:[f32;3],pub contents:Vec<(BlockType,u32)>,pub age:f32,
+    #[serde(default)] pub cargo:crate::automation::Inventory,
+    #[serde(default)] pub machine:bool,
+    #[serde(default)] pub launch:Option<[f32;3]>,
+}
+impl Drop {
+    pub fn valid_saved(&self)->bool {
+        if self.machine {return self.valid_machine();}
+        self.pos.iter().all(|v|v.is_finite()&&v.abs()<1_000_000.0)
+            && self.age.is_finite() && self.age>=0.0 && self.cargo.is_empty()
+            && self.launch.is_none() && !self.contents.is_empty() && self.contents.len()<=64
+            && self.contents.iter().all(|(b,n)|crate::voxel::COLLECTIBLE_BLOCKS.contains(b)&&*n>0)
+    }
+    pub fn display_position(&self)->Vec3 {
+        let end=Vec3::from_array(self.pos);
+        if let Some(start)=self.launch {
+            let t=(self.age/0.85).clamp(0.0,1.0);
+            Vec3::from_array(start).lerp(end,t)+Vec3::Y*(4.0*t*(1.0-t)*1.2)
+        } else {end+Vec3::Y*(0.08*(self.age*3.0).sin()+0.6*(1.0-self.age/0.6).max(0.0))}
+    }
+    pub fn valid_machine(&self)->bool {
+        self.machine && self.pos.iter().all(|v|v.is_finite()&&v.abs()<1_000_000.0)
+            && self.launch.is_some_and(|p|p.iter().all(|v|v.is_finite()&&v.abs()<1_000_000.0))
+            && self.age.is_finite() && self.age>=0.0 && self.contents.len()+self.cargo.len()>0
+            && self.contents.len()<=64 && self.cargo.len()<=64
+            && self.contents.iter().all(|(b,n)|crate::voxel::COLLECTIBLE_BLOCKS.contains(b)&&*n>0&&*n<=256)
+            && self.cargo.iter().all(|(id,n)|crate::automation::valid_item(id)&&!id.starts_with("creature:")&&*n>0&&*n<=256)
+    }
+}
 #[derive(Default)]
 pub struct Effects {pub drops:Vec<Drop>,puffs:Vec<(Vec3,f32)>}
 const PICKUP_DELAY: f32 = 2.0;
@@ -143,12 +172,35 @@ impl Effects {
         if self.drops.len()>=48 {return;}
         let angle=pos.x*1.7+pos.z*0.8;
         let Some(pos)=landing_position(world,pos,angle) else {return;};
-        self.drops.push(Drop{pos,contents:rewards(kind),age:0.0});
+        self.drops.push(Drop{pos,contents:rewards(kind),age:0.0,cargo:Default::default(),machine:false,launch:None});
+    }
+    pub fn restore_machine(drops:Vec<Drop>)->Self {Self{drops,puffs:Vec::new()}}
+    /// Return false without mutation if there is no room or clear throw path.
+    pub fn eject(&mut self,world:&World,cell:crate::automation::Cell,item:&str,amount:u32,seed:u64)->bool {
+        if self.drops.len()>=48 || amount==0 || amount>256 || !crate::automation::valid_item(item) || item.starts_with("creature:") {return false;}
+        let start=crate::automation::center(cell)+Vec3::Y*0.75;
+        for attempt in 0..8 {
+            let angle=(seed%997) as f32*0.37+attempt as f32*std::f32::consts::FRAC_PI_4;
+            let Some(pos)=landing_position(world,start,angle) else {continue;};
+            let end=Vec3::from_array(pos);
+            if glam::Vec2::new(end.x-start.x,end.z-start.z).length()<0.8 || end.distance(start)>5.0 {continue;}
+            let mut drop=Drop{pos,contents:Vec::new(),age:0.0,cargo:Default::default(),machine:true,launch:Some(start.to_array())};
+            if let Some(block)=item.strip_prefix("resource:").and_then(BlockType::from_name) {drop.contents.push((block,amount));}
+            else {drop.cargo.insert(item.into(),amount);}
+            let clear=(0..=30).all(|i| {
+                drop.age=i as f32/30.0*0.85;let p=drop.display_position();
+                [Vec3::ZERO,Vec3::X*0.18,-Vec3::X*0.18,Vec3::Z*0.18,-Vec3::Z*0.18,Vec3::Y*0.25].iter()
+                    .all(|offset|{let p=p+*offset;!world.is_solid(p.x.floor() as i32,p.y.floor() as i32,p.z.floor() as i32)})
+            });
+            if clear {drop.age=0.0;self.drops.push(drop);return true;}
+        }
+        false
     }
     pub fn update(&mut self,dt:f32,host:bool) {
         for (_,age) in &mut self.puffs {*age+=dt;}
         self.puffs.retain(|(_,age)|*age<0.6);
-        if host {for d in &mut self.drops {d.age+=dt;}self.drops.retain(|d|d.age<120.0);}
+        for d in &mut self.drops {d.age=(d.age+dt.max(0.0)).min(3600.0);}
+        if host {self.drops.retain(|d|d.machine || d.age<120.0);}
     }
     pub fn collect(&mut self,world:&World,feet:Vec3,account:&mut crate::crafting::Account) -> Vec<(BlockType,u32)> {
         let mut acquired=Vec::new();
@@ -156,14 +208,15 @@ impl Effects {
             let pos=Vec3::from_array(d.pos);let eye=feet+Vec3::Y*1.4;
             if d.age<PICKUP_DELAY || pos.distance(feet)>1.5 || crate::raycast::raycast(world,eye,pos-eye,(pos-eye).length()-0.25).is_some() {return true;}
             // Award the entire bundle atomically; overflow leaves it on the ground.
-            let mut resources=account.resources.clone();
+            let mut next=account.clone();
             for &(block,amount) in &d.contents {
                 let Some(i)=crate::voxel::COLLECTIBLE_BLOCKS.iter().position(|b|*b==block) else {return true;};
-                let Some(count)=resources[i].checked_add(amount) else {return true;};
-                resources[i]=count;
+                let Some(count)=next.resources[i].checked_add(amount) else {return true;};
+                next.resources[i]=count;
             }
-            account.resources=resources;
-            account.revision=account.revision.saturating_add(1);
+            for (item,n) in &d.cargo {if crate::automation::account_add(&mut next,item,*n).is_err(){return true;}}
+            let Some(revision)=next.revision.checked_add(1)else{return true;};next.revision=revision;
+            *account=next;
             acquired.extend_from_slice(&d.contents);
             false
         });
@@ -172,8 +225,7 @@ impl Effects {
     pub fn mesh(&self,visible:impl Fn(Vec3)->bool)->MeshData {
         let mut mesh=MeshData{vertices:vec![],indices:vec![]};
         for d in &self.drops {
-            let p=Vec3::from_array(d.pos);if !visible(p) {continue;}
-            let p=p+Vec3::Y*(0.08*(d.age*3.0).sin()+0.6*(1.0-d.age/0.6).max(0.0));
+            let p=d.display_position();if !visible(p) {continue;}
             let bag=crate::model::loot_bag_mesh();
             let base=mesh.vertices.len() as u32;
             mesh.vertices.extend(bag.vertices.iter().map(|v| {

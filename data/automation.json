@@ -1,0 +1,35 @@
+{
+  "tick_ms": 100,
+  "max_devices": 64,
+  "collector_radius": 8,
+  "collector_supply": 1,
+  "collector_period_ticks": 10,
+  "condenser_costs": [10, 12, 14, 16, 20],
+  "dissipator_yields": [4, 5, 6, 7, 8],
+  "smelting": {
+    "mana_cost": 1, "wood_heat": 2, "coal_heat": 8,
+    "recipes": {
+      "resource:copper_ore":"resource:copper", "resource:iron_ore":"resource:iron",
+      "resource:tin_ore":"resource:tin", "resource:silver_ore":"resource:silver",
+      "resource:gold_ore":"resource:gold", "resource:mithril_ore":"resource:mithril"
+    }
+  },
+  "devices": [
+    {"kind":"lantern","name":"Street Lantern","cost":{"resource:iron":2,"resource:copper":1},"mana_capacity":60,"item_capacity":0,"throughput":2,"duration_ticks":100,"ports":[["west","mana","in"],["east","mana","in"],["north","mana","in"],["south","mana","in"],["down","mana","in"]]},
+    {"kind":"dark_altar","name":"Dark Altar","cost":{"resource:stone":5,"resource:copper":2},"mana_capacity":60,"item_capacity":0,"throughput":2,"duration_ticks":10,"ports":[["west","mana","in"],["east","mana","in"],["north","mana","in"],["south","mana","in"],["down","mana","in"]]},
+    {"kind":"shrine","name":"Shrine","cost":{"resource:stone":5,"resource:silver":1},"mana_capacity":60,"item_capacity":0,"throughput":2,"duration_ticks":10,"ports":[["west","mana","in"],["east","mana","in"],["north","mana","in"],["south","mana","in"],["down","mana","in"]]},
+    {"kind":"collector","name":"Mana Collector","cost":{"resource:oak_wood":3,"resource:copper":1},"mana_capacity":30,"item_capacity":0,"throughput":2,"duration_ticks":10,"ports":[["east","mana","out"]]},
+    {"kind":"vessel","name":"Mana Vessel","cost":{"resource:clay":3,"resource:copper":1},"mana_capacity":200,"item_capacity":0,"throughput":4,"duration_ticks":1,"ports":[["west","mana","in"],["east","mana","out"]]},
+    {"kind":"condenser","name":"Element Condenser","cost":{"resource:stone":3,"resource:copper":2},"mana_capacity":60,"item_capacity":16,"throughput":2,"duration_ticks":30,"ports":[["west","mana","in"],["east","mana","out"],["east","matter","out"]]},
+    {"kind":"dissipator","name":"Element Dissipator","cost":{"resource:stone":3,"resource:clay":2},"mana_capacity":60,"item_capacity":16,"throughput":2,"duration_ticks":20,"ports":[["west","matter","in"],["east","mana","out"]]},
+    {"kind":"conduit","name":"Mana Conduit","cost":{"resource:copper":1},"mana_capacity":12,"item_capacity":0,"throughput":3,"duration_ticks":1,"ports":[["west","mana","in"],["east","mana","out"]]},
+    {"kind":"channel","name":"Matter Channel","cost":{"resource:oak_wood":1},"mana_capacity":0,"item_capacity":8,"throughput":1,"duration_ticks":1,"ports":[["west","matter","in"],["east","matter","out"]]},
+    {"kind":"splitter","name":"Filter Splitter","cost":{"resource:oak_wood":2,"resource:copper":1},"mana_capacity":0,"item_capacity":16,"throughput":1,"duration_ticks":1,"ports":[["west","matter","in"],["east","matter","out"],["north","matter","out"],["south","matter","out"]]},
+    {"kind":"chest","name":"Storage Chest","cost":{"resource:oak_wood":4},"mana_capacity":0,"item_capacity":4294967295,"throughput":2,"duration_ticks":10,"ports":[["west","matter","in"],["east","matter","out"]]},
+    {"kind":"workshop","name":"Formula Workshop","cost":{"resource:oak_wood":4,"resource:copper":2,"resource:stone":2},"mana_capacity":300,"item_capacity":64,"throughput":2,"duration_ticks":40,"ports":[["west","matter","in"],["west","mana","in"],["east","matter","out"]]},
+    {"kind":"sensor","name":"Threshold Sensor","cost":{"resource:stone":2,"resource:copper":1},"mana_capacity":0,"item_capacity":0,"throughput":1,"duration_ticks":1,"ports":[["west","signal","out"],["east","signal","out"],["north","signal","out"],["south","signal","out"],["up","signal","out"],["down","signal","out"]]},
+    {"kind":"valve","name":"Controlled Valve","cost":{"resource:copper":2,"resource:oak_wood":1},"mana_capacity":12,"item_capacity":8,"throughput":2,"duration_ticks":1,"ports":[["west","mana","in"],["east","mana","out"],["up","signal","in"],["down","signal","in"]]},
+    {"kind":"signal","name":"Signal Connector","cost":{"resource:stone":1},"mana_capacity":0,"item_capacity":0,"throughput":1,"duration_ticks":1,"ports":[["west","signal","both"],["east","signal","both"],["north","signal","both"],["south","signal","both"],["up","signal","both"],["down","signal","both"]]},
+    {"kind":"smelter","name":"Ore Smelter","cost":{"resource:stone":4,"resource:clay":2,"resource:oak_wood":1},"mana_capacity":30,"item_capacity":32,"throughput":2,"duration_ticks":1,"ports":[["west","mana","in"],["west","matter","in"],["north","matter","in"],["east","matter","out"]]}
+  ]
+}

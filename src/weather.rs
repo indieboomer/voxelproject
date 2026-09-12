@@ -137,7 +137,7 @@ impl SurfaceWeather {
 /// independent of the day/night cycle. A Lua rule can still force a change
 /// via `api.set_weather`, which just resets this timer using the newly-set
 /// weather's own `stretch_range`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WeatherState {
     pub current: Weather,
     timer: f32,
@@ -145,6 +145,7 @@ pub struct WeatherState {
 }
 
 impl WeatherState {
+    pub fn valid_save(&self) -> bool { self.timer.is_finite() && self.timer >= 0.0 && self.rng != 0 }
     pub fn new(seed: u32) -> Self {
         let mut state = Self {
             current: Weather::Sunny,

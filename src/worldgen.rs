@@ -23,6 +23,8 @@ pub enum Surface {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorldGeneration {
+    #[serde(default)]
+    pub underground: bool,
     pub description: String,
     /// Natural population percentages; omitted species retain their defaults.
     #[serde(default)]
@@ -39,6 +41,7 @@ pub struct WorldGeneration {
 impl Default for WorldGeneration {
     fn default() -> Self {
         Self {
+            underground: true,
             description: String::new(),
             creatures: Default::default(),
             shape: Shape::Mainland,

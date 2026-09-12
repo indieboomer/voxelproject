@@ -85,6 +85,8 @@ pub fn totals(slots: &[Slot]) -> Result<Composition, String> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Account {
+    pub packed_devices: Vec<crate::automation::Device>,
+    pub production_goods: std::collections::BTreeMap<String,u32>,
     pub gear: [u32;4],
     pub hotbar: crate::equipment::Hotbar,
     pub elements: Composition,
@@ -97,6 +99,8 @@ impl Default for Account {
     fn default() -> Self {
         Self {
             gear: [1,1,1,0],
+            packed_devices: Vec::new(),
+            production_goods: Default::default(),
             hotbar: crate::equipment::Hotbar::default(),
             elements: [0; 5],
             mana: 0,
@@ -211,6 +215,8 @@ pub struct ObjectComposition {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Registry {
+    #[serde(default)]
+    pub mana_free: bool,
     pub mana_costs: [u32; 5],
     pub conversion_rate: u32,
     pub recipes: Vec<Recipe>,
@@ -349,8 +355,11 @@ impl Registry {
         if n == 0 {
             0
         } else {
-            self.mana_costs[n - 1]
+            self.mana_charge(self.mana_costs[n - 1])
         }
+    }
+    pub fn mana_charge(&self, cost: u32) -> u32 {
+        if self.mana_free { 0 } else { cost }
     }
     // Run on a private account; the caller commits only after output preparation succeeds.
     pub(crate) fn prepare(&self, account: &mut Account, action: &Action) -> Result<Option<Output>, String> {
@@ -401,13 +410,13 @@ impl Registry {
                     .checked_sub(*amount)
                     .ok_or("Insufficient resources")?;
                 account.add_elements(comp)?;
-                account.mana = account.mana.checked_sub(*amount).ok_or("Insufficient mana for decomposition")?;
+                account.mana = account.mana.checked_sub(self.mana_charge(*amount)).ok_or("Insufficient mana for decomposition")?;
                 Ok(None)
             }
             Action::CraftGear(gear) | Action::SalvageGear(gear) => {
                 let salvage = matches!(action,Action::SalvageGear(_));
                 let (iron,wood,mana) = gear_formula(*gear,salvage)?;
-                account.mana = account.mana.checked_sub(mana).ok_or("Insufficient mana")?;
+                account.mana = account.mana.checked_sub(self.mana_charge(mana)).ok_or("Insufficient mana")?;
                 let count = &mut account.gear[*gear as usize];
                 *count = if salvage {count.checked_sub(1).ok_or("Item not owned")?}
                     else {count.checked_add(1).ok_or("Item inventory full")?};
@@ -520,7 +529,7 @@ pub enum Action {
     SalvageGear(crate::equipment::Gear),
 }
 
-fn spawn_position(
+pub(crate) fn spawn_position(
     world: &World,
     creatures: &Creatures,
     position: Vec3,
@@ -533,7 +542,7 @@ fn spawn_position(
     for (dx, dz) in [(4, 0), (-4, 0), (0, 4), (0, -4), (4, 4), (-4, -4)] {
         let x = position.x.floor() as i32 + dx;
         let z = position.z.floor() as i32 + dz;
-        for y in ((position.y as i32 - 4).max(1)..=(position.y as i32 + 4).min(44)).rev() {
+        for y in ((position.y as i32 - 4).max(1)..=(position.y as i32 + 4).min(crate::voxel::chunk::CHUNK_Y-4)).rev() {
             let pos = Vec3::new(x as f32 + 0.5, y as f32, z as f32 + 0.5);
             if players.iter().any(|p| p.distance(pos) < 3.0)
                 || occupied
@@ -574,6 +583,22 @@ mod tests {
     }
     fn registry() -> Registry {
         Registry::parse(include_str!("../data/crafting.json")).unwrap()
+    }
+    #[test]
+    fn mana_free_actions_keep_material_costs_and_restore_normal_charges() {
+        let mut r=registry();assert!(!r.mana_free);r.mana_free=true;
+        let mut a=rich();a.mana=0;a.resources.fill(20);
+        let actions=[Action::Craft(formula(&[(Element::Earth,1),(Element::Water,1)])),
+            Action::Extract{block:BlockType::Stone,amount:1},Action::CraftGear(crate::equipment::Gear::Axe),Action::SalvageGear(crate::equipment::Gear::Axe)];
+        for action in &actions {let before=a.clone();r.prepare(&mut a,action).unwrap();assert_eq!(a.mana,0);assert_ne!(a,before);}
+        let mut empty=Account::default();
+        assert!(r.prepare(&mut empty,&actions[0]).is_err());
+        assert_eq!(r.mana_charge(INSTANT_MANA),0);assert_eq!(r.mana_charge(RULE_MANA),0);
+        let packet=crate::net::Packet::Reliable{id:1,msg:crate::net::ReliableMsg::CraftRegistry(r.clone())};
+        let crate::net::Packet::Reliable{msg:crate::net::ReliableMsg::CraftRegistry(received),..}=crate::net::decode(&crate::net::encode(&packet)).unwrap() else {panic!("registry packet")};
+        assert!(received.mana_free);
+        r.mana_free=false;assert_eq!(r.mana_charge(INSTANT_MANA),INSTANT_MANA);
+        assert!(r.prepare(&mut a,&actions[0]).is_err());
     }
     fn formula(pairs: &[(Element, i64)]) -> Formula {
         let mut slots = [None; 5];

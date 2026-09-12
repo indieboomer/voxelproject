@@ -229,6 +229,45 @@ struct Fixture {
     resources: [u32; COLLECTIBLE_BLOCKS.len()],
 }
 
+#[test]
+fn automation_lua_changes_are_visible_in_callback_and_rollback_on_error() {
+    use crate::automation::{Device,Kind};
+    let mut fixture=Fixture::new();
+    fixture.world.automation.devices.insert((2,1,0),Device::new(Kind::Workshop,(2,1,0),0));
+    let body=r#"
+        assert(#api.get_devices() == 1)
+        assert(api.configure_device(2,1,0,{recipe="stone"}))
+        assert(api.set_device_enabled(2,1,0,false))
+        local d=api.get_device(2,1,0)
+        assert(d.recipe == "stone" and not d.enabled)
+        assert(not api.replace_block(2,1,0,"air"))
+    "#;
+    let mut failing=module("on_tick",&format!("{body}\nerror('rollback')"));
+    let (outcome,_)=fixture.invoke(&mut failing,"on_tick");
+    assert!(outcome.player_effects.is_empty());
+    assert!(fixture.world.automation.devices[&(2,1,0)].config.enabled);
+    let mut successful=module("on_tick",body);
+    let (outcome,_)=fixture.invoke(&mut successful,"on_tick");
+    assert!(outcome.player_effects.iter().any(|effect|matches!(effect,PlayerEffect::AutomationState{state} if state.devices[&(2,1,0)].config.recipe=="stone" && !state.devices[&(2,1,0)].config.enabled)));
+}
+
+#[test]
+fn automation_lua_placement_pays_resources_and_failed_callback_refunds() {
+    let mut fixture=Fixture::new();
+    let body=format!(r#"
+        assert(api.place_device({},"signal",2,1,0,0))
+        assert(api.get_device(2,1,0).kind == "signal")
+        assert(not api.place_device({},"signal",2,1,0,0))
+    "#,HOST_PLAYER_ID,HOST_PLAYER_ID);
+    let mut failed=module("on_cast",&format!("{body}\nerror('rollback')"));
+    let (outcome,_)=fixture.invoke(&mut failed,"on_cast");assert!(outcome.player_effects.is_empty());
+    let mut success=module("on_cast",&body);
+    let (outcome,_)=fixture.invoke(&mut success,"on_cast");
+    let stone=COLLECTIBLE_BLOCKS.iter().position(|b|*b==BlockType::Stone).unwrap();
+    assert!(outcome.player_effects.iter().any(|e|matches!(e,PlayerEffect::Inventory{resources,..} if resources[stone]==4)));
+    assert!(outcome.player_effects.iter().any(|e|matches!(e,PlayerEffect::AutomationState{state} if state.devices.len()==1)));
+}
+
 impl Fixture {
     fn new() -> Self {
         let mut creatures = Creatures::new();

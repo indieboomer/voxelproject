@@ -13,7 +13,7 @@ fn render_ui_previews() {
             .unwrap();
     let width = 1280;
     for (theme, name) in [(UiTheme::Generic, "generic"), (UiTheme::Fantasy, "fantasy")] {
-        for panel in ["settings", "crafting", "resources", "hotbar", "inventory", "chat"] {
+        for panel in ["settings", "crafting", "resources", "hotbar", "hotbar_machine", "inventory", "chat", "automation", "chest"] {
             if std::env::var("UI_PREVIEW_PANEL").is_ok_and(|filter|filter!=panel) { continue; }
             let height = if panel == "resources" { 1024 } else { 720 };
             let ctx = egui::Context::default();
@@ -48,7 +48,25 @@ fn render_ui_previews() {
             if panel == "inventory" { account.resources.fill(128); }
             let mut inventory = crate::inventory_ui::Inventory::default();
             inventory.preview_selection(crate::equipment::Entry::Gear(crate::equipment::Gear::Pickaxe));
-            let world = crate::voxel::World::new(1);
+            let mut world = crate::voxel::World::new(1);
+            let mut automation = crate::automation_ui::Panel::default();
+            if panel == "automation" {
+                let mut d=crate::automation::Device::new(crate::automation::Kind::Workshop,(3,30,0),0);
+                d.config.recipe="stone".into();d.mana=20;
+                d.items.insert("element:earth".into(),1);d.items.insert("element:water".into(),1);
+                world.automation.devices.insert(d.cell,d);
+                world.automation.step(crate::automation::balance(),&registry);
+                automation.inspect(&world.automation.devices[&(3,30,0)]);
+            }
+            if panel == "chest" {
+                let mut d=crate::automation::Device::new(crate::automation::Kind::Chest,(3,30,0),0);
+                d.items.insert("resource:stone".into(),2048);
+                d.items.insert("resource:copper_ore".into(),36);
+                d.items.insert("resource:crystal".into(),8);
+                d.items.insert("item:pickaxe".into(),1);
+                automation.inspect(&d);
+                world.automation.devices.insert(d.cell,d);
+            }
             let creatures = crate::creature::Creatures::new();
             let mut craft = crate::crafting_ui::CraftingUi::default();
             craft.open = true;
@@ -80,7 +98,8 @@ fn render_ui_previews() {
                                 ui_theme::menu_backdrop(ui);
                             }
                         });
-                        if panel == "chat" {
+                        if panel == "automation" || panel == "chest" {automation.draw(ctx,&world.automation,&account,&registry);}
+                        else if panel == "chat" {
                             egui::Window::new("Chat").fixed_pos(egui::pos2(80.0,100.0)).show(ctx,|ui| {
                                 ui.set_width(360.0);
                                 for text in ["Mira: Hello! :smile: :wink:","Bram: :laugh: :sad: :angry: :surprised:",
@@ -103,10 +122,10 @@ fn render_ui_previews() {
                             }
                         } else if panel == "inventory" {
                             let mut requests = crate::ui::UiRequests::default();
-                            requests.select_slot = crate::equipment_ui::hotbar(ctx,&account,true,true);
+                            requests.select_slot = crate::equipment_ui::hotbar(ctx,&account,true,true,false);
                             inventory.show(ctx,&account,&registry,&mut requests);
-                        } else if panel == "hotbar" {
-                            crate::equipment_ui::hotbar(ctx,&account,false,true);
+                        } else if panel == "hotbar" || panel == "hotbar_machine" {
+                            crate::equipment_ui::hotbar(ctx,&account,false,true,panel == "hotbar_machine");
                         } else if panel == "crafting" {
                             craft.draw(
                                 ctx,
