@@ -6,6 +6,10 @@
 - Procedural chunks with mainland rivers/lakes, mountain terrain, vegetation,
   resources, and configurable world-generation presets.
 - Resource inventory, crafting, equipment, health and underwater oxygen.
+- Optional campkeeper dialogue, three personal saved contracts, a field journal,
+  camp rest and automatic recovery after defeat; see [the adventure guide](ADVENTURE_GUIDE.md).
+- Portable held-crystal light, map waypoints/recovery markers, aimed creature health
+  and contextual interaction/damage feedback.
 - Host-authoritative multiplayer and saved worlds, creatures and rule modules.
 - Wildlife and hostile creatures, including walking zombies/skeletons, rare
   separated dragons with ground/air behavior, and water-constrained fish.
@@ -27,6 +31,16 @@ runtime. Lua callbacks stage mutations and commit only after successful executio
 Networking replicates authoritative results; clients derive cosmetic animation
 and sound locally. Saves preserve block edits, so procedural generation changes
 can affect regenerated unedited terrain while explicit saved edits take priority.
+
+`adventure.rs` holds camp transactions, progression checks and safe recovery search;
+`adventure_app.rs` connects them to authoritative accounts/networking, and
+`adventure_ui.rs` renders the journal/feedback. Keepers reuse animated player assets
+and are derived from fires rather than added to the creature ECS. Progress is saved
+inside crafting accounts. Protocol 31 carries camp requests, recovery and creature
+health; World API 1.27 exposes journal state and current held items to reviewed rules.
+
+The [sandbox/RPG review](SANDBOX_RPG_REVIEW.md) records strengths, weaknesses,
+the two-hour plan, implementation choices and follow-up priorities.
 
 ## Safe entry
 

@@ -66,6 +66,8 @@ pub struct ChatEntry {
 /// state directly.
 #[derive(Default)]
 pub struct UiRequests {
+    pub camp_action: Option<crate::adventure::Action>,
+    pub close_journal: bool,
     pub automation: Option<crate::automation::Action>,
     pub close_inventory: bool,
     pub invite_friends: bool,
@@ -85,6 +87,7 @@ pub struct UiRequests {
 }
 
 pub struct Ui {
+    pub journal: crate::adventure_ui::Journal,
     pub automation: crate::automation_ui::Panel,
     pickup_rows: Vec<(crate::voxel::BlockType,u32)>,
     pickup_started: Instant,
@@ -131,6 +134,7 @@ impl Ui {
         let renderer = Renderer::new(device, output_format, None, 1);
         Self {
             pickup_rows:Vec::new(),
+            journal: Default::default(),
             automation: Default::default(),
             pickup_started:Instant::now(),
             nameplates:Vec::new(),
@@ -263,10 +267,19 @@ impl Ui {
                 self.settings.draw(ctx);
                 return;
             }
+            if self.journal.open {
+                requests.camp_action=self.journal.draw(ctx,player);
+                requests.close_journal=!self.journal.open;
+                return;
+            }
+            self.map.home=player.crafting.adventure.home.map(crate::adventure::feet);
             if self.map.open {self.map.draw(ctx,world,player.position);return;}
             requests.crafting = crafting_ui.draw(ctx, registry, &player.crafting, world, creatures, player.position, players);
             requests.automation = self.automation.draw(ctx,&world.automation,&player.crafting,registry);
             status_hud(ctx,player,fps);
+            if !console_open && !chat_open && !quit_dialog_open && !crafting_ui.open && !self.inventory_open && !self.automation.open {
+                self.journal.hud(ctx,player,self.map.waypoint);
+            }
 
             egui::Window::new("Rules")
                 .default_open(!scripting.modules.is_empty())
@@ -590,7 +603,7 @@ pub(crate) fn status_hud(ctx:&egui::Context,player:&Player,fps:f32) {
                 .interactable(false)
                 .show(ctx, |ui| {
                       ui.label(format!("{fps:.0} FPS | I: Inventory | C: Craft | M: Map | F10: Settings"));
-                      ui.label("Gestures: , Dance | . Angry | / Jump");
+                      ui.label("J: Field journal · Gestures: , Dance | . Angry | / Jump");
                       ui.label("B: Automation · F: Configure device");
                 });
 

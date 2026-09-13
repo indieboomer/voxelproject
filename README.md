@@ -17,6 +17,12 @@ Press **B** to build, **R** to rotate, and **F** to configure. See
 [AUTOMATION_GUIDE.md](docs/AUTOMATION_GUIDE.md) for the verified production loop,
 World API capabilities, balance settings, and replacement model requirements.
 
+Optional campkeeper contracts connect gathering, cave exploration and crafting.
+Press **F** at a campfire/keeper, **J** for your journal, and **M** for waypoints.
+Hold a crystal to light caves; defeat returns you to camp with your inventory.
+See the [adventure guide](docs/ADVENTURE_GUIDE.md) and
+[sandbox/RPG review and implementation plan](docs/SANDBOX_RPG_REVIEW.md).
+
 ## MVP Goal
 
 Build a small but playable first-person voxel game that proves one idea: a local LLM can translate a player's prompt into sandboxed game code, activate it at runtime, and change the same authoritative world for every connected player.
@@ -27,7 +33,7 @@ This is a side project and technical experiment. Prioritize a working end-to-end
 
 - Start a new procedural world and enter it immediately, similar to Minecraft or Valheim.
 - Play alone or host a session for up to four players.
-- Multiplayer players receive a random model from `models/player/player1..4.glb` and a random hat from `hat1..4.glb` or no hat. The host assigns unique model/hat combinations among connected players and replicates them to everyone; appearances stay fixed until disconnect. Assets are embedded in the executable. All peers must use the same build (protocol 27).
+- Multiplayer players receive a random model from `models/player/player1..4.glb` and a random hat from `hat1..4.glb` or no hat. The host assigns unique model/hat combinations among connected players and replicates them to everyone; appearances stay fixed until disconnect. Assets are embedded in the executable. All peers must use the same build (protocol 31).
 - Hosts can enable guest prompting in Settings. Guests generate locally and submit disabled proposals for host review; only the host activates world rules.
 - Move in first person, run, jump, collide with terrain, and respawn.
 - Use comma to dance, period for angry, and slash for a jump gesture. Multiplayer characters animate movement, combat, and work, with held items attached to the right hand. Chat includes eight original emoticons, a picker, and overhead bubbles. See [PLAYER_ANIMATIONS.md](PLAYER_ANIMATIONS.md).
@@ -126,7 +132,7 @@ Reference acceptance tests:
 
 ## Explicitly Out of Scope
 
-Crafting depth, survival needs, quests, story, multiple biomes, procedural art or music, generated animations, large public servers, marketplace/workshop, monetization, production backend, and Everwind-level visuals.
+Crafting depth, survival needs, a general quest/story system, multiple biomes, procedural art or music, large public servers, marketplace/workshop, monetization, production backend, and Everwind-level visuals. The optional three-contract campkeeper loop is a deliberately small exception added for the sandbox/RPG improvement pass.
 
 Visual ambition may grow later. The MVP should look clean and coherent using simple textures, block-based creatures, good color, fog, lighting, and ambient occlusion. The product risk to validate is programmable world behavior, not content volume or graphical fidelity.
 

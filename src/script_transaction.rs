@@ -97,6 +97,8 @@ impl<'a> CallbackTransaction<'a> {
     pub fn inventory(&self, player_id: PlayerId) -> Option<crate::crafting::Account> {
         let p = self.players().into_iter().find(|p|p.id==player_id)?;
         let mut account = crate::crafting::Account {mana:p.finances.mana,elements:p.finances.elements,gear:p.finances.items,..Default::default()};
+        account.adventure=p.finances.adventure;
+        account.hotbar.slots[0]=p.finances.held;
         account.resources=*self.resources.get(&player_id)?;
         for effect in self.effects.borrow().iter() {
             match *effect {

@@ -264,7 +264,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let direct = sun_tint * sun_intensity * ndotl * shadow * mix(0.8, 1.0, in.ao);
     var local_light=vec3<f32>(0.0);
     let night=1.0-smoothstep(-0.1,0.25,camera.sun_dir.w);
-    if night>0.001 && camera.camp_lights[0].w!=0.0 {
+    if camera.camp_lights[0].w!=0.0 {
         for (var i=0u;i<4u;i=i+1u) {
             let light=camera.camp_lights[i];
             if light.w==0.0 {continue;}
@@ -276,7 +276,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 let cool=light.w<0.0;
                 let flicker=select(0.92+0.08*sin(camera.light_params.z*7.0+light.x),1.0,cool);
                 let tint=select(vec3<f32>(1.0,0.38,0.09),vec3<f32>(0.72,0.86,1.0),cool);
-                local_light+=tint*fade*fade*(0.2+facing)*night*flicker*1.8;
+                // Steady lantern/crystal light also works in daytime caves.
+                let strength=select(night,1.0,cool);
+                local_light+=tint*fade*fade*(0.2+facing)*strength*flicker*1.8;
             }
         }
     }

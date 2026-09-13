@@ -93,13 +93,16 @@ pub struct PlayerSnapshot {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct InventoryBalances {
+    pub adventure: crate::adventure::Progress,
+    pub held: Option<crate::equipment::Entry>,
     pub mana: u32,
     pub elements: [u32; 5],
     pub items: [u32; 4],
 }
 impl InventoryBalances {
     pub fn from_account(account: &crate::crafting::Account) -> Self {
-        Self {mana:account.mana,elements:account.elements,items:account.gear}
+        Self {mana:account.mana,elements:account.elements,items:account.gear,
+            adventure:account.adventure,held:account.hotbar.entry()}
     }
 }
 

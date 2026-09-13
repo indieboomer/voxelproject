@@ -12,6 +12,19 @@ Then update this file by hand with what actually changed and why -- the docs
 regenerate automatically, but "what changed and why" is not mechanically
 derivable from a diff of the schema alone.
 
+## 1.27.0 - Journal and current equipment
+
+- Added `get_player_journal(player_id)`: detached saved contract stage/title,
+  exploration/crafting flags, recovery count and optional home position.
+- Added `get_equipped_item(player_id)`: selected resource/equipment ID or nil for
+  a missing player, empty slot or depleted stack. Reads staged inventory changes.
+- Player inventory transactions now preserve the journal and held selection in
+  callback snapshots. Neither query allows direct reward claims or journal edits.
+- Documented campkeeper derivation, automatic recovery and current host-vital
+  persistence. Multiplayer protocol is 31; existing saves default missing journal fields.
+- Added a tested optional Wayfinder crystal ward under `docs/examples/`, separate
+  from automatically loaded starter modules. Focused prompt context includes both queries.
+
 ## 1.21.0 - Nearby campfire placement
 
 - Added place_campfire_near_player: bounded search over loaded edited terrain,

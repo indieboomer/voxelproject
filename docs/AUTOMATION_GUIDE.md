@@ -114,7 +114,7 @@ Ingredients and mana are reserved once into a paid batch. Full local outputs or 
 
 Saves preserve active devices, sensor latch, routing cursor, inventories, mana, paid batches, and packed player devices. Older saves default to an empty installation. There is no offline simulation; a frame stall catches up at most one second to bound work. Devices continue operating outside rendered chunks while the host runs.
 
-Multiplayer uses protocol **26**. Clients send requests; only the host changes installations and accounts. Reliable snapshots split devices into groups of four and publish every half second (also scheduled by edits). Clients validate and install a complete revision atomically, tolerate reordered/duplicate packets, and never simulate production themselves. This MVP replicates the bounded whole installation rather than using spatial subscriptions or deltas.
+Multiplayer uses protocol **31**. Clients send requests; only the host changes installations and accounts. Reliable snapshots split devices into groups of four and publish every half second (also scheduled by edits). Clients validate and install a complete revision atomically, tolerate reordered/duplicate packets, and never simulate production themselves. This MVP replicates the bounded whole installation rather than using spatial subscriptions or deltas.
 
 ## Prompting / World API 1.25.0
 

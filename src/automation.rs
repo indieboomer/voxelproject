@@ -563,6 +563,7 @@ pub fn valid_cell(p: Cell) -> bool {
 }
 
 pub fn validate_account(account: &Account, b: &Balance, recipes: &Registry) -> Result<(), String> {
+    if !account.adventure.valid() { return Err("Invalid adventure progress".into()); }
     if account.packed_devices.len() > 8
         || account.production_goods.len() > 13
         || account

@@ -13,7 +13,7 @@ fn render_ui_previews() {
             .unwrap();
     let width = 1280;
     for (theme, name) in [(UiTheme::Generic, "generic"), (UiTheme::Fantasy, "fantasy")] {
-        for panel in ["settings", "crafting", "resources", "hotbar", "hotbar_machine", "inventory", "chat", "automation", "chest", "map", "hud"] {
+        for panel in ["settings", "crafting", "resources", "hotbar", "hotbar_machine", "inventory", "chat", "automation", "chest", "map", "hud", "journal", "adventure", "recovery"] {
             if std::env::var("UI_PREVIEW_PANEL").is_ok_and(|filter|filter!=panel) { continue; }
             let height = if panel == "resources" { 1024 } else { 720 };
             let ctx = egui::Context::default();
@@ -74,6 +74,12 @@ fn render_ui_previews() {
                 for x in 10..16 {for z in 10..16 {world.edits.insert((x,25,z),crate::voxel::BlockType::Bricks);}}
             }
             player.health=24.0;player.poisoned=true;player.oxygen=65.0;
+            player.crafting=account.clone();
+            player.crafting.adventure.home=Some((4,24,8));
+            let mut journal=crate::adventure_ui::Journal {open:panel=="journal",camp:Some((4,24,8)),
+                hint:Some("F · Talk to Mira / rest at camp".into()),..Default::default()};
+            if panel=="adventure" {journal.target=Some(("goblin".into(),14.,40.));journal.hint=Some("Hostile · sword attacks within 3 blocks".into());}
+            if panel=="recovery" {player.health=0.;journal.recovery_seconds=Some(2.);journal.damage_flash=0.55;}
             let creatures = crate::creature::Creatures::new();
             let mut craft = crate::crafting_ui::CraftingUi::default();
             craft.open = true;
@@ -107,7 +113,13 @@ fn render_ui_previews() {
                                 ui_theme::menu_backdrop(ui);
                             }
                         });
-                        if panel == "map" {map.draw(ctx,&world,player.position);}
+                        if panel == "journal" {journal.draw(ctx,&player);}
+                        else if panel == "adventure" || panel == "recovery" {
+                            crate::ui::status_hud(ctx,&player,60.0);
+                            journal.hud(ctx,&player,Some(glam::Vec3::new(40.,8.,-25.)));
+                            crate::equipment_ui::hotbar(ctx,&account,false,true,false);
+                        }
+                        else if panel == "map" {map.home=player.crafting.adventure.home.map(crate::adventure::feet);map.waypoint=Some(glam::Vec3::new(40.,8.,-25.));map.draw(ctx,&world,player.position);}
                         else if panel == "hud" {crate::ui::status_hud(ctx,&player,60.0);}
                         else if panel == "automation" || panel == "chest" {automation.draw(ctx,&world.automation,&account,&registry);}
                         else if panel == "chat" {

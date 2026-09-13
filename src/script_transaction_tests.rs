@@ -1,9 +1,51 @@
 use super::*;
 
 #[test]
+fn documented_wayfinder_ward_uses_current_progress_and_selection() {
+    let source=include_str!("../docs/examples/wayfinder_crystal_ward.lua");
+    assert!(crate::world_api_validate::validate_source(source).is_empty());
+    let mut f=Fixture::new();f.players[0].finances.adventure.stage=3;
+    f.players[0].finances.held=Some(crate::equipment::Entry::Resource(BlockType::Crystal));
+    f.resources[COLLECTIBLE_BLOCKS.iter().position(|b|*b==BlockType::Crystal).unwrap()]=1;
+    let mut m=Module::load("wayfinder ward".into(),"Protect experienced crystal holders from goblins".into(),source.into()).unwrap();m.enabled=true;
+    f.invoke(&mut m,"on_tick");assert!(m.error.is_none(),"{:?}",m.error);
+    assert!(f.creatures.attack_policies.values().flatten().any(|p|matches!(p,crate::creature::AttackPolicy::ProtectPlayer(0,k) if *k==CreatureKind::Goblin as u8)));
+    f.players[0].finances.held=None;
+    f.invoke(&mut m,"on_tick");assert!(f.creatures.attack_policies.is_empty());
+}
+
+#[test]
+fn journal_and_equipment_queries_preserve_progress_across_staged_inventory_changes() {
+    let mut f=Fixture::new();
+    f.players[0].finances.adventure=crate::adventure::Progress{stage:2,home:Some((4,30,8)),explored_depths:true,recoveries:3,..Default::default()};
+    f.players[0].finances.held=Some(crate::equipment::Entry::Resource(BlockType::Crystal));
+    let crystal=COLLECTIBLE_BLOCKS.iter().position(|b|*b==BlockType::Crystal).unwrap();f.players[0].resources[crystal]=1;f.resources[crystal]=1;
+    let mut guest=f.players[0];guest.id=7;f.players.push(guest);
+    let body=r#"
+        for _,id in ipairs({0,7}) do
+            local journal=api.get_player_journal(id)
+            assert(journal.stage==2 and journal.explored_depths and journal.recoveries==3)
+            assert(journal.home.x==4 and journal.home.y==30 and journal.home.z==8)
+            journal.stage=3; journal.home.x=900
+            assert(api.get_player_journal(id).stage==2 and api.get_player_journal(id).home.x==4)
+            assert(api.get_equipped_item(id)=='crystal')
+            assert(api.take_item(id,'crystal',1)); assert(api.get_equipped_item(id)==nil)
+            assert(api.give_mana(id,1)); assert(api.get_player_journal(id).recoveries==3)
+            assert(api.give_item(id,'crystal',1)); assert(api.get_equipped_item(id)=='crystal')
+        end
+        assert(api.get_player_journal(99)==nil and api.get_equipped_item(99)==nil)
+    "#;
+    let mut m=module("on_cast",body);let (out,_)=f.invoke(&mut m,"on_cast");
+    assert!(m.error.is_none(),"{:?}",m.error);
+    assert!(out.player_effects.iter().any(|e|matches!(e,PlayerEffect::Inventory{balances,..} if balances.adventure.recoveries==3)));
+    let mut m=module("on_cast",&format!("{body}\nerror('rollback')"));let (out,_)=f.invoke(&mut m,"on_cast");
+    assert!(m.error.is_some());assert!(out.player_effects.is_empty());
+}
+
+#[test]
 fn inventory_economy_reads_staged_balances_for_host_and_guest_and_rolls_back() {
     let mut f=Fixture::new();
-    f.players[0].finances=InventoryBalances {mana:100,elements:[0;5],items:[1,1,1,0]};
+    f.players[0].finances=InventoryBalances {mana:100,elements:[0;5],items:[1,1,1,0],..Default::default()};
     let mut guest=f.players[0];guest.id=7;guest.resources=[0;COLLECTIBLE_BLOCKS.len()];f.players.push(guest);
     let body=r#"
         for _,id in ipairs({0,7}) do
@@ -40,7 +82,7 @@ fn inventory_economy_reads_staged_balances_for_host_and_guest_and_rolls_back() {
 #[test]
 fn inventory_uses_configured_registry_and_rejects_overflow() {
     let mut f=Fixture::new();
-    f.players[0].finances=InventoryBalances{mana:u32::MAX,elements:[2,0,0,0,0],items:[0;4]};
+    f.players[0].finances=InventoryBalances{mana:u32::MAX,elements:[2,0,0,0,0],items:[0;4],..Default::default()};
     let mut registry=crate::crafting::Registry::parse(include_str!("../data/crafting.json")).unwrap();registry.conversion_rate=3;
     let mut m=module("on_cast",r#"
         assert(not api.give_mana(0,1))

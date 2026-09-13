@@ -4,6 +4,8 @@ use egui::{Color32, Pos2, Vec2};
 
 pub struct Map {
     pub open: bool,
+    pub waypoint: Option<glam::Vec3>,
+    pub home: Option<glam::Vec3>,
     center: Option<Vec2>,
     span: f32,
     cached: Option<(u32, i32, i32, u32)>,
@@ -14,6 +16,8 @@ impl Default for Map {
     fn default() -> Self {
         Self {
             open: false,
+            waypoint: None,
+            home: None,
             center: None,
             span: 512.0,
             cached: None,
@@ -34,7 +38,7 @@ impl Map {
             return;
         }
         let mut open = self.open;
-        let side = (ctx.screen_rect().height() - 260.0)
+        let side = (ctx.screen_rect().height() - 310.0)
             .min(ctx.screen_rect().width() - 60.0)
             .clamp(160.0, 620.0);
         egui::Window::new("World map [M]")
@@ -56,6 +60,18 @@ impl Map {
                     }
                     ui.label(format!("{} blocks across", self.span as u32));
                 });
+                ui.horizontal(|ui| {
+                    if ui.button("Clear waypoint").clicked() {self.waypoint=None;}
+                    if let Some(home)=self.home {
+                        if ui.button("Mark recovery camp").clicked() {self.waypoint=Some(home);}
+                    }
+                    if ui.button("Mark nearest cave").clicked() {
+                        self.waypoint=crate::underground::entrances(world,
+                            (player.x as i32-192,player.z as i32-192),(player.x as i32+192,player.z as i32+192))
+                            .into_iter().min_by_key(|p| ((p.0 as f32-player.x).powi(2)+(p.2 as f32-player.z).powi(2)) as u32)
+                            .map(crate::adventure::feet);
+                    }
+                });
                 ui.label(format!(
                     "Your position: X {:.0}, Y {:.0}, Z {:.0}   |   North is up",
                     player.x, player.y, player.z
@@ -63,9 +79,15 @@ impl Map {
                 let (rect, response) = ui
                     .horizontal(|ui| {
                         ui.add_space(((ui.available_width() - side) * 0.5).max(0.0));
-                        ui.allocate_exact_size(Vec2::splat(side), egui::Sense::drag())
+                        ui.allocate_exact_size(Vec2::splat(side), egui::Sense::click_and_drag())
                     })
                     .inner;
+                if response.secondary_clicked() {
+                    if let Some(p)=response.interact_pointer_pos() {
+                        let world_pos=center+(p-rect.center())*(self.span/side);
+                        self.waypoint=Some(glam::Vec3::new(world_pos.x,world.terrain_height(world_pos.x as i32,world_pos.y as i32) as f32+1.,world_pos.y));
+                    }
+                }
                 if response.dragged() {
                     center -= ui.input(|i| i.pointer.delta()) * (self.span / side);
                 }
@@ -180,6 +202,12 @@ impl Map {
                     }
                 }
                 let p = project(player.x, player.z);
+                for (target,color,label) in [(self.home,Color32::from_rgb(240,170,80),"Camp"),(self.waypoint,Color32::from_rgb(100,220,235),"Waypoint")] {
+                    if let Some(target)=target {
+                        let p=project(target.x,target.z);
+                        if rect.contains(p) {painter.circle_stroke(p,7.,egui::Stroke::new(2.0_f32,color));painter.text(p+egui::vec2(0.,9.),egui::Align2::CENTER_TOP,label,egui::FontId::proportional(12.),color);}
+                    }
+                }
                 if rect.contains(p) {
                     painter.circle_filled(p, 6.0, Color32::WHITE);
                     painter.circle_filled(p, 3.0, Color32::from_rgb(230, 65, 65));
@@ -189,7 +217,7 @@ impl Map {
                     ui.colored_label(Color32::from_rgb(210, 135, 245), "Cave entrances");
                     ui.colored_label(Color32::YELLOW, "Built blocks / devices / chests");
                 });
-                ui.small("Drag to pan. Scroll to zoom. Press M or Esc to return.");
+                ui.small("Drag to pan. Scroll to zoom. Right-click to mark a waypoint. M or Esc returns.");
             });
         self.open = open;
     }

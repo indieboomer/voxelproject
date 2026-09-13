@@ -350,6 +350,8 @@ mod tests {
         write_save(&second, &old).unwrap();
         let mut crafting = CraftingSave::default();
         let p = (0, 30, 0);
+        crafting.host.adventure=crate::adventure::Progress{stage:2,home:Some((4,30,8)),explored_depths:true,recoveries:3,..Default::default()};
+        crafting.guests.insert("expedition-guest".into(),crafting.host.clone());
         let mut chest = crate::automation::Device::new(crate::automation::Kind::Chest, p, 0);
         chest.items.insert("resource:stone".into(), 2_000_000);
         crafting.automation.devices.insert(p, chest);
@@ -376,6 +378,8 @@ mod tests {
         assert_eq!(fs::read(path.with_extension("bin.bak")).unwrap(), old);
         assert_eq!(fs::read(&second).unwrap(), old);
         let mut loaded = load_path(&path, "First World").unwrap();
+        assert_eq!(loaded.crafting.host.adventure,crafting.host.adventure);
+        assert_eq!(loaded.crafting.guests["expedition-guest"].adventure,crafting.host.adventure);
         assert_eq!(loaded.world.name, "First World");
         assert_eq!(loaded.player_pos, Vec3::new(1., 2., 3.));
         loaded.world.ensure_chunk_loaded(0, 0);

@@ -1,6 +1,8 @@
 #[cfg(feature = "dev-playtest")]
 #[path = "playtest_app.rs"]
 mod playtest_app;
+#[path = "adventure_app.rs"]
+mod adventure_app;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use crate::transport::{Peer, Transport, JoinTarget};
@@ -327,6 +329,7 @@ struct ClientNet {
     reliable: ReliableChannel,
     remote_players: HashMap<PlayerId, RemotePlayer>,
     creature_snapshot: Vec<([f32; 3], u8, f32, u8, f32)>,
+    creature_vitals: Vec<([f32;3],u8,f32)>,
     send_timer: f32,
     last_server_packet: Instant,
     lost_connection_logged: bool,
@@ -653,6 +656,8 @@ pub struct App {
     held_mesh: DynamicMesh,
     /// Host-owned mining progress and cooldowns, shared by local and remote interactions.
     interaction_states: HashMap<PlayerId, crate::equipment::Mining>,
+    recovery_timers: HashMap<PlayerId, f32>,
+    recovery_arrivals: HashMap<PlayerId, Vec3>,
     use_animation: f32,
     player_animation: crate::player_animation::Animation,
     automation_clock: crate::automation::Clock,
@@ -727,6 +732,7 @@ impl App {
     }
 
     fn submit_crafting(&mut self, action: crate::crafting::Action) {
+        if self.player.health <= 0. {self.crafting_ui.pending=false;return;}
         self.player_animation.start(crate::player_animation::Clip::Work);
         let revision = self.player.crafting.revision;
         if let NetRole::Joined(client) = &mut self.net {
@@ -770,7 +776,7 @@ impl App {
         };
         crate::crafting::load_interaction_area(&mut self.world, rp.pos);
         let account = self.guest_accounts.entry(from.account_key(&rp.nickname)).or_default();
-        let feedback = self
+        let feedback = if rp.health <= 0. { "Recover before crafting".into() } else { self
             .crafting_registry
             .execute(
                 account,
@@ -781,7 +787,7 @@ impl App {
                 rp.pos,
                 &players,
             )
-            .unwrap_or_else(|e| e);
+            .unwrap_or_else(|e| e) };
         host.reliable.send(
             &host.socket,
             from,
@@ -821,6 +827,7 @@ impl App {
     }
 
     fn perform_automation(&mut self,from:Option<Peer>,action:crate::automation::Action) {
+        if !self.adventure_actor_alive(from) {return;}
         let (feet,key)=if let Some(peer)=from {
             let NetRole::Host(host)=&self.net else{return;};
             let Some(rp)=host.clients.get(&peer).and_then(|id|host.remote_players.get(id))else{return;};
@@ -862,6 +869,7 @@ impl App {
     }
 
     fn perform_item_action(&mut self, from:Option<Peer>, intent:crate::equipment::Intent) {
+        if !self.adventure_actor_alive(from) {return;}
         let (id,feet,key)=if let Some(peer)=from {
             let NetRole::Host(host)=&self.net else{return;};
             let Some(&id)=host.clients.get(&peer) else{return;};
@@ -1284,6 +1292,7 @@ impl App {
                     reliable,
                     remote_players: HashMap::new(),
                     creature_snapshot: Vec::new(),
+                    creature_vitals: Vec::new(),
                     send_timer: 0.0,
                     last_server_packet: Instant::now(),
                     lost_connection_logged: false,
@@ -1415,6 +1424,8 @@ impl App {
             entity_mesh,
             held_mesh,
             interaction_states: HashMap::new(),
+            recovery_timers: HashMap::new(),
+            recovery_arrivals: HashMap::new(),
             use_animation: 0.0,
             player_animation: Default::default(),
             automation_clock: Default::default(),
@@ -1437,6 +1448,7 @@ impl App {
 
         app.grab_cursor(true);
         crate::crafting::load_interaction_area(&mut app.world,app.player.position);
+        app.initialize_adventure(launch.fresh);
         app.update_chunks();
         if launch.fresh && matches!(app.net,NetRole::Host(_)) {
             if let Some((x,_,z))=crate::underground::nearby_entrance(&app.world,app.player.position) {
@@ -1494,6 +1506,16 @@ impl App {
                 let PhysicalKey::Code(code) = key_event.physical_key else {
                     return;
                 };
+                if self.ui.journal.open {
+                    if !key_event.repeat && matches!(code,KeyCode::Escape|KeyCode::KeyJ) {
+                        self.ui.journal.open=false;self.sync_settings_input();
+                    }
+                    return;
+                }
+                if code==KeyCode::KeyJ && !key_event.repeat && self.cursor_grabbed {
+                    self.ui.journal.open=true;self.ui.journal.camp=None;self.ui.journal.feedback.clear();
+                    self.sync_settings_input();return;
+                }
                 if code == KeyCode::F5 && !key_event.repeat {
                     self.input.save_requested = true;
                     return;
@@ -1579,7 +1601,7 @@ impl App {
                 }
             }
             WindowEvent::MouseInput { state, button, .. }
-                if !self.ui.map.open && !self.ui.inventory_open && !self.ui.settings.open && !self.crafting_ui.open && !self.console_open && !self.quit_dialog_open && !self.chat_open => {
+                if !self.ui.journal.open && !self.ui.automation.open && !self.ui.map.open && !self.ui.inventory_open && !self.ui.settings.open && !self.crafting_ui.open && !self.console_open && !self.quit_dialog_open && !self.chat_open => {
                     self.input.mouse_button_event(*button, *state);
                     if *state == ElementState::Pressed
                         && *button == MouseButton::Left
@@ -1599,7 +1621,7 @@ impl App {
     fn sync_settings_input(&mut self) {
         self.input.release_all();self.input.end_frame();
         self.grab_cursor(!self.ui.map.open && !self.ui.inventory_open && !self.ui.settings.open && !self.console_open && !self.chat_open
-            && !self.crafting_ui.open && !self.quit_dialog_open && !self.ui.automation.open);
+            && !self.crafting_ui.open && !self.quit_dialog_open && !self.ui.automation.open && !self.ui.journal.open);
     }
 
     fn toggle_console(&mut self) {
@@ -1870,6 +1892,7 @@ impl App {
         let elapsed = (now - self.last_frame).as_secs_f32();
         let dt = elapsed.min(0.1);
         self.last_frame = now;
+        self.update_adventure(dt);
         #[cfg(feature = "dev-playtest")]
         self.update_playtest(dt);
         // Wrap well before f32 precision would start eating into a sine's
@@ -1955,7 +1978,17 @@ impl App {
         // and placing (right click) -- see world_api/schema.yaml's
         // `on_interact`. Only reports the event; a rule decides what, if
         // anything, happens.
-        if !self.console_open && !self.chat_open && self.input.interact_clicked {
+        if self.cursor_grabbed && self.player.health>0. && self.input.interact_clicked {
+            if let Some(camp)=self.aimed_camp() {
+                match &mut self.net {
+                    NetRole::Host(_)=>self.pending_interacts.push(InteractEvent{x:camp.0,y:camp.1,z:camp.2,block:BlockType::Campfire,player_id:self.local_player_id}),
+                    NetRole::Joined(client)=>{client.reliable.send(&client.socket,client.server_addr,ReliableMsg::Interact{x:camp.0,y:camp.1,z:camp.2});}
+                }
+                self.ui.journal.camp=Some(camp);self.ui.journal.open=true;self.ui.journal.feedback.clear();
+                self.sync_settings_input();
+            }
+        }
+        if self.cursor_grabbed && self.player.health>0. && !self.console_open && !self.chat_open && self.input.interact_clicked {
             let origin = self.camera.eye_position();
             let dir = self.camera.forward();
             if let Some(hit) = raycast(&self.world, origin, dir, REACH) {
@@ -2005,6 +2038,7 @@ impl App {
         }
 
         self.input.end_frame();
+        self.update_adventure_hints();
         self.ui.settings.poll_name(self.llm.base_url());
         let display=crate::fantasy_name::clean(&self.ui.settings.values.player_name);
         if !display.is_empty() && display!=self.local_nickname {
@@ -2166,6 +2200,14 @@ impl App {
         ));
         #[cfg(feature = "dev-playtest")]
         if let Some(session) = &self.playtest { mesh.extend(remote_player::build_mesh(&session.visual,self.local_player_id,&self.models)); }
+        for (camp,position) in self.nearby_guides() {
+            let facing=self.camera.eye_position()-position;
+            let delta=facing.z.atan2(facing.x);
+            self.models.push_player_animated(&mut mesh.vertices,&mut mesh.indices,
+                crate::remote_player::Appearance{model:1,hat:Some(2)},position,delta,
+                crate::player_animation::Clip::Idle,self.water_time,None);
+            let _=camp;
+        }
         self.entity_mesh.update(&self.device, &self.queue, &mesh);
         let entry=self.player.crafting.hotbar.entry().filter(|e|!self.ui.automation.tools_suspended() && e.count(&self.player.crafting)>0);
         let forward=self.camera.forward();let right=self.camera.right();let up=right.cross(forward);
@@ -2239,6 +2281,8 @@ impl App {
         if map_was_open!=self.ui.map.open {self.sync_settings_input();}
         if automation_was_open!=self.ui.automation.open {self.sync_settings_input();}
         if let Some(action)=requests.automation {self.submit_automation(action);}
+        if let Some(action)=requests.camp_action {self.submit_camp_action(action);}
+        if requests.close_journal {self.sync_settings_input();}
         if settings_was_open != self.ui.settings.open { self.sync_settings_input(); }
         if requests.close_inventory {self.ui.inventory_open=false;self.sync_settings_input();}
         if let Some(action) = requests.crafting {
@@ -2756,6 +2800,7 @@ impl App {
                     self.guest_accounts.entry(peer.account_key(&player.nickname)).or_default()
                 };
                 account.resources=resources;account.elements=balances.elements;account.mana=balances.mana;account.gear=balances.items;
+                account.adventure=balances.adventure;
                 account.revision=account.revision.saturating_add(1);
                 self.sync_guest_mana();
             }
@@ -3104,6 +3149,7 @@ impl App {
                 weather: self.weather.current.to_u8(),
                 players,
                 creatures: self.creatures.snapshot(),
+                creature_vitals: self.creatures.snapshot_with_ids().into_iter().map(|c|(c.2,c.1,c.3)).collect(),
             };
             let bytes = encode(&Packet::Unreliable(snapshot));
             for addr in host.clients.keys() {
@@ -3202,6 +3248,7 @@ impl App {
                     ReliableMsg::Hotbar(hotbar)=>self.handle_remote_hotbar(from,hotbar),
                     ReliableMsg::ItemAction(intent)=>self.perform_item_action(Some(from),intent),
                     ReliableMsg::AutomationAction(action)=>self.perform_automation(Some(from),action),
+                    ReliableMsg::CampAction(action)=>self.perform_camp_action(Some(from),action),
                     // BlockEdit is host-to-client only. Never accept claimed destruction.
                     ReliableMsg::BlockEdit { .. } => {}
                     ReliableMsg::ChatMessage(text) => {
@@ -3250,6 +3297,9 @@ impl App {
                     if let Some(rp) = host.remote_players.get_mut(&player_id) {
                         let new_pos = Vec3::from_array(pos);
                         let dt = rp.last_seen.elapsed().as_secs_f32().max(0.001);
+                        rp.last_seen = Instant::now();
+                        if !crate::adventure::accept_movement(rp.health,new_pos,self.recovery_arrivals.get(&player_id).copied()) {return;}
+                        self.recovery_arrivals.remove(&player_id);
                         rp.velocity = (new_pos - rp.pos) / dt;
                         rp.pos = new_pos;
                         rp.yaw = yaw;
@@ -3335,6 +3385,17 @@ impl App {
                     ReliableMsg::RuleProposalResult { accepted, message } => {
                         self.proposal_waiting = None;
                         self.notify_important(format!("{}: {message}", if accepted { "Host accepted proposal for review" } else { "Proposal rejected" }));
+                    }
+                    ReliableMsg::CampResult(message) => {
+                        self.ui.journal.feedback=message.clone();self.toasts.push(Toast::important(message));
+                    }
+                    ReliableMsg::Recovered {pos} => {
+                        self.player.position=Vec3::from_array(pos);self.player.velocity=Vec3::ZERO;
+                        self.player.health=MAX_HEALTH;self.player.oxygen=MAX_OXYGEN;self.player.poisoned=false;
+                        self.player.speed_multiplier=1.;self.player.jump_multiplier=1.;self.camera.position=self.player.position;
+                        self.ui.journal.open=false;
+                        self.toasts.push(Toast::important("Recovered at camp. Inventory kept; 10 seconds of creature protection."));
+                        self.sync_settings_input();
                     }
                     ReliableMsg::Goodbye => {
                         self.crafting_ui.feedback = "Host ended the session. Return to the menu to join another game.".into();
@@ -3430,6 +3491,7 @@ impl App {
                 weather,
                 players,
                 creatures,
+                creature_vitals,
             }) => {
                 self.time_of_day = time_of_day;
                 self.weather.current = Weather::from_u8(weather);
@@ -3437,6 +3499,7 @@ impl App {
                     unreachable!()
                 };
                 client.creature_snapshot = creatures;
+                client.creature_vitals=creature_vitals;
                 self.loot.drops=loot.into_iter().take(48).collect();
                 client.allow_guest_prompting = allow_guest_prompting;
                 let local_player_id = self.local_player_id;
@@ -3532,6 +3595,15 @@ impl App {
             if let Some(bubble) = self.chat_bubbles.get(&id) {
                 self.ui.chat_bubbles.push((screen_pos-egui::vec2(0.0,26.0),bubble.text.clone(),bubble.opacity(now)));
             }
+        }
+        for (camp,p) in self.nearby_guides() {
+            let target=p+Vec3::Y*2.15;let distance=eye.distance(target);
+            if crate::raycast::raycast(&self.world,eye,target-eye,(distance-0.3).max(0.)).is_some() {continue;}
+            let clip=matrix*target.extend(1.);if clip.w<=0. {continue;}
+            let ndc=clip.truncate()/clip.w;
+            if ndc.x.abs()>1. || ndc.y.abs()>1. || !(0. ..=1.).contains(&ndc.z) {continue;}
+            let pos=egui::pos2((ndc.x+1.)*0.5*screen.width as f32/scale,(1.-ndc.y)*0.5*screen.height as f32/scale);
+            self.ui.nameplates.push((pos,format!("{} · Campkeeper",crate::adventure::guide_name(camp))));
         }
         let mut centers = vec![(pcx,pcz)];
         centers.extend(remote_chunks.iter().copied());
@@ -3663,9 +3735,22 @@ impl App {
         self.audio.update_campfires(&campfires);
         self.audio.update_auras(&self.world.automation);
         let fire_effects=crate::campfire::effects(&campfires,cam_pos,self.water_time);
+        let mut local_lights=self.machine_feedback.lights(&campfires,cam_pos);
+        let remote=match &self.net {NetRole::Host(host)=>&host.remote_players,NetRole::Joined(client)=>&client.remote_players};
+        let mut crystal_carriers:Vec<_>=remote.iter().filter(|(id,p)|**id!=self.local_player_id
+            && p.held==Some(crate::equipment::Entry::Resource(BlockType::Crystal)) && p.pos.distance_squared(cam_pos)<24.*24.)
+            .map(|(_,p)|p.pos+Vec3::Y*1.5).collect();
+        crystal_carriers.sort_by(|a,b|b.distance_squared(cam_pos).total_cmp(&a.distance_squared(cam_pos)));
+        for position in crystal_carriers.into_iter().rev().take(3).collect::<Vec<_>>().into_iter().rev() {
+            local_lights.rotate_right(1);local_lights[0]=position.extend(-6.).to_array();
+        }
+        if crate::adventure::crystal_light(&self.player.crafting) {
+            local_lights.rotate_right(1);
+            local_lights[0]=(cam_pos+self.camera.forward()*0.4).extend(-6.0).to_array();
+        }
         self.campfire_mesh.update(&self.device,&self.queue,&fire_effects);
         let uniform = CameraUniform {
-            camp_lights: self.machine_feedback.lights(&campfires,cam_pos),
+            camp_lights: local_lights,
             view_proj: view_proj.to_cols_array_2d(),
             light_view_proj: light_view_proj.to_cols_array_2d(),
             inv_view_proj: view_proj.inverse().to_cols_array_2d(),

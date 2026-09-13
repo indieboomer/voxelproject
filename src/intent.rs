@@ -308,6 +308,8 @@ fn focused_prompt(plan: &Plan) -> String {
         let relevant = !line.starts_with("- api.")
             || method == "- api.broadcast"
             || method == "- api.players"
+            || method == "- api.get_equipped_item"
+            || method == "- api.get_player_journal"
             || plan.api_groups.iter().any(|g| match g.as_str() {
                 "creatures" => [
                     "creature",
@@ -509,7 +511,7 @@ fn smoke_code(code: &str, kind: PromptKind) -> Result<(), String> {
         ("sunny", 0.75),
     ] {
         let players = [0, 7].map(|id| PlayerSnapshot {
-            finances: crate::scripting::InventoryBalances {mana:100,elements:[20;5],items:[1,1,1,0]},
+            finances: crate::scripting::InventoryBalances {mana:100,elements:[20;5],items:[1,1,1,0],..Default::default()},
             id,
             pos,
             resources: [1; COLLECTIBLE_BLOCKS.len()],
@@ -593,7 +595,7 @@ pub fn verify_policy(plan: &Plan, code: &str) -> Result<(), String> {
     let mut creatures = Creatures::new();
     let id = creatures.spawn_one(CreatureKind::from_u8(species), pos, 1);
     let players = [0, 7].map(|id| PlayerSnapshot {
-        finances: crate::scripting::InventoryBalances {mana:100,elements:[20;5],items:[1,1,1,0]},
+        finances: crate::scripting::InventoryBalances {mana:100,elements:[20;5],items:[1,1,1,0],..Default::default()},
         id,
         pos,
         resources: [0; COLLECTIBLE_BLOCKS.len()],
@@ -787,7 +789,7 @@ mod tests {
     fn focused_inventory_context_contains_current_economy() {
         let mut p=plan();p.api_groups=vec!["inventory".into()];
         let prompt=focused_prompt(&p);
-        for name in ["get_player_inventory","get_mana","give_element","craft_item","decompose_resource","convert_elements_to_mana","get_item_recipe"] {
+        for name in ["get_player_inventory","get_player_journal","get_equipped_item","get_mana","give_element","craft_item","decompose_resource","convert_elements_to_mana","get_item_recipe"] {
             assert!(prompt.contains(&format!("- api.{name}(")),"missing {name}");
         }
         assert!(!prompt.contains("There is no separate equipment-item catalog yet"));

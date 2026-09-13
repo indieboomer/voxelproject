@@ -1,6 +1,8 @@
 #[cfg(feature = "dev-playtest")]
 mod playtest;
 mod app;
+mod adventure;
+mod adventure_ui;
 mod map_ui;
 mod audio;
 mod machine_feedback;

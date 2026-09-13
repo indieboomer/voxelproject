@@ -37,6 +37,22 @@ pub(super) fn populate<'lua,'scope>(_lua: &'lua Lua, scope: &mlua::Scope<'lua,'s
         Ok(Some(result))
     })?)?;
     api.set("get_mana",scope.create_function(move |_,id:PlayerId|Ok(tx.inventory(id).map(|a|a.mana)))?)?;
+    api.set("get_player_journal",scope.create_function(move |lua,id:PlayerId| {
+        let Some(a)=tx.inventory(id) else {return Ok(None);};
+        let p=a.adventure;let result=lua.create_table()?;
+        result.set("stage",p.stage)?;result.set("title",p.title())?;
+        result.set("explored_depths",p.explored_depths)?;result.set("crafted_tool",p.crafted_tool)?;
+        result.set("recoveries",p.recoveries)?;result.set("complete",p.stage==3)?;
+        if let Some((x,y,z))=p.home {let home=lua.create_table()?;home.set("x",x)?;home.set("y",y)?;home.set("z",z)?;result.set("home",home)?;}
+        Ok(Some(result))
+    })?)?;
+    api.set("get_equipped_item",scope.create_function(move |_,id:PlayerId| {
+        let Some(a)=tx.inventory(id) else {return Ok(None);};
+        Ok(a.hotbar.entry().filter(|entry|entry.count(&a)>0).map(|entry|match entry {
+            crate::equipment::Entry::Resource(block)=>block.id().to_string(),
+            crate::equipment::Entry::Gear(gear)=>gear.name().to_lowercase(),
+        }))
+    })?)?;
     api.set("get_element_count",scope.create_function(move |_,(id,name):(PlayerId,String)|Ok(element(&name).and_then(|e|tx.inventory(id).map(|a|a.elements[e.index()]))))?)?;
     api.set("get_item_count",scope.create_function(move |_,(id,name):(PlayerId,String)| {
         Ok(tx.inventory(id).and_then(|a| if let Some(g)=gear(&name) {Some(a.gear[g as usize])} else {

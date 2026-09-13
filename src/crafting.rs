@@ -85,6 +85,7 @@ pub fn totals(slots: &[Slot]) -> Result<Composition, String> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Account {
+    pub adventure: crate::adventure::Progress,
     pub packed_devices: Vec<crate::automation::Device>,
     pub production_goods: std::collections::BTreeMap<String,u32>,
     pub gear: [u32;4],
@@ -98,6 +99,7 @@ pub struct Account {
 impl Default for Account {
     fn default() -> Self {
         Self {
+            adventure: Default::default(),
             gear: [1,1,1,0],
             packed_devices: Vec::new(),
             production_goods: Default::default(),
@@ -468,6 +470,9 @@ impl Registry {
         }
         let mut next = account.clone();
         let output = self.prepare(&mut next, action)?;
+        if matches!(action, Action::CraftGear(_)) && next.adventure.stage == 2 {
+            next.adventure.crafted_tool = true;
+        }
         let mut draft = None;
         if let Some(o) = &output {
             if o.kind == ObjectKind::Creature {

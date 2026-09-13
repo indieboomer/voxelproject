@@ -165,10 +165,12 @@ fn render_weather_previews() {
             world.chunks.insert((cx, cz), chunk);
         }
     }
+    let adventure_preview=std::env::var_os("VOXEL_ADVENTURE_PREVIEW").is_some();
+    let crystal_preview=std::env::var_os("VOXEL_CRYSTAL_PREVIEW").is_some();
     let entrance_preview = std::env::var_os("VOXEL_ENTRANCE_PREVIEW").is_some();
     let underground_preview = std::env::var_os("VOXEL_UNDERGROUND_PREVIEW").is_some() || entrance_preview;
     let water_preview = std::env::var_os("VOXEL_WATER_PREVIEW").is_some();
-    let camp_preview = std::env::var_os("VOXEL_CAMPFIRE_PREVIEW").is_some();
+    let camp_preview = std::env::var_os("VOXEL_CAMPFIRE_PREVIEW").is_some() || adventure_preview;
     let aura_preview = std::env::var_os("VOXEL_AURA_PREVIEW").is_some();
     let machine_preview = std::env::var_os("VOXEL_MACHINE_PREVIEW").is_some() || aura_preview;
     let mut target = Vec3::new(3.0, 7.0, 0.0);
@@ -211,6 +213,15 @@ fn render_weather_previews() {
     }
     if machine_preview {target=Vec3::new(4.5,7.5,12.5);}
     if aura_preview {target.y=8.3;}
+    if crystal_preview {
+        // Compact cave fixture, 5-wide room and 3-high clearance. Midday tests
+        // portable light independently of the sun/night switch.
+        for x in 0..12 {for z in 3..16 {for y in 6..11 {
+            let block=if (2..7).contains(&x)&&(5..15).contains(&z)&&(7..10).contains(&y) {BlockType::Air}else{BlockType::Stone};
+            world.chunks.get_mut(&(0,0)).unwrap().set_local(x,y,z,block);
+        }}}
+        target=Vec3::new(4.5,8.4,8.5);
+    }
     let camps: Vec<_> = world
         .chunks
         .values()
@@ -218,6 +229,11 @@ fn render_weather_previews() {
         .collect();
     let camp_eye = target + Vec3::new(-3.0, 1.3, if machine_preview {-4.5} else {4.5});
     let mut effect_mesh=crate::campfire::effects(&camps, camp_eye, 10.0);
+    if adventure_preview {
+        let appearance=crate::remote_player::Appearance{model:1,hat:Some(2)};
+        models.push_player_animated(&mut effect_mesh.vertices,&mut effect_mesh.indices,appearance,
+            Vec3::new(5.5,7.,12.5),0.,crate::player_animation::Clip::Idle,0.5,None);
+    }
     let mut feedback=crate::machine_feedback::Feedback::default();
     if machine_preview {
         use crate::automation::{State,Device,Kind,Activity};
@@ -377,7 +393,9 @@ fn render_weather_previews() {
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let eye = if entrance_preview {
+    let eye = if crystal_preview {
+        Vec3::new(4.5,8.5,13.5)
+    } else if entrance_preview {
         target+Vec3::new(10.0,7.0,-15.0)
     } else if underground_preview {
         target+Vec3::new(6.0,0.6,-5.0)
@@ -425,7 +443,7 @@ fn render_weather_previews() {
             &camera,
             0,
             bytemuck::bytes_of(&CameraUniform {
-                camp_lights: feedback.lights(&camps, eye),
+                camp_lights: if crystal_preview {let mut lights=[[0.;4];4];if !std::env::var("VOXEL_CRYSTAL_PREVIEW").is_ok_and(|v|v=="unlit") {lights[0]=(eye+Vec3::new(0.,0.,-0.4)).extend(-6.).to_array();}lights} else {feedback.lights(&camps, eye)},
                 view_proj: vp.to_cols_array_2d(),
                 inv_view_proj: vp.inverse().to_cols_array_2d(),
                 light_view_proj: light_vp.to_cols_array_2d(),

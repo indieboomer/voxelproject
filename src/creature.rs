@@ -905,6 +905,7 @@ impl Creatures {
         for remaining in self.start_protection.values_mut() {*remaining=(*remaining-elapsed).max(0.0);}
         for &(id,_) in players {self.start_protection.entry(id).or_insert(60.0);}
     }
+    pub fn protect_recovery(&mut self,id:PlayerId) { self.start_protection.insert(id,10.0); }
 
     pub fn update(
         &mut self,

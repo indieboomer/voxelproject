@@ -1,5 +1,10 @@
 # Campfires
 
+Campfires also support stationary campkeepers, optional personal contracts and
+rest/recovery points. Aim at the fire or keeper and press **F**. See
+[Camps and expeditions](ADVENTURE_GUIDE.md) for requirements, rewards and persistence.
+Camp actions are host-validated; F continues to emit `on_interact` for world rules.
+
 Campfires are append-only `campfire` blocks generated sparsely on level, dry
 grass, soil, sand, or stone above the shoreline. Placement requires a flat 3x3
 patch and four blocks of clearance. Eligible 48x48 regions try up to eight

@@ -15,9 +15,7 @@ const SPRINT_SPEED: f32 = 7.5;
 /// that actually slow the player rather than just being cosmetic).
 const MUD_SPEED_MULTIPLIER: f32 = 0.45;
 
-/// Every player starts here every session -- health is deliberately NOT
-/// saved with the world (see world_api/schema.yaml's
-/// `persistence.player_state_not_saved`), the crafting inventory is saved separately.
+/// Starting/recovery health. Current saves also preserve the host's vitals.
 pub const MAX_HEALTH: f32 = 100.0;
 /// Clamp range for `speed_multiplier`/`jump_multiplier` -- see
 /// world_api/schema.yaml's `attribute_multiplier_min`/`_max`.
@@ -65,8 +63,7 @@ pub struct Player {
     /// same way -- incremented on breaking, decremented on placing. Shown
     /// in the Resources HUD panel.
     pub crafting: crate::crafting::Account,
-    /// 0..=MAX_HEALTH. Set via `api.damage_player`/`api.heal_player`; there
-    /// is no death/respawn system yet, so it just clamps at 0 and stays.
+    /// 0..=MAX_HEALTH. Zero freezes movement until App's recovery timer expires.
     pub health: f32,
     /// While true, `App`'s poison timer drains 1 health every
     /// `POISON_TICK_INTERVAL` seconds -- see `api.set_poisoned`.
@@ -203,6 +200,7 @@ impl Player {
     }
 
     pub fn update(&mut self, world: &World, input: &Input, forward: Vec3, right: Vec3, dt: f32) {
+        if self.health <= 0.0 { self.velocity=Vec3::ZERO;return; }
         let forward_flat = Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
         let right_flat = Vec3::new(right.x, 0.0, right.z).normalize_or_zero();
 
