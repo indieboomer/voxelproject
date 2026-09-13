@@ -12,10 +12,11 @@ Implementation uses the existing authoritative device transactions, deterministi
 
 ## Caves and dungeons
 
-- Newly created worlds have sparse, seeded underground landmarks. Natural chambers and brick-lined dungeon rooms have ore-rich walls, loot chests, and skeleton guards.
-- Stair passages sometimes open at the surface; others stop short and need excavation. Look away from lakes and riverbeds, which remain sealed against underground generation.
+- Newly created worlds place one open system per suitable 96 by 96 block land region. Each has nine chambers connected by a seeded depth-first spanning-tree algorithm, with at least 224 blocks of connecting corridors, a spiral descent, and an additional loop. Rooms include ore-rich walls, three loot chests, and skeleton guards.
+- Every system has an open, stone-framed surface entrance. New-world startup reports a nearby entrance location. Spiral stairs descend to floor Y=3; terrain generation retains its original elevation profile, while the build ceiling is now Y=127. Systems gain additional scale horizontally. Deep water crossings receive a solid lining.
+- New cave version 2 uses a **3-block-wide outer gate** with a **1-block-wide, 3-block-high opening**. The entrance stair passage is one block wide with four blocks of headroom. Connecting corridors vary between **1–2 blocks wide and 3–4 blocks high**; rooms are **4–5 blocks across in each horizontal direction and 3–4 blocks high**. The bottom stair junction turns inward so the narrow exit cannot run back beneath its own stair treads. Guards fit inside the smaller rooms.
 - Terrain is generated from world coordinates, independent of chunk load order. The host initializes each landmark's rewards once and saves its discovery marker. Emptying or packing a chest, killing guards, leaving the area, and reloading does not replenish rewards.
-- Older saves keep their original terrain generation. New underground terrain is not retroactively carved into them. Generated chests share the existing 128-device world limit; when it is reached, undiscovered rewards wait for space.
+- The cave-generation version is saved and replicated. Older saves keep their original terrain generation, including the larger version-1 rooms; create a new world to get the compact systems. New underground terrain is not retroactively carved into them. Generated chests share the existing 128-device world limit; when it is reached, undiscovered rewards wait for space.
 
 ## Mana and appearance
 
@@ -33,3 +34,23 @@ Implementation uses the existing authoritative device transactions, deterministi
 ## Verification
 
 Run `cargo test --offline`. Tests cover large atomic chest transfers, preserved packed contents, initial mana and exhaustion, legacy saves, file replacement and backups, state round trips, deterministic underground generation, and one-time landmark rewards. GPU previews are opt-in through the existing `render_weather_previews` test with `VOXEL_MACHINE_PREVIEW=1` or `VOXEL_AURA_PREVIEW=1`.
+
+## Map and building height
+
+Press **M** to open or close the map, or **Esc** to close it. It shows procedural land and water, cave entrances (purple), placed/modified solid blocks and devices (yellow), and your current position (white/red). Drag to pan, scroll or use the buttons to zoom, and use **Center on me** to return to your position. Hover an entrance for coordinates. Markers use the same world generation version as the save. Opening the map does not load chunks or initialize cave loot.
+
+The vertical build range is now **Y=0..127**. Existing terrain elevations and saved worlds retain their shapes. Empty upper layers are implicit and are skipped by terrain meshing; upper storage is allocated when blocks are placed there. Building large structures still adds geometry and memory in proportion to the construction.
+
+Health, poison and oxygen are positioned beneath the measured shortcut-panel bounds, including wrapped text in the fantasy theme.
+
+### Height benchmark
+
+`cargo test --offline profile_exploration -- --ignored --nocapture` on the current machine, averaging three fixed exploration areas:
+
+| Work | 48-block ceiling | 128-block ceiling |
+|---|---:|---:|
+| Generate 121 chunks | 156.47 ms | 159.20 ms |
+| Mesh 121 chunks | 234.22 ms | 233.57 ms |
+| Stream 11 new chunks | 14.05 ms | 14.22 ms |
+
+Triangle counts were identical in every area. Generation averaged about 1.7% slower, meshing about 0.3% faster; this benchmark showed no material regression for existing terrain. This does not claim that arbitrarily large new towers are free to render. Detailed outputs are in `target/height48-benchmark.log` and `target/height128-final-benchmark.log`.

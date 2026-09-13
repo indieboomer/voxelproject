@@ -165,7 +165,8 @@ fn render_weather_previews() {
             world.chunks.insert((cx, cz), chunk);
         }
     }
-    let underground_preview = std::env::var_os("VOXEL_UNDERGROUND_PREVIEW").is_some();
+    let entrance_preview = std::env::var_os("VOXEL_ENTRANCE_PREVIEW").is_some();
+    let underground_preview = std::env::var_os("VOXEL_UNDERGROUND_PREVIEW").is_some() || entrance_preview;
     let water_preview = std::env::var_os("VOXEL_WATER_PREVIEW").is_some();
     let camp_preview = std::env::var_os("VOXEL_CAMPFIRE_PREVIEW").is_some();
     let aura_preview = std::env::var_os("VOXEL_AURA_PREVIEW").is_some();
@@ -180,6 +181,12 @@ fn render_weather_previews() {
         for dx in -1..=2 {for dz in -1..=1 {world.ensure_chunk_loaded(cx+dx,cz+dz);}}
         crate::underground::discover(&mut world,&mut underground_creatures);
         target=Vec3::new(site.x as f32-1.0,site.floor as f32+2.0,site.z as f32+1.0);
+        if entrance_preview {
+            let (x,y,z)=crate::underground::nearby_entrance(&world,Vec3::ZERO).unwrap();
+            let (cx,cz)=crate::voxel::chunk::world_to_chunk(x,z);
+            for dx in -2..=2 {for dz in -2..=2 {world.ensure_chunk_loaded(cx+dx,cz+dz);}}
+            target=Vec3::new(x as f32,y as f32+1.0,z as f32);
+        }
         println!("Dungeon preview at {}, {}, {}",site.x,site.floor,site.z);
     }
     if water_preview {
@@ -370,7 +377,9 @@ fn render_weather_previews() {
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let eye = if underground_preview {
+    let eye = if entrance_preview {
+        target+Vec3::new(10.0,7.0,-15.0)
+    } else if underground_preview {
         target+Vec3::new(6.0,0.6,-5.0)
     } else if camp_preview || machine_preview {
         camp_eye

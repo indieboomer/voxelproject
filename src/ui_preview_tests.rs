@@ -13,7 +13,7 @@ fn render_ui_previews() {
             .unwrap();
     let width = 1280;
     for (theme, name) in [(UiTheme::Generic, "generic"), (UiTheme::Fantasy, "fantasy")] {
-        for panel in ["settings", "crafting", "resources", "hotbar", "hotbar_machine", "inventory", "chat", "automation", "chest"] {
+        for panel in ["settings", "crafting", "resources", "hotbar", "hotbar_machine", "inventory", "chat", "automation", "chest", "map", "hud"] {
             if std::env::var("UI_PREVIEW_PANEL").is_ok_and(|filter|filter!=panel) { continue; }
             let height = if panel == "resources" { 1024 } else { 720 };
             let ctx = egui::Context::default();
@@ -67,6 +67,13 @@ fn render_ui_previews() {
                 automation.inspect(&d);
                 world.automation.devices.insert(d.cell,d);
             }
+            let mut map=crate::map_ui::Map::default();
+            let mut player=crate::player::Player::new(glam::Vec3::new(0.5,24.0,0.5));
+            if panel=="map" {
+                map.toggle(player.position);
+                for x in 10..16 {for z in 10..16 {world.edits.insert((x,25,z),crate::voxel::BlockType::Bricks);}}
+            }
+            player.health=24.0;player.poisoned=true;player.oxygen=65.0;
             let creatures = crate::creature::Creatures::new();
             let mut craft = crate::crafting_ui::CraftingUi::default();
             craft.open = true;
@@ -79,6 +86,8 @@ fn render_ui_previews() {
                 amount: 1,
             });
             let mut settings = crate::settings::SettingsPanel::new(&ctx);
+            #[cfg(feature = "dev-playtest")]
+            {settings.playtest_in_game=true;}
             settings.values.appearance.ui_theme = theme;
             ui_theme::apply(&ctx, theme);
             // Multiple frames settle egui window measurements and font atlas updates.
@@ -98,7 +107,9 @@ fn render_ui_previews() {
                                 ui_theme::menu_backdrop(ui);
                             }
                         });
-                        if panel == "automation" || panel == "chest" {automation.draw(ctx,&world.automation,&account,&registry);}
+                        if panel == "map" {map.draw(ctx,&world,player.position);}
+                        else if panel == "hud" {crate::ui::status_hud(ctx,&player,60.0);}
+                        else if panel == "automation" || panel == "chest" {automation.draw(ctx,&world.automation,&account,&registry);}
                         else if panel == "chat" {
                             egui::Window::new("Chat").fixed_pos(egui::pos2(80.0,100.0)).show(ctx,|ui| {
                                 ui.set_width(360.0);

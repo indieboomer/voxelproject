@@ -25,6 +25,8 @@ pub enum Surface {
 pub struct WorldGeneration {
     #[serde(default)]
     pub underground: bool,
+    #[serde(default)]
+    pub cave_version: u8,
     pub description: String,
     /// Natural population percentages; omitted species retain their defaults.
     #[serde(default)]
@@ -42,6 +44,7 @@ impl Default for WorldGeneration {
     fn default() -> Self {
         Self {
             underground: true,
+            cave_version: 2,
             description: String::new(),
             creatures: Default::default(),
             shape: Shape::Mainland,
@@ -61,6 +64,7 @@ impl WorldGeneration {
     }
     pub fn validate(&self) -> Result<(), String> {
         if self.creatures.iter().any(|(key, value)| !CREATURE_SPECIES.contains(&key.as_str()) || *value > 1000)
+            || self.cave_version > 2
             || self.description.len() > 2048
             || self.trees > 300
             || self.relief > 200
@@ -71,7 +75,7 @@ impl WorldGeneration {
         Ok(())
     }
     pub fn height(&self, x: i32, z: i32, seed: u32) -> i32 {
-        use crate::voxel::{chunk::CHUNK_Y, noise::fbm, world::SEA_LEVEL};
+        use crate::voxel::{chunk::TERRAIN_HEIGHT as CHUNK_Y, noise::fbm, world::SEA_LEVEL};
         let original = || crate::voxel::terrain::height(x, z, seed);
         if self.shape == Shape::Mainland && self.relief == 100 {
             return crate::voxel::terrain::tributary(x,z,seed).map(|p|p.0).unwrap_or_else(original);
@@ -133,8 +137,11 @@ mod tests {
         assert_eq!(restored, config);
         let mut old = serde_json::to_value(&config).unwrap();
         old.as_object_mut().unwrap().remove("creatures");
+        old.as_object_mut().unwrap().remove("cave_version");
         let old: WorldGeneration = serde_json::from_value(old).unwrap();
         assert_eq!(old.abundance("cow"), 100);
+        assert_eq!(old.cave_version,0);
+        assert_eq!(config.cave_version,2);
         config.creatures.insert("cow".into(), 1001);
         assert!(config.validate().is_err());
         config.creatures.remove("cow");

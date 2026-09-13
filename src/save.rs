@@ -74,10 +74,20 @@ struct SaveV2 {
 fn legacy_generation() -> crate::worldgen::WorldGeneration {
     crate::worldgen::WorldGeneration {
         underground: false,
+        cave_version: 0,
         ..Default::default()
     }
 }
 const MAGIC: &[u8] = b"VOXEL_SAVE_2\n";
+/// Capture a development session without changing the named world's save file.
+#[cfg(feature = "dev-playtest")]
+pub fn playtest_snapshot(world: &World, player: &Player, camera: &Camera, time_of_day: f32,
+    modules: Vec<ModuleSaveEntry>, crafting: &CraftingSave) -> Result<Vec<u8>, String> {
+    encode_save(WorldSave { seed: world.seed, player_pos: player.position.to_array(),
+        player_yaw: camera.yaw, player_pitch: camera.pitch, time_of_day,
+        edits: world.edits.iter().map(|(k,v)|(*k,*v)).collect(), modules }, crafting, &world.generation)
+        .map_err(|e|e.to_string())
+}
 fn encode_save(
     world: WorldSave,
     crafting: &CraftingSave,
@@ -303,9 +313,33 @@ fn load_path(path: &Path, name: &str) -> Option<LoadedWorld> {
     })
 }
 
+/// Read a development artifact without touching a named world save.
+#[cfg(feature = "dev-playtest")]
+pub fn load_playtest_snapshot(path: &Path) -> Option<LoadedWorld> {
+    load_path(path, "Playtest replay")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "dev-playtest")]
+    #[test]
+    fn playtest_snapshot_loads_through_the_real_save_reader() {
+        let mut world=World::new(71);
+        world.set_block(2,127,2,crate::voxel::BlockType::Crystal);
+        let mut player=Player::new(Vec3::new(2.5,60.0,2.5));
+        player.health=37.0;player.crafting.mana=17;
+        let crafting=CraftingSave {player:Some(PlayerSave::capture(&player)),host:player.crafting.clone(),..Default::default()};
+        let bytes=playtest_snapshot(&world,&player,&Camera::new(player.position,1.0),0.35,vec![],&crafting).unwrap();
+        let path=std::path::PathBuf::from(format!("target/playtest-save-test-{}.bin",std::process::id()));
+        fs::write(&path,bytes).unwrap();
+        let loaded=load_path(&path,"diagnostic snapshot").unwrap();
+        assert_eq!(loaded.player_pos,player.position);
+        assert_eq!(loaded.crafting.host.mana,17);
+        assert_eq!(loaded.crafting.player.unwrap().health,37.0);
+        assert_eq!(loaded.world.edits.get(&(2,127,2)),Some(&crate::voxel::BlockType::Crystal));
+        fs::remove_file(path).unwrap();
+    }
     #[test]
     fn named_files_replace_safely_and_keep_previous_complete_save() {
         let dir = std::path::PathBuf::from(format!("target/save-test-{}", std::process::id()));
@@ -335,7 +369,9 @@ mod tests {
             machine: false,
             launch: None,
         }]);
-        let bytes = encode_save(world_save(), &crafting, &Default::default()).unwrap();
+        let mut saved=world_save();
+        saved.edits.push(((4,127,4),crate::voxel::BlockType::Bricks));
+        let bytes = encode_save(saved, &crafting, &Default::default()).unwrap();
         write_save(&path, &bytes).unwrap();
         assert_eq!(fs::read(path.with_extension("bin.bak")).unwrap(), old);
         assert_eq!(fs::read(&second).unwrap(), old);
@@ -343,6 +379,7 @@ mod tests {
         assert_eq!(loaded.world.name, "First World");
         assert_eq!(loaded.player_pos, Vec3::new(1., 2., 3.));
         loaded.world.ensure_chunk_loaded(0, 0);
+        assert_eq!(loaded.world.get_block(4,127,4),crate::voxel::BlockType::Bricks);
         assert_eq!(
             loaded.world.get_block(1, 2, 3),
             crate::voxel::BlockType::Bricks

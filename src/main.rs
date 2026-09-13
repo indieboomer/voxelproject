@@ -1,4 +1,7 @@
+#[cfg(feature = "dev-playtest")]
+mod playtest;
 mod app;
+mod map_ui;
 mod audio;
 mod machine_feedback;
 mod camera;
@@ -77,6 +80,17 @@ enum Stage {
 
 fn main() {
     env_logger::init();
+    #[cfg(feature = "dev-playtest")]
+    if std::env::args().nth(1).as_deref() == Some("--playtest-replay") {
+        let result = std::env::args_os().nth(2)
+            .ok_or_else(|| "Usage: voxelproject --playtest-replay <session-directory>".to_string())
+            .and_then(|path| playtest::replay::replay(std::path::Path::new(&path)));
+        match result {
+            Ok(report) => println!("{}", serde_json::to_string_pretty(&report).unwrap()),
+            Err(error) => { eprintln!("Replay failed: {error}"); std::process::exit(1); }
+        }
+        return;
+    }
     if let Err(e) = runtime_paths::initialize() {
         eprintln!("Cannot initialize game data: {e}");
         std::process::exit(1);

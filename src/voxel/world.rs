@@ -123,6 +123,7 @@ struct SurfaceResource { block: BlockType, habitat: &'static str, chance: f32, s
 const SURFACE_RESOURCES: &[SurfaceResource] = include!("resource_surface.rs");
 
 pub struct World {
+    pub(crate) cave_layouts: std::cell::RefCell<HashMap<(i32,i32),std::sync::Arc<crate::underground::Layout>>>,
     pub name: String,
     pub underground_discovered: std::collections::BTreeSet<(i32,i32)>,
     pub automation: crate::automation::State,
@@ -142,7 +143,7 @@ impl World {
     pub fn new(seed: u32) -> Self {
         Self {
             seed,
-            automation: Default::default(),
+            cave_layouts: Default::default(),            automation: Default::default(),
             generation: Default::default(),
             name: "world".into(),
             underground_discovered: Default::default(),
@@ -188,7 +189,7 @@ impl World {
                 let slope=[halo[x-1][z],halo[x+1][z],halo[x][z-1],halo[x][z+1]].into_iter().map(|h|(h-height).abs()).max().unwrap_or(0);
                 let mountain_surface=super::terrain::mountain_surface_with_slope(wx,wz,height,self.seed,slope);
 
-                for ly in 0..CHUNK_Y {
+                for ly in 0..super::chunk::TERRAIN_HEIGHT {
                     let block = if ly < BEDROCK_DEPTH {
                         BlockType::Bedrock
                     } else if ly > height {
@@ -230,7 +231,7 @@ impl World {
                 let tree_land = if self.generation.surface == crate::worldgen::Surface::Natural {
                     on_dry_land
                 } else {
-                    height > water_level + 2 && height < CHUNK_Y - 12
+                    height > water_level + 2 && height < super::chunk::TERRAIN_HEIGHT - 12
                         && self.generation.surface != crate::worldgen::Surface::Stone
                 };
                 if tree_land && column_rand(wx, wz, self.seed, 0xA11CE) < 0.006 * self.generation.trees as f32 / 100. {

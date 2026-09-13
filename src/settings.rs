@@ -19,6 +19,24 @@ pub struct Settings {
     pub gameplay: Gameplay,
     pub appearance: Appearance,
     pub multiplayer: Multiplayer,
+    pub aiapi: AiApi,
+}
+
+/// Local-only credentials. Retained in normal builds so saving preferences does
+/// not erase a development configuration. Never copy into world/session artifacts.
+#[derive(Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AiApi {
+    #[serde(rename = "OPENAI_API_KEY")]
+    pub api_key: String,
+    #[serde(rename = "OPENAI_PLAYTEST_MODEL")]
+    pub model: String,
+}
+impl std::fmt::Debug for AiApi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AiApi").field("api_key", &"[redacted]")
+            .field("model", &self.model).finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,7 +88,8 @@ impl Settings {
     pub fn load(path: &Path) -> Result<Self, String> {
         match std::fs::read(path) {
             Ok(bytes) => {
-                serde_json::from_slice(&bytes).map_err(|e| format!("Cannot read settings: {e}"))
+                // Serde type errors can contain the offending value, including a secret.
+                serde_json::from_slice(&bytes).map_err(|e| format!("Cannot read settings: invalid JSON or field type at line {}, column {}", e.line(), e.column()))
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(format!("Cannot read settings: {e}")),
@@ -86,6 +105,14 @@ impl Settings {
 }
 
 pub struct SettingsPanel {
+    #[cfg(feature = "dev-playtest")]
+    pub playtest_request: bool,
+    #[cfg(feature = "dev-playtest")]
+    pub playtest_status: String,
+    #[cfg(feature = "dev-playtest")]
+    pub playtest_scenario: crate::playtest::Scenario,
+    #[cfg(feature = "dev-playtest")]
+    pub playtest_in_game: bool,
     name_job: Option<std::sync::mpsc::Receiver<Result<String,String>>>,
     pub name_status: String,
     pub open: bool,
@@ -118,6 +145,14 @@ impl SettingsPanel {
         crate::ui_theme::apply(ctx, values.appearance.ui_theme);
         Self {
             name_job:None,
+            #[cfg(feature = "dev-playtest")]
+            playtest_request: false,
+            #[cfg(feature = "dev-playtest")]
+            playtest_status: String::new(),
+            #[cfg(feature = "dev-playtest")]
+            playtest_scenario: Default::default(),
+            #[cfg(feature = "dev-playtest")]
+            playtest_in_game: false,
             name_status:String::new(),
             open: false,
             values,
@@ -137,6 +172,24 @@ impl SettingsPanel {
             .max_height((ctx.screen_rect().height() - 64.0).max(180.0))
             .vscroll(true)
             .show(ctx, |ui| {
+                #[cfg(feature = "dev-playtest")]
+                {
+                    ui.group(|ui| {
+                        ui.label("Development playtesting");
+                        egui::ComboBox::from_id_source("playtest_scenario").selected_text(self.playtest_scenario.name()).show_ui(ui,|ui| {
+                            for scenario in [crate::playtest::Scenario::GatherCraft,crate::playtest::Scenario::WalkReturn,crate::playtest::Scenario::MineBlock,crate::playtest::Scenario::AiGatherTool,crate::playtest::Scenario::AiShelter,crate::playtest::Scenario::AiEncounterReturn] {
+                                ui.selectable_value(&mut self.playtest_scenario,scenario,scenario.name());
+                            }
+                        });
+                        ui.small("Actions change this world. Session logs include a starting snapshot.");
+                        if self.playtest_scenario.is_ai() {
+                            ui.small("Sends limited gameplay observations to OpenAI. Reads OPENAI_API_KEY and OPENAI_PLAYTEST_MODEL from settings.json > aiapi, with environment fallback. Limits: 10 minutes, 96 decisions, 160,000 tokens.");
+                        }
+                        if ui.add_enabled(self.playtest_in_game,egui::Button::new("Start / stop Agent1")).clicked() { self.playtest_request = true; }
+                        if !self.playtest_in_game {ui.small("Enter a world to start a session.");}
+                        ui.label(&self.playtest_status);
+                    });
+                }
                 ui.heading("Player name");
                 ui.add(egui::TextEdit::singleline(&mut self.values.player_name).char_limit(crate::net::MAX_NICKNAME_LEN).hint_text("Leave empty for an AI fantasy name"));
                 if ui.button("Suggest funny fantasy name (AI)").clicked() {self.values.player_name.clear();}
@@ -233,6 +286,19 @@ impl SettingsPanel {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ai_credentials_survive_preferences_save_and_are_redacted_from_debug_and_errors() {
+        let mut settings: Settings = serde_json::from_str(r#"{"aiapi":{"OPENAI_API_KEY":"local-test-secret","OPENAI_PLAYTEST_MODEL":"test-model"}}"#).unwrap();
+        settings.player_name = "Changed preference".into();
+        let path = std::env::temp_dir().join(format!("voxel-ai-settings-test-{}.json", std::process::id()));
+        settings.save(&path).unwrap();
+        let loaded = Settings::load(&path).unwrap();
+        assert_eq!(loaded.aiapi, settings.aiapi);
+        assert!(!format!("{loaded:?}").contains("local-test-secret"));
+        std::fs::write(&path, br#"{"aiapi":{"OPENAI_API_KEY":{"secret":"local-test-secret"}}}"#).unwrap();
+        assert!(!Settings::load(&path).unwrap_err().contains("local-test-secret"));
+        std::fs::remove_file(path).unwrap();
+    }
     use super::*;
     #[test]
     fn missing_fields_and_future_sections_are_compatible() {

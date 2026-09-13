@@ -129,7 +129,7 @@ impl CreatureKind {
     /// every other kind which only ever moves under `chase()`. See
     /// `Creatures::update`'s aggro pass and `spawn_around`'s doc comment for
     /// how these kinds participate in the starter world scatter.
-    fn is_hostile(self) -> bool {
+    pub(crate) fn is_hostile(self) -> bool {
         matches!(
             self,
             CreatureKind::StoneGolem

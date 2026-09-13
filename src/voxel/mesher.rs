@@ -3,7 +3,7 @@ use glam::Vec3;
 
 use super::atlas;
 use super::block::BlockType;
-use super::chunk::{Chunk, CHUNK_X, CHUNK_Y, CHUNK_Z};
+use super::chunk::{Chunk, CHUNK_X, CHUNK_Z};
 use super::world::World;
 
 #[repr(C)]
@@ -366,14 +366,14 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
     // One short column scan per mesh build, never per weather change/frame.
     // A roof, leaves, or water above a face shields it from surface rain.
     let rain_height: [[i32; CHUNK_Z as usize]; CHUNK_X as usize] = std::array::from_fn(|x| {
-        std::array::from_fn(|z| (0..CHUNK_Y).rev().find(|&y| {
+        std::array::from_fn(|z| (0..chunk.stored_height()).rev().find(|&y| {
             let block = chunk.get_local(x as i32, y, z as i32);
             block.is_solid() || block == BlockType::Water
         }).unwrap_or(-1))
     });
 
     for lx in 0..CHUNK_X {
-        for ly in 0..CHUNK_Y {
+        for ly in 0..chunk.stored_height() {
             for lz in 0..CHUNK_Z {
                 let block = chunk.get_local(lx, ly, lz);
                 if block == BlockType::Air {

@@ -31,4 +31,5 @@ opt-level = 1
 opt-level = 3
 
 [features]
+dev-playtest = []
 steam = ["dep:steamworks"]

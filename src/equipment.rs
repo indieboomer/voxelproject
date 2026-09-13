@@ -236,6 +236,12 @@ pub fn block_action(
     players: &[Vec3],
     intent: &Intent,
 ) -> Result<Option<((i32, i32, i32), BlockType, BlockType)>, String> {
+    block_action_at(world, account, mining, feet, players, intent, std::time::Instant::now())
+}
+
+/// Shared validator with an explicit clock for deterministic development playback.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn block_action_at(world: &World, account: &mut Account, mining: &mut Mining, feet: Vec3, players: &[Vec3], intent: &Intent, now: std::time::Instant) -> Result<Option<((i32, i32, i32), BlockType, BlockType)>, String> {
     accept_hotbar(account, &intent.hotbar)?;
     if intent.item != account.hotbar.entry() {
         return Err("Active item mismatch".into());
@@ -259,7 +265,7 @@ pub fn block_action(
     }
     if mining
         .last_use
-        .is_some_and(|t| t.elapsed().as_millis() < 160)
+        .is_some_and(|t| now.saturating_duration_since(t).as_millis() < 160)
     {
         return Err("".into());
     }
@@ -298,7 +304,7 @@ pub fn block_action(
                 mining.hits = 0;
             }
             mining.hits += 1;
-            mining.last_use = Some(std::time::Instant::now());
+            mining.last_use = Some(now);
             if mining.hits < if entry.is_none() { 1 } else { old.hardness() } {
                 return Ok(None);
             }
@@ -335,7 +341,7 @@ pub fn block_action(
                 .ok_or("Not placeable")?;
             account.resources[i] -= 1;
             account.revision += 1;
-            mining.last_use = Some(std::time::Instant::now());
+            mining.last_use = Some(now);
             Ok(Some((p, block, previous)))
         }
         Action::Attack => Err("Use a weapon against a creature".into()),
@@ -351,6 +357,12 @@ pub fn attack(
     feet: Vec3,
     intent: &Intent,
 ) -> Result<(), String> {
+    attack_at(world, creatures, account, state, feet, intent, std::time::Instant::now())
+}
+
+/// Shared validator with an explicit clock for deterministic development playback.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn attack_at(world: &World, creatures: &mut crate::creature::Creatures, account: &mut Account, state: &mut Mining, feet: Vec3, intent: &Intent, now: std::time::Instant) -> Result<(), String> {
     accept_hotbar(account, &intent.hotbar)?;
     if intent.item != account.hotbar.entry() {
         return Err("Active item mismatch".into());
@@ -369,11 +381,11 @@ pub fn attack(
     }
     if state
         .last_use
-        .is_some_and(|t| t.elapsed().as_millis() < 350)
+        .is_some_and(|t| now.saturating_duration_since(t).as_millis() < 350)
     {
         return Err("".into());
     }
-    state.last_use = Some(std::time::Instant::now());
+    state.last_use = Some(now);
     state.target = None;
     state.hits = 0;
     let eye = feet + Vec3::Y * 1.62;

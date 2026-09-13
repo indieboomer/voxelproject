@@ -1,3 +1,6 @@
+#[cfg(feature = "dev-playtest")]
+#[path = "playtest_app.rs"]
+mod playtest_app;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use crate::transport::{Peer, Transport, JoinTarget};
@@ -574,6 +577,8 @@ pub struct App {
 
     camera: Camera,
     player: Player,
+    #[cfg(feature = "dev-playtest")]
+    playtest: Option<crate::playtest::Session>,
     world: World,
     input: Input,
     creatures: Creatures,
@@ -1224,6 +1229,7 @@ impl App {
                         let mut world = World::new(seed);
                         world.generation = launch.generation.clone();
                         world.generation.underground = true;
+                        world.generation.cave_version = crate::worldgen::WorldGeneration::default().cave_version;
                         world.name = launch.world_name.clone();
                         let h = world.terrain_height(0, 0) as f32 + 2.0;
                         (
@@ -1367,6 +1373,8 @@ impl App {
             shadow_sample_bind_group: shadow.sample_bind_group,
             camera,
             player,
+            #[cfg(feature = "dev-playtest")]
+            playtest: None,
             world,
             input: Input::new(),
             creatures,
@@ -1430,6 +1438,11 @@ impl App {
         app.grab_cursor(true);
         crate::crafting::load_interaction_area(&mut app.world,app.player.position);
         app.update_chunks();
+        if launch.fresh && matches!(app.net,NetRole::Host(_)) {
+            if let Some((x,_,z))=crate::underground::nearby_entrance(&app.world,app.player.position) {
+                app.notify_important(format!("Explore underground: a stone-framed cave entrance is nearby at X {x}, Z {z}."));
+            }
+        }
         Ok(app)
     }
 
@@ -1490,7 +1503,14 @@ impl App {
                     self.sync_settings_input();
                     return;
                 }
-                if code==KeyCode::KeyB && !key_event.repeat && !self.console_open && !self.chat_open && !self.quit_dialog_open && !self.crafting_ui.open && !self.ui.inventory_open && !self.ui.settings.open {
+                if code==KeyCode::KeyM && !key_event.repeat && !self.console_open && !self.chat_open && !self.quit_dialog_open && !self.crafting_ui.open && !self.ui.map.open && !self.ui.inventory_open && !self.ui.settings.open && !self.ui.automation.open {
+                    self.ui.map.toggle(self.player.position);self.sync_settings_input();return;
+                }
+                if self.ui.map.open {
+                    if !key_event.repeat && matches!(code,KeyCode::Escape|KeyCode::KeyM) {self.ui.map.open=false;self.sync_settings_input();}
+                    return;
+                }
+                if code==KeyCode::KeyB && !key_event.repeat && !self.console_open && !self.chat_open && !self.quit_dialog_open && !self.crafting_ui.open && !self.ui.map.open && !self.ui.inventory_open && !self.ui.settings.open {
                     if self.ui.automation.build.take().is_some() {self.ui.automation.open=false;}
                     else {self.ui.automation.open=!self.ui.automation.open;}
                     self.ui.automation.selected=None;self.sync_settings_input();return;
@@ -1554,12 +1574,12 @@ impl App {
                     }
                     return;
                 }
-                if !self.ui.inventory_open && !self.ui.settings.open && !self.crafting_ui.open && !self.console_open && !self.quit_dialog_open && !self.chat_open {
+                if !self.ui.map.open && !self.ui.inventory_open && !self.ui.settings.open && !self.crafting_ui.open && !self.console_open && !self.quit_dialog_open && !self.chat_open {
                     self.input.key_event(code, key_event.state);
                 }
             }
             WindowEvent::MouseInput { state, button, .. }
-                if !self.ui.inventory_open && !self.ui.settings.open && !self.crafting_ui.open && !self.console_open && !self.quit_dialog_open && !self.chat_open => {
+                if !self.ui.map.open && !self.ui.inventory_open && !self.ui.settings.open && !self.crafting_ui.open && !self.console_open && !self.quit_dialog_open && !self.chat_open => {
                     self.input.mouse_button_event(*button, *state);
                     if *state == ElementState::Pressed
                         && *button == MouseButton::Left
@@ -1578,7 +1598,7 @@ impl App {
 
     fn sync_settings_input(&mut self) {
         self.input.release_all();self.input.end_frame();
-        self.grab_cursor(!self.ui.inventory_open && !self.ui.settings.open && !self.console_open && !self.chat_open
+        self.grab_cursor(!self.ui.map.open && !self.ui.inventory_open && !self.ui.settings.open && !self.console_open && !self.chat_open
             && !self.crafting_ui.open && !self.quit_dialog_open && !self.ui.automation.open);
     }
 
@@ -1850,6 +1870,8 @@ impl App {
         let elapsed = (now - self.last_frame).as_secs_f32();
         let dt = elapsed.min(0.1);
         self.last_frame = now;
+        #[cfg(feature = "dev-playtest")]
+        self.update_playtest(dt);
         // Wrap well before f32 precision would start eating into a sine's
         // period -- the animation is periodic anyway so this is seamless.
         self.water_time = (self.water_time + dt) % 10_000.0;
@@ -2012,6 +2034,10 @@ impl App {
             self.creatures.discover_fish(&self.world, &player_targets, dt);
             let golem_attacks = self.creatures.update(&self.world, dt, &player_targets);
             for (player_id, damage) in golem_attacks {
+                #[cfg(feature = "dev-playtest")]
+                if player_id==crate::playtest::AGENT_ID {
+                    if let Some(session)=&mut self.playtest {session.hostile_hit(damage);}
+                }
                 self.apply_player_effect(PlayerEffect::Health {
                     player_id,
                     delta: -damage,
@@ -2138,6 +2164,8 @@ impl App {
             self.local_player_id,
             &self.models,
         ));
+        #[cfg(feature = "dev-playtest")]
+        if let Some(session) = &self.playtest { mesh.extend(remote_player::build_mesh(&session.visual,self.local_player_id,&self.models)); }
         self.entity_mesh.update(&self.device, &self.queue, &mesh);
         let entry=self.player.crafting.hotbar.entry().filter(|e|!self.ui.automation.tools_suspended() && e.count(&self.player.crafting)>0);
         let forward=self.camera.forward();let right=self.camera.right();let up=right.cross(forward);
@@ -2182,6 +2210,7 @@ impl App {
             NetRole::Joined(client) => client.socket.lobby_code(),
         };
         let settings_was_open = self.ui.settings.open;
+        let map_was_open=self.ui.map.open;
         let automation_was_open=self.ui.automation.open;
         let (full_output, requests) = self.ui.draw(
             &self.window,
@@ -2207,6 +2236,7 @@ impl App {
             lobby_code.as_deref(),
         );
         self.pending_egui_output = Some(full_output);
+        if map_was_open!=self.ui.map.open {self.sync_settings_input();}
         if automation_was_open!=self.ui.automation.open {self.sync_settings_input();}
         if let Some(action)=requests.automation {self.submit_automation(action);}
         if settings_was_open != self.ui.settings.open { self.sync_settings_input(); }
@@ -2404,6 +2434,8 @@ impl App {
                 oxygen: rp.oxygen,
             });
         }
+        #[cfg(feature = "dev-playtest")]
+        if let Some(agent)=self.playtest_player_snapshot() { players.push(agent); }
         players
     }
 
@@ -2712,6 +2744,8 @@ impl App {
     /// only item grants need an explicit targeted message, since inventory
     /// doesn't ride the snapshot.
     fn apply_player_effect(&mut self, effect: PlayerEffect) {
+        #[cfg(feature = "dev-playtest")]
+        if self.playtest_player_effect(&effect) { return; }
         match effect {
             PlayerEffect::AutomationState{state}=> {self.world.automation=*state;self.automation_timer=1.0;}
             PlayerEffect::Inventory {player_id,balances,resources} => {
@@ -2866,6 +2900,10 @@ impl App {
     /// fires for this, matching world_api/schema.yaml's `poison_tick_secs`
     /// note that it's "only observable by polling ... .health from on_tick".
     fn apply_poison_ticks(&mut self) {
+        #[cfg(feature = "dev-playtest")]
+        if let Some(session)=&mut self.playtest {
+            if session.actor.player.poisoned && session.script.finished.is_none() {session.actor.player.damage(POISON_DAMAGE_PER_TICK);session.external_event("Poison damage tick");}
+        }
         if self.player.poisoned {
             self.player.damage(POISON_DAMAGE_PER_TICK);
         }
@@ -3475,6 +3513,8 @@ impl App {
                 .map(|p| chunk_of(p.pos)).collect(),
             NetRole::Joined(_) => Vec::new(),
         };
+        #[cfg(feature = "dev-playtest")]
+        { self.ui.agent_nameplate = None; self.playtest_nameplate(); }
         self.ui.nameplates.clear();
         self.ui.chat_bubbles.clear();
         let now = Instant::now();

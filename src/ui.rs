@@ -88,6 +88,10 @@ pub struct Ui {
     pub automation: crate::automation_ui::Panel,
     pickup_rows: Vec<(crate::voxel::BlockType,u32)>,
     pickup_started: Instant,
+    #[cfg(feature = "dev-playtest")]
+    pub agent_nameplate: Option<(egui::Pos2, String)>,
+    #[cfg(feature = "dev-playtest")]
+    pub agent_home_marker:Option<(egui::Pos2,&'static str)>,
     pub nameplates: Vec<(egui::Pos2,String)>,
     pub chat_bubbles: Vec<(egui::Pos2,String,f32)>,
     pub settings: crate::settings::SettingsPanel,
@@ -98,6 +102,7 @@ pub struct Ui {
     /// shown in the "Rule Source" viewer window, if any. Purely local UI
     /// state -- doesn't need to round-trip through `App`.
     viewing_index: Option<usize>,
+    pub map: crate::map_ui::Map,
     pub inventory_open: bool,
     last_hotbar: Option<(usize,Option<crate::equipment::Entry>)>,
     selected_until: Instant,
@@ -129,12 +134,17 @@ impl Ui {
             automation: Default::default(),
             pickup_started:Instant::now(),
             nameplates:Vec::new(),
+            #[cfg(feature = "dev-playtest")]
+            agent_nameplate: None,
+            #[cfg(feature = "dev-playtest")]
+            agent_home_marker:None,
             chat_bubbles:Vec::new(),
             settings,
             ctx,
             state,
             renderer,
             viewing_index: None,
+            map: Default::default(),
             inventory_open: false,
             last_hotbar: None,
             selected_until: Instant::now(),
@@ -196,7 +206,6 @@ impl Ui {
         let mut requests = UiRequests::default();
         let mut viewing_index = self.viewing_index;
         let mut open_settings = false;
-        let fantasy = self.settings.values.appearance.ui_theme == crate::settings::UiTheme::Fantasy;
 
         let full_output = self.ctx.run(raw_input, |ctx| {
             let age=self.pickup_started.elapsed().as_secs_f32();
@@ -222,6 +231,21 @@ impl Ui {
                 ctx.request_repaint();
             }
             let painter=ctx.layer_painter(egui::LayerId::new(egui::Order::Background,egui::Id::new("player_names")));
+            #[cfg(feature = "dev-playtest")]
+            if let Some((pos,label))=self.agent_home_marker {
+                painter.circle_stroke(pos,7.0,egui::Stroke::new(2.0_f32,egui::Color32::LIGHT_BLUE));
+                painter.text(pos-egui::vec2(0.0,10.0),egui::Align2::CENTER_BOTTOM,label,egui::FontId::proportional(14.0),egui::Color32::LIGHT_BLUE);
+            }
+            #[cfg(feature = "dev-playtest")]
+            if let Some((pos, status)) = &self.agent_nameplate {
+                let status_layout = painter.layout(status.clone(),egui::FontId::proportional(13.0),egui::Color32::from_gray(175),260.0);
+                let status_pos = *pos-egui::vec2(status_layout.size().x*0.5,status_layout.size().y);
+                let name_pos = *pos-egui::vec2(0.0,status_layout.size().y+3.0);
+                painter.text(name_pos+egui::vec2(1.0,1.0),egui::Align2::CENTER_BOTTOM,"Agent1",egui::FontId::proportional(16.0),egui::Color32::BLACK);
+                painter.text(name_pos,egui::Align2::CENTER_BOTTOM,"Agent1",egui::FontId::proportional(16.0),egui::Color32::from_rgb(255,65,65));
+                painter.galley_with_override_text_color(status_pos+egui::vec2(1.0,1.0),status_layout.clone(),egui::Color32::BLACK);
+                painter.galley(status_pos,status_layout,egui::Color32::from_gray(175));
+            }
             for (pos,name) in &self.nameplates {
                 painter.text(*pos+egui::vec2(1.0,1.0),egui::Align2::CENTER_BOTTOM,name,egui::FontId::proportional(16.0),egui::Color32::BLACK);
                 painter.text(*pos,egui::Align2::CENTER_BOTTOM,name,egui::FontId::proportional(16.0),egui::Color32::WHITE);
@@ -239,50 +263,10 @@ impl Ui {
                 self.settings.draw(ctx);
                 return;
             }
+            if self.map.open {self.map.draw(ctx,world,player.position);return;}
             requests.crafting = crafting_ui.draw(ctx, registry, &player.crafting, world, creatures, player.position, players);
             requests.automation = self.automation.draw(ctx,&world.automation,&player.crafting,registry);
-            egui::Window::new("fps")
-                .title_bar(false)
-                .anchor(egui::Align2::RIGHT_TOP, [-8.0, 8.0])
-                .resizable(false)
-                .collapsible(false)
-                .interactable(false)
-                .show(ctx, |ui| {
-                      ui.label(format!("{fps:.0} FPS | I: Inventory | C: Craft | F10: Settings"));
-                      ui.label("Gestures: , Dance | . Angry | / Jump");
-                      ui.label("B: Automation · F: Configure device");
-                });
-
-            egui::Window::new("health")
-                .title_bar(false)
-                .anchor(egui::Align2::RIGHT_TOP, [-8.0, if fantasy { 58.0 } else { 40.0 }])
-                .resizable(false)
-                .collapsible(false)
-                .interactable(false)
-                .show(ctx, |ui| {
-                    let health_color = if player.health <= 25.0 {
-                        egui::Color32::from_rgb(220, 90, 90)
-                    } else if player.health <= 60.0 {
-                        IMPORTANT_TOAST_COLOR
-                    } else {
-                        egui::Color32::from_rgb(100, 200, 100)
-                    };
-                    ui.colored_label(health_color, format!("Health: {:.0}/100", player.health));
-                    if player.poisoned {
-                        ui.colored_label(egui::Color32::from_rgb(140, 210, 100), "POISONED");
-                    }
-                    // Only shown while it's actually relevant (currently
-                    // draining, or still catching back up) rather than
-                    // permanently cluttering the HUD on dry land.
-                    if player.oxygen < 100.0 {
-                        let oxygen_color = if player.oxygen <= 0.0 {
-                            egui::Color32::from_rgb(220, 90, 90)
-                        } else {
-                            egui::Color32::from_rgb(120, 190, 230)
-                        };
-                        ui.colored_label(oxygen_color, format!("Oxygen: {:.0}/100", player.oxygen));
-                    }
-                });
+            status_hud(ctx,player,fps);
 
             egui::Window::new("Rules")
                 .default_open(!scripting.modules.is_empty())
@@ -594,4 +578,51 @@ impl Ui {
             self.renderer.free_texture(id);
         }
     }
+}
+
+/// Position status below the actual shortcut-panel bounds in either theme.
+pub(crate) fn status_hud(ctx:&egui::Context,player:&Player,fps:f32) {
+            let hints = egui::Window::new("fps")
+                .title_bar(false)
+                .anchor(egui::Align2::RIGHT_TOP, [-8.0, 8.0])
+                .resizable(false)
+                .collapsible(false)
+                .interactable(false)
+                .show(ctx, |ui| {
+                      ui.label(format!("{fps:.0} FPS | I: Inventory | C: Craft | M: Map | F10: Settings"));
+                      ui.label("Gestures: , Dance | . Angry | / Jump");
+                      ui.label("B: Automation · F: Configure device");
+                });
+
+            egui::Window::new("health")
+                .title_bar(false)
+                .anchor(egui::Align2::RIGHT_TOP, [-8.0, hints.as_ref().map_or(110.0, |h| h.response.rect.bottom()+10.0)])
+                .resizable(false)
+                .collapsible(false)
+                .interactable(false)
+                .show(ctx, |ui| {
+                    let health_color = if player.health <= 25.0 {
+                        egui::Color32::from_rgb(220, 90, 90)
+                    } else if player.health <= 60.0 {
+                        IMPORTANT_TOAST_COLOR
+                    } else {
+                        egui::Color32::from_rgb(100, 200, 100)
+                    };
+                    ui.colored_label(health_color, format!("Health: {:.0}/100", player.health));
+                    if player.poisoned {
+                        ui.colored_label(egui::Color32::from_rgb(140, 210, 100), "POISONED");
+                    }
+                    // Only shown while it's actually relevant (currently
+                    // draining, or still catching back up) rather than
+                    // permanently cluttering the HUD on dry land.
+                    if player.oxygen < 100.0 {
+                        let oxygen_color = if player.oxygen <= 0.0 {
+                            egui::Color32::from_rgb(220, 90, 90)
+                        } else {
+                            egui::Color32::from_rgb(120, 190, 230)
+                        };
+                        ui.colored_label(oxygen_color, format!("Oxygen: {:.0}/100", player.oxygen));
+                    }
+                });
+
 }

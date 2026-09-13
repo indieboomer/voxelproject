@@ -1,6 +1,6 @@
 //! Continuous, seed-only terrain features. No chunk-local hydrology decisions.
 use super::{
-    chunk::CHUNK_Y,
+    chunk::TERRAIN_HEIGHT as CHUNK_Y,
     noise::{column_rand, fbm},
     world::SEA_LEVEL,
 };
