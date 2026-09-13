@@ -1,5 +1,70 @@
 # Camps and expeditions
 
+## Six travelers and twenty quests
+
+![The six NPC models in the offscreen game renderer](images/npc-travelers.png)
+
+The Sage, Elf Ranger, Warrior, Merchant, Fire Sorceress and Necromancer use the
+animated models in `models/npc`. They appear near the initial recovery area in
+new and existing worlds. Each follows a small, dry-ground patrol within four
+blocks of its home, stops to face nearby players, and avoids terrain and devices.
+They are peaceful quest givers, separate from combat creatures. If construction
+blocks a patrol, clear its path. They do not reshape saved terrain.
+
+Look at a traveler and press **F** to talk. **J** lists all twenty contracts.
+Objectives track automatically and can be completed in any order. Crafting and
+kills count from this update onward; delivery quests use current inventory.
+Each quest pays **20 mana once**. Deliveries consume the requested materials.
+
+![Sage quest dialogue](images/npc-quests.png)
+Rewards require a living player within six blocks with an unobstructed view of
+the correct giver. The host checks every claim, including guest claims.
+
+| # | NPC | Quest | Objective |
+|---|---|---|---|
+| 1 | Sage | A Solid Beginning | Bring 10 stone |
+| 2 | Sage | The Five Foundations | Bring 1 each of Earth, Fire, Water, Life and Death |
+| 3 | Sage | Shape the World | Craft stone using elemental crafting |
+| 4 | Sage | A Little Reserve | Place a Mana Vessel and store at least 10 mana |
+| 5 | Elf Ranger | Wood for the Watch | Bring 12 oak wood |
+| 6 | Elf Ranger | Hungry Shadows | Defeat 2 wolves |
+| 7 | Elf Ranger | Ready for the Wilds | Equip a bow |
+| 8 | Warrior | Your First Blade | Craft a sword |
+| 9 | Warrior | Restless Bones | Defeat 3 skeletons |
+| 10 | Warrior | Back to the Grave | Defeat 3 zombies |
+| 11 | Warrior | A Sharper Lesson | Defeat 1 goblin |
+| 12 | Merchant | Room for More | Place a chest |
+| 13 | Merchant | Fresh Supplies | Bring 20 oak wood and 10 stone |
+| 14 | Merchant | From Ore to Ingots | Produce 3 metal ingots in an Ore Smelter |
+| 15 | Fire Sorceress | A Handful of Sparks | Bring 3 Fire |
+| 16 | Fire Sorceress | A Place to Warm Your Hands | Light a campfire |
+| 17 | Fire Sorceress | Light Against the Dark | Place and power a Mana Lantern |
+| 18 | Necromancer | Nothing Is Wasted | Bring 3 Death |
+| 19 | Necromancer | Borrowed Power | Process 1 Death in an Element Dissipator |
+| 20 | Necromancer | An Unexpected Interest | Craft a bound sheep figurine |
+
+Use **C** for stone, swords, bows and the bound sheep button. Use **I** to assign
+and equip a bow. Use **B** to place machinery and **F** to configure, deposit or
+charge it. The Sorceress's campfire button costs **3 oak wood + 2 stone** and
+lights a real fire on nearby clear, level ground. No supplies are spent if there
+is no safe space. Her lantern objective requires your placed lantern to actually
+shine; a charged but disabled lantern does not count.
+
+Machine production tracks the most recent smelter, dissipator and workshop you
+placed or supplied directly. Put ore plus fuel (or mana) into a smelter. Configure
+a dissipator to Death before depositing Death. Configure a workshop to sheep and
+supply Life plus mana to make its bound figurine. Only subsequent completed
+production counts; old stock and packed historical cycles do not. Several players
+may cooperate on the same machine and receive future production credit after
+supplying it. Packing clears that player's tracked location; placing it again
+starts a new observation. Vessel and lantern objectives require personal placement.
+
+NPC homes, positions and patrol state, machine production counters and every
+player's quest progress survive saving. There is no offline quest production.
+Combat credit goes to the player delivering the killing weapon hit. Host and
+guests need the updated build (protocol 32). Lua reads these contracts through
+`get_player_journal(player_id).quests`; scripts cannot claim their rewards.
+
 The campkeeper contracts are optional. Building, crafting and world rules remain
 available from the start.
 
@@ -30,7 +95,11 @@ Clear space beside a blocked fire before resting there.
 |---|---|---|
 | A place by the fire | Deliver 6 oak wood and 4 stone | 2 crystals, 20 mana |
 | Into the depths | While this contract is active, enter roofed underground air at Y 2–12; then return | 3 iron, 30 mana |
-| Forge your own path | While this contract is active, successfully craft a new axe, pickaxe or sword in C; then return | 2 redstone, 40 mana, Wayfinder title |
+| Forge your own path | While this contract is active, successfully craft a new sword in C; then return | 2 redstone, 40 mana, Wayfinder title |
+
+Sword crafting is shown in **C → Tools and weapons**: **2 iron + 1 oak wood + 4 mana**
+(mana is waived in the host's testing mode). Axe and pickaxe recipes are there too.
+Previously credited tool crafting in older saves is retained.
 
 Materials for the first contract are consumed only when its claim succeeds. Merely
 owning a starting tool does not complete the third contract. Earlier exploration
@@ -53,6 +122,11 @@ different inventory and journal.
 | C | Craft tools and materials |
 | B | Build/configure automation |
 | Backquote (`) | Describe a new world rule |
+
+The top HUD compass follows your view; north is -Z and east is +X, matching the map.
+When inspecting a machine with F or positioning one in build mode, a small N/E/S/W
+compass floats over it. These are world directions and do not rotate with its ports.
+See [crafting recipes](../CRAFTING.md) for twelve additional elemental formulas.
 
 Holding a crystal uses no charge and does not consume it. Switching away or
 emptying the stack removes its light. Nearby other players' held crystals also

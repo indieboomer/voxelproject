@@ -102,6 +102,30 @@ impl CraftingUi {
                     }
                 });
                 ui.label("Ordered formula — gaps are ignored. Repeated elements are allowed.");
+                egui::CollapsingHeader::new("Tools and weapons — sword / axe / pickaxe").default_open(true).show(ui,|ui| {
+                    ui.label("The campkeeper's final contract requires a newly crafted sword.");
+                    for gear in crate::equipment::Gear::ALL {
+                        let (iron,wood,mana)=crate::crafting::gear_formula(gear,false).unwrap();
+                        let action=Action::CraftGear(gear);
+                        let status=registry.preview(account,&action,world,creatures,pos,players);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(format!("{} (owned {}): {iron} iron + {wood} oak wood + {} mana",gear.name(),account.gear[gear as usize],registry.mana_charge(mana)));
+                            let button=ui.add_enabled(self.ready() && request.is_none() && status.is_ok(),egui::Button::new(format!("Craft {}",gear.name())));
+                            if button.clicked() {request=Some(action);}
+                            if let Err(error)=status {button.on_hover_text(error);}
+                        });
+                    }
+                });
+                ui.label("Bow: 20-block reach, 1 mana per shot. Select it in I, then left-click to shoot.");
+                let bound=Action::BindSheep;
+                let available=registry.preview(account,&bound,world,creatures,pos,players);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!("Bound sheep figurines: {}. Uses the sheep formula (2 Life) and its mana cost.",account.production_goods.get("creature:sheep").copied().unwrap_or(0)));
+                    let button=ui.add_enabled(self.ready() && request.is_none() && available.is_ok(),egui::Button::new("Craft bound sheep figurine"));
+                    if button.clicked() {request=Some(bound);}
+                    if let Err(e)=available {button.on_hover_text(e);}
+                });
+                ui.small("Deposit the figurine into a chest [F]; release it there to bring the sheep to life.");
                 ui.add_enabled_ui(self.ready(), |ui| {
                     egui::ScrollArea::horizontal().show(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -299,8 +323,8 @@ impl CraftingUi {
                                         }
                                         let cost = registry.mana_charge(registry.mana_costs[r.inputs.len() - 1]);
                                         let label = format!(
-                                            "{}: {} ({} mana)",
-                                            name,
+                                            "{} x{}: {} ({} mana)",
+                                            name, r.output.quantity,
                                             r.inputs
                                                 .iter()
                                                 .map(|s| format!("{:?} x{}", s.element, s.amount))

@@ -5,7 +5,7 @@ use crate::crafting::{Action,Element,Registry};
 use crate::equipment::Gear;
 
 pub(super) fn gear(id: &str) -> Option<Gear> {
-    match id {"axe"=>Some(Gear::Axe),"pickaxe"=>Some(Gear::Pickaxe),"sword"=>Some(Gear::Sword),_=>None}
+    match id {"axe"=>Some(Gear::Axe),"pickaxe"=>Some(Gear::Pickaxe),"sword"=>Some(Gear::Sword),"bow"=>Some(Gear::Bow),_=>None}
 }
 fn element(id: &str) -> Option<Element> {
     Element::ALL.into_iter().find(|e|format!("{e:?}").eq_ignore_ascii_case(id))
@@ -32,7 +32,7 @@ pub(super) fn populate<'lua,'scope>(_lua: &'lua Lua, scope: &mlua::Scope<'lua,'s
         let Some(a)=tx.inventory(id) else {return Ok(None);};
         let result=lua.create_table()?;let resources=lua.create_table()?;let items=lua.create_table()?;
         for (i,b) in COLLECTIBLE_BLOCKS.iter().enumerate() {resources.set(b.id(),a.resources[i])?;}
-        for (id,g) in [("axe",Gear::Axe),("pickaxe",Gear::Pickaxe),("sword",Gear::Sword)] {items.set(id,a.gear[g as usize])?;}
+        for g in Gear::ALL {items.set(g.name().to_lowercase(),a.gear[g as usize])?;}
         result.set("resources",resources)?;result.set("items",items)?;result.set("elements",balance_table(lua,&a.elements)?)?;result.set("mana",a.mana)?;
         Ok(Some(result))
     })?)?;
@@ -43,6 +43,13 @@ pub(super) fn populate<'lua,'scope>(_lua: &'lua Lua, scope: &mlua::Scope<'lua,'s
         result.set("stage",p.stage)?;result.set("title",p.title())?;
         result.set("explored_depths",p.explored_depths)?;result.set("crafted_tool",p.crafted_tool)?;
         result.set("recoveries",p.recoveries)?;result.set("complete",p.stage==3)?;
+        let quests=lua.create_table()?;
+        for (i,q) in crate::quests::QUESTS.iter().enumerate() {
+            let row=lua.create_table()?;row.set("id",i+1)?;row.set("npc",crate::quests::NAMES[q.npc as usize])?;
+            row.set("title",q.title)?;row.set("objective",q.objective)?;row.set("progress",crate::quests::progress(&a,i))?;
+            row.set("target",q.target)?;row.set("completed",p.quests.done(i))?;quests.set(i+1,row)?;
+        }
+        result.set("quests",quests)?;result.set("quests_completed",p.quests.completed.count_ones())?;
         if let Some((x,y,z))=p.home {let home=lua.create_table()?;home.set("x",x)?;home.set("y",y)?;home.set("z",z)?;result.set("home",home)?;}
         Ok(Some(result))
     })?)?;

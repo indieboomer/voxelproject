@@ -8,6 +8,18 @@
   ],
   "conversion_rate": 1,
   "recipes": [
+    {"id":"chicken","inputs":[{"element":"Life","amount":1},{"element":"Water","amount":1}],"output":{"kind":"creature","id":"chicken","quantity":1}},
+    {"id":"cow","inputs":[{"element":"Life","amount":4},{"element":"Earth","amount":1}],"output":{"kind":"creature","id":"cow","quantity":1}},
+    {"id":"wolf","inputs":[{"element":"Life","amount":3},{"element":"Death","amount":1}],"output":{"kind":"creature","id":"wolf","quantity":1}},
+    {"id":"stinger","inputs":[{"element":"Life","amount":2},{"element":"Death","amount":2}],"output":{"kind":"creature","id":"stinger","quantity":1}},
+    {"id":"goblin","inputs":[{"element":"Life","amount":2},{"element":"Earth","amount":2},{"element":"Death","amount":1}],"output":{"kind":"creature","id":"goblin","quantity":1}},
+    {"id":"zombie","inputs":[{"element":"Death","amount":3},{"element":"Life","amount":1}],"output":{"kind":"creature","id":"zombie","quantity":1}},
+    {"id":"skeleton","inputs":[{"element":"Death","amount":3},{"element":"Earth","amount":2}],"output":{"kind":"creature","id":"skeleton","quantity":1}},
+    {"id":"fish","inputs":[{"element":"Water","amount":2},{"element":"Life","amount":1}],"output":{"kind":"creature","id":"fish","quantity":1}},
+    {"id":"crystal","inputs":[{"element":"Earth","amount":1},{"element":"Water","amount":2},{"element":"Death","amount":1}],"output":{"kind":"resource","id":"crystal","quantity":1}},
+    {"id":"oak_wood","inputs":[{"element":"Earth","amount":1},{"element":"Life","amount":2},{"element":"Water","amount":1}],"output":{"kind":"resource","id":"oak_wood","quantity":1}},
+    {"id":"stone_batch","inputs":[{"element":"Earth","amount":8},{"element":"Water","amount":2}],"output":{"kind":"resource","id":"stone","quantity":8}},
+    {"id":"bricks_batch","inputs":[{"element":"Earth","amount":8},{"element":"Fire","amount":4}],"output":{"kind":"resource","id":"bricks","quantity":4}},
     {
       "id": "sheep",
       "inputs": [

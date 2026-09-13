@@ -10,6 +10,7 @@ pub type Cell = (i32, i32, i32);
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Progress {
+    pub quests: crate::quests::Progress,
     pub stage: u8,
     pub home: Option<Cell>,
     pub explored_depths: bool,
@@ -18,7 +19,7 @@ pub struct Progress {
 }
 impl Progress {
     pub fn valid(&self) -> bool {
-        self.stage <= 3
+        self.quests.valid() && self.stage <= 3
             && self.home.is_none_or(|(x, y, z)| {
                 x.unsigned_abs() < 1_000_000
                     && z.unsigned_abs() < 1_000_000
@@ -37,7 +38,7 @@ impl Progress {
         match self.stage {
             0 => "Bring 6 oak wood and 4 stone to a campkeeper.",
             1 => "Explore underground at Y 12 or below, then return to a campkeeper.",
-            2 => "Craft a new axe, pickaxe or sword, then return to a campkeeper.",
+            2 => "Craft a new sword in C, then return to a campkeeper.",
             _ => "The world is yours. Build, explore, or write a new world rule.",
         }
     }
@@ -460,7 +461,7 @@ mod tests {
         let registry =
             crate::crafting::Registry::parse(include_str!("../data/crafting.json")).unwrap();
         let mut creatures = crate::creature::Creatures::new();
-        let action = crate::crafting::Action::CraftGear(crate::equipment::Gear::Pickaxe);
+        let action = crate::crafting::Action::CraftGear(crate::equipment::Gear::Sword);
         a.resources.fill(0);
         let before = a.clone();
         let revision = a.revision;
@@ -501,6 +502,7 @@ mod tests {
             explored_depths: true,
             crafted_tool: false,
             recoveries: 3,
+            quests: Default::default(),
         };
         let mut save = crate::save::CraftingSave::default();
         save.host = a.clone();

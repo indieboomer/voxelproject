@@ -2,6 +2,56 @@
 
 Press **C** during gameplay to open crafting; press **C** or **Esc** to close. Mine blocks, use **Confirm extraction** to turn gathered resources into elements, then build a formula or select one from the Formula book. Conversion to mana is always explicit. Balances start at zero. The existing mouse/keyboard and egui navigation are used; this project has no controller bindings.
 
+## Tools and weapons
+
+The initially expanded **Tools and weapons** section in C exposes these recipes:
+
+| Item | Materials | Mana |
+|---|---|---:|
+| Sword | 2 iron + 1 oak wood | 4 |
+| Axe | 3 iron + 2 oak wood | 4 |
+| Pickaxe | 3 iron + 2 oak wood | 6 |
+| Bow | 1 iron + 4 oak wood | 6 |
+
+These use the same host-authoritative transactions as inventory crafting. Missing
+materials disable crafting. The third campkeeper contract requires a newly crafted
+sword while active; old completion credit is preserved.
+
+The bow fires an immediate mana shot up to 20 blocks for 9 damage, costing
+1 mana per shot with a 0.7-second cooldown. Terrain blocks shots. Assign the bow
+in **I**, select its hotbar slot, then left-click. Bows can be stored in machines
+as `item:bow`, and existing saved bows are retained.
+
+**Craft bound sheep figurine** in C uses the sheep formula (2 Life and the
+formula's normal mana cost) but puts `creature:sheep` into your carried production
+goods instead of spawning it. Deposit it into a chest's matter storage and use
+**Release** to bring it to life. Workshops producing sheep also create figurines.
+This craft completes the Necromancer's "An Unexpected Interest" objective.
+
+## Additional formulas
+
+There are now **49 ordered elemental formulas**. Experiment or open the searchable
+Formula book to see and load them. There is no discovery unlock gate. Order matters.
+
+| New formula | Ordered inputs | Output |
+|---|---|---|
+| Chicken | Life 1 → Water 1 | 1 chicken |
+| Cow | Life 4 → Earth 1 | 1 cow |
+| Wolf | Life 3 → Death 1 | 1 wolf |
+| Stinger | Life 2 → Death 2 | 1 stinger |
+| Goblin | Life 2 → Earth 2 → Death 1 | 1 goblin |
+| Zombie | Death 3 → Life 1 | 1 zombie |
+| Skeleton | Death 3 → Earth 2 | 1 skeleton |
+| Fish | Water 2 → Life 1 | 1 fish; requires a suitable nearby pool |
+| Crystal | Earth 1 → Water 2 → Death 1 | 1 crystal |
+| Oak wood | Earth 1 → Life 2 → Water 1 | 1 oak wood |
+| Stone batch | Earth 8 → Water 2 | 8 stone |
+| Bricks batch | Earth 8 → Fire 4 | 4 bricks |
+
+Land creatures need clear supported space. Failed spawning refunds the entire
+transaction. Hostile recipes create hostile creatures. Mana uses existing slot-count
+costs; mana-free testing waives mana, not materials or elements.
+
 ## Architecture
 
 - `src/crafting.rs`: validated registry, composition APIs, ordered matching, checked arithmetic, private account transactions, staged creature output, spawn clearance, tests.
@@ -24,9 +74,9 @@ Extraction consumes existing stackable resources. Water and crystal compositions
 
 ## Resource catalog
 
-The world has **82 stackable resources**, including 34 resource formulas with two or three ordered slots. See [the complete resource/formula/balance guide](RESOURCES.md). `data/resources.json` is the authoring catalog; `tools/build_resources.py` generates resource entries in `data/crafting.json` while preserving creature recipes. The Formula book is searchable and shows texture icons and mana costs.
+The world has **84 stackable resources**, with 38 resource formulas and 11 creature formulas. See [the complete resource/formula/balance guide](RESOURCES.md). `data/resources.json` is the authoring catalog; `tools/build_resources.py` generates single-output resource entries in `data/crafting.json` while preserving creature and batch recipes. The Formula book shows icons, output quantities and mana costs.
 
-Resource outputs use `kind: resource`; no equipment or consumable item system was added. Existing creature formulas remain unchanged and may use one to five slots. Crafted output compositions must be present, and their recoverable elements multiplied by quantity must not exceed inputs in any element; invalid registries fail loading.
+Resource outputs use `kind: resource`. Equipment uses the separate material recipes above. Creature formulas may use one to five slots. Resource compositions must be present, and recoverable elements multiplied by output quantity must not exceed inputs in any element; invalid registries fail loading.
 
 Inventory `item`, `block`, and `resource` outputs all add to the current block-resource inventory and can be selected in Resources for placement. There is no separate consumable-item system or fixed slot capacity; `u32` stack overflow reports Inventory full. The poison/preservative/lava examples are therefore adapted to existing mud/redstone/basalt content.
 

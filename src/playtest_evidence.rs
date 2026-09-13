@@ -110,6 +110,11 @@ pub fn transaction(tick: u64, action: &Action, before: &crafting::Account,
         }
         Action::Craft { recipe } => {
             match recipe {
+                crafting::Action::BindSheep => {
+                    let slots=[Some(crafting::Slot{element:crafting::Element::Life,amount:2}),None,None,None,None];
+                    expected[element+crafting::Element::Life as usize]-=2;
+                    expected[mana]-=i64::from(registry.mana_cost(&slots));
+                }
                 crafting::Action::Craft(slots) => {
                     let Ok(recipe) = registry.matched(slots) else {
                         return vec![Finding::new(tick, "known_recipe", "Accepted crafting uses a known recipe", "Unknown recipe accepted".into())];

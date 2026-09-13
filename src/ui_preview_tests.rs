@@ -79,6 +79,7 @@ fn render_ui_previews() {
             let mut journal=crate::adventure_ui::Journal {open:panel=="journal",camp:Some((4,24,8)),
                 hint:Some("F · Talk to Mira / rest at camp".into()),..Default::default()};
             if panel=="adventure" {journal.target=Some(("goblin".into(),14.,40.));journal.hint=Some("Hostile · sword attacks within 3 blocks".into());}
+            if panel=="journal" {journal.npc=Some(0);journal.camp=None;player.crafting.adventure.quests.record(2,1);}
             if panel=="recovery" {player.health=0.;journal.recovery_seconds=Some(2.);journal.damage_flash=0.55;}
             let creatures = crate::creature::Creatures::new();
             let mut craft = crate::crafting_ui::CraftingUi::default();
@@ -113,6 +114,11 @@ fn render_ui_previews() {
                                 ui_theme::menu_backdrop(ui);
                             }
                         });
+                        if matches!(panel,"adventure"|"hud"|"automation") {crate::compass::hud(ctx,-60f32.to_radians());}
+                        if panel=="automation" {
+                            let p=egui::pos2(850.,320.);
+                            crate::compass::machine(ctx,&[Some(p),Some(p+egui::vec2(-24.,-29.)),Some(p+egui::vec2(42.,-17.)),Some(p+egui::vec2(24.,29.)),Some(p+egui::vec2(-42.,17.))]);
+                        }
                         if panel == "journal" {journal.draw(ctx,&player);}
                         else if panel == "adventure" || panel == "recovery" {
                             crate::ui::status_hud(ctx,&player,60.0);

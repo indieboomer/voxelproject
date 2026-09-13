@@ -14,7 +14,7 @@ pub fn gear_formula(gear: crate::equipment::Gear, salvage: bool) -> Result<(u32,
         (Sword,false)=>Ok((2,1,4)), (Sword,true)=>Ok((1,1,2)),
         (Axe,false)=>Ok((3,2,4)), (Axe,true)=>Ok((2,1,2)),
         (Pickaxe,false)=>Ok((3,2,6)), (Pickaxe,true)=>Ok((2,1,3)),
-        _=>Err("Unavailable equipment".into()),
+        (Bow,false)=>Ok((1,4,6)), (Bow,true)=>Ok((0,2,3)),
     }
 }
 
@@ -366,6 +366,16 @@ impl Registry {
     // Run on a private account; the caller commits only after output preparation succeeds.
     pub(crate) fn prepare(&self, account: &mut Account, action: &Action) -> Result<Option<Output>, String> {
         match action {
+            Action::BindSheep => {
+                let recipe=self.recipes.iter().find(|r|r.output.kind==ObjectKind::Creature && r.output.id=="sheep").ok_or("Sheep recipe missing")?;
+                let mut formula=[None;5];
+                for (i,s) in recipe.inputs.iter().enumerate() {formula[i]=Some(*s);}
+                account.consume_elements(totals(&recipe.inputs)?)?;
+                account.mana=account.mana.checked_sub(self.mana_cost(&formula)).ok_or("Insufficient mana")?;
+                let n=account.production_goods.entry("creature:sheep".into()).or_default();
+                *n=n.checked_add(1).filter(|n|*n<=1_000_000).ok_or("Inventory full")?;
+                Ok(None)
+            }
             Action::Craft(slots) => {
                 let r = self.matched(slots)?;
                 account.consume_elements(totals(&r.inputs)?)?;
@@ -470,7 +480,10 @@ impl Registry {
         }
         let mut next = account.clone();
         let output = self.prepare(&mut next, action)?;
-        if matches!(action, Action::CraftGear(_)) && next.adventure.stage == 2 {
+        if output.as_ref().is_some_and(|o|o.kind==ObjectKind::Resource && o.id=="stone") {next.adventure.quests.record(2,1);}
+        if matches!(action,Action::CraftGear(crate::equipment::Gear::Sword)) {next.adventure.quests.record(7,1);}
+        if matches!(action,Action::BindSheep) {next.adventure.quests.record(19,1);}
+        if matches!(action, Action::CraftGear(crate::equipment::Gear::Sword)) && next.adventure.stage == 2 {
             next.adventure.crafted_tool = true;
         }
         let mut draft = None;
@@ -532,6 +545,7 @@ pub enum Action {
     Extract { block: BlockType, amount: u32 },
     CraftGear(crate::equipment::Gear),
     SalvageGear(crate::equipment::Gear),
+    BindSheep,
 }
 
 pub(crate) fn spawn_position(
@@ -802,6 +816,30 @@ mod tests {
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].1, CreatureKind::StoneGolem.to_u8());
         assert_eq!(snapshot[0].0[1], 10.0);
+    }
+    #[test]
+    fn expanded_recipes_create_their_outputs_and_fish_refund_on_dry_land() {
+        let reg=registry();let world=flat_world();
+        for id in ["chicken","cow","wolf","stinger","goblin","zombie","skeleton","fish","crystal","oak_wood","stone_batch","bricks_batch"] {
+            let recipe=reg.recipes.iter().find(|r|r.id==id).unwrap();
+            let mut slots=[None;5];for (i,s) in recipe.inputs.iter().enumerate(){slots[i]=Some(*s);}
+            let mut account=rich();let before=account.clone();let mut creatures=Creatures::new();
+            let result=execute(&reg,&mut account,Action::Craft(slots),&world,&mut creatures);
+            if id=="fish" {assert!(result.is_err());assert_eq!(account,before);assert!(creatures.snapshot().is_empty());continue;}
+            result.unwrap();
+            if recipe.output.kind==ObjectKind::Creature {assert_eq!(creatures.snapshot_with_ids()[0].1,creature_kind(id).unwrap().to_u8());}
+            else {let index=resource_index(&recipe.output.id).unwrap();assert_eq!(account.resources[index],before.resources[index]+recipe.output.quantity);}
+        }
+        let mut pool=flat_world();for x in -12..13 {for z in -12..13 {for y in 10..13 {pool.set_block(x,y,z,BlockType::Water);}}}
+        let mut fish_account=rich();let mut fish_creatures=Creatures::new();
+        execute(&reg,&mut fish_account,Action::Craft(formula(&[(Element::Water,2),(Element::Life,1)])),&pool,&mut fish_creatures).unwrap();
+        assert_eq!(fish_creatures.snapshot_with_ids()[0].1,CreatureKind::Fish.to_u8());
+        let mut account=rich();account.resources.fill(10);account.adventure.stage=2;
+        let mut creatures=Creatures::new();
+        execute(&reg,&mut account,Action::CraftGear(crate::equipment::Gear::Axe),&world,&mut creatures).unwrap();
+        assert!(!account.adventure.crafted_tool);
+        execute(&reg,&mut account,Action::CraftGear(crate::equipment::Gear::Sword),&world,&mut creatures).unwrap();
+        assert!(account.adventure.crafted_tool);
     }
     #[test]
     fn exhausted_creature_budget_and_occupied_ground_consume_nothing() {

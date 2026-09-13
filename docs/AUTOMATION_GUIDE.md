@@ -4,6 +4,10 @@ Implemented from [AUTOMATION.md](../AUTOMATION.md). Sixteen devices run on the a
 
 ## Build and operate
 
+The HUD heading compass and the N/E/S/W compass above the configured machine use
+world directions: **N = -Z, E = +X, S = +Z, W = -X**. The overhead compass also
+appears over placement previews. Device rotation changes ports, not world north.
+
 - **B** opens the device palette. Each button lists its resource cost and is enabled when affordable. Select a device, aim at an adjacent empty cell, **R** to rotate, and **left or right click** to place. **B** or **Escape** exits placement and restores the previous tool. Machine mode hides the held item, suppresses tool actions, and grays out and locks the hotbar, including number keys and the wheel.
 - The preview outlines the occupied cell green/red, shows rotated face ports, and marks compatible neighbors green. Mana has one mark, matter two, and signal three, alongside blue/amber/violet colors.
 - Aim at a device and press **F** to inspect/configure it. Choose settings, then **Apply settings**. Reopen F if another player changes the configuration while you're editing; stale drafts cannot overwrite their changes.

@@ -1,13 +1,13 @@
 # Resources and elemental balance
 
-The catalog contains **84 stackable, placeable resources**: **56 obtainable naturally** (six also craftable), and **28 crafting-only**. This adds 61 resources to the original 23. Air, water and bedrock are not counted. Surface blue crystals now stack in inventory; harvesting still sets the legacy crystal rule flag. No equipment, tools, consumable items, stations or animal harvesting were added.
+The catalog contains **84 stackable, placeable resources**: **56 obtainable naturally** (eight also craftable), and **28 crafting-only**. Air, water and bedrock are not counted. Surface blue crystals stack in inventory; harvesting still sets the legacy crystal rule flag. Equipment recipes are documented in [CRAFTING.md](CRAFTING.md).
 
 
 Snow forms solid, opaque patches from Y=32 on mountain slopes and summits, mixed with exposed rock and rare grass. Generated snow is one block deep with stone immediately underneath. It is hand-pickable (one use), placeable from the hotbar, and extracts to Water 1. Snow is natural-only with no crafting recipe; it does not melt or spread. Its original, seamless 64px powder texture is shared by top, side and bottom faces, with no emission or shiny glimmer.
 
 ## Play and progression
 
-Open Resources to search by name/category, filter to owned resources, and select a material for placement. Hover a name for its source and mining hardness. Press **C** and open the searchable **Formula book** to fill the ordered slots. Every resource formula uses **two or three slots**, costing **2 or 4 mana** respectively, and produces one resource. Order matters. Existing creature formulas remain separate and unchanged.
+Open Resources to search by name/category, filter to owned resources, and select a material for placement. Hover a name for its source and mining hardness. Press **C** and open the searchable **Formula book** to fill ordered slots. Resource formulas use **two or three slots**, costing **2 or 4 mana**. Most produce one resource; the new stone/bricks batch formulas produce eight/four. Oak wood and crystal can now be crafted as well as gathered. See [all new formulas](CRAFTING.md#additional-formulas), including eight additional creatures.
 
 The crafting system is elemental transmutation: extract a gathered block into Earth/Fire/Water/Life/Death, explicitly convert spare elements into mana, then craft. Iron ore is a natural block and iron is a crafted material. Ore is a useful elemental source, not an identity-locked ingredient: equivalent elements from other sources also work. Rare geology therefore offers variety and concentrated materials, not a hard progression gate. Specific ore requirements would be a separate change to the crafting rules.
 
@@ -26,7 +26,7 @@ E = Earth, F = Fire, W = Water, L = Life, D = Death. Arrows show slot order; `-`
 | Soil | Earth and stone | Surface terrain | - | - | 2/0/0/0/0 |
 | Stone | Earth and stone | Underground pockets + crafting | E1 -> W1 | 2 | 1/0/0/0/0 |
 | Sand | Earth and stone | Surface terrain | - | - | 2/0/0/0/0 |
-| Oak Wood | Plants | Trees and open grassland | - | - | 1/0/0/2/0 |
+| Oak Wood | Plants | Trees and elemental crafting | E1 -> L2 -> W1 | 4 | 1/0/0/2/0 |
 | Oak Leaves | Plants | Trees and open grassland | - | - | 0/0/1/2/0 |
 | Cobblestone | Earth and stone | Underground pockets + crafting | E1 -> E1 | 2 | 2/0/0/0/0 |
 | Bricks | Earth and stone | Rare buried ruins + crafting | E2 -> F1 | 2 | 2/1/0/0/0 |

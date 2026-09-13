@@ -8,6 +8,8 @@ use egui::{Color32, RichText};
 
 #[derive(Default)]
 pub struct Journal {
+    pub npc: Option<u8>,
+    pub quest_request: Option<crate::quests::Action>,
     pub open: bool,
     pub hide_tracker: bool,
     pub camp: Option<Cell>,
@@ -41,6 +43,8 @@ impl Journal {
             .default_height((ctx.screen_rect().height()-140.).clamp(240.,620.))
             .max_height((ctx.screen_rect().height()-80.).max(200.)).vscroll(true).resizable(false).collapsible(false)
             .anchor(egui::Align2::CENTER_CENTER,[0.,0.]).show(ctx,|ui| {
+                self.quest_rows(ui,account);
+                if self.npc.is_some() {if !self.feedback.is_empty() {ui.label(&self.feedback);}return;}
                 if let Some(camp)=self.camp {
                     ui.heading(format!("{} · Campkeeper",adventure::guide_name(camp)));
                     ui.label("“A fire, a few supplies, and a story worth bringing back. That's all a traveler needs.”");
@@ -71,6 +75,30 @@ impl Journal {
             });
         self.open = open;
         request
+    }
+    fn quest_rows(&mut self,ui:&mut egui::Ui,a:&Account) {
+        ui.heading(format!("Travelers' contracts: {} / 20",a.adventure.quests.completed.count_ones()));
+        ui.label("Objectives track your adventures automatically. Return to the named giver to claim 20 mana per quest. Deliveries consume supplies.");
+        for npc in 0..6u8 {
+            if self.npc.is_some_and(|n|n!=npc) {continue;}
+            egui::CollapsingHeader::new(crate::quests::NAMES[npc as usize]).default_open(self.npc==Some(npc)).show(ui,|ui| {
+                ui.label(crate::quests::GREETINGS[npc as usize]);
+                for (id,q) in crate::quests::QUESTS.iter().enumerate().filter(|(_,q)|q.npc==npc) {
+                    ui.separator();let done=a.adventure.quests.done(id);let n=crate::quests::progress(a,id);
+                    ui.label(RichText::new(format!("{}{}",if done {"Completed: "}else{""},q.title)).strong());
+                    ui.label(q.objective);
+                    if !done {
+                        ui.add(egui::ProgressBar::new(n as f32/q.target as f32).text(format!("{n}/{}",q.target)));
+                        if ui.add_enabled(self.npc==Some(npc) && n>=q.target && self.quest_request.is_none(),egui::Button::new("Complete quest (+20 mana)")).clicked() {
+                            self.quest_request=Some(crate::quests::Action::Claim{npc,quest:id as u8});
+                        }
+                        if id==15 && self.npc==Some(4) && ui.button("Light campfire (3 wood + 2 stone)").clicked() {self.quest_request=Some(crate::quests::Action::LightCampfire);}
+                    }
+                }
+            });
+        }
+        if self.npc.is_none() {ui.small("The six travelers patrol near your first recovery camp. Look at one and press F.");}
+        ui.separator();
     }
     pub fn hud(&self, ctx: &egui::Context, player: &Player, waypoint: Option<glam::Vec3>) {
         let painter = ctx.layer_painter(egui::LayerId::new(
@@ -112,7 +140,7 @@ impl Journal {
             egui::Area::new(egui::Id::new("journal_tracker"))
                 .anchor(
                     egui::Align2::LEFT_TOP,
-                    [12., ctx.screen_rect().height() * 0.30 + 52.],
+                    [12., ctx.screen_rect().height() * 0.30 + 100.],
                 )
                 .interactable(false)
                 .show(ctx, |ui| {
@@ -191,9 +219,9 @@ fn progress_rows(ui: &mut egui::Ui, a: &Account) {
         }
         2 => {
             ui.label(if a.adventure.crafted_tool {
-                "Tool crafted — return to a campkeeper"
+                "Sword crafted — return to a campkeeper"
             } else {
-                "Craft a new axe, pickaxe, or sword [C]"
+                "Craft a new sword [C]"
             });
         }
         _ => {

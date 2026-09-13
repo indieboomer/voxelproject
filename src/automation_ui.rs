@@ -64,7 +64,7 @@ impl Panel {
         }
         let mut open = self.open;
         let mut close = false;
-        egui::Window::new("Mage's workshop").open(&mut open).default_width(410.0).vscroll(true).show(ctx,|ui| {
+        egui::Window::new("Mage's workshop").open(&mut open).default_pos(egui::pos2(16.,56.)).default_width(410.0).vscroll(true).show(ctx,|ui| {
             ui.label(&self.feedback);
             if let Some(p)=self.selected {
                 let Some(d)=state.devices.get(&p)else{ui.label("Device removed. Open B to build.");return;};
@@ -134,7 +134,7 @@ impl Panel {
                 for (id,n) in &d.output {ui.small(format!("Output: {id} ×{n}"));}
                 let mut choices:Vec<String>=(0..5).map(|i|element_id(i).into()).collect();
                 choices.extend(crate::voxel::COLLECTIBLE_BLOCKS.iter().map(|b|format!("resource:{}",b.id())));
-                choices.extend(["item:axe","item:pickaxe","item:sword"].map(str::to_owned));
+                choices.extend(["item:axe","item:pickaxe","item:sword","item:bow"].map(str::to_owned));
                 choices.extend(account.production_goods.keys().cloned());choices.extend(d.items.keys().cloned());choices.extend(d.output.keys().cloned());
                 choices.sort();choices.dedup();
                 egui::ComboBox::from_label("Transfer matter").selected_text(&self.item).show_ui(ui,|ui|{for item in choices {ui.selectable_value(&mut self.item,item.clone(),item);}});

@@ -1,0 +1,57 @@
+{
+  "idle": {
+    "duration": 3.2,
+    "min_y": 0.0005,
+    "loop": true
+  },
+  "walk": {
+    "duration": 1.1,
+    "min_y": 0.0005,
+    "loop": true
+  },
+  "run": {
+    "duration": 0.68,
+    "min_y": -0.0,
+    "loop": true
+  },
+  "attack": {
+    "duration": 0.9,
+    "min_y": 0.0005,
+    "loop": false
+  },
+  "work": {
+    "duration": 1.2,
+    "min_y": 0.0005,
+    "loop": true
+  },
+  "dance": {
+    "duration": 3.2,
+    "min_y": 0.0001,
+    "loop": true
+  },
+  "hello": {
+    "duration": 2.2,
+    "min_y": 0.0005,
+    "loop": false
+  },
+  "die": {
+    "duration": 1.7,
+    "min_y": -0.0004,
+    "loop": false
+  },
+  "angry": {
+    "duration": 2.0,
+    "min_y": 0.0005,
+    "loop": false
+  },
+  "happy": {
+    "duration": 1.8,
+    "min_y": 0.0005,
+    "loop": false
+  },
+  "jump": {
+    "duration": 1.2,
+    "min_y": -0.0006,
+    "loop": false
+  }
+}

@@ -11,11 +11,11 @@ pub enum Gear {
     Axe,
     Pickaxe,
     Sword,
-    /// Reserved for old saves; unavailable in gameplay.
+    /// Mana-strung bow; each shot costs one mana.
     Bow,
 }
 impl Gear {
-    pub const ALL: [Self; 3] = [Self::Axe, Self::Pickaxe, Self::Sword];
+    pub const ALL: [Self; 4] = [Self::Axe, Self::Pickaxe, Self::Sword, Self::Bow];
     pub fn name(self) -> &'static str {
         match self {
             Self::Axe => "Axe",
@@ -50,7 +50,6 @@ impl Entry {
                 .iter()
                 .position(|v| *v == b)
                 .map_or(0, |i| account.resources[i]),
-            Self::Gear(Gear::Bow) => 0,
             Self::Gear(g) => account.gear[g as usize],
         }
     }
@@ -72,7 +71,7 @@ pub struct Hotbar {
 impl Default for Hotbar {
     fn default() -> Self {
         let mut slots = [None; 9];
-        for (i, g) in Gear::ALL.into_iter().enumerate() {
+        for (i, g) in [Gear::Axe,Gear::Pickaxe,Gear::Sword].into_iter().enumerate() {
             slots[i] = Some(Entry::Gear(g));
         }
         Self {
@@ -155,25 +154,7 @@ pub fn can_mine(entry: Option<Entry>, block: BlockType, account: &Account) -> bo
             }
         }
 }
-/// Preserve old save discriminants, but remove retired equipment from all accounts.
-pub fn remove_bow(account: &mut Account) {
-    let mut changed = account.gear[Gear::Bow as usize] != 0;
-    account.gear[Gear::Bow as usize] = 0;
-    for slot in &mut account.hotbar.slots {
-        if *slot == Some(Entry::Gear(Gear::Bow)) {
-            *slot = None;
-            changed = true;
-        }
-    }
-    if changed {
-        account.hotbar.revision += 1;
-        account.revision += 1;
-    }
-}
 pub fn accept_hotbar(account: &mut Account, hotbar: &Hotbar) -> Result<(), String> {
-    if hotbar.slots.contains(&Some(Entry::Gear(Gear::Bow))) {
-        return Err("Bow is currently unavailable".into());
-    }
     if hotbar.active >= 9 {
         return Err("Invalid hotbar slot".into());
     }
@@ -348,7 +329,7 @@ pub(crate) fn block_action_at(world: &World, account: &mut Account, mining: &mut
     }
 }
 
-/// Sword melee is blocked by terrain. Retired bow requests are rejected.
+/// Sword melee and mana-strung bow shots are both blocked by terrain.
 pub fn attack(
     world: &World,
     creatures: &mut crate::creature::Creatures,
@@ -369,6 +350,7 @@ pub(crate) fn attack_at(world: &World, creatures: &mut crate::creature::Creature
     }
     match intent.item {
         Some(Entry::Gear(Gear::Sword)) if account.gear[Gear::Sword as usize] > 0 => (),
+        Some(Entry::Gear(Gear::Bow)) if account.gear[Gear::Bow as usize] > 0 => (),
         _ => return Err("Equip a weapon".into()),
     };
     let dir = Vec3::from_array(intent.direction).normalize_or_zero();
@@ -379,9 +361,11 @@ pub(crate) fn attack_at(world: &World, creatures: &mut crate::creature::Creature
     {
         return Err("Invalid aim".into());
     }
+    let bow=intent.item==Some(Entry::Gear(Gear::Bow));
+    if bow && account.mana==0 {return Err("The bow needs 1 mana per shot".into());}
     if state
         .last_use
-        .is_some_and(|t| now.saturating_duration_since(t).as_millis() < 350)
+        .is_some_and(|t| now.saturating_duration_since(t).as_millis() < if bow {700} else {350})
     {
         return Err("".into());
     }
@@ -389,10 +373,12 @@ pub(crate) fn attack_at(world: &World, creatures: &mut crate::creature::Creature
     state.target = None;
     state.hits = 0;
     let eye = feet + Vec3::Y * 1.62;
-    let reach = 3.2;
+    if bow {account.mana-=1;account.revision=account.revision.saturating_add(1);}
+    let reach = if bow {20.} else {3.2};
     let best = creatures.weapon_target(world, eye, dir, reach);
     if let Some(id) = best {
-        if let Some(death) = creatures.damage(id, 12.0) {
+        if let Some(death) = creatures.damage(id, if bow {9.0} else {12.0}) {
+            crate::quests::kill(account,death.kind);
             creatures.player_kills.push(death);
             creatures.combat_deaths.push(death);
         }
@@ -441,6 +427,7 @@ mod tests {
         }
         assert!(creatures.snapshot_with_ids().is_empty());
         assert_eq!(creatures.player_kills.len(),1);
+        assert_eq!(account.adventure.quests.counts[5],1);
         let mut loot=crate::loot::Effects::default();
         for death in creatures.player_kills.drain(..) { loot.spawn(&world,death.kind,death.pos); }
         assert_eq!(loot.drops.len(),1);
@@ -495,24 +482,37 @@ mod tests {
         }
     }
     #[test]
-    fn old_bow_slots_become_empty_hands_and_bow_requests_are_rejected() {
+    fn owned_bow_survives_save_and_unowned_bow_is_rejected() {
         let mut account = Account::default();
         account.gear[3] = 1;
         account.hotbar.slots[3] = Some(Entry::Gear(Gear::Bow));
         account.hotbar.active = 3;
-        remove_bow(&mut account);
-        assert_eq!(account.hotbar.entry(), None);
-        assert_eq!(account.gear[3], 0);
-        let migrated = account.clone();
-        remove_bow(&mut account);
-        assert_eq!(account, migrated);
         let restored: Account =
             serde_json::from_str(&serde_json::to_string(&account).unwrap()).unwrap();
         assert_eq!(restored, account);
+        assert_eq!(account.hotbar.entry(),Some(Entry::Gear(Gear::Bow)));
+        account.gear[3]=0;
+        account.hotbar.slots[3]=None;
         let mut forged = account.hotbar.clone();
         forged.assign(Some(Entry::Gear(Gear::Bow)));
         assert!(accept_hotbar(&mut account, &forged).is_err());
-        assert!(!Gear::ALL.contains(&Gear::Bow));
+        assert!(Gear::ALL.contains(&Gear::Bow));
+    }
+    #[test]
+    fn bow_shots_obey_mana_cooldown_range_and_walls() {
+        let (mut world,mut a,mut intent,feet)=fixture(BlockType::Air,Some(Entry::Gear(Gear::Bow)));
+        for x in 0..25 {for y in 40..44 {world.set_block(x,y,2,BlockType::Air);}}
+        a.gear[3]=1;a.mana=3;intent.action=Action::Attack;
+        let mut creatures=crate::creature::Creatures::new();
+        creatures.spawn_one(crate::creature::CreatureKind::Wolf,Vec3::new(12.,40.8,2.5),1);
+        let hp=creatures.snapshot_with_ids()[0].3;let now=std::time::Instant::now();let mut state=Mining::default();
+        attack_at(&world,&mut creatures,&mut a,&mut state,feet,&intent,now).unwrap();
+        assert_eq!(a.mana,2);assert_eq!(creatures.snapshot_with_ids()[0].3,hp-9.);
+        assert!(attack_at(&world,&mut creatures,&mut a,&mut state,feet,&intent,now).is_err());assert_eq!(a.mana,2);
+        world.set_block(6,41,2,BlockType::Stone);
+        attack_at(&world,&mut creatures,&mut a,&mut state,feet,&intent,now+std::time::Duration::from_secs(1)).unwrap();
+        assert_eq!(a.mana,1);assert_eq!(creatures.snapshot_with_ids()[0].3,hp-9.);
+        a.mana=0;assert!(attack_at(&world,&mut creatures,&mut a,&mut Mining::default(),feet,&intent,now).is_err());
     }
     #[test]
     fn all_materials_have_semantic_tool_mapping_and_weapons_never_mine() {

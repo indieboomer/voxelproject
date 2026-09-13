@@ -135,6 +135,7 @@ pub struct AnimatedModel {
 /// Creature models and their variants, loaded once at startup and shared by every
 /// spawned creature of that kind (see `App::new`).
 pub struct Models {
+    npcs: [AnimatedModel; 6],
     players: [AnimatedModel; 4],
     hats: [AnimatedModel; 4],
     sheep: AnimatedModel,
@@ -152,8 +153,21 @@ pub struct Models {
 }
 
 impl Models {
+    pub fn push_npc(&self,vertices:&mut Vec<Vertex>,indices:&mut Vec<u32>,npc:&crate::npc::Npc) {
+        if let Some(model)=self.npcs.get(npc.kind as usize) {
+            push_model(vertices,indices,model,CreatureKind::Sheep,if npc.walking {"walk"} else {"idle"},npc.phase,Vec3::from_array(npc.position),npc.facing);
+        }
+    }
     pub fn load() -> Self {
         Self {
+            npcs: load_variants([
+                include_bytes!("../models/npc/sage/sage.glb"),
+                include_bytes!("../models/npc/elf_ranger/elf_ranger.glb"),
+                include_bytes!("../models/npc/warrior/warrior.glb"),
+                include_bytes!("../models/npc/merchant/merchant.glb"),
+                include_bytes!("../models/npc/fire_sorceress/fire_sorceress.glb"),
+                include_bytes!("../models/npc/necromancer/necromancer.glb"),
+            ],29),
             players: [
                 load_glb(include_bytes!("../models/player/player1.glb")),
                 load_glb(include_bytes!("../models/player/player2.glb")),
@@ -217,7 +231,7 @@ impl Models {
     /// (see this module's doc comment). `app.rs`'s `create_atlas_bind_group`
     /// uploads these once at startup into the `tex_layer`-indexed
     /// `creature_texture` array `emit_skinned_mesh`'s vertices sample from.
-    pub fn creature_texture_layers(&self) -> [Option<&image::RgbaImage>; 28] {
+    pub fn creature_texture_layers(&self) -> [Option<&image::RgbaImage>; 34] {
         [
             self.sheep.texture.as_ref(),
             self.chicken.texture.as_ref(),
@@ -247,6 +261,9 @@ impl Models {
             self.dragons[1].texture.as_ref(),
             self.fish[0].texture.as_ref(),
             chest_model().texture.as_ref(),
+            self.npcs[0].texture.as_ref(),self.npcs[1].texture.as_ref(),
+            self.npcs[2].texture.as_ref(),self.npcs[3].texture.as_ref(),
+            self.npcs[4].texture.as_ref(),self.npcs[5].texture.as_ref(),
         ]
     }
 
@@ -1168,6 +1185,23 @@ mod tests {
                     assert!(vertices.iter().all(|v| Vec3::from_array(v.position).is_finite()));
                     assert!(vertices.iter().all(|v| v.tex_layer == model.texture_layer.unwrap()));
                 }
+            }
+        }
+    }
+    #[test]
+    fn all_six_npcs_render_textured_animated_human_sized_models() {
+        let models=Models::load();
+        for (kind,model) in models.npcs.iter().enumerate() {
+            assert!(model.texture.is_some());
+            for clip in ["idle","walk"] {
+                assert!(model.animations.contains_key(clip));
+                let mut vertices=Vec::new();let mut indices=Vec::new();
+                push_model(&mut vertices,&mut indices,model,CreatureKind::Sheep,clip,0.3,Vec3::ZERO,0.);
+                assert!(!indices.is_empty());
+                assert!(vertices.iter().all(|v|v.tex_layer==29.+kind as f32 && Vec3::from_array(v.position).is_finite()));
+                assert!(indices.iter().all(|&i|(i as usize)<vertices.len()));
+                let top=vertices.iter().map(|v|v.position[1]).fold(f32::NEG_INFINITY,f32::max);
+                assert!((1.4..2.8).contains(&top),"NPC {kind} height {top}");
             }
         }
     }

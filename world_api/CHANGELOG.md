@@ -12,7 +12,23 @@ Then update this file by hand with what actually changed and why -- the docs
 regenerate automatically, but "what changed and why" is not mechanically
 derivable from a diff of the schema alone.
 
+## 1.28.0 - Traveler quests and bow
+
+`get_player_journal` now includes a `quests` array with stable IDs 1–20,
+NPC names, titles, objectives, progress, targets and completion, plus
+`quests_completed`. Existing campkeeper fields retain their meaning. Lua cannot
+claim built-in rewards or overwrite quest progress. Inventory capabilities now
+accept `bow`; its recipe costs 1 iron, 4 oak wood and 6 mana (salvage: 2 wood,
+3 mana). NPC patrols are separate from combat creatures and are not returned by
+creature/entity queries. Host-saved patrols and per-player quest progress use
+protocol 32; all multiplayer peers must update together.
+
 ## 1.27.0 - Journal and current equipment
+
+Follow-up: the final campkeeper contract now requires crafting a sword; the
+`crafted_tool` field retains its name and legacy completion credit. C exposes the
+existing sword/axe/pickaxe material recipes. Twelve elemental formulas were added;
+`get_item_recipe('sword')` still reports 2 iron, 1 oak wood and 4 mana.
 
 - Added `get_player_journal(player_id)`: detached saved contract stage/title,
   exploration/crafting flags, recovery count and optional home position.

@@ -3,6 +3,8 @@
 mod playtest_app;
 #[path = "adventure_app.rs"]
 mod adventure_app;
+#[path = "npc_app.rs"]
+mod npc_app;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use crate::transport::{Peer, Transport, JoinTarget};
@@ -657,6 +659,8 @@ pub struct App {
     /// Host-owned mining progress and cooldowns, shared by local and remote interactions.
     interaction_states: HashMap<PlayerId, crate::equipment::Mining>,
     recovery_timers: HashMap<PlayerId, f32>,
+    npcs: Vec<crate::npc::Npc>,
+    npc_timer: f32,
     recovery_arrivals: HashMap<PlayerId, Vec3>,
     use_animation: f32,
     player_animation: crate::player_animation::Animation,
@@ -715,6 +719,7 @@ impl App {
     }
     fn crafting_save(&self) -> crate::save::CraftingSave {
         crate::save::CraftingSave {
+            npcs: self.npcs.clone(),
             player: Some(crate::save::PlayerSave::capture(&self.player)),
             weather: Some(self.weather.clone()),
             loot: Some(self.loot.drops.clone()),
@@ -840,7 +845,7 @@ impl App {
             crate::automation::release(&self.world,&mut self.creatures,account,feet,&players,*cell,item)
         }else{crate::automation::apply(&self.world,&mut state,account,feet,&players,&action,crate::automation::balance(),&self.crafting_registry)};
         let ok=result.is_ok();let feedback=result.err().unwrap_or_else(||"Device updated".into());
-        if ok {self.world.automation=state;self.automation_timer=1.0;}
+        if ok {crate::quests::machine_action(account,&state,&action);self.world.automation=state;self.automation_timer=1.0;}
         if let Some(peer)=from {
             if let NetRole::Host(host)=&mut self.net {
                 host.reliable.send(&host.socket,peer,ReliableMsg::CraftState{account:account.clone(),feedback:None});
@@ -857,6 +862,9 @@ impl App {
         crate::underground::discover(&mut self.world,&mut self.creatures);
         self.automation_clock.advance_with(dt,&mut self.world.automation,crate::automation::balance(),&self.crafting_registry,
             |auras|crate::automation::apply_auras(&mut self.creatures,auras));
+        let mut quest_changed=crate::quests::observe(&mut self.player.crafting,&self.world.automation);
+        for account in self.guest_accounts.values_mut() {quest_changed|=crate::quests::observe(account,&self.world.automation);}
+        if quest_changed {self.sync_guest_mana();}
         let players=self.all_player_positions();
         crate::automation::eject_chests(&mut self.world,&mut self.creatures,&mut self.loot,&players);
         let NetRole::Host(host)=&mut self.net else{return;};
@@ -1315,8 +1323,6 @@ impl App {
         camera.yaw = yaw;
         camera.pitch = pitch;
         let mut player = Player::new(spawn_pos);
-        crate::equipment::remove_bow(&mut crafting_save.host);
-        for account in crafting_save.guests.values_mut(){crate::equipment::remove_bow(account);}
         player.crafting = crafting_save.host;
         if let Some(saved)=crafting_save.player {saved.restore(&mut player);}
 
@@ -1425,6 +1431,8 @@ impl App {
             held_mesh,
             interaction_states: HashMap::new(),
             recovery_timers: HashMap::new(),
+            npcs: crafting_save.npcs.into_iter().filter(|n|n.valid()).take(6).collect(),
+            npc_timer: 0.,
             recovery_arrivals: HashMap::new(),
             use_animation: 0.0,
             player_animation: Default::default(),
@@ -1449,6 +1457,7 @@ impl App {
         app.grab_cursor(true);
         crate::crafting::load_interaction_area(&mut app.world,app.player.position);
         app.initialize_adventure(launch.fresh);
+        app.initialize_npcs();
         app.update_chunks();
         if launch.fresh && matches!(app.net,NetRole::Host(_)) {
             if let Some((x,_,z))=crate::underground::nearby_entrance(&app.world,app.player.position) {
@@ -1513,7 +1522,7 @@ impl App {
                     return;
                 }
                 if code==KeyCode::KeyJ && !key_event.repeat && self.cursor_grabbed {
-                    self.ui.journal.open=true;self.ui.journal.camp=None;self.ui.journal.feedback.clear();
+                    self.ui.journal.open=true;self.ui.journal.camp=None;self.ui.journal.npc=None;self.ui.journal.feedback.clear();
                     self.sync_settings_input();return;
                 }
                 if code == KeyCode::F5 && !key_event.repeat {
@@ -1893,6 +1902,7 @@ impl App {
         let dt = elapsed.min(0.1);
         self.last_frame = now;
         self.update_adventure(dt);
+        self.update_npcs(dt);
         #[cfg(feature = "dev-playtest")]
         self.update_playtest(dt);
         // Wrap well before f32 precision would start eating into a sine's
@@ -1960,7 +1970,7 @@ impl App {
             use crate::equipment::{Entry,Gear,Action,Intent};
             let entry=self.player.crafting.hotbar.entry();
             if self.input.left_clicked || self.input.right_clicked {
-                let action=if self.input.right_clicked {Action::Place} else {match entry {Some(Entry::Resource(_))=>Action::Place,Some(Entry::Gear(Gear::Sword))=>Action::Attack,_=>Action::Mine}};
+                let action=if self.input.right_clicked {Action::Place} else {match entry {Some(Entry::Resource(_))=>Action::Place,Some(Entry::Gear(Gear::Sword|Gear::Bow))=>Action::Attack,_=>Action::Mine}};
                 let intent=Intent{hotbar:self.player.crafting.hotbar.clone(),item:entry,target:raycast(&self.world,self.camera.eye_position(),self.camera.forward(),REACH).map(|h|h.target),direction:self.camera.forward().to_array(),action};
                 if entry.is_none() || entry.is_some_and(|e|e.count(&self.player.crafting)>0) {
                     self.use_animation=0.28;self.audio.play_player_attack();
@@ -1979,12 +1989,15 @@ impl App {
         // `on_interact`. Only reports the event; a rule decides what, if
         // anything, happens.
         if self.cursor_grabbed && self.player.health>0. && self.input.interact_clicked {
-            if let Some(camp)=self.aimed_camp() {
+            if let Some(npc)=self.aimed_npc() {
+                self.ui.journal.npc=Some(npc);self.ui.journal.camp=None;self.ui.journal.open=true;self.ui.journal.feedback.clear();
+                self.sync_settings_input();
+            } else if let Some(camp)=self.aimed_camp() {
                 match &mut self.net {
                     NetRole::Host(_)=>self.pending_interacts.push(InteractEvent{x:camp.0,y:camp.1,z:camp.2,block:BlockType::Campfire,player_id:self.local_player_id}),
                     NetRole::Joined(client)=>{client.reliable.send(&client.socket,client.server_addr,ReliableMsg::Interact{x:camp.0,y:camp.1,z:camp.2});}
                 }
-                self.ui.journal.camp=Some(camp);self.ui.journal.open=true;self.ui.journal.feedback.clear();
+                self.ui.journal.camp=Some(camp);self.ui.journal.npc=None;self.ui.journal.open=true;self.ui.journal.feedback.clear();
                 self.sync_settings_input();
             }
         }
@@ -2208,6 +2221,9 @@ impl App {
                 crate::player_animation::Clip::Idle,self.water_time,None);
             let _=camp;
         }
+        for npc in &self.npcs {
+            if Vec3::from_array(npc.position).distance_squared(self.player.position)<80.*80. {self.models.push_npc(&mut mesh.vertices,&mut mesh.indices,npc);}
+        }
         self.entity_mesh.update(&self.device, &self.queue, &mesh);
         let entry=self.player.crafting.hotbar.entry().filter(|e|!self.ui.automation.tools_suspended() && e.count(&self.player.crafting)>0);
         let forward=self.camera.forward();let right=self.camera.right();let up=right.cross(forward);
@@ -2283,6 +2299,7 @@ impl App {
         if let Some(action)=requests.automation {self.submit_automation(action);}
         if let Some(action)=requests.camp_action {self.submit_camp_action(action);}
         if requests.close_journal {self.sync_settings_input();}
+        if let Some(action)=requests.quest_action {self.submit_quest_action(action);}
         if settings_was_open != self.ui.settings.open { self.sync_settings_input(); }
         if requests.close_inventory {self.ui.inventory_open=false;self.sync_settings_input();}
         if let Some(action) = requests.crafting {
@@ -3249,6 +3266,7 @@ impl App {
                     ReliableMsg::ItemAction(intent)=>self.perform_item_action(Some(from),intent),
                     ReliableMsg::AutomationAction(action)=>self.perform_automation(Some(from),action),
                     ReliableMsg::CampAction(action)=>self.perform_camp_action(Some(from),action),
+                    ReliableMsg::QuestAction(action)=>self.perform_quest_action(Some(from),action),
                     // BlockEdit is host-to-client only. Never accept claimed destruction.
                     ReliableMsg::BlockEdit { .. } => {}
                     ReliableMsg::ChatMessage(text) => {
@@ -3389,6 +3407,7 @@ impl App {
                     ReliableMsg::CampResult(message) => {
                         self.ui.journal.feedback=message.clone();self.toasts.push(Toast::important(message));
                     }
+                    ReliableMsg::Npcs(npcs)=>{self.npcs=npcs.into_iter().filter(|n|n.valid()).take(6).collect();}
                     ReliableMsg::Recovered {pos} => {
                         self.player.position=Vec3::from_array(pos);self.player.velocity=Vec3::ZERO;
                         self.player.health=MAX_HEALTH;self.player.oxygen=MAX_OXYGEN;self.player.poisoned=false;
@@ -3579,6 +3598,22 @@ impl App {
         #[cfg(feature = "dev-playtest")]
         { self.ui.agent_nameplate = None; self.playtest_nameplate(); }
         self.ui.nameplates.clear();
+        self.ui.compass_yaw=self.camera.yaw;
+        self.ui.machine_compass=[None;5];
+        let machine=self.ui.automation.selected.and_then(|cell|self.world.automation.devices.get(&cell))
+            .map(|d|(d.cell,d.kind.height()))
+            .or_else(||self.ui.automation.build.and_then(|(kind,_,_)|raycast(&self.world,self.camera.eye_position(),self.camera.forward(),REACH).map(|hit|(hit.place,kind.height()))));
+        if let Some((cell,height))=machine.filter(|_|self.ui.automation.open || self.ui.automation.build.is_some()) {
+            let center=Vec3::new(cell.0 as f32+0.5,(cell.1+height) as f32+0.3,cell.2 as f32+0.5);
+            let size=self.window.inner_size();let scale=self.window.scale_factor() as f32;
+            let size=egui::vec2(size.width as f32/scale,size.height as f32/scale);
+            self.ui.machine_compass[0]=crate::compass::project(self.camera.view_proj(),center,size);
+            for (i,(_,direction)) in crate::compass::DIRECTIONS.iter().enumerate() {
+                let forward=Vec3::new(self.camera.yaw.cos(),0.,self.camera.yaw.sin());
+                let right=forward.cross(Vec3::Y);
+                self.ui.machine_compass[i+1]=self.ui.machine_compass[0].map(|p|p+egui::vec2(direction.dot(right)*48.,-direction.dot(forward)*34.));
+            }
+        }
         self.ui.chat_bubbles.clear();
         let now = Instant::now();
         self.chat_bubbles.retain(|_,bubble|bubble.opacity(now)>0.0);
@@ -3604,6 +3639,13 @@ impl App {
             if ndc.x.abs()>1. || ndc.y.abs()>1. || !(0. ..=1.).contains(&ndc.z) {continue;}
             let pos=egui::pos2((ndc.x+1.)*0.5*screen.width as f32/scale,(1.-ndc.y)*0.5*screen.height as f32/scale);
             self.ui.nameplates.push((pos,format!("{} · Campkeeper",crate::adventure::guide_name(camp))));
+        }
+        for npc in &self.npcs {
+            let target=Vec3::from_array(npc.position)+Vec3::Y*2.2;let distance=eye.distance(target);
+            if distance>40. || crate::raycast::raycast(&self.world,eye,target-eye,(distance-0.3).max(0.)).is_some() {continue;}
+            if let Some(pos)=crate::compass::project(matrix,target,egui::vec2(screen.width as f32/scale,screen.height as f32/scale)) {
+                self.ui.nameplates.push((pos,format!("{} · Quests [F]",crate::quests::NAMES[npc.kind as usize])));
+            }
         }
         let mut centers = vec![(pcx,pcz)];
         centers.extend(remote_chunks.iter().copied());

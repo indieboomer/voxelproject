@@ -269,6 +269,14 @@ fn render_weather_previews() {
             crate::model::push_model(&mut effect_mesh.vertices,&mut effect_mesh.indices,models.for_kind(kind),kind,"idle",0.0,Vec3::from_array(pos),0.0);
         }
     }
+    if std::env::var_os("VOXEL_NPC_PREVIEW").is_some() {
+        target=Vec3::new(1.5,8.1,-1.5);
+        for kind in 0..6 {
+            let home=(-4+kind as i32*2,7,-2);
+            let npc=crate::npc::Npc{kind,home,position:crate::adventure::feet(home).to_array(),facing:1.2,walking:kind%2==0,phase:0.3,wait:0.,step:0,target:None};
+            models.push_npc(&mut effect_mesh.vertices,&mut effect_mesh.indices,&npc);
+        }
+    }
     let camp_fx = upload_mesh(&device, &effect_mesh);
     let falls: Vec<_> = world
         .chunks
@@ -393,7 +401,9 @@ fn render_weather_previews() {
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let eye = if crystal_preview {
+    let eye = if std::env::var_os("VOXEL_NPC_PREVIEW").is_some() {
+        Vec3::new(1.5,10.,11.)
+    } else if crystal_preview {
         Vec3::new(4.5,8.5,13.5)
     } else if entrance_preview {
         target+Vec3::new(10.0,7.0,-15.0)

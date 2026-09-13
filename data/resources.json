@@ -84,7 +84,7 @@
     "id": "oak_wood",
     "name": "Oak Wood",
     "category": "Plants",
-    "source": "natural",
+    "source": "both",
     "location": "Trees and open grassland",
     "composition": [
       1,
@@ -93,7 +93,7 @@
       2,
       0
     ],
-    "formula": null,
+    "formula": [{"element":"Earth","amount":1},{"element":"Life","amount":2},{"element":"Water","amount":1}],
     "texture": null,
     "harvest_category": "wood",
     "hand_pickable": false
@@ -2271,7 +2271,7 @@
     "id": "crystal",
     "name": "Crystal",
     "category": "Arcane",
-    "source": "natural",
+    "source": "both",
     "location": "Rare blue outcrops on dry land surfaces",
     "composition": [
       1,
@@ -2280,7 +2280,7 @@
       0,
       1
     ],
-    "formula": null,
+    "formula": [{"element":"Earth","amount":1},{"element":"Water","amount":2},{"element":"Death","amount":1}],
     "texture": null,
     "hardness": 1,
     "harvest_category": "stone",

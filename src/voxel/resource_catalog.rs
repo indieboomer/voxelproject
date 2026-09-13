@@ -6,7 +6,7 @@ pub const RESOURCES: &[ResourceInfo] = &[
     ResourceInfo { block: BlockType::Soil, category: "Earth and stone", harvest_category: "soil", hand_pickable: false, source: "natural", location: "Surface terrain" },
     ResourceInfo { block: BlockType::Stone, category: "Earth and stone", harvest_category: "stone", hand_pickable: false, source: "both", location: "Underground pockets" },
     ResourceInfo { block: BlockType::Sand, category: "Earth and stone", harvest_category: "soil", hand_pickable: false, source: "natural", location: "Surface terrain" },
-    ResourceInfo { block: BlockType::OakWood, category: "Plants", harvest_category: "wood", hand_pickable: false, source: "natural", location: "Trees and open grassland" },
+    ResourceInfo { block: BlockType::OakWood, category: "Plants", harvest_category: "wood", hand_pickable: false, source: "both", location: "Trees and open grassland" },
     ResourceInfo { block: BlockType::OakLeaves, category: "Plants", harvest_category: "plant", hand_pickable: false, source: "natural", location: "Trees and open grassland" },
     ResourceInfo { block: BlockType::Cobblestone, category: "Earth and stone", harvest_category: "stone", hand_pickable: false, source: "both", location: "Underground pockets" },
     ResourceInfo { block: BlockType::Bricks, category: "Earth and stone", harvest_category: "stone", hand_pickable: false, source: "both", location: "Rare buried ruins" },
@@ -84,7 +84,7 @@ pub const RESOURCES: &[ResourceInfo] = &[
     ResourceInfo { block: BlockType::Glowcap, category: "Plants", harvest_category: "plant", hand_pickable: true, source: "natural", location: "Shaded ground beneath tree canopies" },
     ResourceInfo { block: BlockType::ThornBush, category: "Plants", harvest_category: "plant", hand_pickable: true, source: "natural", location: "Open grassy meadows" },
     ResourceInfo { block: BlockType::DryShrub, category: "Plants", harvest_category: "plant", hand_pickable: true, source: "natural", location: "Dry upland grassland" },
-    ResourceInfo { block: BlockType::Crystal, category: "Arcane", harvest_category: "stone", hand_pickable: false, source: "natural", location: "Rare blue outcrops on dry land surfaces" },
+    ResourceInfo { block: BlockType::Crystal, category: "Arcane", harvest_category: "stone", hand_pickable: false, source: "both", location: "Rare blue outcrops on dry land surfaces" },
     ResourceInfo { block: BlockType::Snow, category: "Water and ice", harvest_category: "soil", hand_pickable: true, source: "natural", location: "Patchy mountain snow from Y 32 upward, more common near summits" },
 ];
 pub fn info(block: BlockType) -> &'static ResourceInfo { RESOURCES.iter().find(|r| r.block == block).expect("collectible resource metadata") }

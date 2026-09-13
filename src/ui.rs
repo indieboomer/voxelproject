@@ -67,6 +67,7 @@ pub struct ChatEntry {
 #[derive(Default)]
 pub struct UiRequests {
     pub camp_action: Option<crate::adventure::Action>,
+    pub quest_action: Option<crate::quests::Action>,
     pub close_journal: bool,
     pub automation: Option<crate::automation::Action>,
     pub close_inventory: bool,
@@ -87,6 +88,8 @@ pub struct UiRequests {
 }
 
 pub struct Ui {
+    pub compass_yaw:f32,
+    pub machine_compass:[Option<egui::Pos2>;5],
     pub journal: crate::adventure_ui::Journal,
     pub automation: crate::automation_ui::Panel,
     pickup_rows: Vec<(crate::voxel::BlockType,u32)>,
@@ -138,6 +141,7 @@ impl Ui {
             automation: Default::default(),
             pickup_started:Instant::now(),
             nameplates:Vec::new(),
+            compass_yaw:0.,machine_compass:[None;5],
             #[cfg(feature = "dev-playtest")]
             agent_nameplate: None,
             #[cfg(feature = "dev-playtest")]
@@ -235,6 +239,10 @@ impl Ui {
                 ctx.request_repaint();
             }
             let painter=ctx.layer_painter(egui::LayerId::new(egui::Order::Background,egui::Id::new("player_names")));
+            if !self.settings.open && !self.map.open && !self.journal.open && !console_open && !quit_dialog_open {
+                crate::compass::hud(ctx,self.compass_yaw);
+                if self.automation.open || self.automation.build.is_some() {crate::compass::machine(ctx,&self.machine_compass);}
+            }
             #[cfg(feature = "dev-playtest")]
             if let Some((pos,label))=self.agent_home_marker {
                 painter.circle_stroke(pos,7.0,egui::Stroke::new(2.0_f32,egui::Color32::LIGHT_BLUE));
@@ -269,6 +277,7 @@ impl Ui {
             }
             if self.journal.open {
                 requests.camp_action=self.journal.draw(ctx,player);
+                requests.quest_action=self.journal.quest_request.take();
                 requests.close_journal=!self.journal.open;
                 return;
             }
@@ -287,7 +296,7 @@ impl Ui {
                 .max_width(ctx.screen_rect().width() * 0.46)
                 .max_height(ctx.screen_rect().height() * 0.30)
                 .vscroll(true)
-                .anchor(egui::Align2::LEFT_TOP, [8.0, 8.0])
+                .anchor(egui::Align2::LEFT_TOP, [8.0, 56.0])
                 .resizable(false)
                 .collapsible(true)
                 .show(ctx, |ui| {
@@ -597,7 +606,7 @@ impl Ui {
 pub(crate) fn status_hud(ctx:&egui::Context,player:&Player,fps:f32) {
             let hints = egui::Window::new("fps")
                 .title_bar(false)
-                .anchor(egui::Align2::RIGHT_TOP, [-8.0, 8.0])
+                .anchor(egui::Align2::RIGHT_TOP, [-8.0, 56.0])
                 .resizable(false)
                 .collapsible(false)
                 .interactable(false)

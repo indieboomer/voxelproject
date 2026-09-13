@@ -357,6 +357,9 @@ pub struct Batch {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Device {
+    /// Completed metal ingots, Death dissipation, and bound sheep production.
+    #[serde(default)]
+    pub quest_production: [u64; 3],
     #[serde(default)]
     pub powered_ticks: u32,
     #[serde(default)]
@@ -392,6 +395,7 @@ impl Device {
             config.outputs = vec![Face::East, Face::North, Face::South];
         }
         Self {
+            quest_production: [0; 3],
             powered_ticks: 0,
             feedback_events: [0; 3],
             fuel_heat: 0,
@@ -527,7 +531,7 @@ pub fn valid_item(id: &str) -> bool {
         return BlockType::from_name(name).is_some_and(|b| COLLECTIBLE_BLOCKS.contains(&b));
     }
     if let Some(name) = id.strip_prefix("item:") {
-        return matches!(name, "sword" | "axe" | "pickaxe");
+        return matches!(name, "sword" | "axe" | "pickaxe" | "bow");
     }
     id.strip_prefix("creature:")
         .is_some_and(|name| crate::crafting::creature_kind(name).is_some())
@@ -899,6 +903,7 @@ fn account_slot<'a>(account: &'a mut Account, id: &str) -> Result<&'a mut u32, S
             "sword" => 2,
             "axe" => 0,
             "pickaxe" => 1,
+            "bow" => 3,
             _ => return Err("Unknown item".into()),
         };
         return Ok(&mut account.gear[i]);

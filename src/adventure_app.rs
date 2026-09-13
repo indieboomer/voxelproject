@@ -286,6 +286,9 @@ impl App {
         if !self.cursor_grabbed || self.player.health <= 0. {
             return;
         }
+        if let Some(npc)=self.aimed_npc() {
+            self.ui.journal.hint=Some(format!("F · Talk to {}",crate::quests::NAMES[npc as usize]));return;
+        }
         if let Some(camp) = self.aimed_camp() {
             self.ui.journal.hint = Some(format!(
                 "F · Talk to {} / rest at camp",
@@ -306,7 +309,8 @@ impl App {
                 .total_cmp(&Vec3::from_array(b.0).distance_squared(eye))
         });
         // Health and poses come from the same authoritative snapshot on clients.
-        for c in creatures {
+        for mut c in creatures {
+            c.1 &= 0x0f; // Render snapshots pack undead appearance in the high nibble.
             let p = Vec3::from_array(c.0) + Vec3::Y * 0.7;
             let distance = eye.distance(p);
             if distance > 8.

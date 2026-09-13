@@ -188,8 +188,8 @@ def main():
     assert len(ids) == len(set(ids)) == 84
     crafting_path = ROOT / 'data/crafting.json'
     crafting = json.loads(crafting_path.read_text())
-    # Preserve creature rules; the catalog owns all stackable resource definitions.
-    recipes = [r for r in crafting['recipes'] if r['output']['kind'] == 'creature']
+    # Preserve creature and batch variants; the catalog owns single-resource formulas.
+    recipes = [r for r in crafting['recipes'] if r['output']['kind'] == 'creature' or r['output']['quantity'] > 1]
     compositions = [c for c in crafting['compositions'] if c['kind'] == 'creature' or c['id'] not in ids]
     formulas = {tuple((s['element'],s['amount']) for s in r['inputs']) for r in recipes}
     csv_path = ROOT / 'textures/blocks.csv'

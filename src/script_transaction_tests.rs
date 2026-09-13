@@ -25,6 +25,10 @@ fn journal_and_equipment_queries_preserve_progress_across_staged_inventory_chang
         for _,id in ipairs({0,7}) do
             local journal=api.get_player_journal(id)
             assert(journal.stage==2 and journal.explored_depths and journal.recoveries==3)
+            assert(#journal.quests==20 and journal.quests_completed==0)
+            assert(journal.quests[20].npc=='Necromancer' and journal.quests[20].target==1)
+            journal.quests[1].completed=true
+            assert(not api.get_player_journal(id).quests[1].completed)
             assert(journal.home.x==4 and journal.home.y==30 and journal.home.z==8)
             journal.stage=3; journal.home.x=900
             assert(api.get_player_journal(id).stage==2 and api.get_player_journal(id).home.x==4)
@@ -69,7 +73,7 @@ fn inventory_economy_reads_staged_balances_for_host_and_guest_and_rolls_back() {
             assert(not api.take_mana(id,100)); assert(not api.craft_item(id,'pickaxe'))
             assert(api.get_mana(id)==90)
         end
-        assert(api.get_mana(99)==nil and api.get_item_count(7,'bow')==nil)
+        assert(api.get_mana(99)==nil and api.get_item_count(7,'bow')==0)
         assert(not api.give_element(7,'light',1) and not api.give_mana(7,0))
     "#;
     let mut m=module("on_cast",body);

@@ -2,6 +2,9 @@
 mod playtest;
 mod app;
 mod adventure;
+mod quests;
+mod npc;
+mod compass;
 mod adventure_ui;
 mod map_ui;
 mod audio;
