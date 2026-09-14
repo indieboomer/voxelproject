@@ -86,5 +86,7 @@ pub const RESOURCES: &[ResourceInfo] = &[
     ResourceInfo { block: BlockType::DryShrub, category: "Plants", harvest_category: "plant", hand_pickable: true, source: "natural", location: "Dry upland grassland" },
     ResourceInfo { block: BlockType::Crystal, category: "Arcane", harvest_category: "stone", hand_pickable: false, source: "both", location: "Rare blue outcrops on dry land surfaces" },
     ResourceInfo { block: BlockType::Snow, category: "Water and ice", harvest_category: "soil", hand_pickable: true, source: "natural", location: "Patchy mountain snow from Y 32 upward, more common near summits" },
+    ResourceInfo { block: BlockType::Meat, category: "Food", harvest_category: "plant", hand_pickable: true, source: "loot", location: "Chicken and fish: 1; sheep: 2; cow: 4. Eat for 8 health or cook at a campfire." },
+    ResourceInfo { block: BlockType::CookedMeat, category: "Food", harvest_category: "plant", hand_pickable: true, source: "cooked", location: "Cook raw meat at a campfire. Eat in inventory for 25 health." },
 ];
 pub fn info(block: BlockType) -> &'static ResourceInfo { RESOURCES.iter().find(|r| r.block == block).expect("collectible resource metadata") }

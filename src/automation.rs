@@ -531,7 +531,7 @@ pub fn valid_item(id: &str) -> bool {
         return BlockType::from_name(name).is_some_and(|b| COLLECTIBLE_BLOCKS.contains(&b));
     }
     if let Some(name) = id.strip_prefix("item:") {
-        return matches!(name, "sword" | "axe" | "pickaxe" | "bow");
+        return crate::equipment::Gear::ALL.iter().any(|g|g.id()==name);
     }
     id.strip_prefix("creature:")
         .is_some_and(|name| crate::crafting::creature_kind(name).is_some())
@@ -899,13 +899,7 @@ fn account_slot<'a>(account: &'a mut Account, id: &str) -> Result<&'a mut u32, S
         return Ok(&mut account.resources[i]);
     }
     if let Some(name) = id.strip_prefix("item:") {
-        let i = match name {
-            "sword" => 2,
-            "axe" => 0,
-            "pickaxe" => 1,
-            "bow" => 3,
-            _ => return Err("Unknown item".into()),
-        };
+        let i=crate::equipment::Gear::ALL.iter().find(|g|g.id()==name).ok_or("Unknown item")?.to_owned() as usize;
         return Ok(&mut account.gear[i]);
     }
     if valid_item(id) {

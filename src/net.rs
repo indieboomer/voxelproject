@@ -9,7 +9,7 @@ use crate::voxel::block::BlockType;
 pub type PlayerId = u32;
 pub type WorldEdit = ((i32, i32, i32), BlockType);
 pub const MAX_PLAYERS: usize = 4;
-pub const PROTOCOL_VERSION: u32 = 32;
+pub const PROTOCOL_VERSION: u32 = 36;
 pub const HOST_PLAYER_ID: PlayerId = 0;
 pub const DEFAULT_PORT: u16 = 7878;
 pub const RELIABLE_RESEND_INTERVAL: Duration = Duration::from_millis(200);
@@ -138,6 +138,10 @@ pub enum ReliableMsg {
     Recovered {pos:[f32;3]},
     QuestAction(crate::quests::Action),
     Npcs(Vec<crate::npc::Npc>),
+    ReadRecipeBook((i32,i32,u8)),
+    RecipeBookResult(Result<u8,String>),
+    EatFood{block:BlockType,revision:u64},
+    FoodResult(String),
 }
 
 /// One player's position/status as carried in a `Snapshot` -- see

@@ -286,6 +286,9 @@ impl App {
         if !self.cursor_grabbed || self.player.health <= 0. {
             return;
         }
+        if let Some(book)=self.aimed_book() {
+            self.ui.journal.hint=Some(format!("F - Read {} (4 recipes)",crate::gear_catalog::BOOK_NAMES[book.kind as usize]));return;
+        }
         if let Some(npc)=self.aimed_npc() {
             self.ui.journal.hint=Some(format!("F · Talk to {}",crate::quests::NAMES[npc as usize]));return;
         }

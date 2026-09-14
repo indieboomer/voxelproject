@@ -1778,6 +1778,8 @@
         0,
         0
       ]
-    }
+    },
+    {"kind":"resource","id":"meat","elements":[0,0,1,2,0]},
+    {"kind":"resource","id":"cooked_meat","elements":[0,0,1,2,0]}
   ]
 }

@@ -110,6 +110,9 @@ pub enum BlockType {
     Campfire,
     /// Occupancy only; its folk-workshop mesh is rendered by automation_mesh.
     AutomationDevice,
+    /// Food stacks, appended after existing save/network IDs.
+    Meat,
+    CookedMeat,
 }
 
 /// Per-block static properties, transcribed 1:1 from `textures/blocks.csv`
@@ -161,7 +164,7 @@ pub struct BlockDef {
 /// Block types the player can gather (by breaking) and place again, shown
 /// in the Resources inventory panel and assignable to the nine-slot hotbar.
 /// Air, Water, and Bedrock cannot be gathered. Keep slots append-only for saves.
-pub const COLLECTIBLE_BLOCKS: [BlockType; 84] = [
+pub const COLLECTIBLE_BLOCKS: [BlockType; 86] = [
     BlockType::Grass,
     BlockType::Soil,
     BlockType::Stone,
@@ -246,6 +249,8 @@ pub const COLLECTIBLE_BLOCKS: [BlockType; 84] = [
     BlockType::DryShrub,
     BlockType::Crystal,
     BlockType::Snow,
+    BlockType::Meat,
+    BlockType::CookedMeat,
 ];
 
 impl BlockType {
@@ -340,7 +345,7 @@ impl BlockType {
             | Ruby | Sapphire | Glass | Charcoal | Ash | Lime | Mortar | Ceramic | Planks
             | WoodPulp | PlantFiber | Cloth | Resin | CrystalDust | EnchantedGlass | MoonSilver
             | Runestone | Fern | Clover | Lavender | RedPoppy | Bluebell | Cattail
-            | BrownMushroom | Glowcap | ThornBush | DryShrub | Snow => {
+            | BrownMushroom | Glowcap | ThornBush | DryShrub | Snow | Meat | CookedMeat => {
                 unreachable!("block_defs::csv_def should have handled every CSV block")
             }
         }

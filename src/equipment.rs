@@ -13,21 +13,34 @@ pub enum Gear {
     Sword,
     /// Mana-strung bow; each shot costs one mana.
     Bow,
+    ForesterAxe, ProspectorPick, Spade, Sickle,
+    Spear, Dagger, Warhammer, Longbow,
+    EmberWand, TideWand, LifeStaff, SurveyLantern,
+    TrailCharm, LeapingCharm, DivingCharm, FeatherCharm,
 }
 impl Gear {
-    pub const ALL: [Self; 4] = [Self::Axe, Self::Pickaxe, Self::Sword, Self::Bow];
+    pub const ALL: [Self; 20] = [Self::Axe, Self::Pickaxe, Self::Sword, Self::Bow,
+        Self::ForesterAxe, Self::ProspectorPick, Self::Spade, Self::Sickle,
+        Self::Spear, Self::Dagger, Self::Warhammer, Self::Longbow,
+        Self::EmberWand, Self::TideWand, Self::LifeStaff, Self::SurveyLantern,
+        Self::TrailCharm, Self::LeapingCharm, Self::DivingCharm, Self::FeatherCharm];
     pub fn name(self) -> &'static str {
         match self {
             Self::Axe => "Axe",
             Self::Pickaxe => "Pickaxe",
             Self::Sword => "Sword",
             Self::Bow => "Bow",
+            _ => self.definition().name,
         }
     }
     pub fn categories(self) -> &'static [Category] {
         match self {
             Self::Axe => &[Category::Wood, Category::Plant],
             Self::Pickaxe => &[Category::Stone, Category::Ore, Category::Soil],
+            Self::ForesterAxe => &[Category::Wood, Category::Plant],
+            Self::ProspectorPick => &[Category::Stone, Category::Ore],
+            Self::Spade => &[Category::Soil],
+            Self::Sickle => &[Category::Plant],
             _ => &[],
         }
     }
@@ -284,7 +297,7 @@ pub(crate) fn block_action_at(world: &World, account: &mut Account, mining: &mut
                 mining.target = Some(key);
                 mining.hits = 0;
             }
-            mining.hits += 1;
+            mining.hits = mining.hits.saturating_add(match entry {Some(Entry::Gear(g))=>g.harvest_power(),_=>1});
             mining.last_use = Some(now);
             if mining.hits < if entry.is_none() { 1 } else { old.hardness() } {
                 return Ok(None);
@@ -300,6 +313,7 @@ pub(crate) fn block_action_at(world: &World, account: &mut Account, mining: &mut
             let block = entry
                 .and_then(Entry::resource)
                 .ok_or("Select a resource to build")?;
+            if crate::food::inventory_only(block) {return Err("Eat this food in inventory [I]; raw meat can be cooked at a campfire".into());}
             let p = hit.place;
             if (p.0 - hit.target.0).abs() + (p.1 - hit.target.1).abs() + (p.2 - hit.target.2).abs()
                 != 1
@@ -348,11 +362,8 @@ pub(crate) fn attack_at(world: &World, creatures: &mut crate::creature::Creature
     if intent.item != account.hotbar.entry() {
         return Err("Active item mismatch".into());
     }
-    match intent.item {
-        Some(Entry::Gear(Gear::Sword)) if account.gear[Gear::Sword as usize] > 0 => (),
-        Some(Entry::Gear(Gear::Bow)) if account.gear[Gear::Bow as usize] > 0 => (),
-        _ => return Err("Equip a weapon".into()),
-    };
+    let Some(Entry::Gear(gear))=intent.item else {return Err("Equip a weapon".into());};
+    let (reach,damage,cooldown,mana)=gear.weapon().filter(|_|account.gear[gear as usize]>0).ok_or("Equip a weapon")?;
     let dir = Vec3::from_array(intent.direction).normalize_or_zero();
     if !feet.is_finite()
         || feet.abs().max_element() > 1_000_000.0
@@ -361,11 +372,10 @@ pub(crate) fn attack_at(world: &World, creatures: &mut crate::creature::Creature
     {
         return Err("Invalid aim".into());
     }
-    let bow=intent.item==Some(Entry::Gear(Gear::Bow));
-    if bow && account.mana==0 {return Err("The bow needs 1 mana per shot".into());}
+    if account.mana<mana {return Err(format!("{} needs {mana} mana per use",gear.name()));}
     if state
         .last_use
-        .is_some_and(|t| now.saturating_duration_since(t).as_millis() < if bow {700} else {350})
+        .is_some_and(|t| now.saturating_duration_since(t).as_millis() < cooldown as u128)
     {
         return Err("".into());
     }
@@ -373,11 +383,11 @@ pub(crate) fn attack_at(world: &World, creatures: &mut crate::creature::Creature
     state.target = None;
     state.hits = 0;
     let eye = feet + Vec3::Y * 1.62;
-    if bow {account.mana-=1;account.revision=account.revision.saturating_add(1);}
-    let reach = if bow {20.} else {3.2};
+    if mana>0 {account.mana-=mana;account.revision=account.revision.saturating_add(1);}
+    if gear==Gear::LifeStaff {return Ok(());}
     let best = creatures.weapon_target(world, eye, dir, reach);
     if let Some(id) = best {
-        if let Some(death) = creatures.damage(id, if bow {9.0} else {12.0}) {
+        if let Some(death) = creatures.damage(id, damage) {
             crate::quests::kill(account,death.kind);
             creatures.player_kills.push(death);
             creatures.combat_deaths.push(death);
@@ -497,6 +507,34 @@ mod tests {
         forged.assign(Some(Entry::Gear(Gear::Bow)));
         assert!(accept_hotbar(&mut account, &forged).is_err());
         assert!(Gear::ALL.contains(&Gear::Bow));
+    }
+    #[test]
+    fn specialist_weapons_use_authoritative_damage_mana_and_cooldowns() {
+        for gear in [Gear::Spear,Gear::Dagger,Gear::Warhammer,Gear::Longbow,Gear::EmberWand,Gear::TideWand,Gear::LifeStaff] {
+            let (world,mut a,mut intent,feet)=fixture(BlockType::Air,Some(Entry::Gear(gear)));
+            a.gear[gear as usize]=1;a.mana=20;intent.action=Action::Attack;
+            let mut creatures=crate::creature::Creatures::new();
+            creatures.spawn_one(crate::creature::CreatureKind::StoneGolem,feet+Vec3::new(1.5,0.8,0.),1);
+            let hp=creatures.snapshot_with_ids()[0].3;let now=std::time::Instant::now();let mut state=Mining::default();
+            attack_at(&world,&mut creatures,&mut a,&mut state,feet,&intent,now).unwrap();
+            let (_,damage,_,mana)=gear.weapon().unwrap();
+            assert_eq!(a.mana,20-mana);assert_eq!(creatures.snapshot_with_ids()[0].3,hp-damage);
+            let before=a.clone();
+            assert!(attack_at(&world,&mut creatures,&mut a,&mut state,feet,&intent,now).is_err());assert_eq!(a,before);
+        }
+    }
+    #[test]
+    fn specialist_harvesting_is_faster_without_duplicate_rewards() {
+        for (gear,block) in [(Gear::ForesterAxe,BlockType::OakWood),(Gear::ProspectorPick,BlockType::Stone),(Gear::Spade,BlockType::Soil),(Gear::Sickle,BlockType::CherryLeaves)] {
+            let (world,mut a,intent,feet)=fixture(block,Some(Entry::Gear(gear)));a.gear[gear as usize]=1;
+            let before=Entry::Resource(block).count(&a);let now=std::time::Instant::now();let mut state=Mining::default();
+            let strikes=block.hardness().div_ceil(gear.harvest_power());
+            for n in 0..strikes {
+                let edit=block_action_at(&world,&mut a,&mut state,feet,&[],&intent,now+std::time::Duration::from_millis(n as u64*200)).unwrap();
+                assert_eq!(edit.is_some(),n+1==strikes);
+            }
+            assert_eq!(Entry::Resource(block).count(&a),before+1);
+        }
     }
     #[test]
     fn bow_shots_obey_mana_cooldown_range_and_walls() {

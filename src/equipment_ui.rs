@@ -9,16 +9,15 @@ pub fn icon(ui: &mut egui::Ui, entry: Entry) {
     let Entry::Gear(g) = entry else {
         return;
     };
-    let wood = egui::Color32::from_rgb(146, 99, 52);
     let metal = egui::Color32::from_rgb(199, 218, 222);
     for (min, max, c) in crate::held_item::parts(Some(Entry::Gear(g))) {
-        let color = if c[0] < 0.6 { wood } else { metal };
+        let color = egui::Color32::from_rgb((c[0]*255.) as u8,(c[1]*255.) as u8,(c[2]*255.) as u8);
         let a = r.min + egui::vec2((min.x + 0.5) * 24.0, (1.0 - max.y) * 24.0);
         let b = r.min + egui::vec2((max.x + 0.5) * 24.0, (1.0 - min.y) * 24.0);
         ui.painter()
             .rect_filled(egui::Rect::from_min_max(a, b), 0.0, color);
     }
-    if g == Gear::Bow {
+    if matches!(g,Gear::Bow|Gear::Longbow) {
         ui.painter().line_segment(
             [
                 r.left_top() + egui::vec2(7.0, 2.0),

@@ -1,11 +1,11 @@
 {
   "version": 1,
   "generators": {
-    "tools/build_resources.py": "2a9a26e794591e3cbbd2ba219bd660c50b4451458b4a750439ad7324de8ab539",
+    "tools/build_resources.py": "82a9db5f08fd669bf440f4c52164bbe0962a1f99cfcad99422fa64ed6d7010e0",
     "tools/build_base_textures.py": "c7b4190779d3df7fa5828a7487124bcf311d73e8587249edce2af7e84e9782f9",
     "tools/build_atlas.py": "13d7c1d012cea778e090f5e035709582d1e627c8110cac56ef9bf1e5372119d4",
     "tools/audit_resource_textures.py": "be3be6eedbf9b4e463804fbcb454f22ab2443f895511f5b836ce852313098814",
-    "data/resources.json": "b4ce6d50db349e881dcda1054e91eabeb219fad94fcd2d54e419c6621a2d9c79",
+    "data/resources.json": "6d96aee8774472a1f4f034553853beadfdfdcad718781b23cd4bfb0a2527e9f2",
     "data/base_textures.json": "96986e670461497606204f98c8e109b4c5f169409feb8c29e1fca11769277cb4"
   },
   "files": {
@@ -103,6 +103,10 @@
     },
     "textures/cobblestone.png": {
       "sha256": "458109d24f10ff8f0d732eb16824c32d56a08ec050804cfe190c16e6789ccb1b",
+      "origin": "local_procedural_generation"
+    },
+    "textures/cooked_meat.png": {
+      "sha256": "91458081a5d2ef5b2d38948b396c95d5ffd9aaa21a391c0d6c9f3174c5a8ae7a",
       "origin": "local_procedural_generation"
     },
     "textures/copper.png": {
@@ -203,6 +207,10 @@
     },
     "textures/marble.png": {
       "sha256": "29884190daa29c5ac2191a8348b7b2cef8d867ab26f3360059a9dddb552095fe",
+      "origin": "local_procedural_generation"
+    },
+    "textures/meat.png": {
+      "sha256": "a8947f3b21635fe43a6397d6abbe1ba63f6c1117045098a8ac12d919bfc34754",
       "origin": "local_procedural_generation"
     },
     "textures/mithril.png": {

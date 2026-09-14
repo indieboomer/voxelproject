@@ -15,6 +15,7 @@ pub fn gear_formula(gear: crate::equipment::Gear, salvage: bool) -> Result<(u32,
         (Axe,false)=>Ok((3,2,4)), (Axe,true)=>Ok((2,1,2)),
         (Pickaxe,false)=>Ok((3,2,6)), (Pickaxe,true)=>Ok((2,1,3)),
         (Bow,false)=>Ok((1,4,6)), (Bow,true)=>Ok((0,2,3)),
+        (g,salvage)=>{let d=g.definition();Ok(if salvage {(d.iron/2,d.wood/2,(d.mana/2).max(1))}else{(d.iron,d.wood,d.mana)})},
     }
 }
 
@@ -88,7 +89,8 @@ pub struct Account {
     pub adventure: crate::adventure::Progress,
     pub packed_devices: Vec<crate::automation::Device>,
     pub production_goods: std::collections::BTreeMap<String,u32>,
-    pub gear: [u32;4],
+    #[serde(with="crate::gear_catalog::counts")]
+    pub gear: [u32;20],
     pub hotbar: crate::equipment::Hotbar,
     pub elements: Composition,
     pub mana: u32,
@@ -100,7 +102,7 @@ impl Default for Account {
     fn default() -> Self {
         Self {
             adventure: Default::default(),
-            gear: [1,1,1,0],
+            gear: crate::gear_catalog::starter_counts(),
             packed_devices: Vec::new(),
             production_goods: Default::default(),
             hotbar: crate::equipment::Hotbar::default(),
@@ -427,12 +429,14 @@ impl Registry {
             }
             Action::CraftGear(gear) | Action::SalvageGear(gear) => {
                 let salvage = matches!(action,Action::SalvageGear(_));
-                let (iron,wood,mana) = gear_formula(*gear,salvage)?;
+                if !salvage && !gear.known(account) {return Err(format!("Discover {} to learn this recipe",crate::gear_catalog::BOOK_NAMES[gear.book().unwrap() as usize]));}
+                let (_,_,mana) = gear_formula(*gear,salvage)?;
                 account.mana = account.mana.checked_sub(self.mana_charge(mana)).ok_or("Insufficient mana")?;
                 let count = &mut account.gear[*gear as usize];
                 *count = if salvage {count.checked_sub(1).ok_or("Item not owned")?}
                     else {count.checked_add(1).ok_or("Item inventory full")?};
-                for (id,amount) in [("iron",iron),("oak_wood",wood)] {
+                for (block,amount) in gear.ingredients(salvage) {
+                    let id=block.id();
                     let count = &mut account.resources[resource_index(id).ok_or("Unknown material")?];
                     *count = if salvage {count.checked_add(amount).ok_or("Inventory full")?}
                         else {count.checked_sub(amount).ok_or_else(||format!("Requires {amount} {id}"))?};
@@ -964,6 +968,8 @@ mod tests {
         let mut creatures = Creatures::new();
         for gear in crate::equipment::Gear::ALL {
             let mut a = rich();
+            a.adventure.recipe_books=15;
+            a.resources.fill(20);
             let iron = resource_index("iron").unwrap();
             let wood = resource_index("oak_wood").unwrap();
             a.resources[iron]=10;a.resources[wood]=10;
@@ -1119,7 +1125,7 @@ mod resource_balance_tests {
     #[test]
     fn all_resource_formulas_execute_without_recycling_profit() {
         let registry = Registry::parse(include_str!("../data/crafting.json")).unwrap();
-        assert_eq!(COLLECTIBLE_BLOCKS.len(), 84);
+        assert_eq!(COLLECTIBLE_BLOCKS.len(), 86);
         let world = World::new(5);
         let mut creatures = Creatures::new();
         for (index, block) in COLLECTIBLE_BLOCKS.iter().enumerate() {
@@ -1137,7 +1143,7 @@ mod resource_balance_tests {
             let recipe = registry.recipes.iter().find(|r| r.output.id == block.id());
             assert_eq!(
                 recipe.is_some(),
-                info.source != "natural",
+                matches!(info.source, "crafted" | "both"),
                 "{} source mismatch",
                 block.id()
             );

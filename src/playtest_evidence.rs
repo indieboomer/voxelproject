@@ -1,6 +1,6 @@
 //! Technical checks run outside the decision provider, at transaction boundaries.
 use super::{Action, Effects};
-use crate::{crafting, voxel::{BlockType, COLLECTIBLE_BLOCKS}};
+use crate::{crafting, equipment, voxel::{BlockType, COLLECTIBLE_BLOCKS}};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,10 +89,16 @@ pub fn transaction(tick: u64, action: &Action, before: &crafting::Account,
     let mut expected = vec![0i64; initial.len()];
     let element = COLLECTIBLE_BLOCKS.len();
     let gear = element + 5;
-    let mana = gear + 4;
+    let mana = gear + crate::equipment::Gear::ALL.len();
     let checked = match action {
         Action::Wait | Action::Move { .. } | Action::Look { .. } |
-        Action::Equip { .. } | Action::Interact { .. } | Action::Attack => true,
+        Action::Equip { .. } | Action::Interact { .. } => true,
+        Action::Attack => {
+            if let Some(equipment::Entry::Gear(g))=before.hotbar.entry() {
+                if let Some((_,_,_,cost))=g.weapon() {expected[mana]-=i64::from(cost);}
+            }
+            true
+        }
         Action::Mine { .. } => {
             for (_, new, old) in &effects.edits {
                 if *new != BlockType::Air { continue; }
@@ -140,10 +146,9 @@ pub fn transaction(tick: u64, action: &Action, before: &crafting::Account,
                 }
                 crafting::Action::CraftGear(g) | crafting::Action::SalvageGear(g) => {
                     let salvage = matches!(recipe, crafting::Action::SalvageGear(_));
-                    let Ok((iron, wood, cost)) = crafting::gear_formula(*g, salvage) else { return findings; };
+                    let Ok((_, _, cost)) = crafting::gear_formula(*g, salvage) else { return findings; };
                     let sign = if salvage { 1 } else { -1 };
-                    resource(&mut expected, BlockType::Iron, sign * i64::from(iron));
-                    resource(&mut expected, BlockType::OakWood, sign * i64::from(wood));
+                    for (block,n) in g.ingredients(salvage) {resource(&mut expected,block,sign*i64::from(n));}
                     expected[gear + *g as usize] -= sign;
                     expected[mana] -= i64::from(registry.mana_charge(cost));
                 }

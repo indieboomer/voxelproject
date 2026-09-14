@@ -4,7 +4,7 @@
 // Consumed by src/world_api_validate.rs's pre-flight lint, which runs on
 // LLM-generated Lua before it's ever loaded into a real Lua VM.
 
-pub const VERSION: &str = "1.28.0";
+pub const VERSION: &str = "1.30.0";
 
 // Runtime execution limits, shared with the generated documentation.
 pub const SCRIPT_TIME_MS: u64 = 5;
@@ -126,7 +126,7 @@ pub const PROPERTY_NAMES: &[&str] = &["instant_mana_cost", "rule_mana_cost", "ma
 
 /// Valid `kind` strings for a block (see get_block/replace_block/find_blocks),
 /// derived from textures/blocks.csv plus the non-CSV extras.
-pub const BLOCK_KINDS: &[&str] = &["amber", "amethyst", "ash", "basalt", "bedrock", "birch_leaves", "birch_wood", "bluebell", "bricks", "bronze", "brown_mushroom", "cattail", "ceramic", "charcoal", "cherry_leaves", "cherry_wood", "clay", "cloth", "clover", "coal", "cobblestone", "copper", "copper_ore", "crystal_dust", "diamond", "diamond_ore", "dry_shrub", "emerald", "emerald_ore", "enchanted_glass", "fern", "flax", "glass", "glowcap", "gold", "gold_ore", "granite", "grass", "iron", "iron_ore", "lavender", "lime", "limestone", "marble", "mithril", "mithril_ore", "moon_silver", "moonstone", "mortar", "oak_leaves", "oak_wood", "obsidian", "peat", "planks", "plant_fiber", "pumpkin", "quartz", "red_poppy", "reeds", "resin", "rock_salt", "ruby", "ruby_ore", "runestone", "sand", "sapphire", "sapphire_ore", "short_grass", "silver", "silver_ore", "snow", "soil", "spruce_leaves", "spruce_wood", "steel", "stone", "sulfur", "thorn_bush", "tin", "tin_ore", "water", "wild_herbs", "wood_pulp", "air", "mud", "redstone", "crystal", "campfire"];
+pub const BLOCK_KINDS: &[&str] = &["amber", "amethyst", "ash", "basalt", "bedrock", "birch_leaves", "birch_wood", "bluebell", "bricks", "bronze", "brown_mushroom", "cattail", "ceramic", "charcoal", "cherry_leaves", "cherry_wood", "clay", "cloth", "clover", "coal", "cobblestone", "cooked_meat", "copper", "copper_ore", "crystal_dust", "diamond", "diamond_ore", "dry_shrub", "emerald", "emerald_ore", "enchanted_glass", "fern", "flax", "glass", "glowcap", "gold", "gold_ore", "granite", "grass", "iron", "iron_ore", "lavender", "lime", "limestone", "marble", "meat", "mithril", "mithril_ore", "moon_silver", "moonstone", "mortar", "oak_leaves", "oak_wood", "obsidian", "peat", "planks", "plant_fiber", "pumpkin", "quartz", "red_poppy", "reeds", "resin", "rock_salt", "ruby", "ruby_ore", "runestone", "sand", "sapphire", "sapphire_ore", "short_grass", "silver", "silver_ore", "snow", "soil", "spruce_leaves", "spruce_wood", "steel", "stone", "sulfur", "thorn_bush", "tin", "tin_ore", "water", "wild_herbs", "wood_pulp", "air", "mud", "redstone", "crystal", "campfire"];
 
 /// Valid `kind` strings for a creature. Not read by the validator yet --
 /// creature-kind typos already fail soft (silently default to "sheep", see

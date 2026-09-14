@@ -13,6 +13,7 @@ multiplayer simulation, and local-AI-assisted sandboxed Lua rules.
 | [Creature loot](creature-loot.md) | Death puffs, player-kill rewards and ground pickups |
 | [Player names](player-names.md) | Settings, AI suggestions and multiplayer name tags |
 | [Inventory](inventory.md) | Elements, equipment, resources and numbered hotbar assignment |
+| [Equipment and recipe books](EQUIPMENT_AND_RECIPE_BOOKS.md) | 16 specialist tools, weapons, magic items and exploration charms; discoverable recipes |
 | [Mana and recipes](mana.md) | Spell/rule costs, mana recovery and equipment decomposition |
 | [Inventory scripting](inventory-api.md) | Transactional resource, equipment, element and mana APIs |
 | [Water](water.md) | Currents, raised tributaries, waterfalls and audio |

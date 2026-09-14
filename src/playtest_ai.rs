@@ -305,7 +305,7 @@ impl Ai {
             .collect();
         let prompt=json!({"goal":goal,"objective":self.progress,
             "position":o.position,"health":o.health,"mana":o.mana,"mana_free":o.mana_free,"mana_regeneration":"one per five seconds, up to 100","oxygen":o.oxygen,
-            "resources":resources,"elements":o.inventory.elements,"gear":o.inventory.gear,"gear_costs_iron_wood_mana":o.gear_recipes,"recipes":known_recipes,"visible_mining_targets":visible_targets,
+            "resources":resources,"elements":o.inventory.elements,"gear":o.inventory.gear,"gear_costs_iron_wood_mana":o.gear_recipes,"gear_all_materials":o.gear_materials,"recipe_books":o.inventory.adventure.recipe_books,"recipes":known_recipes,"visible_mining_targets":visible_targets,
             "inspected_device":o.inspected_device,"smelter_build_cost":crate::automation::balance().def(crate::automation::Kind::Smelter).cost,"smelting":crate::automation::balance().smelting,
             "visible_drops":o.drops,
             "visible_creatures":o.creatures.iter().map(|c|json!({"id":c.0,"kind":format!("{:?}",crate::creature::CreatureKind::from_u8(c.1)),"position":c.2})).collect::<Vec<_>>(),

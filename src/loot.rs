@@ -64,11 +64,12 @@ pub fn rewards(kind:CreatureKind)->Vec<(BlockType,u32)> {
     use BlockType::*;
     use CreatureKind as C;
     match kind {
-        C::Sheep|C::Cow=>vec![(PlantFiber,2)], C::Chicken=>vec![(PlantFiber,1)],
+        C::Sheep=>vec![(PlantFiber,2),(Meat,2)], C::Cow=>vec![(PlantFiber,2),(Meat,4)],
+        C::Chicken=>vec![(PlantFiber,1),(Meat,1)],
         C::Wolf=>vec![(PlantFiber,1),(Resin,1)], C::Stinger=>vec![(Resin,1)],
         C::Goblin=>vec![(IronOre,1),(Cloth,1)], C::StoneGolem=>vec![(Stone,3),(IronOre,1)],
         C::Sunscorch=>vec![(Sulfur,2),(Ash,1)], C::Zombie=>vec![(Ash,1),(Cloth,1)],
-        C::Skeleton=>vec![(Ash,2)], C::Fish=>vec![(PlantFiber,1)],
+        C::Skeleton=>vec![(Ash,2)], C::Fish=>vec![(PlantFiber,1),(Meat,1)],
         C::DragonGreen=>vec![(Resin,3),(CrystalDust,2)], C::DragonRed=>vec![(Sulfur,3),(CrystalDust,2)],
     }
 }
@@ -76,6 +77,14 @@ pub fn rewards(kind:CreatureKind)->Vec<(BlockType,u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn friendly_creatures_supply_species_sized_meat_rewards() {
+        for (kind,n) in [(CreatureKind::Chicken,1),(CreatureKind::Sheep,2),(CreatureKind::Cow,4),(CreatureKind::Fish,1)] {
+            let loot=rewards(kind);
+            assert_eq!(loot.iter().filter(|(b,_)|*b==BlockType::Meat).map(|(_,n)|*n).sum::<u32>(),n);
+            assert!(loot.iter().any(|(b,_)|*b==BlockType::PlantFiber));
+        }
+    }
     #[test]
     fn bundle_collection_is_atomic_and_only_rewards_one_player() {
         let mut world=World::new(1);

@@ -113,6 +113,7 @@ pub struct Observation {
     pub inspected_device: Option<DeviceView>,
     pub recipes: Vec<crafting::Recipe>,
     pub gear_recipes: Vec<(equipment::Gear, (u32, u32, u32))>,
+    pub gear_materials: Vec<(equipment::Gear, Vec<(BlockType,u32)>)>,
     pub compositions: Vec<crafting::ObjectComposition>,
     pub mana_costs: [u32; 5],
     pub mana_free: bool,
@@ -259,6 +260,7 @@ impl Actor {
                 .into_iter()
                 .filter_map(|g| crafting::gear_formula(g, false).ok().map(|r| (g, r)))
                 .collect(),
+            gear_materials: equipment::Gear::ALL.into_iter().map(|g|(g,g.ingredients(false))).collect(),
             compositions: context.registry.compositions.clone(),
             mana_costs: context.registry.mana_costs,
             mana_free: context.registry.mana_free,
@@ -411,6 +413,7 @@ impl Actor {
                         &intent,
                         now,
                     )?;
+                    if intent.item==Some(equipment::Entry::Gear(equipment::Gear::LifeStaff)){self.player.heal(15.);}
                 }
                 Action::Interact { target } => {
                     let hit = crate::raycast::raycast(
@@ -477,7 +480,7 @@ impl Actor {
         ) == BlockType::Water
         {
             self.player
-                .drain_oxygen(crate::player::OXYGEN_DRAIN_PER_SEC * STEP);
+                .drain_oxygen(crate::player::OXYGEN_DRAIN_PER_SEC * STEP * crate::gear_catalog::oxygen_factor(&self.player.crafting));
             if self.player.oxygen <= 0.0 {
                 self.player
                     .damage(crate::player::DROWNING_DAMAGE_PER_SEC * STEP);

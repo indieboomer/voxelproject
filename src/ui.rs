@@ -66,6 +66,7 @@ pub struct ChatEntry {
 /// state directly.
 #[derive(Default)]
 pub struct UiRequests {
+    pub eat_food: Option<crate::voxel::BlockType>,
     pub camp_action: Option<crate::adventure::Action>,
     pub quest_action: Option<crate::quests::Action>,
     pub close_journal: bool,
@@ -282,7 +283,7 @@ impl Ui {
                 return;
             }
             self.map.home=player.crafting.adventure.home.map(crate::adventure::feet);
-            if self.map.open {self.map.draw(ctx,world,player.position);return;}
+            if self.map.open {self.map.draw(ctx,world,player.position,self.compass_yaw);return;}
             requests.crafting = crafting_ui.draw(ctx, registry, &player.crafting, world, creatures, player.position, players);
             requests.automation = self.automation.draw(ctx,&world.automation,&player.crafting,registry);
             status_hud(ctx,player,fps);
@@ -374,7 +375,7 @@ impl Ui {
             requests.select_slot=crate::equipment_ui::hotbar(ctx,&player.crafting,self.inventory_open,self.inventory_open || Instant::now()<self.selected_until,self.automation.tools_suspended());
             if self.inventory_open {
                 self.inventory.feedback = crafting_ui.feedback.clone();
-                self.inventory.show(ctx, &player.crafting, registry, &mut requests);
+                self.inventory.show(ctx, &player.crafting, player.health, registry, &mut requests);
                 if requests.crafting.is_some() {
                     if crafting_ui.pending {requests.crafting=None;}
                     else {crafting_ui.pending=true;}

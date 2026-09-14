@@ -13,7 +13,7 @@ fn render_ui_previews() {
             .unwrap();
     let width = 1280;
     for (theme, name) in [(UiTheme::Generic, "generic"), (UiTheme::Fantasy, "fantasy")] {
-        for panel in ["settings", "crafting", "resources", "hotbar", "hotbar_machine", "inventory", "chat", "automation", "chest", "map", "hud", "journal", "adventure", "recovery"] {
+        for panel in ["settings", "crafting", "recipe_book", "resources", "hotbar", "hotbar_machine", "inventory", "food", "cooking", "chat", "automation", "chest", "map", "hud", "journal", "adventure", "recovery"] {
             if std::env::var("UI_PREVIEW_PANEL").is_ok_and(|filter|filter!=panel) { continue; }
             let height = if panel == "resources" { 1024 } else { 720 };
             let ctx = egui::Context::default();
@@ -45,9 +45,16 @@ fn render_ui_previews() {
             account.hotbar.slots[4]=Some(crate::equipment::Entry::Resource(crate::voxel::BlockType::OakWood));
             account.hotbar.slots[5]=Some(crate::equipment::Entry::Resource(crate::voxel::BlockType::Crystal));
             account.resources[4]=12;
+            if panel=="recipe_book" {account.adventure.recipe_books=15;account.resources.fill(12);}
             if panel == "inventory" { account.resources.fill(128); }
             let mut inventory = crate::inventory_ui::Inventory::default();
             inventory.preview_selection(crate::equipment::Entry::Gear(crate::equipment::Gear::Pickaxe));
+            if matches!(panel,"food"|"cooking") {
+                for (block,n) in [(crate::voxel::BlockType::Meat,8),(crate::voxel::BlockType::CookedMeat,3),(crate::voxel::BlockType::Pumpkin,4)] {
+                    account.resources[crate::voxel::COLLECTIBLE_BLOCKS.iter().position(|b|*b==block).unwrap()]=n;
+                }
+                inventory.preview_selection(crate::equipment::Entry::Resource(crate::voxel::BlockType::Meat));
+            }
             let mut world = crate::voxel::World::new(1);
             let mut automation = crate::automation_ui::Panel::default();
             if panel == "automation" {
@@ -76,13 +83,14 @@ fn render_ui_previews() {
             player.health=24.0;player.poisoned=true;player.oxygen=65.0;
             player.crafting=account.clone();
             player.crafting.adventure.home=Some((4,24,8));
-            let mut journal=crate::adventure_ui::Journal {open:panel=="journal",camp:Some((4,24,8)),
+            let mut journal=crate::adventure_ui::Journal {open:matches!(panel,"journal"|"cooking"),camp:Some((4,24,8)),
                 hint:Some("F · Talk to Mira / rest at camp".into()),..Default::default()};
             if panel=="adventure" {journal.target=Some(("goblin".into(),14.,40.));journal.hint=Some("Hostile · sword attacks within 3 blocks".into());}
             if panel=="journal" {journal.npc=Some(0);journal.camp=None;player.crafting.adventure.quests.record(2,1);}
             if panel=="recovery" {player.health=0.;journal.recovery_seconds=Some(2.);journal.damage_flash=0.55;}
             let creatures = crate::creature::Creatures::new();
             let mut craft = crate::crafting_ui::CraftingUi::default();
+            if panel=="recipe_book" {craft.show_book(2);}
             craft.open = true;
             craft.slots[0] = Some(crate::crafting::Slot {
                 element: crate::crafting::Element::Earth,
@@ -119,13 +127,13 @@ fn render_ui_previews() {
                             let p=egui::pos2(850.,320.);
                             crate::compass::machine(ctx,&[Some(p),Some(p+egui::vec2(-24.,-29.)),Some(p+egui::vec2(42.,-17.)),Some(p+egui::vec2(24.,29.)),Some(p+egui::vec2(-42.,17.))]);
                         }
-                        if panel == "journal" {journal.draw(ctx,&player);}
+                        if matches!(panel,"journal"|"cooking") {journal.draw(ctx,&player);}
                         else if panel == "adventure" || panel == "recovery" {
                             crate::ui::status_hud(ctx,&player,60.0);
                             journal.hud(ctx,&player,Some(glam::Vec3::new(40.,8.,-25.)));
                             crate::equipment_ui::hotbar(ctx,&account,false,true,false);
                         }
-                        else if panel == "map" {map.home=player.crafting.adventure.home.map(crate::adventure::feet);map.waypoint=Some(glam::Vec3::new(40.,8.,-25.));map.draw(ctx,&world,player.position);}
+                        else if panel == "map" {map.home=player.crafting.adventure.home.map(crate::adventure::feet);map.waypoint=Some(glam::Vec3::new(40.,8.,-25.));map.draw(ctx,&world,player.position,-std::f32::consts::FRAC_PI_2);}
                         else if panel == "hud" {crate::ui::status_hud(ctx,&player,60.0);}
                         else if panel == "automation" || panel == "chest" {automation.draw(ctx,&world.automation,&account,&registry);}
                         else if panel == "chat" {
@@ -149,13 +157,13 @@ fn render_ui_previews() {
                                     egui::Color32::from_rgba_unmultiplied(20,25,32,225).linear_multiply(alpha));
                                 line.paint(&painter,origin,alpha);
                             }
-                        } else if panel == "inventory" {
+                        } else if matches!(panel,"inventory"|"food") {
                             let mut requests = crate::ui::UiRequests::default();
                             requests.select_slot = crate::equipment_ui::hotbar(ctx,&account,true,true,false);
-                            inventory.show(ctx,&account,&registry,&mut requests);
+                            inventory.show(ctx,&account,player.health,&registry,&mut requests);
                         } else if panel == "hotbar" || panel == "hotbar_machine" {
                             crate::equipment_ui::hotbar(ctx,&account,false,true,panel == "hotbar_machine");
-                        } else if panel == "crafting" {
+                        } else if panel == "crafting" || panel == "recipe_book" {
                             craft.draw(
                                 ctx,
                                 &registry,

@@ -760,7 +760,7 @@ mod resource_generation_tests {
         let mut report=String::from("resource,count_in_432_sampled_chunks\n");
         for (i,info) in crate::voxel::resource_catalog::RESOURCES.iter().enumerate() {
             report.push_str(&format!("{},{}\n",info.block.id(),counts[i]));
-            if info.source=="crafted" {assert_eq!(counts[i],0,"crafted-only {} spawned",info.block.id());}
+            if matches!(info.source,"crafted"|"loot"|"cooked") {assert_eq!(counts[i],0,"non-terrain resource {} spawned",info.block.id());}
             else {assert!(counts[i]>0,"natural {} unavailable",info.block.id());}
         }
         let count=|block|counts[crate::voxel::COLLECTIBLE_BLOCKS.iter().position(|&b|b==block).unwrap()];

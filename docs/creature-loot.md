@@ -22,8 +22,9 @@ Creature-versus-creature combat and script kills do not create pickup rewards.
 
 | Creature | Reward |
 | --- | --- |
-| Sheep / cow | 2 plant fiber |
-| Chicken / fish | 1 plant fiber |
+| Sheep | 2 plant fiber + 2 raw meat |
+| Cow | 2 plant fiber + 4 raw meat |
+| Chicken / fish | 1 plant fiber + 1 raw meat |
 | Wolf | 1 plant fiber + 1 resin |
 | Stinger | 1 resin |
 | Goblin | 1 iron ore + 1 cloth |
@@ -34,9 +35,9 @@ Creature-versus-creature combat and script kills do not create pickup rewards.
 | Green dragon | 3 resin + 2 crystal dust |
 | Red dragon | 3 sulfur + 2 crystal dust |
 
-These use existing catalog resources and elemental compositions, not new food,
-bone, feather or hide currencies. Biological drops represent recoverable organic
-residue; humanoids leave cloth/materials, undead leave ash, and magical predators
+Raw meat can be eaten for 8 health or cooked at a campfire for 25 health per piece.
+Other biological drops represent recoverable organic residue;
+humanoids leave cloth/materials, undead leave ash, and magical predators
 leave sulfur/resin and crystal residue. Resource tooltips identify loot sources.
 Normal paid resource decomposition remains available after pickup.
 

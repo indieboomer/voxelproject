@@ -49,7 +49,7 @@ fn journal_and_equipment_queries_preserve_progress_across_staged_inventory_chang
 #[test]
 fn inventory_economy_reads_staged_balances_for_host_and_guest_and_rolls_back() {
     let mut f=Fixture::new();
-    f.players[0].finances=InventoryBalances {mana:100,elements:[0;5],items:[1,1,1,0],..Default::default()};
+    f.players[0].finances=InventoryBalances {mana:100,elements:[0;5],items:crate::gear_catalog::starter_counts(),..Default::default()};
     let mut guest=f.players[0];guest.id=7;guest.resources=[0;COLLECTIBLE_BLOCKS.len()];f.players.push(guest);
     let body=r#"
         for _,id in ipairs({0,7}) do
@@ -86,7 +86,7 @@ fn inventory_economy_reads_staged_balances_for_host_and_guest_and_rolls_back() {
 #[test]
 fn inventory_uses_configured_registry_and_rejects_overflow() {
     let mut f=Fixture::new();
-    f.players[0].finances=InventoryBalances{mana:u32::MAX,elements:[2,0,0,0,0],items:[0;4],..Default::default()};
+    f.players[0].finances=InventoryBalances{mana:u32::MAX,elements:[2,0,0,0,0],items:[0;20],..Default::default()};
     let mut registry=crate::crafting::Registry::parse(include_str!("../data/crafting.json")).unwrap();registry.conversion_rate=3;
     let mut m=module("on_cast",r#"
         assert(not api.give_mana(0,1))

@@ -1255,6 +1255,36 @@ pub(crate) fn csv_def(block: BlockType) -> Option<BlockDef> {
             cutout: false,
             cross: false,
         },
+        BlockType::Meat => BlockDef {
+            display_name: "Raw meat",
+            resource_type: "food",
+            opacity: 1.0,
+            roughness: 0.9,
+            emission: 0.0,
+            hardness: 1,
+            tile_top: TILE_MEAT,
+            tile_side: TILE_MEAT,
+            tile_bottom: TILE_MEAT,
+            only_on_top: false,
+            single_item: false,
+            cutout: false,
+            cross: false,
+        },
+        BlockType::CookedMeat => BlockDef {
+            display_name: "Cooked meat",
+            resource_type: "food",
+            opacity: 1.0,
+            roughness: 0.9,
+            emission: 0.0,
+            hardness: 1,
+            tile_top: TILE_COOKED_MEAT,
+            tile_side: TILE_COOKED_MEAT,
+            tile_bottom: TILE_COOKED_MEAT,
+            only_on_top: false,
+            single_item: false,
+            cutout: false,
+            cross: false,
+        },
         _ => return None,
     })
 }
@@ -1347,6 +1377,8 @@ pub(crate) fn csv_from_name(lower_name: &str) -> Option<BlockType> {
         "thorn_bush" => BlockType::ThornBush,
         "dry_shrub" => BlockType::DryShrub,
         "snow" => BlockType::Snow,
+        "meat" => BlockType::Meat,
+        "cooked_meat" => BlockType::CookedMeat,
         _ => return None,
     })
 }
@@ -1439,6 +1471,8 @@ pub(crate) fn csv_id(block: BlockType) -> Option<&'static str> {
         BlockType::ThornBush => "thorn_bush",
         BlockType::DryShrub => "dry_shrub",
         BlockType::Snow => "snow",
+        BlockType::Meat => "meat",
+        BlockType::CookedMeat => "cooked_meat",
         _ => return None,
     })
 }

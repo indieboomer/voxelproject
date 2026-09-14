@@ -5,11 +5,22 @@
 ![The six NPC models in the offscreen game renderer](images/npc-travelers.png)
 
 The Sage, Elf Ranger, Warrior, Merchant, Fire Sorceress and Necromancer use the
-animated models in `models/npc`. They appear near the initial recovery area in
-new and existing worlds. Each follows a small, dry-ground patrol within four
+animated models in `models/npc`. The starting area has the campkeeper plus **one
+random traveler**. Further travelers appear as any player explores, with one
+potential encounter per **100 × 100 block region**, small seeded offsets and a
+search for safe dry ground. Expect roughly 100 blocks between encounters on land;
+water, obstructed terrain and the direction you travel affect the actual spacing.
+Roles can repeat; each role offers the same personal quests wherever encountered.
+Each follows a small, dry-ground patrol within four
 blocks of its home, stops to face nearby players, and avoids terrain and devices.
 They are peaceful quest givers, separate from combat creatures. If construction
 blocks a patrol, clear its path. They do not reshape saved terrain.
+
+Encounter locations, roles and explored regions persist across save/reload.
+Returning to an explored region does not spawn duplicates, and moving your recovery
+camp does not move the encounter grid. Existing six-traveler starting groups migrate
+to one traveler on load; all player quest progress is retained. Distant travelers
+pause their patrols, and multiplayer clients receive only nearby travelers.
 
 Look at a traveler and press **F** to talk. **J** lists all twenty contracts.
 Objectives track automatically and can be completed in any order. Crafting and
@@ -62,7 +73,7 @@ starts a new observation. Vessel and lantern objectives require personal placeme
 NPC homes, positions and patrol state, machine production counters and every
 player's quest progress survive saving. There is no offline quest production.
 Combat credit goes to the player delivering the killing weapon hit. Host and
-guests need the updated build (protocol 32). Lua reads these contracts through
+guests need the updated build (protocol 33). Lua reads these contracts through
 `get_player_journal(player_id).quests`; scripts cannot claim their rewards.
 
 The campkeeper contracts are optional. Building, crafting and world rules remain
@@ -174,4 +185,7 @@ items or appear in `api.creatures()`. Removing the fire removes its keeper. F st
 emits the campfire `on_interact` event, so existing world rules can react.
 
 Current saves retain their format; missing journal fields default safely. Multiplayer
-protocol is **31**, so all players need this build. Playtesting-agent work remains paused.
+protocol is **36**, so all players need this build. Playtesting-agent work remains paused.
+
+Floating recipe books now teach [16 specialist equipment recipes](EQUIPMENT_AND_RECIPE_BOOKS.md).
+Look at a book and press F to read it; C opens the searchable equipment catalog.

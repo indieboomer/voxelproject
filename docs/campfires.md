@@ -5,6 +5,15 @@ rest/recovery points. Aim at the fire or keeper and press **F**. See
 [Camps and expeditions](ADVENTURE_GUIDE.md) for requirements, rewards and persistence.
 Camp actions are host-validated; F continues to emit `on_interact` for world rules.
 
+The camp panel includes **Cook 1 meat** and **Cook batch** (up to 64 pieces).
+Each raw meat becomes one cooked meat, with no mana or additional fuel cost.
+Cooking requires a living player within six blocks, an unobstructed view of the
+fire, and no nearby hostiles. It changes inventory immediately; eat the cooked
+meat from inventory **I** to restore 25 health (raw meat restores 8).
+Inventory revisions prevent repeated cooking requests from consuming twice.
+Raw and cooked meat persist with the host and guest inventories. Multiplayer
+peers must use protocol 36 / the same updated build.
+
 Campfires are append-only `campfire` blocks generated sparsely on level, dry
 grass, soil, sand, or stone above the shoreline. Placement requires a flat 3x3
 patch and four blocks of clearance. Eligible 48x48 regions try up to eight

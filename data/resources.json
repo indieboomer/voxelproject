@@ -2308,5 +2308,19 @@
     "emission": 0,
     "harvest_category": "soil",
     "hand_pickable": true
+  },
+  {
+    "id": "meat", "name": "Raw meat", "category": "Food", "source": "loot",
+    "location": "Chicken and fish: 1; sheep: 2; cow: 4. Eat for 8 health or cook at a campfire.",
+    "composition": [0,0,1,2,0], "formula": null,
+    "texture": {"pattern":"meat","color":"#bd5963"},
+    "hardness": 1, "harvest_category": "plant", "hand_pickable": true
+  },
+  {
+    "id": "cooked_meat", "name": "Cooked meat", "category": "Food", "source": "cooked",
+    "location": "Cook raw meat at a campfire. Eat in inventory for 25 health.",
+    "composition": [0,0,1,2,0], "formula": null,
+    "texture": {"pattern":"meat","color":"#955a32"},
+    "hardness": 1, "harvest_category": "plant", "hand_pickable": true
   }
 ]

@@ -33,6 +33,13 @@ balance overflow and account revision on the host before committing any changes.
 | Sword | 2 iron + 1 oak wood | 4 | 1 iron + 1 oak wood | 2 |
 | Axe | 3 iron + 2 oak wood | 4 | 2 iron + 1 oak wood | 2 |
 | Pickaxe | 3 iron + 2 oak wood | 6 | 2 iron + 1 oak wood | 3 |
+| Bow | 1 iron + 4 oak wood | 6 | 2 oak wood | 3 |
+
+[Specialist equipment](EQUIPMENT_AND_RECIPE_BOOKS.md) adds 16 recipes with extra
+materials and recipe-book requirements. The equipment catalog in C shows all
+costs, effects, discovery requirements and current balances; elemental formulas
+and extraction are in a separate tab. Mana-free testing does not bypass book or
+material requirements.
 
 Iron forms the blade/head and oak wood the handle. Decomposition loses some
 metal and, for heavier tools, wood. It cannot return more of any material than

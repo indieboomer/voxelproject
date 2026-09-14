@@ -95,11 +95,13 @@ The unused legacy atlas backup is overwritten with the new atlas when present. `
 | thorn_bush | [thorn_bush.png](thorn_bush.png) | [thorn_bush.png](thorn_bush.png) | [thorn_bush.png](thorn_bush.png) |
 | dry_shrub | [dry_shrub.png](dry_shrub.png) | [dry_shrub.png](dry_shrub.png) | [dry_shrub.png](dry_shrub.png) |
 | snow | [snow.png](snow.png) | [snow.png](snow.png) | [snow.png](snow.png) |
+| meat | [meat.png](meat.png) | [meat.png](meat.png) | [meat.png](meat.png) |
+| cooked_meat | [cooked_meat.png](cooked_meat.png) | [cooked_meat.png](cooked_meat.png) | [cooked_meat.png](cooked_meat.png) |
 | mud | mud.png | mud.png | mud.png |
 | redstone | redstone.png | redstone.png | redstone.png |
 | crystal | crystal.png | crystal.png | crystal.png |
 
-All 95 source PNGs have local generation provenance, including the unused placeholder. Air/entities use the synthetic white atlas tile. No required resource texture is missing.
+All 97 source PNGs have local generation provenance, including the unused placeholder. Air/entities use the synthetic white atlas tile. No required resource texture is missing.
 
 ## Source tiles
 
@@ -129,6 +131,7 @@ All 95 source PNGs have local generation provenance, including the unused placeh
 | [clover.png](clover.png) | Local procedural generation |
 | [coal.png](coal.png) | Local procedural generation |
 | [cobblestone.png](cobblestone.png) | Local procedural generation |
+| [cooked_meat.png](cooked_meat.png) | Local procedural generation |
 | [copper.png](copper.png) | Local procedural generation |
 | [copper_ore.png](copper_ore.png) | Local procedural generation |
 | [crystal.png](crystal.png) | Local procedural generation |
@@ -154,6 +157,7 @@ All 95 source PNGs have local generation provenance, including the unused placeh
 | [lime.png](lime.png) | Local procedural generation |
 | [limestone.png](limestone.png) | Local procedural generation |
 | [marble.png](marble.png) | Local procedural generation |
+| [meat.png](meat.png) | Local procedural generation |
 | [mithril.png](mithril.png) | Local procedural generation |
 | [mithril_ore.png](mithril_ore.png) | Local procedural generation |
 | [moon_silver.png](moon_silver.png) | Local procedural generation |

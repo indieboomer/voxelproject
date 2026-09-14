@@ -23,12 +23,12 @@ mod tests {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1280.0,720.0))),
                 events: vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }],
                 ..Default::default()
-            }, |ctx|inventory.show(ctx,&account,&registry,&mut requests));
+            }, |ctx|inventory.show(ctx,&account,100.,&registry,&mut requests));
             assert_eq!(requests.select_slot,Some(slot));
             assert_eq!(requests.assign_entry,Some(Some(entry)));
             account.gear[Gear::Pickaxe as usize]=0;
             let mut requests = UiRequests {select_slot:Some(4),..Default::default()};
-            let _ = ctx.run(Default::default(), |ctx|inventory.show(ctx,&account,&registry,&mut requests));
+            let _ = ctx.run(Default::default(), |ctx|inventory.show(ctx,&account,100.,&registry,&mut requests));
             assert_eq!(requests.assign_entry,None);
             assert_eq!(inventory.selected,Some(entry));
         }
@@ -37,25 +37,33 @@ mod tests {
 impl Inventory {
     #[cfg(test)]
     pub(crate) fn preview_selection(&mut self, entry: Entry) {self.selected=Some(entry);}
-    fn actions(&self, ui: &mut egui::Ui, account: &Account, registry: &crate::crafting::Registry, requests: &mut UiRequests) {
+    fn actions(&self, ui: &mut egui::Ui, account: &Account, health:f32, registry: &crate::crafting::Registry, requests: &mut UiRequests) {
         use crate::crafting::{Action,ObjectKind};
         match self.selected {
             Some(Entry::Gear(g)) => {
                 for salvage in [false,true] {
-                    let (iron,wood,mana) = crate::crafting::gear_formula(g,salvage).unwrap();
+                    let (_,_,mana) = crate::crafting::gear_formula(g,salvage).unwrap();
                     let mana = registry.mana_charge(mana);
                     let available = if salvage {Entry::Gear(g).count(account)>0} else {
-                        Entry::Resource(crate::voxel::BlockType::Iron).count(account)>=iron && Entry::Resource(crate::voxel::BlockType::OakWood).count(account)>=wood
+                        g.known(account) && g.ingredients(false).iter().all(|(b,n)|Entry::Resource(*b).count(account)>=*n)
                     };
                     ui.horizontal_wrapped(|ui| {
                         if ui.add_enabled(available && account.mana>=mana,egui::Button::new(if salvage {"Decompose 1 item"} else {"Create 1 item"})).clicked() {
                             requests.crafting=Some(if salvage {Action::SalvageGear(g)} else {Action::CraftGear(g)});
                         }
-                        ui.label(format!("{} {iron} iron + {wood} oak wood; {mana} mana",if salvage {"Returns"} else {"Uses"}));
+                        ui.label(format!("{} {}; {mana} mana",if salvage {"Returns"} else {"Uses"},g.recipe_text(salvage)));
                     });
                 }
             }
             Some(Entry::Resource(block)) => {
+                if let Some(healing)=crate::food::healing(block) {
+                    ui.horizontal_wrapped(|ui| {
+                        let ready=health.is_finite() && health>0. && health<crate::player::MAX_HEALTH && Entry::Resource(block).count(account)>0;
+                        if ui.add_enabled(ready,egui::Button::new(format!("Eat 1 (+{healing:.0} health)"))).clicked(){requests.eat_food=Some(block);}
+                        if health>=crate::player::MAX_HEALTH {ui.label("Health full - food is kept.");}
+                        if block==crate::voxel::BlockType::Meat {ui.small("Campfire cooking improves this to +25 health.");}
+                    });
+                }
                 let comp = registry.composition(ObjectKind::Resource,block.id());
                 ui.label(format!("Returns: {}",Element::ALL.iter().filter(|e|comp[e.index()]>0).map(|e|format!("{} {e:?}",comp[e.index()])).collect::<Vec<_>>().join(", ")));
                 let mana=registry.mana_charge(1);
@@ -63,10 +71,10 @@ impl Inventory {
                     requests.crafting=Some(Action::Extract {block,amount:1});
                 }
             }
-            None => {ui.small("Select equipment to create or decompose it; select resources to extract elements.");}
+            None => {ui.small("Select equipment to create or decompose it; select food to eat or resources to extract elements.");}
         }
     }
-    pub fn show(&mut self, ctx: &egui::Context, account: &Account, registry: &crate::crafting::Registry, requests: &mut UiRequests) {
+    pub fn show(&mut self, ctx: &egui::Context, account: &Account, health:f32, registry: &crate::crafting::Registry, requests: &mut UiRequests) {
         if self.selected.is_some_and(|e| matches!(e,Entry::Resource(_)) && e.count(account) == 0) { self.selected = None; }
         let size = ctx.screen_rect().size();
         // Reserve room for the larger fantasy font, window chrome and hotbar.
@@ -83,6 +91,7 @@ impl Inventory {
                     });
                 });
                 ui.horizontal_wrapped(|ui| {
+                    ui.strong(format!("Health: {health:.0} / {:.0}",crate::player::MAX_HEALTH));
                     ui.strong(format!("Mana: {}",account.mana)).on_hover_text("+1 every 5 seconds, up to 100. Instant: 5. New rule: 20. Convert elements to mana in Crafting [C].");
                     let colors = [[190,145,75],[245,120,60],[90,165,245],[105,205,100],[180,130,215]];
                     for e in Element::ALL {
@@ -110,7 +119,7 @@ impl Inventory {
                 });
                 ui.separator();
                 ui.label(self.selected.map_or("Nothing selected".into(), |e|format!("Selected: {} — press 1–9 or click a hotbar slot",e.name())));
-                self.actions(ui,account,registry,requests);
+                self.actions(ui,account,health,registry,requests);
                 if !self.feedback.is_empty() {ui.label(&self.feedback);}
                 if ui.button(format!("Clear slot {} (empty hand)",account.hotbar.active+1)).clicked() {
                     requests.assign_entry=Some(None);
@@ -134,9 +143,7 @@ impl Inventory {
             if response.clicked() { self.selected=Some(entry); }
             response.on_hover_text(match entry {
                 Entry::Resource(b)=>crate::resource_ui::description(b),
-                Entry::Gear(Gear::Pickaxe)=>"Mine stone, ores and soil".into(),
-                Entry::Gear(Gear::Axe)=>"Gather wood and plants".into(),
-                _=>"Attack creatures".into(),
+                Entry::Gear(g)=>g.description().into(),
             });
         });
     }

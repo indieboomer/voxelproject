@@ -12,6 +12,18 @@ Then update this file by hand with what actually changed and why -- the docs
 regenerate automatically, but "what changed and why" is not mechanically
 derivable from a diff of the schema alone.
 
+## 1.30.0 - Food and campfire cooking
+
+- Added `meat` and `cooked_meat` resource IDs to inventory, storage, element composition queries, and saved balances. Existing resource and block indices stay stable; older inventories gain empty food stacks.
+- Chicken/fish weapon-kill loot supplies one raw meat, sheep two, and cows four. Inventory eating heals 8 health for raw meat, 25 for cooked meat, 10 for pumpkin, 5 for wild herbs, and 6 for brown mushrooms.
+- Campfires cook one piece or batches up to 64. Eating and cooking are authoritative, revision-checked transactions; full-health eating keeps the food. Multiplayer protocol 36 requires matching builds. No new Lua calls were needed.
+
+## 1.29.0 - Specialist equipment and recipe books
+
+- Added 16 equipment IDs for harvesting, combat, magic and exploration. Inventory, crafting, salvage, held-item queries and device storage share the expanded catalog.
+- `get_item_recipe` returns every required resource plus the specialist recipe's book name/bit. `get_player_journal().recipe_books` reports discovered knowledge; crafting specialist gear enforces discovery and material costs on the host.
+- Books use the supplied lore_book model/texture and sound, remain available for other players, and preserve each reader's learned recipes through saves and reconnects. They now stand upright with golden motes and use independently scattered locations at least 17 blocks apart. Legacy four-slot equipment saves migrate with empty specialist slots; multiplayer protocol is now 35.
+
 ## 1.28.0 - Traveler quests and bow
 
 `get_player_journal` now includes a `quests` array with stable IDs 1–20,
@@ -22,6 +34,11 @@ accept `bow`; its recipe costs 1 iron, 4 oak wood and 6 mana (salvage: 2 wood,
 3 mana). NPC patrols are separate from combat creatures and are not returned by
 creature/entity queries. Host-saved patrols and per-player quest progress use
 protocol 32; all multiplayer peers must update together.
+
+Follow-up (protocol 33): the starting group is now one seeded random traveler
+beside the campkeeper. Other travelers are discovered on a 100-block grid while
+any connected player explores. Encounter records persist; distant patrols pause
+and clients receive nearby NPCs only. Quest IDs and per-player progress are unchanged.
 
 ## 1.27.0 - Journal and current equipment
 

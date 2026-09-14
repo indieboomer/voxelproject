@@ -33,7 +33,7 @@ impl Map {
             self.center = Some(Vec2::new(pos.x, pos.z));
         }
     }
-    pub fn draw(&mut self, ctx: &egui::Context, world: &World, player: glam::Vec3) {
+    pub fn draw(&mut self, ctx: &egui::Context, world: &World, player: glam::Vec3, yaw: f32) {
         if !self.open {
             return;
         }
@@ -209,11 +209,20 @@ impl Map {
                     }
                 }
                 if rect.contains(p) {
+                    // Map +X is right and +Z is down, matching camera yaw.
+                    let forward = Vec2::new(yaw.cos(), yaw.sin());
+                    let right = Vec2::new(-forward.y, forward.x);
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![p + forward * 15.0, p - forward * 5.0 + right * 7.0,
+                            p - forward * 5.0 - right * 7.0],
+                        Color32::from_rgb(230, 65, 65),
+                        egui::Stroke::new(2.0_f32, Color32::WHITE),
+                    ));
                     painter.circle_filled(p, 6.0, Color32::WHITE);
                     painter.circle_filled(p, 3.0, Color32::from_rgb(230, 65, 65));
                 }
                 ui.horizontal_wrapped(|ui| {
-                    ui.colored_label(Color32::WHITE, "You");
+                    ui.colored_label(Color32::WHITE, "You / facing direction");
                     ui.colored_label(Color32::from_rgb(210, 135, 245), "Cave entrances");
                     ui.colored_label(Color32::YELLOW, "Built blocks / devices / chests");
                 });

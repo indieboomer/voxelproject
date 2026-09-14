@@ -97,7 +97,7 @@ pub struct InventoryBalances {
     pub held: Option<crate::equipment::Entry>,
     pub mana: u32,
     pub elements: [u32; 5],
-    pub items: [u32; 4],
+    pub items: [u32; 20],
 }
 impl InventoryBalances {
     pub fn from_account(account: &crate::crafting::Account) -> Self {

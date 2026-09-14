@@ -234,17 +234,20 @@ impl Player {
             speed *= MUD_SPEED_MULTIPLIER;
         }
         speed *= self.speed_multiplier;
+        if crate::gear_catalog::held(&self.crafting,crate::equipment::Gear::TrailCharm) {speed*=1.3;}
 
         self.velocity.x = wish.x * speed;
         self.velocity.z = wish.z * speed;
 
         if input.is_down(KeyCode::Space) && self.on_ground {
             self.velocity.y = JUMP_SPEED * self.jump_multiplier;
+            if crate::gear_catalog::held(&self.crafting,crate::equipment::Gear::LeapingCharm) {self.velocity.y*=1.35;}
             self.on_ground = false;
         }
 
         self.velocity.y += GRAVITY * dt;
         self.velocity.y = self.velocity.y.max(-50.0);
+        if crate::gear_catalog::held(&self.crafting,crate::equipment::Gear::FeatherCharm) {self.velocity.y=self.velocity.y.max(-3.0);}
 
         let delta = self.velocity * dt;
         let before = self.position;
@@ -483,6 +486,30 @@ mod tests {
         world
     }
 
+    #[test]
+    fn held_charms_change_motion_and_stop_when_unequipped() {
+        use crate::equipment::{Entry,Gear};
+        let world=World::new(1);
+        let mut player=Player::new(Vec3::new(0.5,60.,0.5));let mut input=Input::new();
+        input.key_event(KeyCode::KeyW,ElementState::Pressed);
+        player.crafting.gear[Gear::TrailCharm as usize]=1;
+        player.crafting.hotbar.assign(Some(Entry::Gear(Gear::TrailCharm)));
+        player.update(&world,&input,Vec3::X,Vec3::Z,0.01);
+        assert!((player.velocity.x-WALK_SPEED*1.3).abs()<0.001);
+        player.crafting.hotbar.assign(None);
+        player.update(&world,&input,Vec3::X,Vec3::Z,0.01);
+        assert!((player.velocity.x-WALK_SPEED).abs()<0.001);
+        player.crafting.gear[Gear::LeapingCharm as usize]=1;
+        player.crafting.hotbar.assign(Some(Entry::Gear(Gear::LeapingCharm)));
+        player.on_ground=true;input.key_event(KeyCode::Space,ElementState::Pressed);
+        player.update(&world,&input,Vec3::X,Vec3::Z,0.01);
+        assert!((player.velocity.y-(JUMP_SPEED*1.35+GRAVITY*0.01)).abs()<0.001);
+        player.crafting.gear[Gear::FeatherCharm as usize]=1;
+        player.crafting.hotbar.assign(Some(Entry::Gear(Gear::FeatherCharm)));player.velocity.y=-20.;
+        player.update(&world,&input,Vec3::X,Vec3::Z,0.01);assert_eq!(player.velocity.y,-3.);
+        player.crafting.hotbar.assign(None);
+        player.update(&world,&input,Vec3::X,Vec3::Z,0.01);assert!(player.velocity.y < -3.);
+    }
     #[test]
     fn walking_forward_on_the_ground_eventually_queues_a_footstep() {
         let world = world_with_loaded_ground(1);

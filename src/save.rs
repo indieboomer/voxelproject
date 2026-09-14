@@ -13,6 +13,7 @@ use crate::voxel::World;
 #[serde(default)]
 pub struct CraftingSave {
     pub npcs: Vec<crate::npc::Npc>,
+    pub npc_distribution: crate::npc::Distribution,
     pub player: Option<PlayerSave>,
     pub weather: Option<crate::weather::WeatherState>,
     pub loot: Option<Vec<crate::loot::Drop>>,

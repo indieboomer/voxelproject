@@ -43,11 +43,23 @@ impl Journal {
             .default_height((ctx.screen_rect().height()-140.).clamp(240.,620.))
             .max_height((ctx.screen_rect().height()-80.).max(200.)).vscroll(true).resizable(false).collapsible(false)
             .anchor(egui::Align2::CENTER_CENTER,[0.,0.]).show(ctx,|ui| {
-                self.quest_rows(ui,account);
-                if self.npc.is_some() {if !self.feedback.is_empty() {ui.label(&self.feedback);}return;}
+                if self.npc.is_some() {self.quest_rows(ui,account);if !self.feedback.is_empty() {ui.label(&self.feedback);}return;}
+                if self.camp.is_none() {self.quest_rows(ui,account);}
                 if let Some(camp)=self.camp {
                     ui.heading(format!("{} · Campkeeper",adventure::guide_name(camp)));
                     ui.label("“A fire, a few supplies, and a story worth bringing back. That's all a traveler needs.”");
+                    ui.separator();
+                    ui.heading("Campfire cooking");
+                    let raw=adventure::count(account,crate::voxel::BlockType::Meat);
+                    let cooked=adventure::count(account,crate::voxel::BlockType::CookedMeat);
+                    ui.label(format!("Raw meat: {raw} | Cooked meat: {cooked}"));
+                    ui.label("1 raw meat becomes 1 cooked meat. Restores 25 health when eaten in I. No mana or extra fuel needed.");
+                    let room=u32::MAX-cooked;
+                    let batch=raw.min(crate::food::MAX_COOK_BATCH).min(room);
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.add_enabled(player.health>0. && batch>0,egui::Button::new("Cook 1 meat")).clicked(){request=Some(Action::Cook{camp,amount:1,revision:account.revision});}
+                        if ui.add_enabled(player.health>0. && batch>1,egui::Button::new(format!("Cook batch ({batch})"))).clicked(){request=Some(Action::Cook{camp,amount:batch,revision:account.revision});}
+                    });
                     ui.separator();
                 }
                 ui.label(RichText::new(format!("{} / 3 contracts · {}",account.adventure.stage,account.adventure.title())).strong());
@@ -58,7 +70,7 @@ impl Journal {
                 if account.adventure.stage < 3 {ui.colored_label(Color32::from_rgb(230,190,110),format!("Reward: {}",account.adventure.reward()));}
                 ui.separator();
                 if let Some(camp)=self.camp {
-                    ui.label("Rest restores health, cures poison, and sets your recovery camp. Nearby hostiles prevent resting and trading.");
+                    ui.label("Rest restores health, cures poison, and sets your recovery camp. Nearby hostiles prevent resting, cooking, and trading.");
                     if ui.add_enabled(player.health>0.,egui::Button::new("Rest and set recovery camp")).clicked() {request=Some(Action::Rest{camp});}
                     if account.adventure.stage < 3 && ui.add_enabled(adventure::ready(account)&&player.health>0.,egui::Button::new(if account.adventure.stage==0 {"Deliver 6 oak wood + 4 stone"} else {"Complete contract"})).clicked() {request=Some(Action::Claim{camp});}
                 } else {ui.label("Find a campfire and press F to speak with its keeper. Contracts are optional; your tools and world remain yours.");}
@@ -97,7 +109,7 @@ impl Journal {
                 }
             });
         }
-        if self.npc.is_none() {ui.small("The six travelers patrol near your first recovery camp. Look at one and press F.");}
+        if self.npc.is_none() {ui.small("One traveler starts near camp. Explore to meet more roughly every 100 blocks on dry land. Look at one and press F.");}
         ui.separator();
     }
     pub fn hud(&self, ctx: &egui::Context, player: &Player, waypoint: Option<glam::Vec3>) {

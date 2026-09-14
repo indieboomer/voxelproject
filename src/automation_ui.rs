@@ -134,7 +134,7 @@ impl Panel {
                 for (id,n) in &d.output {ui.small(format!("Output: {id} ×{n}"));}
                 let mut choices:Vec<String>=(0..5).map(|i|element_id(i).into()).collect();
                 choices.extend(crate::voxel::COLLECTIBLE_BLOCKS.iter().map(|b|format!("resource:{}",b.id())));
-                choices.extend(["item:axe","item:pickaxe","item:sword","item:bow"].map(str::to_owned));
+                choices.extend(crate::equipment::Gear::ALL.map(|g|format!("item:{}",g.id())));
                 choices.extend(account.production_goods.keys().cloned());choices.extend(d.items.keys().cloned());choices.extend(d.output.keys().cloned());
                 choices.sort();choices.dedup();
                 egui::ComboBox::from_label("Transfer matter").selected_text(&self.item).show_ui(ui,|ui|{for item in choices {ui.selectable_value(&mut self.item,item.clone(),item);}});

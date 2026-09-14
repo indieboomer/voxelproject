@@ -17,6 +17,11 @@ pub struct CraftingUi {
     extraction_block: BlockType,
     extraction_amount: u32,
     recipe_search: String,
+    tab: u8,
+    gear_search: String,
+    gear_path: Option<usize>,
+    craftable_only: bool,
+    selected_gear: crate::equipment::Gear,
 }
 impl Default for CraftingUi {
     fn default() -> Self {
@@ -31,6 +36,8 @@ impl Default for CraftingUi {
             extraction_block: BlockType::Stone,
             extraction_amount: 1,
             recipe_search: String::new(),
+            tab: 0, gear_search: String::new(), gear_path: None, craftable_only: false,
+            selected_gear: crate::equipment::Gear::Axe,
         }
     }
 }
@@ -44,6 +51,72 @@ fn selector(ui: &mut egui::Ui, id: impl std::hash::Hash, element: &mut Element) 
         });
 }
 impl CraftingUi {
+    pub fn show_book(&mut self,kind:u8) {
+        if kind>=4 {return;}
+        self.tab=0;self.gear_path=Some(kind as usize+1);self.gear_search.clear();self.craftable_only=false;
+        self.selected_gear=crate::equipment::Gear::ALL[4+kind as usize*4];
+        self.feedback=format!("{}: four recipes learned. This book remains for other travelers.",crate::gear_catalog::BOOK_NAMES[kind as usize]);
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn equipment_panel(&mut self,ui:&mut egui::Ui,registry:&Registry,account:&Account,world:&World,creatures:&Creatures,pos:Vec3,players:&[Vec3])->Option<Action> {
+        use crate::equipment::{Gear,Entry};
+        let mut request=None;
+        ui.horizontal_wrapped(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut self.gear_search).hint_text("Search equipment or effect").desired_width(260.));
+            ui.checkbox(&mut self.craftable_only,"Can craft now");
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.selectable_value(&mut self.gear_path,None,"All");
+            for (i,path) in crate::gear_catalog::PATHS.iter().enumerate() {ui.selectable_value(&mut self.gear_path,Some(i),*path);}
+        });
+        ui.small(format!("{} / 4 recipe books discovered. Find floating books on dry land; look at one and press F.",account.adventure.recipe_books.count_ones()));
+        let query=self.gear_search.trim().to_lowercase();
+        let rows:Vec<_>=Gear::ALL.into_iter().filter(|g|self.gear_path.is_none_or(|p|p==g.path()))
+            .filter(|g|format!("{} {}",g.name(),g.description()).to_lowercase().contains(&query))
+            .filter(|g|!self.craftable_only || registry.preview(account,&Action::CraftGear(*g),world,creatures,pos,players).is_ok()).collect();
+        if !rows.contains(&self.selected_gear) {if let Some(g)=rows.first(){self.selected_gear=*g;}}
+        let selected=self.selected_gear;
+        ui.columns(2,|columns| {
+            egui::ScrollArea::vertical().id_source("equipment_catalog").max_height(340.).show(&mut columns[0],|ui| {
+                if rows.is_empty(){ui.label("No matching equipment. Change the search or filters.");}
+                for g in &rows {
+                    ui.horizontal(|ui| {
+                        crate::equipment_ui::icon(ui,Entry::Gear(*g));
+                        ui.selectable_value(&mut self.selected_gear,*g,format!("{}{}  ({})",if g.known(account){""}else{"? "},g.name(),Entry::Gear(*g).count(account)));
+                    });
+                }
+            });
+            let ui=&mut columns[1];
+            if !rows.is_empty() {
+                ui.heading(selected.name());ui.label(selected.description());
+                ui.label(format!("Owned: {}",Entry::Gear(selected).count(account)));
+                if let Some(book)=selected.book() {
+                    ui.small(format!("Recipe: {}",crate::gear_catalog::BOOK_NAMES[book as usize]));
+                }
+                ui.separator();
+                for (block,n) in selected.ingredients(false) {
+                    let have=Entry::Resource(block).count(account);
+                    ui.colored_label(if have>=n {egui::Color32::LIGHT_GREEN}else{egui::Color32::LIGHT_RED},format!("{}: {have} / {n}",block.name()));
+                }
+                let mana=registry.mana_charge(crate::crafting::gear_formula(selected,false).unwrap().2);
+                ui.label(format!("Mana: {} / {mana}",account.mana));
+                let action=Action::CraftGear(selected);
+                let status=registry.preview(account,&action,world,creatures,pos,players);
+                if ui.add_enabled(self.ready() && status.is_ok(),egui::Button::new(format!("Craft {}",selected.name()))).clicked(){request=Some(action);}
+                if let Err(error)=status {ui.label(error);}
+                ui.small("Assign crafted equipment to your hotbar in I. Effects apply while held.");
+            }
+        });
+        ui.separator();
+        ui.collapsing("Discovered recipe library",|ui| {
+            for kind in 0..4 {
+                let known=account.adventure.recipe_books & (1<<kind)!=0;
+                if ui.add_enabled(known,egui::Button::new(crate::gear_catalog::BOOK_NAMES[kind])).clicked(){self.show_book(kind as u8);}
+            }
+            ui.small("Starter equipment is always available. Books teach four specialist recipes each; none are consumed when read.");
+        });
+        request
+    }
     fn ready(&self) -> bool {
         !self.pending
             && self
@@ -80,6 +153,7 @@ impl CraftingUi {
                 720.0
             })
             .default_height(620.0)
+            .max_width((ctx.screen_rect().width()-48.0).max(260.0))
             .max_height((ctx.screen_rect().height() - 70.0).max(180.0))
             .vscroll(true)
             .show(ctx, |ui| {
@@ -101,22 +175,18 @@ impl CraftingUi {
                         );
                     }
                 });
-                ui.label("Ordered formula — gaps are ignored. Repeated elements are allowed.");
-                egui::CollapsingHeader::new("Tools and weapons — sword / axe / pickaxe").default_open(true).show(ui,|ui| {
-                    ui.label("The campkeeper's final contract requires a newly crafted sword.");
-                    for gear in crate::equipment::Gear::ALL {
-                        let (iron,wood,mana)=crate::crafting::gear_formula(gear,false).unwrap();
-                        let action=Action::CraftGear(gear);
-                        let status=registry.preview(account,&action,world,creatures,pos,players);
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(format!("{} (owned {}): {iron} iron + {wood} oak wood + {} mana",gear.name(),account.gear[gear as usize],registry.mana_charge(mana)));
-                            let button=ui.add_enabled(self.ready() && request.is_none() && status.is_ok(),egui::Button::new(format!("Craft {}",gear.name())));
-                            if button.clicked() {request=Some(action);}
-                            if let Err(error)=status {button.on_hover_text(error);}
-                        });
-                    }
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.tab,0,"Equipment & recipe books");
+                    ui.selectable_value(&mut self.tab,1,"Elemental formulas & extraction");
                 });
-                ui.label("Bow: 20-block reach, 1 mana per shot. Select it in I, then left-click to shoot.");
+                ui.separator();
+                if self.tab==0 {
+                    request=self.equipment_panel(ui,registry,account,world,creatures,pos,players);
+                    if self.pending {ui.label("Waiting for host...");}
+                    ui.label(&self.feedback);
+                    return;
+                }
+                ui.label("Ordered formula — gaps are ignored. Repeated elements are allowed.");
                 let bound=Action::BindSheep;
                 let available=registry.preview(account,&bound,world,creatures,pos,players);
                 ui.horizontal_wrapped(|ui| {
@@ -394,6 +464,7 @@ mod tests {
             ..CraftingUi::default()
         };
         for known in [false, true] {
+            ui.tab=1;
             if known {
                 ui.slots[0] = Some(Slot {
                     element: Element::Earth,

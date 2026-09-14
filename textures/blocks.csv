@@ -82,3 +82,5 @@ glowcap,Glowcap,plants,1,0.35,0.9,1,glowcap,,,,1,1
 thorn_bush,Thorn Bush,plants,1,0,0.9,2,thorn_bush,,,,1,1
 dry_shrub,Dry Shrub,plants,1,0,0.9,1,dry_shrub,,,,1,1
 snow,Snow,water and ice,1,0,0.9,1,snow,,,,,
+meat,Raw meat,food,1,0,0.9,1,meat,,,,,
+cooked_meat,Cooked meat,food,1,0,0.9,1,cooked_meat,,,,,

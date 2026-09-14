@@ -511,7 +511,7 @@ fn smoke_code(code: &str, kind: PromptKind) -> Result<(), String> {
         ("sunny", 0.75),
     ] {
         let players = [0, 7].map(|id| PlayerSnapshot {
-            finances: crate::scripting::InventoryBalances {mana:100,elements:[20;5],items:[1,1,1,0],..Default::default()},
+            finances: crate::scripting::InventoryBalances {mana:100,elements:[20;5],items:crate::gear_catalog::starter_counts(),..Default::default()},
             id,
             pos,
             resources: [1; COLLECTIBLE_BLOCKS.len()],
@@ -595,7 +595,7 @@ pub fn verify_policy(plan: &Plan, code: &str) -> Result<(), String> {
     let mut creatures = Creatures::new();
     let id = creatures.spawn_one(CreatureKind::from_u8(species), pos, 1);
     let players = [0, 7].map(|id| PlayerSnapshot {
-        finances: crate::scripting::InventoryBalances {mana:100,elements:[20;5],items:[1,1,1,0],..Default::default()},
+        finances: crate::scripting::InventoryBalances {mana:100,elements:[20;5],items:crate::gear_catalog::starter_counts(),..Default::default()},
         id,
         pos,
         resources: [0; COLLECTIBLE_BLOCKS.len()],

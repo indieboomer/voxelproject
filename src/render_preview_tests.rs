@@ -269,6 +269,11 @@ fn render_weather_previews() {
             crate::model::push_model(&mut effect_mesh.vertices,&mut effect_mesh.indices,models.for_kind(kind),kind,"idle",0.0,Vec3::from_array(pos),0.0);
         }
     }
+    if std::env::var_os("VOXEL_BOOK_PREVIEW").is_some() {
+        target=Vec3::new(-3.,7.5,1.5);
+        let book=crate::lore_books::Book{sector:(0,0,0),kind:0,pos:Vec3::new(-3.,7.,1.5)};
+        effect_mesh.extend(crate::lore_books::mesh(&[book],1.0));
+    }
     if std::env::var_os("VOXEL_NPC_PREVIEW").is_some() {
         target=Vec3::new(1.5,8.1,-1.5);
         for kind in 0..6 {
@@ -401,7 +406,9 @@ fn render_weather_previews() {
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let eye = if std::env::var_os("VOXEL_NPC_PREVIEW").is_some() {
+    let eye = if std::env::var_os("VOXEL_BOOK_PREVIEW").is_some() {
+        Vec3::new(0.5,10.,6.)
+    } else if std::env::var_os("VOXEL_NPC_PREVIEW").is_some() {
         Vec3::new(1.5,10.,11.)
     } else if crystal_preview {
         Vec3::new(4.5,8.5,13.5)

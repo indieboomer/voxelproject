@@ -18,7 +18,7 @@
 # (air, mud, redstone, crystal, campfire), so it can't drift out of sync with the
 # actual block system the way a third hand-copied list would.
 
-version: "1.28.0"
+version: "1.30.0"
 title: World API
 description: >
   The Lua API exposed to sandboxed rule modules as the `api` table passed
@@ -288,6 +288,7 @@ types:
       - {name: title, type: string, desc: "Current contract name, or Wayfinder after completion."}
       - {name: explored_depths, type: boolean, desc: "Explored roofed underground air at Y 2..12 while on contract two."}
       - {name: crafted_tool, type: boolean, desc: "Successfully crafted a new sword through the player crafting transaction while on contract three. Legacy tool completion credit is retained."}
+      - {name: recipe_books, type: integer, desc: "Discovered recipe bitmask: 1 harvesting, 2 combat, 4 magic, 8 exploration. Reading world books teaches recipes per player; rules cannot grant knowledge directly."}
       - {name: recoveries, type: integer, desc: "Number of automatic recoveries from defeat."}
       - {name: complete, type: boolean}
       - {name: home, type: "table | nil", desc: "Recovery feet cell with integer x/y/z; nil before a home is established."}
@@ -449,7 +450,7 @@ methods:
   - name: get_player_journal
     namespace: world
     category: query
-    summary: "Read a connected player's saved campkeeper contracts, recovery location, and twenty traveler quests (quests and quests_completed added in 1.28.0). Detached table; scripts cannot directly claim rewards or change built-in progress. Quest givers are peaceful patrol NPCs, separate from combat creatures."
+    summary: "Read a connected player's saved campkeeper contracts, recovery location, and twenty traveler quests (quests and quests_completed added in 1.28.0). Detached table; scripts cannot directly claim rewards or change built-in progress. Quest givers are peaceful patrol NPCs, separate from combat creatures. One random traveler starts near camp; more are discovered roughly every 100 blocks on dry land. Repeated roles share the same per-player quest completion."
     params:
       - {name: player_id, type: integer}
     returns: {type: "PlayerJournal | nil", desc: "nil for a missing player."}
@@ -469,7 +470,7 @@ methods:
   - name: get_player_inventory
     namespace: world
     category: query
-    summary: "Complete detached inventory: resources maps resource IDs to counts, items maps axe/pickaxe/sword/bow to counts, elements maps earth/fire/water/life/death to counts, and mana is an integer. Includes zeros, staged changes and earlier committed callbacks; nil for missing player."
+    summary: "Complete detached inventory: resources maps resource IDs to counts, items maps all 20 equipment IDs to counts (see get_item_recipe), elements maps earth/fire/water/life/death to counts, and mana is an integer. Includes zeros, staged changes and earlier committed callbacks; nil for missing player."
     params:
       - {name: player_id, type: integer}
     returns: {type: "table | nil"}
@@ -500,7 +501,7 @@ methods:
   - name: get_item_count
     namespace: world
     category: query
-    summary: "Count an equipment item (axe, pickaxe, sword, bow) or collectible resource ID. nil for unknown player/ID."
+    summary: "Count any equipment ID listed by get_player_inventory or collectible resource ID. nil for unknown player/ID."
     params:
       - {name: player_id, type: integer}
       - {name: kind, type: string}
@@ -557,7 +558,7 @@ methods:
   - name: craft_item
     namespace: world
     category: action
-    summary: "Create one axe, pickaxe, sword or bow using the same iron/oak_wood/mana formula as inventory. Optional amount defaults to 1 and must equal 1. No free gear grant. Read get_item_recipe first."
+    summary: "Create one equipment item using the same materials, mana and discovered-recipe requirements as inventory. Optional amount defaults to 1 and must equal 1. Specialist recipes require the player to read the corresponding world recipe book. No free gear grant. Read get_item_recipe first."
     params:
       - {name: player_id, type: integer}
       - {name: kind, type: string}
@@ -569,7 +570,7 @@ methods:
   - name: decompose_item
     namespace: world
     category: action
-    summary: "Consume one owned axe/pickaxe/sword/bow and its mana cost; return salvaged iron and oak_wood per get_item_recipe. Optional amount must equal 1."
+    summary: "Consume one owned equipment item and its mana cost; return salvaged materials per get_item_recipe. Optional amount must equal 1. Recipe knowledge is not required for salvage."
     params:
       - {name: player_id, type: integer}
       - {name: kind, type: string}
@@ -615,7 +616,7 @@ methods:
   - name: get_item_recipe
     namespace: world
     category: query
-    summary: "For axe/pickaxe/sword/bow returns create and decompose tables. Each has resources={iron=count, oak_wood=count} and mana=cost. Create consumes listed materials; decompose returns them. nil for unknown equipment."
+    summary: "Equipment IDs: axe, pickaxe, sword, bow, forester_axe, prospector_pick, spade, sickle, spear, dagger, warhammer, longbow, ember_wand, tide_wand, life_staff, survey_lantern, trail_charm, leaping_charm, diving_charm, feather_charm. Returns create/decompose tables with resources={resource_id=count} and mana=cost. Specialist items also return recipe_book and recipe_book_bit; require that bit in get_player_journal(player_id).recipe_books to craft. Create consumes materials; decompose returns them. nil for unknown equipment."
     params:
       - {name: kind, type: string}
     returns: {type: "table | nil"}
@@ -636,7 +637,7 @@ methods:
   - name: get_devices
     namespace: world
     category: query
-    summary: "List automation devices in deterministic cell order (at most 64 by default). Each snapshot has x/y/z, kind, enabled, mana, signal, activity, recipe, element, rotation, reserve, progress (0..1), items and output maps. Matter map keys are element:earth/fire/water/life/death, resource:<block_id>, item:axe/pickaxe/sword/bow or creature:<kind>. Returned tables are copies. Production runs separately on fixed host ticks; never call an LLM for production."
+    summary: "List automation devices in deterministic cell order (at most 64 by default). Each snapshot has x/y/z, kind, enabled, mana, signal, activity, recipe, element, rotation, reserve, progress (0..1), items and output maps. Matter map keys are element:earth/fire/water/life/death, resource:<block_id>, item:<equipment_id> or creature:<kind>. Returned tables are copies. Production runs separately on fixed host ticks; never call an LLM for production."
     params: []
     returns: {type: "table[]", desc: "Device snapshots including staged changes."}
     errors: []
@@ -1098,10 +1099,10 @@ methods:
   - name: give_item
     namespace: world
     category: action
-    summary: "Grants collectible resources or equipment IDs axe/pickaxe/sword/bow into a connected player inventory, bypassing crafting costs. Equipment amounts must be 1..item_grant_max and overflow is rejected; legacy resource grants clamp the amount and saturate balances. Only use this when the request explicitly asks to add to a player's inventory/resources -- for everything else (\"add 100 stone\", \"fill this area with water\"), prefer replace_block to place blocks in the world instead."
+    summary: "Grants collectible resources or equipment IDs listed by get_player_inventory into a connected player inventory, bypassing crafting costs. Equipment amounts must be 1..item_grant_max and overflow is rejected; legacy resource grants clamp the amount and saturate balances. Only use this when the request explicitly asks to add to a player's inventory/resources -- for everything else (\"add 100 stone\", \"fill this area with water\"), prefer replace_block to place blocks in the world instead."
     params:
       - {name: player_id, type: integer, desc: "Target player (matches PlayerSnapshot.id)."}
-      - {name: kind, type: string, desc: "A collectible resource ID or equipment ID axe/pickaxe/sword/bow. Air, water and campfire are not inventory stacks."}
+      - {name: kind, type: string, desc: "A collectible resource ID or equipment ID listed by get_player_inventory. Air, water and campfire are not inventory stacks."}
       - {name: amount, type: integer, desc: "Resource grants clamp into [0, item_grant_max]; equipment requires 1..item_grant_max."}
     returns: {type: boolean, desc: "false for invalid ID/player/amount or equipment overflow. True stages the grant."}
     errors: []
@@ -1111,7 +1112,7 @@ methods:
   - name: take_item
     namespace: world
     category: action
-    summary: "Atomically remove collectible resources or equipment IDs axe/pickaxe/sword/bow from any connected player. Includes staged changes; failure rolls back. Equipment amounts must be 1..item_grant_max. This consumes items without decomposition returns."
+    summary: "Atomically remove collectible resources or equipment IDs listed by get_player_inventory from any connected player. Includes staged changes; failure rolls back. Equipment amounts must be 1..item_grant_max. This consumes items without decomposition returns."
     params:
       - {name: player_id, type: integer}
       - {name: kind, type: string}
@@ -1156,7 +1157,7 @@ methods:
   - name: has_item
     namespace: world
     category: query
-    summary: "Checks equipment IDs axe/pickaxe/sword/bow or collectible resource IDs. Omitted amount defaults to 1; false means insufficient count, nil means missing player or invalid ID/amount. Includes staged changes."
+    summary: "Checks equipment IDs listed by get_player_inventory or collectible resource IDs. Omitted amount defaults to 1; false means insufficient count, nil means missing player or invalid ID/amount. Includes staged changes."
     params:
       - {name: player_id, type: integer}
       - {name: kind, type: string}

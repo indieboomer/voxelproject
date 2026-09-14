@@ -231,7 +231,7 @@ impl Models {
     /// (see this module's doc comment). `app.rs`'s `create_atlas_bind_group`
     /// uploads these once at startup into the `tex_layer`-indexed
     /// `creature_texture` array `emit_skinned_mesh`'s vertices sample from.
-    pub fn creature_texture_layers(&self) -> [Option<&image::RgbaImage>; 34] {
+    pub fn creature_texture_layers(&self) -> [Option<&image::RgbaImage>; 35] {
         [
             self.sheep.texture.as_ref(),
             self.chicken.texture.as_ref(),
@@ -264,6 +264,7 @@ impl Models {
             self.npcs[0].texture.as_ref(),self.npcs[1].texture.as_ref(),
             self.npcs[2].texture.as_ref(),self.npcs[3].texture.as_ref(),
             self.npcs[4].texture.as_ref(),self.npcs[5].texture.as_ref(),
+            lore_book_model().texture.as_ref(),
         ]
     }
 
@@ -1042,6 +1043,31 @@ pub fn chest_mesh() -> &'static crate::voxel::mesher::MeshData {
 }
 
 /// Cache the static bag geometry once; instances only translate these vertices.
+fn lore_book_model() -> &'static AnimatedModel {
+    static MODEL:std::sync::OnceLock<AnimatedModel>=std::sync::OnceLock::new();
+    MODEL.get_or_init(|| {let mut model=load_glb(include_bytes!("../models/lore_book.glb"));model.texture_layer=Some(35.0);model})
+}
+pub fn lore_book_mesh() -> &'static crate::voxel::mesher::MeshData {
+    static MESH:std::sync::OnceLock<crate::voxel::mesher::MeshData>=std::sync::OnceLock::new();
+    MESH.get_or_init(|| {
+        let model=lore_book_model();
+        let mut mesh=crate::voxel::mesher::MeshData{vertices:Vec::new(),indices:Vec::new()};
+        let matrices=compute_world_matrices(model,None,0.0);
+        emit_rigid_parts(model,&matrices,&mut mesh.vertices,&mut mesh.indices,Vec3::ZERO,&|x,z|(x,z),white_uv());
+        // The supplied book lies flat. Stand it on its bottom edge, keeping lighting correct.
+        let upright=glam::Mat3::from_rotation_x(std::f32::consts::FRAC_PI_2);
+        for v in &mut mesh.vertices {
+            v.position=(upright*Vec3::from_array(v.position)).to_array();
+            v.normal=(upright*Vec3::from_array(v.normal)).to_array();
+        }
+        let min=mesh.vertices.iter().fold(Vec3::splat(f32::INFINITY),|a,v|a.min(Vec3::from_array(v.position)));
+        let max=mesh.vertices.iter().fold(Vec3::splat(f32::NEG_INFINITY),|a,v|a.max(Vec3::from_array(v.position)));
+        let scale=0.85/(max-min).max_element().max(0.001);
+        let origin=Vec3::new((min.x+max.x)*0.5,min.y,(min.z+max.z)*0.5);
+        for v in &mut mesh.vertices {v.position=((Vec3::from_array(v.position)-origin)*scale).to_array();v.emission=0.;}
+        mesh
+    })
+}
 pub fn loot_bag_mesh() -> &'static crate::voxel::mesher::MeshData {
     static MESH: std::sync::OnceLock<crate::voxel::mesher::MeshData> = std::sync::OnceLock::new();
     MESH.get_or_init(|| {

@@ -38,7 +38,15 @@ def tile(identifier, spec, write=True):
     for y in range(16):
         for x in range(16):
             draw.point((x, y), fill=shade(rng.choice([-15, -8, 0, 0, 7, 12])))
-    if pattern == 'snow':
+    if pattern == 'meat':
+        im = Image.new('RGBA', (16, 16), (0, 0, 0, 0)); draw = ImageDraw.Draw(im)
+        draw.polygon([(3,3),(10,2),(14,5),(13,11),(9,14),(3,13),(1,9)], fill=shade(-35))
+        draw.polygon([(4,4),(10,3),(13,6),(12,10),(9,12),(4,11),(2,8)], fill=shade(10))
+        draw.line((4,5,8,4,11,6), fill=shade(45), width=1)
+        draw.ellipse((5,6,8,9), fill=(235,209,167,255))
+        if identifier == 'cooked_meat':
+            for x,y in [(3,7),(8,5),(9,10)]: draw.line((x,y,x+2,y+1), fill=shade(-45))
+    elif pattern == 'snow':
         # Low-contrast powder, with periodic drift highlights. Matching edge
         # texels keep the tile seamless across large snow fields on every face.
         import math
@@ -185,7 +193,7 @@ def write_provenance(textures, rows):
 
 def main():
     ids = [r['id'] for r in DATA]
-    assert len(ids) == len(set(ids)) == 84
+    assert len(ids) == len(set(ids)) == 86
     crafting_path = ROOT / 'data/crafting.json'
     crafting = json.loads(crafting_path.read_text())
     # Preserve creature and batch variants; the catalog owns single-resource formulas.
@@ -212,7 +220,7 @@ def main():
             cost = [sum(s['amount'] for s in slots if s['element']==e) for e in ELEMENTS]
             assert all(0 <= a <= b for a,b in zip(r['composition'],cost)), r['id']
             recipes.append(dict(id=r['id'],inputs=slots,output=dict(kind='resource',id=r['id'],quantity=1)))
-        assert (r['source'] == 'natural') == (slots is None), r['id']
+        assert (r['source'] in ('natural', 'loot', 'cooked')) == (slots is None), r['id']
         compositions.append(dict(kind='resource',id=r['id'],elements=r['composition']))
         metadata.append('    ResourceInfo { block: BlockType::%s, category: %s, harvest_category: %s, hand_pickable: %s, source: %s, location: %s },' %
                         (variant(r['id']),json.dumps(r['category']),json.dumps(r['harvest_category']),str(r['hand_pickable']).lower(),json.dumps(r['source']),json.dumps(r['location'])))

@@ -5,40 +5,44 @@ impl App {
             self.npcs.clear();
             return;
         }
-        let mut seen = [false; 6];
-        self.npcs.retain(|n| {
-            let keep = !seen[n.kind as usize];
-            seen[n.kind as usize] = true;
-            keep
-        });
-        if self.npcs.len() < 6 {
-            let center = self
-                .player
-                .crafting
-                .adventure
-                .home
-                .map(crate::adventure::feet)
-                .unwrap_or(self.player.position);
-            for npc in crate::npc::populate(&mut self.world, center) {
-                if !seen[npc.kind as usize] {
-                    self.npcs.push(npc);
-                }
-            }
-        }
+        let center = self
+            .player
+            .crafting
+            .adventure
+            .home
+            .map(crate::adventure::feet)
+            .unwrap_or(self.player.position);
+        self.npc_distribution
+            .initialize(&mut self.world, &mut self.npcs, center);
     }
     pub(super) fn update_npcs(&mut self, dt: f32) {
         let players = self.all_player_positions();
         for npc in &mut self.npcs {
-            npc.tick(&self.world, &players, dt);
+            if players.iter().any(|p| {
+                Vec3::from_array(npc.position).distance_squared(*p)
+                    < crate::npc::ACTIVE_RADIUS.powi(2)
+            }) {
+                npc.tick(&self.world, &players, dt);
+            }
         }
         // Clients predict only these harmless patrol poses; all dialogue is host-validated.
         self.npc_timer += dt;
         if self.npc_timer >= 0.5 {
             self.npc_timer = 0.;
+            if matches!(self.net, NetRole::Host(_)) {
+                self.npc_distribution
+                    .discover(&mut self.world, &mut self.npcs, &players);
+            }
             if let NetRole::Host(host) = &mut self.net {
-                for &peer in host.clients.keys() {
-                    host.reliable
-                        .send(&host.socket, peer, ReliableMsg::Npcs(self.npcs.clone()));
+                for (&peer, id) in &host.clients {
+                    let Some(player) = host.remote_players.get(id) else {
+                        continue;
+                    };
+                    host.reliable.send(
+                        &host.socket,
+                        peer,
+                        ReliableMsg::Npcs(crate::npc::nearby(&self.npcs, player.pos)),
+                    );
                 }
             }
         }

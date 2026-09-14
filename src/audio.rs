@@ -401,6 +401,9 @@ impl AudioEngine {
     pub fn play_loot(&mut self) {
         self.play_varied(LOOT,0.55,0.0,0.0);
     }
+    pub fn play_lore_book(&mut self) {
+        self.play_varied(include_bytes!("../sounds/lore_book.mp3"),0.55,0.0,0.0);
+    }
     pub fn play_machine(&mut self,pos:Vec3,cue:crate::machine_feedback::Cue) {
         use crate::machine_feedback::Cue;
         let (bytes,volume)=match cue {

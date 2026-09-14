@@ -10,6 +10,7 @@ pub type Cell = (i32, i32, i32);
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Progress {
+    pub recipe_books: u8,
     pub quests: crate::quests::Progress,
     pub stage: u8,
     pub home: Option<Cell>,
@@ -19,7 +20,7 @@ pub struct Progress {
 }
 impl Progress {
     pub fn valid(&self) -> bool {
-        self.quests.valid() && self.stage <= 3
+        self.recipe_books <= 15 && self.quests.valid() && self.stage <= 3
             && self.home.is_none_or(|(x, y, z)| {
                 x.unsigned_abs() < 1_000_000
                     && z.unsigned_abs() < 1_000_000
@@ -56,11 +57,12 @@ impl Progress {
 pub enum Action {
     Rest { camp: Cell },
     Claim { camp: Cell },
+    Cook { camp: Cell, amount: u32, revision: u64 },
 }
 impl Action {
     pub fn camp(self) -> Cell {
         match self {
-            Self::Rest { camp } | Self::Claim { camp } => camp,
+            Self::Rest { camp } | Self::Claim { camp } | Self::Cook { camp, .. } => camp,
         }
     }
 }
@@ -161,6 +163,11 @@ pub fn transact(
     }
     let mut next = account.clone();
     let message = match action {
+        Action::Cook {amount,revision,..} => {
+            if revision!=account.revision {return Err("Inventory changed; try cooking again".into());}
+            crate::food::cook(&mut next,amount)?;
+            format!("Cooked {amount} meat. Eat it in inventory [I] to restore health.")
+        }
         Action::Rest { .. } => {
             next.adventure.home =
                 Some(safe_camp(world, camp).ok_or("Clear a safe standing place beside the fire")?);
@@ -224,6 +231,9 @@ pub fn observe(world: &World, account: &mut Account, position: Vec3, health: f32
 }
 
 pub fn respawn_position(world: &mut World, home: Option<Cell>) -> Vec3 {
+    if home.is_none() {
+        return surface_spawn_position(world, 0, 0);
+    }
     let preferred = home.unwrap_or((0, world.terrain_height(0, 0) + 1, 0));
     crate::crafting::load_interaction_area(world, feet(preferred));
     for radius in 0i32..=8 {
@@ -242,34 +252,44 @@ pub fn respawn_position(world: &mut World, home: Option<Cell>) -> Vec3 {
             }
         }
     }
-    // A destroyed/buried camp falls back to dry surface, without editing the world.
-    for radius in 0i32..=24 {
+    surface_spawn_position(world, preferred.0, preferred.2)
+}
+
+/// Find dry surface ground with standing room, including generated water and edits.
+pub fn surface_spawn_position(world: &mut World, origin_x: i32, origin_z: i32) -> Vec3 {
+    for radius in 0i32..=256 {
         for x in -radius..=radius {
             for z in -radius..=radius {
                 if x.abs().max(z.abs()) != radius {
                     continue;
                 }
-                let (x, z) = (preferred.0 + x, preferred.2 + z);
-                crate::crafting::load_interaction_area(world, Vec3::new(x as f32, 30., z as f32));
-                for y in (1..crate::voxel::chunk::CHUNK_Y - 2).rev() {
-                    if clear_feet(world, (x, y, z)) {
-                        return feet((x, y, z));
-                    }
+                let (x, z) = (origin_x + x, origin_z + z);
+                let y = world.terrain_height(x, z) + 1;
+                if y <= crate::voxel::world::SEA_LEVEL {
+                    continue;
+                }
+                world.ensure_chunk_loaded(
+                    x.div_euclid(crate::voxel::chunk::CHUNK_X),
+                    z.div_euclid(crate::voxel::chunk::CHUNK_Z),
+                );
+                if clear_feet(world, (x, y, z)) {
+                    return feet((x, y, z));
                 }
             }
         }
     }
     // Remain bounded in entirely edited worlds; the next frame's physics can settle.
     Vec3::new(
-        preferred.0 as f32 + 0.5,
+        origin_x as f32 + 0.5,
         crate::voxel::chunk::CHUNK_Y as f32 + 2.,
-        preferred.2 as f32 + 0.5,
+        origin_z as f32 + 0.5,
     )
 }
 
 pub fn crystal_light(account: &Account) -> bool {
-    account.hotbar.entry() == Some(crate::equipment::Entry::Resource(BlockType::Crystal))
-        && count(account, BlockType::Crystal) > 0
+    (account.hotbar.entry() == Some(crate::equipment::Entry::Resource(BlockType::Crystal))
+        && count(account, BlockType::Crystal) > 0)
+        || crate::gear_catalog::held(account, crate::equipment::Gear::SurveyLantern)
 }
 
 /// Ignore stale movement in flight until a recovering guest reports arrival.
@@ -368,6 +388,21 @@ mod tests {
         }
     }
     #[test]
+    fn camp_cooking_commits_once_without_mana_and_requires_existing_fire() {
+        let (mut w,mut a,p)=fixture();
+        resource(&mut a,BlockType::Meat,64).unwrap();a.mana=0;
+        let rev=a.revision;
+        let action=Action::Cook{camp:CAMP,amount:64,revision:rev};
+        transact(&w,&mut a,p,50.,false,action).unwrap();
+        assert_eq!(count(&a,BlockType::Meat),0);assert_eq!(count(&a,BlockType::CookedMeat),64);
+        assert_eq!(a.mana,0);assert_eq!(a.revision,rev+1);
+        let before=a.clone();assert!(transact(&w,&mut a,p,50.,false,action).is_err());assert_eq!(a,before);
+        resource(&mut a,BlockType::Meat,1).unwrap();
+        w.set_block(CAMP.0,CAMP.1,CAMP.2,BlockType::Air);
+        let before=a.clone();
+        assert!(transact(&w,&mut a,p,50.,false,Action::Cook{camp:CAMP,amount:1,revision:before.revision}).is_err());assert_eq!(a,before);
+    }
+    #[test]
     fn contracts_commit_once_and_preserve_inventory_on_failure() {
         let (w, mut a, p) = fixture();
         let initial = a.clone();
@@ -426,7 +461,7 @@ mod tests {
             (p + Vec3::X * 20., 100., false),
             (Vec3::NAN, 100., false),
         ] {
-            for action in [Action::Rest { camp: CAMP }, Action::Claim { camp: CAMP }] {
+            for action in [Action::Rest { camp: CAMP }, Action::Claim { camp: CAMP }, Action::Cook { camp:CAMP,amount:1,revision:before.revision }] {
                 assert!(transact(&w, &mut a, pos, hp, danger, action).is_err());
                 assert_eq!(a, before);
             }
@@ -479,6 +514,25 @@ mod tests {
         assert!(a.adventure.crafted_tool);
     }
     #[test]
+    fn surface_spawn_avoids_water_and_obstructions() {
+        for shape in [crate::worldgen::Shape::Mainland, crate::worldgen::Shape::Islands,
+            crate::worldgen::Shape::Flat, crate::worldgen::Shape::Mountains] {
+            let mut w = World::new(42);
+            w.generation.shape = shape;
+            let first = surface_spawn_position(&mut w, 0, 0);
+            assert!(clear_feet(&w, cell(first)), "{shape:?}");
+            let p = cell(first);
+            w.set_block(p.0, p.1, p.2, BlockType::Water);
+            let next = surface_spawn_position(&mut w, p.0, p.2);
+            assert_ne!(next, first);
+            assert!(clear_feet(&w, cell(next)));
+            let p = cell(next);
+            w.set_block(p.0, p.1 + 1, p.2, BlockType::Stone);
+            let next = surface_spawn_position(&mut w, p.0, p.2);
+            assert!(clear_feet(&w, cell(next)));
+        }
+    }
+    #[test]
     fn recovery_moves_out_of_buried_camp_and_keeper_disappears_with_fire() {
         let (mut w, _, _) = fixture();
         w.set_block(8,crate::voxel::chunk::CHUNK_Y-1,6,BlockType::Stone);
@@ -497,6 +551,7 @@ mod tests {
     fn saved_accounts_preserve_journal_and_old_accounts_default_and_light_needs_stock() {
         let (_, mut a, _) = fixture();
         a.adventure = Progress {
+            recipe_books: 15,
             stage: 2,
             home: Some((8, 40, 6)),
             explored_depths: true,

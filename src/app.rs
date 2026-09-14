@@ -5,6 +5,10 @@ mod playtest_app;
 mod adventure_app;
 #[path = "npc_app.rs"]
 mod npc_app;
+#[path = "lore_books_app.rs"]
+mod lore_books_app;
+#[path = "food_app.rs"]
+mod food_app;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use crate::transport::{Peer, Transport, JoinTarget};
@@ -660,6 +664,7 @@ pub struct App {
     interaction_states: HashMap<PlayerId, crate::equipment::Mining>,
     recovery_timers: HashMap<PlayerId, f32>,
     npcs: Vec<crate::npc::Npc>,
+    npc_distribution: crate::npc::Distribution,
     npc_timer: f32,
     recovery_arrivals: HashMap<PlayerId, Vec3>,
     use_animation: f32,
@@ -720,6 +725,7 @@ impl App {
     fn crafting_save(&self) -> crate::save::CraftingSave {
         crate::save::CraftingSave {
             npcs: self.npcs.clone(),
+            npc_distribution: self.npc_distribution.clone(),
             player: Some(crate::save::PlayerSave::capture(&self.player)),
             weather: Some(self.weather.clone()),
             loot: Some(self.loot.drops.clone()),
@@ -901,6 +907,11 @@ impl App {
         } else {
             self.mining_hits=state.hits;self.mining_target=state.target.map(|v|v.0);
             if let Some(text)=feedback {self.toasts.push(Toast::new(text));}
+        }
+        if result.is_ok() && matches!(intent.action,crate::equipment::Action::Attack)
+            && intent.item==Some(crate::equipment::Entry::Gear(crate::equipment::Gear::LifeStaff)) {
+            if from.is_none() {self.player.heal(15.);}
+            else if let NetRole::Host(host)=&mut self.net {if let Some(rp)=host.remote_players.get_mut(&id) {rp.health=(rp.health+15.).min(crate::player::MAX_HEALTH);}}
         }
         if let Ok(Some((p,block,old)))=result {
             self.apply_block_edit(p.0,p.1,p.2,block);
@@ -1247,10 +1258,10 @@ impl App {
                         world.generation.underground = true;
                         world.generation.cave_version = crate::worldgen::WorldGeneration::default().cave_version;
                         world.name = launch.world_name.clone();
-                        let h = world.terrain_height(0, 0) as f32 + 2.0;
+                        let spawn = crate::adventure::surface_spawn_position(&mut world, 0, 0);
                         (
                             world,
-                            Vec3::new(0.5, h, 0.5),
+                            spawn,
                             -90f32.to_radians(),
                             0.0,
                             0.28,
@@ -1431,7 +1442,8 @@ impl App {
             held_mesh,
             interaction_states: HashMap::new(),
             recovery_timers: HashMap::new(),
-            npcs: crafting_save.npcs.into_iter().filter(|n|n.valid()).take(6).collect(),
+            npcs: crafting_save.npcs.into_iter().filter(|n|n.valid()).collect(),
+            npc_distribution: crafting_save.npc_distribution,
             npc_timer: 0.,
             recovery_arrivals: HashMap::new(),
             use_animation: 0.0,
@@ -1967,10 +1979,10 @@ impl App {
             self.player.crafting.hotbar.select(i);self.publish_hotbar();
         }
         if self.cursor_grabbed && !machine_input && (matches!(self.net,NetRole::Host(_)) || self.inventory_ready) {
-            use crate::equipment::{Entry,Gear,Action,Intent};
+            use crate::equipment::{Entry,Action,Intent};
             let entry=self.player.crafting.hotbar.entry();
             if self.input.left_clicked || self.input.right_clicked {
-                let action=if self.input.right_clicked {Action::Place} else {match entry {Some(Entry::Resource(_))=>Action::Place,Some(Entry::Gear(Gear::Sword|Gear::Bow))=>Action::Attack,_=>Action::Mine}};
+                let action=if self.input.right_clicked {Action::Place} else {match entry {Some(Entry::Resource(_))=>Action::Place,Some(Entry::Gear(g)) if g.weapon().is_some()=>Action::Attack,_=>Action::Mine}};
                 let intent=Intent{hotbar:self.player.crafting.hotbar.clone(),item:entry,target:raycast(&self.world,self.camera.eye_position(),self.camera.forward(),REACH).map(|h|h.target),direction:self.camera.forward().to_array(),action};
                 if entry.is_none() || entry.is_some_and(|e|e.count(&self.player.crafting)>0) {
                     self.use_animation=0.28;self.audio.play_player_attack();
@@ -1989,7 +2001,11 @@ impl App {
         // `on_interact`. Only reports the event; a rule decides what, if
         // anything, happens.
         if self.cursor_grabbed && self.player.health>0. && self.input.interact_clicked {
-            if let Some(npc)=self.aimed_npc() {
+            if let Some(book)=self.aimed_book() {
+                if let NetRole::Joined(client)=&mut self.net {client.reliable.send(&client.socket,client.server_addr,ReliableMsg::ReadRecipeBook(book.sector));}
+                else {self.read_recipe_book(None,book.sector);}
+                self.input.interact_clicked=false;
+            } else if let Some(npc)=self.aimed_npc() {
                 self.ui.journal.npc=Some(npc);self.ui.journal.camp=None;self.ui.journal.open=true;self.ui.journal.feedback.clear();
                 self.sync_settings_input();
             } else if let Some(camp)=self.aimed_camp() {
@@ -2202,6 +2218,8 @@ impl App {
             }
         }
         mesh.extend(self.loot.mesh(|pos|{let cell=chunk_of(pos);crate::visibility::within_terrain_range(cell,center,RENDER_RADIUS)&&self.chunk_meshes.contains_key(&cell)}));
+        let books=crate::lore_books::nearby(&self.world,self.player.position).into_iter().filter(|b|self.chunk_meshes.contains_key(&chunk_of(b.pos))).collect::<Vec<_>>();
+        mesh.extend(crate::lore_books::mesh(&books,self.water_time));
         let remote_players = match &self.net {
             NetRole::Host(host) => &host.remote_players,
             NetRole::Joined(client) => &client.remote_players,
@@ -2298,6 +2316,7 @@ impl App {
         if automation_was_open!=self.ui.automation.open {self.sync_settings_input();}
         if let Some(action)=requests.automation {self.submit_automation(action);}
         if let Some(action)=requests.camp_action {self.submit_camp_action(action);}
+        if let Some(block)=requests.eat_food {self.submit_eat(block);}
         if requests.close_journal {self.sync_settings_input();}
         if let Some(action)=requests.quest_action {self.submit_quest_action(action);}
         if settings_was_open != self.ui.settings.open { self.sync_settings_input(); }
@@ -2988,7 +3007,7 @@ impl App {
     fn update_oxygen(&mut self, dt: f32) {
         let host_submerged = is_in_water(&self.world, self.player.position);
         if host_submerged {
-            self.player.drain_oxygen(OXYGEN_DRAIN_PER_SEC * dt);
+            self.player.drain_oxygen(OXYGEN_DRAIN_PER_SEC * dt * crate::gear_catalog::oxygen_factor(&self.player.crafting));
             if self.player.oxygen <= 0.0 {
                 self.player.damage(DROWNING_DAMAGE_PER_SEC * dt);
             }
@@ -2999,10 +3018,13 @@ impl App {
         let NetRole::Host(host) = &mut self.net else {
             return;
         };
-        for rp in host.remote_players.values_mut() {
+        for (id, rp) in host.remote_players.iter_mut() {
             let submerged = is_in_water(&self.world, rp.pos);
             if submerged {
-                rp.oxygen = (rp.oxygen - OXYGEN_DRAIN_PER_SEC * dt).max(0.0);
+                let factor=host.clients.iter().find(|(_,pid)|*pid==id)
+                    .and_then(|(peer,_)|self.guest_accounts.get(&peer.account_key(&rp.nickname)))
+                    .map_or(1.0,crate::gear_catalog::oxygen_factor);
+                rp.oxygen = (rp.oxygen - OXYGEN_DRAIN_PER_SEC * dt * factor).max(0.0);
                 if rp.oxygen <= 0.0 {
                     rp.health = (rp.health - DROWNING_DAMAGE_PER_SEC * dt).max(0.0);
                 }
@@ -3214,18 +3236,12 @@ impl App {
                         }
                         let player_id = host.next_player_id;
                         host.next_player_id += 1;
-                        // Terrain-height-snapped, not just offset from the
-                        // host's own Y -- otherwise a new player spawns
-                        // floating or buried whenever the ground isn't flat
-                        // between the two spawn columns.
+                        // Guests also need dry ground when the host is swimming.
                         let spawn_x = self.player.position.x + (player_id as f32) * 2.0;
                         let spawn_z = self.player.position.z + 2.0;
-                        let spawn_y = self
-                            .world
-                            .terrain_height(spawn_x.floor() as i32, spawn_z.floor() as i32)
-                            as f32
-                            + 2.0;
-                        let spawn = Vec3::new(spawn_x, spawn_y, spawn_z);
+                        let spawn = crate::adventure::surface_spawn_position(
+                            &mut self.world, spawn_x.floor() as i32, spawn_z.floor() as i32,
+                        );
                         let appearance = remote_player::Appearance::choose(random_world_seed(),
                             std::iter::once(host.appearance).chain(host.remote_players.values().map(|p| p.appearance)));
                         let mut remote = RemotePlayer::new(spawn, 0.0, false, nickname.clone());
@@ -3266,7 +3282,9 @@ impl App {
                     ReliableMsg::ItemAction(intent)=>self.perform_item_action(Some(from),intent),
                     ReliableMsg::AutomationAction(action)=>self.perform_automation(Some(from),action),
                     ReliableMsg::CampAction(action)=>self.perform_camp_action(Some(from),action),
+                    ReliableMsg::EatFood{block,revision}=>self.perform_eat(Some(from),block,revision),
                     ReliableMsg::QuestAction(action)=>self.perform_quest_action(Some(from),action),
+                    ReliableMsg::ReadRecipeBook(sector)=>self.read_recipe_book(Some(from),sector),
                     // BlockEdit is host-to-client only. Never accept claimed destruction.
                     ReliableMsg::BlockEdit { .. } => {}
                     ReliableMsg::ChatMessage(text) => {
@@ -3404,10 +3422,11 @@ impl App {
                         self.proposal_waiting = None;
                         self.notify_important(format!("{}: {message}", if accepted { "Host accepted proposal for review" } else { "Proposal rejected" }));
                     }
+                    ReliableMsg::FoodResult(message) => {self.crafting_ui.feedback=message;}
                     ReliableMsg::CampResult(message) => {
                         self.ui.journal.feedback=message.clone();self.toasts.push(Toast::important(message));
                     }
-                    ReliableMsg::Npcs(npcs)=>{self.npcs=npcs.into_iter().filter(|n|n.valid()).take(6).collect();}
+                    ReliableMsg::Npcs(npcs)=>{self.npcs=npcs.into_iter().filter(|n|n.valid()).take(crate::npc::MAX_VISIBLE).collect();}
                     ReliableMsg::Recovered {pos} => {
                         self.player.position=Vec3::from_array(pos);self.player.velocity=Vec3::ZERO;
                         self.player.health=MAX_HEALTH;self.player.oxygen=MAX_OXYGEN;self.player.poisoned=false;
@@ -3428,6 +3447,9 @@ impl App {
                     }
                     ReliableMsg::DeathPuffs(positions) => {
                         for pos in positions.into_iter().take(16).map(Vec3::from_array).filter(|p|p.is_finite()) {self.loot.puff(pos);}
+                    }
+                    ReliableMsg::RecipeBookResult(result) => {
+                        match result {Ok(kind)=>self.open_recipe_book(kind),Err(e)=>self.toasts.push(Toast::new(e))}
                     }
                     ReliableMsg::LootCollected(contents) => {
                         self.audio.play_loot();
@@ -3631,6 +3653,15 @@ impl App {
                 self.ui.chat_bubbles.push((screen_pos-egui::vec2(0.0,26.0),bubble.text.clone(),bubble.opacity(now)));
             }
         }
+        for book in crate::lore_books::nearby(&self.world,self.player.position) {
+            let target=book.pos+Vec3::Y;let distance=eye.distance(target);
+            if distance>28. || crate::raycast::raycast(&self.world,eye,target-eye,(distance-0.3).max(0.)).is_some(){continue;}
+            let clip=matrix*target.extend(1.);if clip.w<=0. {continue;}
+            let ndc=clip.truncate()/clip.w;
+            if ndc.x.abs()>1. || ndc.y.abs()>1. || !(0.0..=1.0).contains(&ndc.z){continue;}
+            let pos=egui::pos2((ndc.x+1.)*0.5*screen.width as f32/scale,(1.-ndc.y)*0.5*screen.height as f32/scale);
+            self.ui.nameplates.push((pos,"Recipe book [F]".into()));
+        }
         for (camp,p) in self.nearby_guides() {
             let target=p+Vec3::Y*2.15;let distance=eye.distance(target);
             if crate::raycast::raycast(&self.world,eye,target-eye,(distance-0.3).max(0.)).is_some() {continue;}
@@ -3642,7 +3673,7 @@ impl App {
         }
         for npc in &self.npcs {
             let target=Vec3::from_array(npc.position)+Vec3::Y*2.2;let distance=eye.distance(target);
-            if distance>40. || crate::raycast::raycast(&self.world,eye,target-eye,(distance-0.3).max(0.)).is_some() {continue;}
+            if distance>80. || crate::raycast::raycast(&self.world,eye,target-eye,(distance-0.3).max(0.)).is_some() {continue;}
             if let Some(pos)=crate::compass::project(matrix,target,egui::vec2(screen.width as f32/scale,screen.height as f32/scale)) {
                 self.ui.nameplates.push((pos,format!("{} · Quests [F]",crate::quests::NAMES[npc.kind as usize])));
             }

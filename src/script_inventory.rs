@@ -5,7 +5,7 @@ use crate::crafting::{Action,Element,Registry};
 use crate::equipment::Gear;
 
 pub(super) fn gear(id: &str) -> Option<Gear> {
-    match id {"axe"=>Some(Gear::Axe),"pickaxe"=>Some(Gear::Pickaxe),"sword"=>Some(Gear::Sword),"bow"=>Some(Gear::Bow),_=>None}
+    Gear::ALL.into_iter().find(|g|g.id()==id)
 }
 fn element(id: &str) -> Option<Element> {
     Element::ALL.into_iter().find(|e|format!("{e:?}").eq_ignore_ascii_case(id))
@@ -32,7 +32,7 @@ pub(super) fn populate<'lua,'scope>(_lua: &'lua Lua, scope: &mlua::Scope<'lua,'s
         let Some(a)=tx.inventory(id) else {return Ok(None);};
         let result=lua.create_table()?;let resources=lua.create_table()?;let items=lua.create_table()?;
         for (i,b) in COLLECTIBLE_BLOCKS.iter().enumerate() {resources.set(b.id(),a.resources[i])?;}
-        for g in Gear::ALL {items.set(g.name().to_lowercase(),a.gear[g as usize])?;}
+        for g in Gear::ALL {items.set(g.id(),a.gear[g as usize])?;}
         result.set("resources",resources)?;result.set("items",items)?;result.set("elements",balance_table(lua,&a.elements)?)?;result.set("mana",a.mana)?;
         Ok(Some(result))
     })?)?;
@@ -43,6 +43,7 @@ pub(super) fn populate<'lua,'scope>(_lua: &'lua Lua, scope: &mlua::Scope<'lua,'s
         result.set("stage",p.stage)?;result.set("title",p.title())?;
         result.set("explored_depths",p.explored_depths)?;result.set("crafted_tool",p.crafted_tool)?;
         result.set("recoveries",p.recoveries)?;result.set("complete",p.stage==3)?;
+        result.set("recipe_books",p.recipe_books)?;
         let quests=lua.create_table()?;
         for (i,q) in crate::quests::QUESTS.iter().enumerate() {
             let row=lua.create_table()?;row.set("id",i+1)?;row.set("npc",crate::quests::NAMES[q.npc as usize])?;
@@ -57,7 +58,7 @@ pub(super) fn populate<'lua,'scope>(_lua: &'lua Lua, scope: &mlua::Scope<'lua,'s
         let Some(a)=tx.inventory(id) else {return Ok(None);};
         Ok(a.hotbar.entry().filter(|entry|entry.count(&a)>0).map(|entry|match entry {
             crate::equipment::Entry::Resource(block)=>block.id().to_string(),
-            crate::equipment::Entry::Gear(gear)=>gear.name().to_lowercase(),
+            crate::equipment::Entry::Gear(gear)=>gear.id(),
         }))
     })?)?;
     api.set("get_element_count",scope.create_function(move |_,(id,name):(PlayerId,String)|Ok(element(&name).and_then(|e|tx.inventory(id).map(|a|a.elements[e.index()]))))?)?;
@@ -114,8 +115,10 @@ pub(super) fn populate<'lua,'scope>(_lua: &'lua Lua, scope: &mlua::Scope<'lua,'s
             let (iron,wood,mana)=crate::crafting::gear_formula(g,salvage).unwrap();
             let mana=if mana_free {0} else {mana};
             let part=lua.create_table()?;let resources=lua.create_table()?;
-            resources.set("iron",iron)?;resources.set("oak_wood",wood)?;part.set("resources",resources)?;part.set("mana",mana)?;result.set(label,part)?;
+            resources.set("iron",iron)?;resources.set("oak_wood",wood)?;
+            for (b,n) in g.ingredients(salvage) {resources.set(b.id(),n)?;}part.set("resources",resources)?;part.set("mana",mana)?;result.set(label,part)?;
         }
+        if let Some(book)=g.book() {result.set("recipe_book",crate::gear_catalog::BOOK_NAMES[book as usize])?;result.set("recipe_book_bit",1u8<<book)?;}
         Ok(Some(result))
     })?)?;
     Ok(())
