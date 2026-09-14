@@ -39,6 +39,7 @@ impl Appearance {
     }
 }
 pub struct RemotePlayer {
+    pub torch_lit: bool,
     pub appearance: Appearance,
     pub animation: crate::player_animation::Animation,
     pub animation_received: Instant,
@@ -88,7 +89,7 @@ impl RemotePlayer {
             appearance: Appearance::default(),
             animation: Default::default(),
             animation_received: Instant::now(),
-            held:None,
+            held:None, torch_lit:false,
             pos,
             yaw,
             carrying_crystal,
@@ -119,6 +120,11 @@ pub fn build_mesh(players: &HashMap<PlayerId, RemotePlayer>, exclude: PlayerId, 
         let feet = rp.pos;
         models.push_player_animated(&mut vertices, &mut indices, rp.appearance, feet, rp.yaw,
             rp.animation.clip, rp.animation.time + rp.animation_received.elapsed().as_secs_f32().min(0.25), rp.held);
+        if rp.torch_lit {
+            let forward=Vec3::new(rp.yaw.cos(),0.,rp.yaw.sin());let right=forward.cross(Vec3::Y);
+            let torch=crate::torch::mesh(feet+Vec3::Y*0.9-right*0.4+forward*0.25,glam::Mat3::IDENTITY,0.7,rp.animation.time+rp.animation_received.elapsed().as_secs_f32());
+            let base=vertices.len() as u32;vertices.extend(torch.vertices);indices.extend(torch.indices.into_iter().map(|i|i+base));
+        }
         // Small floating marker above crystal carriers, so "sheep hunt
         // players carrying a crystal" is something you can actually see
         // happening, not just trust the log for.

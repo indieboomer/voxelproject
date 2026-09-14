@@ -77,7 +77,7 @@ impl Journal {
                 if !self.feedback.is_empty() {ui.add_space(5.);ui.label(&self.feedback);}
                 ui.separator();
                 ui.collapsing("Expedition notes and controls",|ui| {
-                ui.label("• Mine stone with the pickaxe and wood with the axe (I assigns your hotbar).\n• Hold a crystal to illuminate nearby terrain, including caves.\n• M opens the map. Right-click it to place a waypoint.\n• C crafts tools and materials; B builds devices.\n• The prompt console (`) lets you rewrite world rules.");
+                ui.label("• Mine stone with the pickaxe and wood with the axe (I assigns your hotbar).\n• Equip a torch in your left hand [I] for light while using tools.\n• M opens the map. Right-click it to place a waypoint.\n• C crafts tools and materials; B builds devices.\n• The prompt console (`) lets you rewrite world rules.");
                 });
                 if let Some((x,y,z))=account.adventure.home {ui.small(format!("Recovery camp: {x}, {y}, {z} · Recoveries: {}",account.adventure.recoveries));}
                 ui.small("If defeated, you return after 3 seconds and keep your inventory. Resting does not advance time.");

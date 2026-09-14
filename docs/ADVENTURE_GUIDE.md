@@ -139,9 +139,9 @@ When inspecting a machine with F or positioning one in build mode, a small N/E/S
 compass floats over it. These are world directions and do not rotate with its ports.
 See [crafting recipes](../CRAFTING.md) for twelve additional elemental formulas.
 
-Holding a crystal uses no charge and does not consume it. Switching away or
-emptying the stack removes its light. Nearby other players' held crystals also
-emit light. The four-light budget is shared with campfires and machinery; lights
+Equip a [torch](TORCHES.md) in the inventory's left-hand slot for permanent warm
+light while using right-hand tools. Crystals no longer cast held light. Nearby
+players' equipped torches also emit light. The four-light budget is shared with campfires and machinery; lights
 have distance falloff but no wall occlusion. A selected map waypoint is temporary;
 the recorded recovery camp is saved. The nearest-cave shortcut searches the
 procedural map within 192 blocks and is not a guarantee of a clear walking route.
@@ -185,7 +185,7 @@ items or appear in `api.creatures()`. Removing the fire removes its keeper. F st
 emits the campfire `on_interact` event, so existing world rules can react.
 
 Current saves retain their format; missing journal fields default safely. Multiplayer
-protocol is **37**, so all players need this build. Playtesting-agent work remains paused.
+protocol is **38**, so all players need this build. Playtesting-agent work remains paused.
 
-Floating recipe books now teach [15 specialist equipment recipes](EQUIPMENT_AND_RECIPE_BOOKS.md).
+Floating recipe books now teach [16 specialist equipment recipes](EQUIPMENT_AND_RECIPE_BOOKS.md).
 Look at a book and press F to read it; C opens the searchable equipment catalog.

@@ -820,7 +820,7 @@ impl App {
         let Some(rp)=host.clients.get(&from).and_then(|id|host.remote_players.get_mut(id)) else{return;};
         let account=self.guest_accounts.entry(from.account_key(&rp.nickname)).or_default();
         let feedback=crate::equipment::accept_hotbar(account,&hotbar).err();
-        rp.held=account.hotbar.entry().filter(|e|e.count(account)>0);
+        rp.held=account.hotbar.entry().filter(|e|e.count(account)>0);rp.torch_lit=crate::torch::equipped(account) && rp.health>0.;
         host.reliable.send(&host.socket,from,ReliableMsg::CraftState{account:account.clone(),feedback});
     }
 
@@ -900,7 +900,7 @@ impl App {
         let feedback=result.as_ref().err().filter(|s|!s.is_empty()).cloned();
         if let Some(peer)=from {
             if let NetRole::Host(host)=&mut self.net {
-                if let Some(rp)=host.remote_players.get_mut(&id){rp.held=account.hotbar.entry().filter(|e|e.count(account)>0);}
+                if let Some(rp)=host.remote_players.get_mut(&id){rp.held=account.hotbar.entry().filter(|e|e.count(account)>0);rp.torch_lit=crate::torch::equipped(account) && rp.health>0.;}
                 host.reliable.send(&host.socket,peer,ReliableMsg::CraftState{account:account.clone(),feedback:None});
                 if let Some(text)=feedback {host.reliable.send(&host.socket,peer,ReliableMsg::Notify{kind:NotifyKind::Info,text});}
             }
@@ -2255,6 +2255,9 @@ impl App {
         let motion=Vec3::new(-swing*0.12,0.0,-swing*0.08);
         let origin=self.camera.eye_position()+camera_basis*(Vec3::new(0.32,-0.42,-0.65)+turn*motion);
         let mut held=crate::held_item::mesh(entry,origin,basis,0.45);
+        if crate::torch::equipped(&self.player.crafting) && self.player.health>0. {
+            held.extend(crate::torch::mesh(self.camera.eye_position()+camera_basis*Vec3::new(-0.38,-0.45,-0.65),camera_basis,0.75,self.water_time));
+        }
         crate::shelter::Roofs::default().shade(&self.world,&mut held);
         self.held_mesh.update(&self.device,&self.queue,&held);
 
@@ -3162,11 +3165,11 @@ impl App {
                 speed_multiplier: self.player.speed_multiplier,
                 jump_multiplier: self.player.jump_multiplier,
                 oxygen: self.player.oxygen,
-                held: self.player.crafting.hotbar.entry().filter(|e|e.count(&self.player.crafting)>0),
+                held: self.player.crafting.hotbar.entry().filter(|e|e.count(&self.player.crafting)>0), torch_lit:crate::torch::equipped(&self.player.crafting) && self.player.health>0.,
             }];
             for (&id, rp) in host.remote_players.iter_mut() {
                 if let Some(peer)=host.clients.iter().find_map(|(peer,pid)|(*pid==id).then_some(peer)) {
-                    if let Some(account)=self.guest_accounts.get(&peer.account_key(&rp.nickname)) {rp.held=account.hotbar.entry().filter(|e|e.count(account)>0);}
+                    if let Some(account)=self.guest_accounts.get(&peer.account_key(&rp.nickname)) {rp.held=account.hotbar.entry().filter(|e|e.count(account)>0);rp.torch_lit=crate::torch::equipped(account) && rp.health>0.;}
                 }
                 players.push(SnapshotPlayer {
                     animation: rp.animation,
@@ -3181,7 +3184,7 @@ impl App {
                     speed_multiplier: rp.speed_multiplier,
                     jump_multiplier: rp.jump_multiplier,
                     oxygen: rp.oxygen,
-                    held: rp.held,
+                    held: rp.held, torch_lit:rp.torch_lit,
                 });
             }
             let snapshot = UnreliableMsg::Snapshot {
@@ -3579,7 +3582,7 @@ impl App {
                             rp.speed_multiplier = sp.speed_multiplier;
                             rp.jump_multiplier = sp.jump_multiplier;
                             rp.oxygen = sp.oxygen;
-                            rp.held = sp.held;
+                            rp.held = sp.held; rp.torch_lit=sp.torch_lit;
                             rp.receive_animation(sp.animation);
                             rp.last_seen = now;
                         })
@@ -3599,7 +3602,7 @@ impl App {
                             rp.speed_multiplier = sp.speed_multiplier;
                             rp.jump_multiplier = sp.jump_multiplier;
                             rp.oxygen = sp.oxygen;
-                            rp.held = sp.held;
+                            rp.held = sp.held; rp.torch_lit=sp.torch_lit;
                             rp.receive_animation(sp.animation);
                             rp
                         });
@@ -3816,17 +3819,23 @@ impl App {
         let fire_effects=crate::campfire::effects(&campfires,cam_pos,self.water_time);
         let mut local_lights=self.machine_feedback.lights(&campfires,cam_pos);
         let remote=match &self.net {NetRole::Host(host)=>&host.remote_players,NetRole::Joined(client)=>&client.remote_players};
-        let mut crystal_carriers:Vec<_>=remote.iter().filter(|(id,p)|**id!=self.local_player_id
-            && p.held==Some(crate::equipment::Entry::Resource(BlockType::Crystal)) && p.pos.distance_squared(cam_pos)<24.*24.)
+        let mut torch_carriers:Vec<_>=remote.iter().filter(|(id,p)|**id!=self.local_player_id
+            && p.torch_lit && p.pos.distance_squared(cam_pos)<24.*24.)
             .map(|(_,p)|p.pos+Vec3::Y*1.5).collect();
-        crystal_carriers.sort_by(|a,b|b.distance_squared(cam_pos).total_cmp(&a.distance_squared(cam_pos)));
-        for position in crystal_carriers.into_iter().rev().take(3).collect::<Vec<_>>().into_iter().rev() {
-            local_lights.rotate_right(1);local_lights[0]=position.extend(-6.).to_array();
+        torch_carriers.sort_by(|a,b|b.distance_squared(cam_pos).total_cmp(&a.distance_squared(cam_pos)));
+        for position in torch_carriers.iter().copied().rev().take(3).collect::<Vec<_>>().into_iter().rev() {
+            local_lights.rotate_right(1);local_lights[0]=crate::torch::light(position);
         }
-        if crate::adventure::crystal_light(&self.player.crafting) {
+        if crate::adventure::lantern_light(&self.player.crafting) {
             local_lights.rotate_right(1);
             local_lights[0]=(cam_pos+self.camera.forward()*0.4).extend(-6.0).to_array();
         }
+        if crate::torch::equipped(&self.player.crafting) && self.player.health>0. {
+            let position=cam_pos-self.camera.right()*0.35+self.camera.forward()*0.4;
+            local_lights.rotate_right(1);local_lights[0]=crate::torch::light(position);
+            torch_carriers.push(position);
+        }
+        self.audio.update_torches(&torch_carriers);
         self.campfire_mesh.update(&self.device,&self.queue,&fire_effects);
         let uniform = CameraUniform {
             camp_lights: local_lights,

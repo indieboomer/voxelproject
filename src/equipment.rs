@@ -17,15 +17,16 @@ pub enum Gear {
     Spear, Dagger, Warhammer, Longbow,
     EmberWand, TideWand, LifeStaff, SurveyLantern,
     TrailCharm, LeapingCharm, DivingCharm, FeatherCharm,
+    Torch,
 }
 impl Gear {
     pub fn enabled(self)->bool { !matches!(self,Self::Bow|Self::Longbow) }
     pub fn available()->impl Iterator<Item=Self> {Self::ALL.into_iter().filter(|g|g.enabled())}
-    pub const ALL: [Self; 20] = [Self::Axe, Self::Pickaxe, Self::Sword, Self::Bow,
+    pub const ALL: [Self; 21] = [Self::Axe, Self::Pickaxe, Self::Sword, Self::Bow,
         Self::ForesterAxe, Self::ProspectorPick, Self::Spade, Self::Sickle,
         Self::Spear, Self::Dagger, Self::Warhammer, Self::Longbow,
         Self::EmberWand, Self::TideWand, Self::LifeStaff, Self::SurveyLantern,
-        Self::TrailCharm, Self::LeapingCharm, Self::DivingCharm, Self::FeatherCharm];
+        Self::TrailCharm, Self::LeapingCharm, Self::DivingCharm, Self::FeatherCharm, Self::Torch];
     pub fn name(self) -> &'static str {
         match self {
             Self::Axe => "Axe",
@@ -98,7 +99,7 @@ impl Default for Hotbar {
 }
 impl Hotbar {
     pub fn entry(&self) -> Option<Entry> {
-        self.slots.get(self.active).copied().flatten().filter(|e|!matches!(e,Entry::Gear(g) if !g.enabled()))
+        self.slots.get(self.active).copied().flatten().filter(|e|!matches!(e,Entry::Gear(g) if !g.enabled() || *g==Gear::Torch))
     }
     pub fn select(&mut self, slot: usize) {
         if slot < 9 && self.active != slot {
@@ -185,6 +186,7 @@ pub fn accept_hotbar(account: &mut Account, hotbar: &Hotbar) -> Result<(), Strin
     }
     for (i, entry) in hotbar.slots.iter().enumerate() {
         if let Some(e) = entry {
+            if *e==Entry::Gear(Gear::Torch) && account.hotbar.slots[i]!=*entry {return Err("Equip torches in the left-hand inventory slot".into());}
             if e.count(account) == 0 && account.hotbar.slots[i] != *entry {
                 return Err("Assign an owned item".into());
             }

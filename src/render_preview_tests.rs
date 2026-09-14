@@ -166,7 +166,8 @@ fn render_weather_previews() {
         }
     }
     let adventure_preview=std::env::var_os("VOXEL_ADVENTURE_PREVIEW").is_some();
-    let crystal_preview=std::env::var_os("VOXEL_CRYSTAL_PREVIEW").is_some();
+    let torch_preview=std::env::var_os("VOXEL_TORCH_PREVIEW").is_some();
+    let crystal_preview=std::env::var_os("VOXEL_CRYSTAL_PREVIEW").is_some() || torch_preview;
     let entrance_preview = std::env::var_os("VOXEL_ENTRANCE_PREVIEW").is_some();
     let underground_preview = std::env::var_os("VOXEL_UNDERGROUND_PREVIEW").is_some() || entrance_preview;
     let water_preview = std::env::var_os("VOXEL_WATER_PREVIEW").is_some();
@@ -281,6 +282,11 @@ fn render_weather_previews() {
             let npc=crate::npc::Npc{kind,home,position:crate::adventure::feet(home).to_array(),facing:1.2,walking:kind%2==0,phase:0.3,wait:0.,step:0,target:None};
             models.push_npc(&mut effect_mesh.vertices,&mut effect_mesh.indices,&npc);
         }
+    }
+    if torch_preview {
+        effect_mesh.extend(crate::torch::mesh(Vec3::new(4.12,8.05,12.85),glam::Mat3::IDENTITY,0.75,0.45));
+        effect_mesh.extend(crate::held_item::mesh(Some(crate::equipment::Entry::Gear(crate::equipment::Gear::Sword)),Vec3::new(4.82,8.08,12.85),glam::Mat3::from_rotation_y(std::f32::consts::FRAC_PI_2),0.45));
+        crate::shelter::Roofs::default().shade(&world,&mut effect_mesh);
     }
     let camp_fx = upload_mesh(&device, &effect_mesh);
     let falls: Vec<_> = world
@@ -460,7 +466,7 @@ fn render_weather_previews() {
             &camera,
             0,
             bytemuck::bytes_of(&CameraUniform {
-                camp_lights: if crystal_preview {let mut lights=[[0.;4];4];if !std::env::var("VOXEL_CRYSTAL_PREVIEW").is_ok_and(|v|v=="unlit") {lights[0]=(eye+Vec3::new(0.,0.,-0.4)).extend(-6.).to_array();}lights} else {feedback.lights(&camps, eye)},
+                camp_lights: if crystal_preview {let mut lights=[[0.;4];4];if torch_preview {lights[0]=crate::torch::light(eye+Vec3::new(-0.35,0.,-0.4));}lights} else {feedback.lights(&camps, eye)},
                 view_proj: vp.to_cols_array_2d(),
                 inv_view_proj: vp.inverse().to_cols_array_2d(),
                 light_view_proj: light_vp.to_cols_array_2d(),

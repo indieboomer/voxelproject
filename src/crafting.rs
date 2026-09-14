@@ -87,11 +87,12 @@ pub fn totals(slots: &[Slot]) -> Result<Composition, String> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Account {
+    pub torch_equipped: bool,
     pub adventure: crate::adventure::Progress,
     pub packed_devices: Vec<crate::automation::Device>,
     pub production_goods: std::collections::BTreeMap<String,u32>,
     #[serde(with="crate::gear_catalog::counts")]
-    pub gear: [u32;20],
+    pub gear: [u32;21],
     pub hotbar: crate::equipment::Hotbar,
     pub elements: Composition,
     pub mana: u32,
@@ -102,6 +103,7 @@ pub struct Account {
 impl Default for Account {
     fn default() -> Self {
         Self {
+            torch_equipped: false,
             adventure: Default::default(),
             gear: crate::gear_catalog::starter_counts(),
             packed_devices: Vec::new(),
@@ -369,6 +371,11 @@ impl Registry {
     // Run on a private account; the caller commits only after output preparation succeeds.
     pub(crate) fn prepare(&self, account: &mut Account, action: &Action) -> Result<Option<Output>, String> {
         match action {
+            Action::EquipTorch(equip) => {
+                if *equip && account.gear[crate::equipment::Gear::Torch as usize]==0 {return Err("Craft a torch first".into());}
+                account.torch_equipped=*equip;
+                Ok(None)
+            }
             Action::BindSheep => {
                 let recipe=self.recipes.iter().find(|r|r.output.kind==ObjectKind::Creature && r.output.id=="sheep").ok_or("Sheep recipe missing")?;
                 let mut formula=[None;5];
@@ -465,6 +472,7 @@ impl Registry {
             draft.commit(creatures);
         }
         *account = next;
+        if let Action::EquipTorch(equipped)=action {return Ok(if *equipped {"Torch equipped in left hand"}else{"Torch put away"}.into());}
         Ok(output.map_or_else(
             || "Conversion complete".into(),
             |o| format!("Created {} x{}", o.id, o.quantity),
@@ -552,6 +560,7 @@ pub enum Action {
     CraftGear(crate::equipment::Gear),
     SalvageGear(crate::equipment::Gear),
     BindSheep,
+    EquipTorch(bool),
 }
 
 pub(crate) fn spawn_position(
@@ -980,7 +989,8 @@ mod tests {
             assert_eq!(a.gear[gear as usize],before.gear[gear as usize]+1);
             execute(&r,&mut a,Action::SalvageGear(gear),&world,&mut creatures).unwrap();
             assert_eq!(a.gear,before.gear);
-            assert!(a.resources[iron]<before.resources[iron]);
+            assert!(a.resources[iron]<=before.resources[iron]);
+            if gear.ingredients(false).iter().any(|(b,n)|*b==BlockType::Iron && *n>0) {assert!(a.resources[iron]<before.resources[iron]);}
             assert!(a.resources[wood]<=before.resources[wood]);
             assert_eq!(a.mana,before.mana-gear_formula(gear,false).unwrap().2-gear_formula(gear,true).unwrap().2);
             for action in [Action::CraftGear(gear),Action::SalvageGear(gear),Action::Extract{block:BlockType::Stone,amount:1}] {

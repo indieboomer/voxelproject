@@ -32,16 +32,16 @@ range. These local lights do not use shadow maps; see [campfires](campfires.md).
 World API queries describe authoritative blocks and derived features, not a
 client's transient wetness, visible particle count, or audio state.
 
-Held crystals contribute a steady cool six-block light, active during the day as
-well as at night. Local and nearby remote players share the existing four-light
-uniform array with campfires/machinery, with the local held crystal taking priority.
+Left-hand torches contribute warm flickering six-block light, active during the
+day and at night. Crystals no longer cast portable light. Local and nearby remote
+players share the four-light uniform array with campfires/machinery; the local torch takes priority.
 This adds no render targets, shadow passes or terrain remeshing. Local lights are
 unoccluded and can leak through walls. Up to four nearby campkeepers reuse the
 animated player model/hat meshes within the existing entity draw and shadow pass.
 
 The opt-in `render_weather_previews` test accepts `VOXEL_ADVENTURE_PREVIEW=1` for a
-keeper/camp scene and `VOXEL_CRYSTAL_PREVIEW=1` for a compact midday cave; use
-`VOXEL_CRYSTAL_PREVIEW=unlit` for the same geometry without portable light. These
+keeper/camp scene and `VOXEL_TORCH_PREVIEW=1` for a cave with a left-hand torch and
+right-hand sword. `VOXEL_CRYSTAL_PREVIEW=1` now shows the same cave without portable light. These
 write `target/render-*.png`. UI previews accept `UI_PREVIEW_PANEL=journal`,
 `adventure`, `recovery` or `map` and write images for both themes. See the
 [sandbox review](SANDBOX_RPG_REVIEW.md) for measured fixture timings and their limits.

@@ -116,6 +116,7 @@ pub fn transaction(tick: u64, action: &Action, before: &crafting::Account,
         }
         Action::Craft { recipe } => {
             match recipe {
+                crafting::Action::EquipTorch(_) => {},
                 crafting::Action::BindSheep => {
                     let slots=[Some(crafting::Slot{element:crafting::Element::Life,amount:2}),None,None,None,None];
                     expected[element+crafting::Element::Life as usize]-=2;

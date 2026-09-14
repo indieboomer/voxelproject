@@ -20,6 +20,7 @@ mod emoticons;
 mod equipment;
 mod food;
 mod shelter;
+mod torch;
 mod gear_catalog;
 mod lore_books;
 mod equipment_ui;

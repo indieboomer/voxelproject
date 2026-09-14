@@ -86,7 +86,7 @@ fn inventory_economy_reads_staged_balances_for_host_and_guest_and_rolls_back() {
 #[test]
 fn inventory_uses_configured_registry_and_rejects_overflow() {
     let mut f=Fixture::new();
-    f.players[0].finances=InventoryBalances{mana:u32::MAX,elements:[2,0,0,0,0],items:[0;20],..Default::default()};
+    f.players[0].finances=InventoryBalances{mana:u32::MAX,elements:[2,0,0,0,0],items:[0;21],..Default::default()};
     let mut registry=crate::crafting::Registry::parse(include_str!("../data/crafting.json")).unwrap();registry.conversion_rate=3;
     let mut m=module("on_cast",r#"
         assert(not api.give_mana(0,1))

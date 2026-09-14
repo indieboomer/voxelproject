@@ -9,7 +9,7 @@ use crate::voxel::block::BlockType;
 pub type PlayerId = u32;
 pub type WorldEdit = ((i32, i32, i32), BlockType);
 pub const MAX_PLAYERS: usize = 4;
-pub const PROTOCOL_VERSION: u32 = 37;
+pub const PROTOCOL_VERSION: u32 = 38;
 pub const HOST_PLAYER_ID: PlayerId = 0;
 pub const DEFAULT_PORT: u16 = 7878;
 pub const RELIABLE_RESEND_INTERVAL: Duration = Duration::from_millis(200);
@@ -153,6 +153,7 @@ pub enum ReliableMsg {
 /// another player's copy of these yet).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SnapshotPlayer {
+    pub torch_lit: bool,
     pub animation: crate::player_animation::Animation,
     pub name: String,
     pub appearance: crate::remote_player::Appearance,
@@ -470,6 +471,7 @@ mod tests {
     #[test]
     fn snapshot_round_trips_through_encode_decode() {
         let player = SnapshotPlayer {
+            torch_lit:true,
             animation: crate::player_animation::Animation { clip:crate::player_animation::Clip::Work, time:0.4, sequence:7 },
             name:"Sir Turnip".into(),
             appearance: crate::remote_player::Appearance { model: 3, hat: Some(2) },

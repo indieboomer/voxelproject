@@ -86,7 +86,7 @@ pub fn hotbar(
                         egui::FontId::proportional(14.0),
                         ivory,
                     );
-                    if let Some(e) = account.hotbar.slots[i].filter(|e|!matches!(e,Entry::Gear(g) if !g.enabled())) {
+                    if let Some(e) = account.hotbar.slots[i].filter(|e|!matches!(e,Entry::Gear(g) if !g.enabled() || *g==Gear::Torch)) {
                         let count = e.count(account);
                         let ir = egui::Rect::from_center_size(r.center(), egui::vec2(24.0, 24.0));
                         let mut icon_ui =

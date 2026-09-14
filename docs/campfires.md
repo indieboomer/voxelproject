@@ -12,7 +12,7 @@ fire, and no nearby hostiles. It changes inventory immediately; eat the cooked
 meat from inventory **I** to restore 25 health (raw meat restores 8).
 Inventory revisions prevent repeated cooking requests from consuming twice.
 Raw and cooked meat persist with the host and guest inventories. Multiplayer
-peers must use protocol 37 / the same updated build.
+peers must use protocol 38 / the same updated build.
 
 Campfires are append-only `campfire` blocks generated sparsely on level, dry
 grass, soil, sand, or stone above the shoreline. Placement requires a flat 3x3

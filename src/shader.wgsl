@@ -271,16 +271,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         for (var i=0u;i<4u;i=i+1u) {
             let light=camera.camp_lights[i];
             if light.w==0.0 {continue;}
-            let delta=light.xyz-in.world_pos;
+            let torch=light.w < -100.0;
+            let radius=select(abs(light.w),abs(light.w)-100.0,torch);
+            let sway=select(vec3<f32>(0.0),vec3<f32>(sin(camera.light_params.z*8.3+light.z)*0.06,sin(camera.light_params.z*11.7)*0.035,cos(camera.light_params.z*6.7+light.x)*0.06),torch);
+            let delta=light.xyz+sway-in.world_pos;
             let distance2=dot(delta,delta);
-            if distance2<light.w*light.w {
-                let fade=1.0-distance2/(light.w*light.w);
+            if distance2<radius*radius {
+                let fade=1.0-distance2/(radius*radius);
                 let facing=max(dot(shading_normal,delta*inverseSqrt(max(distance2,0.01))),0.0);
-                let cool=light.w<0.0;
+                let cool=light.w<0.0 && !torch;
                 let flicker=select(0.92+0.08*sin(camera.light_params.z*7.0+light.x),1.0,cool);
-                let tint=select(vec3<f32>(1.0,0.38,0.09),vec3<f32>(0.72,0.86,1.0),cool);
+                let tint=select(select(vec3<f32>(1.0,0.38,0.09),vec3<f32>(1.0,0.72,0.22),torch),vec3<f32>(0.72,0.86,1.0),cool);
                 // Steady lantern/crystal light also works in daytime caves.
-                let strength=select(max(night,1.0-in.skylight),1.0,cool);
+                let strength=select(max(night,1.0-in.skylight),1.0,cool || torch);
                 local_light+=tint*fade*fade*(0.2+facing)*strength*flicker*1.8;
             }
         }

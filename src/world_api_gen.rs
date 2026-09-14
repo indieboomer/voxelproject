@@ -4,7 +4,7 @@
 // Consumed by src/world_api_validate.rs's pre-flight lint, which runs on
 // LLM-generated Lua before it's ever loaded into a real Lua VM.
 
-pub const VERSION: &str = "1.31.0";
+pub const VERSION: &str = "1.32.0";
 
 // Runtime execution limits, shared with the generated documentation.
 pub const SCRIPT_TIME_MS: u64 = 5;

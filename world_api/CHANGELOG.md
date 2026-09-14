@@ -12,6 +12,12 @@ Then update this file by hand with what actually changed and why -- the docs
 regenerate automatically, but "what changed and why" is not mechanically
 derivable from a diff of the schema alone.
 
+## 1.32.0 - Left-hand torches
+
+- Added `torch` equipment and its Wayfarer book recipe: 2 oak wood, 1 resin, 2 mana. Equipment inventory queries expose 19 available IDs; legacy save arrays pad the appended torch slot with zero.
+- Torches equip in a persistent left-hand slot, leaving the selected right-hand tool unchanged. Supplied model/flame animation, warm flickering light and quiet campfire audio are visible/audible for other players. Equipment ownership and equip requests remain host-authoritative.
+- Crystals no longer create portable light. Multiplayer protocol 38 includes the authoritative torch state.
+
 ## 1.31.0 - Shelter lighting and bow retirement
 
 - Equipment queries now expose 18 available items. Bow and longbow cannot be crafted, equipped, attacked with, or granted through equipment API calls; old save slots remain reserved.

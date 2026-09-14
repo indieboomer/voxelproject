@@ -24,7 +24,8 @@ The axe, pickaxe and sword remain available without a book. Bow and longbow are 
 | | Leaping charm | 35% stronger jumps | 2 emerald |
 | | Diving charm | One-quarter normal oxygen consumption | 6 reeds |
 | | Feather charm | Limits descent to 3 blocks per second | 4 cloth |
+| | Torch | Permanent warm left-hand light; right-hand tool stays usable | Full recipe: 2 oak wood + 1 resin + 2 mana |
 
 Weapon strikes and bolts respect terrain occlusion, ownership, mana and cooldowns. Harvesting upgrades change the number of strikes, not the quantity of block drops. The life staff heals only its user and cannot revive a defeated player.
 
-Equipment currently uses procedural held models and matching inventory silhouettes. These are placeholders for future supplied models; definitions live in `src/gear_catalog.rs`, and held geometry lives in `src/held_item.rs`. Gear enum order is append-only for saved hotbar references. All peers must run the updated build (protocol 37).
+Equipment currently uses procedural held models and matching inventory silhouettes. These are placeholders for future supplied models; definitions live in `src/gear_catalog.rs`, and held geometry lives in `src/held_item.rs`. Gear enum order is append-only for saved hotbar references. All peers must run the updated build (protocol 38).

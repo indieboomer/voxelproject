@@ -18,7 +18,7 @@
 # (air, mud, redstone, crystal, campfire), so it can't drift out of sync with the
 # actual block system the way a third hand-copied list would.
 
-version: "1.31.0"
+version: "1.32.0"
 title: World API
 description: >
   The Lua API exposed to sandboxed rule modules as the `api` table passed
@@ -460,7 +460,7 @@ methods:
   - name: get_equipped_item
     namespace: world
     category: query
-    summary: "Read the selected resource/equipment ID, e.g. crystal or pickaxe. Returns nil for missing players, empty slots or depleted stacks; respects staged inventory changes. Holding a crystal illuminates nearby terrain within six blocks, including daytime caves. Unlike carrying_crystal, this reflects the current selection and inventory."
+    summary: "Read the selected resource/equipment ID, e.g. crystal or pickaxe. Returns nil for missing players, empty slots or depleted stacks; respects staged inventory changes. Crystals are ordinary held resources and emit no portable light. Torches occupy a separate left-hand slot, so this query continues to report the right-hand tool. Unlike carrying_crystal, this reflects the current selection and inventory."
     params:
       - {name: player_id, type: integer}
     returns: {type: "string | nil"}
@@ -470,7 +470,7 @@ methods:
   - name: get_player_inventory
     namespace: world
     category: query
-    summary: "Complete detached inventory: resources maps resource IDs to counts, items maps all 18 available equipment IDs to counts (see get_item_recipe), elements maps earth/fire/water/life/death to counts, and mana is an integer. Includes zeros, staged changes and earlier committed callbacks; nil for missing player."
+    summary: "Complete detached inventory: resources maps resource IDs to counts, items maps all 19 available equipment IDs to counts (see get_item_recipe), elements maps earth/fire/water/life/death to counts, and mana is an integer. Includes zeros, staged changes and earlier committed callbacks; nil for missing player."
     params:
       - {name: player_id, type: integer}
     returns: {type: "table | nil"}
@@ -616,7 +616,7 @@ methods:
   - name: get_item_recipe
     namespace: world
     category: query
-    summary: "Equipment IDs: axe, pickaxe, sword, forester_axe, prospector_pick, spade, sickle, spear, dagger, warhammer, ember_wand, tide_wand, life_staff, survey_lantern, trail_charm, leaping_charm, diving_charm, feather_charm. Returns create/decompose tables with resources={resource_id=count} and mana=cost. Specialist items also return recipe_book and recipe_book_bit; require that bit in get_player_journal(player_id).recipe_books to craft. Create consumes materials; decompose returns them. nil for unknown equipment."
+    summary: "Equipment IDs: axe, pickaxe, sword, forester_axe, prospector_pick, spade, sickle, spear, dagger, warhammer, ember_wand, tide_wand, life_staff, survey_lantern, trail_charm, leaping_charm, diving_charm, feather_charm, torch. Returns create/decompose tables with resources={resource_id=count} and mana=cost. Specialist items also return recipe_book and recipe_book_bit; require that bit in get_player_journal(player_id).recipe_books to craft. Create consumes materials; decompose returns them. nil for unknown equipment."
     params:
       - {name: kind, type: string}
     returns: {type: "table | nil"}

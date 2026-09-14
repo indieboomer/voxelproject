@@ -27,7 +27,7 @@ macro_rules! item {
         }
     };
 }
-pub const DEFINITIONS: [Definition; 16] = [
+pub const DEFINITIONS: [Definition; 17] = [
     item!(
         "Forester axe",
         "Chops wood and plants with twice the harvesting power.",
@@ -188,6 +188,7 @@ pub const DEFINITIONS: [Definition; 16] = [
         4,
         [0.85, 0.80, 1.0]
     ),
+    item!("Torch", "Left-hand light: burns forever, leaving your tool hand free. Equip in inventory [I].", 0, 2, 2, Resin, 1, [1.0,0.70,0.18]),
 ];
 pub const BOOK_NAMES: [&str; 4] = [
     "The Greenhand's Almanac",
@@ -202,6 +203,7 @@ impl Gear {
         &DEFINITIONS[(self as usize).saturating_sub(4)]
     }
     pub fn book(self) -> Option<u8> {
+        if self==Self::Torch {return Some(3);}
         (self as usize >= 4).then(|| (self as u8 - 4) / 4)
     }
     pub fn known(self, account: &Account) -> bool {
@@ -276,8 +278,8 @@ pub fn oxygen_factor(account: &Account) -> f32 {
     }
 }
 
-pub const fn starter_counts() -> [u32; 20] {
-    let mut counts = [0; 20];
+pub const fn starter_counts() -> [u32; 21] {
+    let mut counts = [0; 21];
     counts[0] = 1;
     counts[1] = 1;
     counts[2] = 1;
@@ -286,21 +288,21 @@ pub const fn starter_counts() -> [u32; 20] {
 /// Legacy four-slot saves remain readable; new gear is appended with zero counts.
 pub mod counts {
     use serde::Serialize;
-    pub fn serialize<S: serde::Serializer>(v: &[u32; 20], s: S) -> Result<S::Ok, S::Error> {
+    pub fn serialize<S: serde::Serializer>(v: &[u32; 21], s: S) -> Result<S::Ok, S::Error> {
         v.as_slice().serialize(s)
     }
-    pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[u32; 20], D::Error> {
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[u32; 21], D::Error> {
         struct Counts;
         impl<'de> serde::de::Visitor<'de> for Counts {
-            type Value = [u32; 20];
+            type Value = [u32; 21];
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(f, "up to 20 gear counts")
+                write!(f, "up to 21 gear counts")
             }
             fn visit_seq<A: serde::de::SeqAccess<'de>>(
                 self,
                 mut seq: A,
             ) -> Result<Self::Value, A::Error> {
-                let mut result = [0; 20];
+                let mut result = [0; 21];
                 for n in &mut result {
                     match seq.next_element()? {
                         Some(v) => *n = v,
@@ -324,7 +326,7 @@ mod tests {
     fn legacy_equipment_migrates_and_all_items_roundtrip() {
         let a: Account = serde_json::from_str(r#"{"gear":[2,3,4,5]}"#).unwrap();
         assert_eq!(&a.gear[..4], &[2, 3, 4, 5]);
-        assert_eq!(&a.gear[4..], &[0; 16]);
+        assert_eq!(&a.gear[4..], &[0; 17]);
         assert_eq!(a.adventure.recipe_books, 0);
         for g in Gear::ALL {
             assert!(!g.description().is_empty());
@@ -336,7 +338,7 @@ mod tests {
             assert_eq!(a, restored);
             assert!(!crate::held_item::parts(Some(Entry::Gear(g))).is_empty());
         }
-        let bad = serde_json::json!({"gear":vec![0;21]});
+        let bad = serde_json::json!({"gear":vec![0;22]});
         assert!(serde_json::from_value::<Account>(bad).is_err());
     }
     #[test]

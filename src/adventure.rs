@@ -286,10 +286,8 @@ pub fn surface_spawn_position(world: &mut World, origin_x: i32, origin_z: i32) -
     )
 }
 
-pub fn crystal_light(account: &Account) -> bool {
-    (account.hotbar.entry() == Some(crate::equipment::Entry::Resource(BlockType::Crystal))
-        && count(account, BlockType::Crystal) > 0)
-        || crate::gear_catalog::held(account, crate::equipment::Gear::SurveyLantern)
+pub fn lantern_light(account: &Account) -> bool {
+    crate::gear_catalog::held(account, crate::equipment::Gear::SurveyLantern)
 }
 
 /// Ignore stale movement in flight until a recovering guest reports arrival.
@@ -571,10 +569,10 @@ mod tests {
         let legacy: Account = serde_json::from_value(old).unwrap();
         assert_eq!(legacy.adventure, Progress::default());
         a.hotbar.slots[0] = Some(crate::equipment::Entry::Resource(BlockType::Crystal));
-        assert!(!crystal_light(&a));
+        assert!(!lantern_light(&a));
         resource(&mut a, BlockType::Crystal, 1).unwrap();
-        assert!(crystal_light(&a));
+        assert!(!lantern_light(&a));
         a.hotbar.slots[0] = None;
-        assert!(!crystal_light(&a));
+        assert!(!lantern_light(&a));
     }
 }

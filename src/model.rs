@@ -45,6 +45,7 @@ use crate::voxel::atlas::white_uv;
 use crate::voxel::mesher::Vertex;
 
 struct Primitive {
+    emission: f32,
     colors: Vec<[f32;3]>,
     uvs: Vec<[f32; 2]>,
     positions: Vec<Vec3>,
@@ -231,7 +232,7 @@ impl Models {
     /// (see this module's doc comment). `app.rs`'s `create_atlas_bind_group`
     /// uploads these once at startup into the `tex_layer`-indexed
     /// `creature_texture` array `emit_skinned_mesh`'s vertices sample from.
-    pub fn creature_texture_layers(&self) -> [Option<&image::RgbaImage>; 35] {
+    pub fn creature_texture_layers(&self) -> [Option<&image::RgbaImage>; 36] {
         [
             self.sheep.texture.as_ref(),
             self.chicken.texture.as_ref(),
@@ -265,6 +266,7 @@ impl Models {
             self.npcs[2].texture.as_ref(),self.npcs[3].texture.as_ref(),
             self.npcs[4].texture.as_ref(),self.npcs[5].texture.as_ref(),
             lore_book_model().texture.as_ref(),
+            torch_model().texture.as_ref(),
         ]
     }
 
@@ -537,6 +539,7 @@ fn load_glb(bytes: &[u8]) -> AnimatedModel {
                     }
                     let material_idx = prim.get("material").and_then(Value::as_u64).map(|v| v as usize);
                     mesh.push(Primitive {
+                        emission: json["materials"][material_idx.unwrap_or(usize::MAX)]["emissiveFactor"].as_array().map_or(0.,|v|v.iter().filter_map(Value::as_f64).fold(0f64,f64::max) as f32),
                         colors: attrs.get("COLOR_0").and_then(Value::as_u64).map(|idx| {
                             let components=if json["accessors"][idx as usize]["type"]=="VEC4" {4} else {3};
                             accessor_floats(&json,bin,idx as usize,components).chunks_exact(components)
@@ -898,7 +901,7 @@ fn emit_rigid_parts(
                     uv: if model.texture_layer.is_some() {prim.uvs.get(i).copied().unwrap_or([0.0;2])} else {[uv[0], uv[1]]},
                     ao: 1.0,
                     reflectivity: 0.0,
-                    emission: 0.0,
+                    emission: prim.emission,
                     wind: 0.0,
                     tex_layer: model.texture_layer.unwrap_or(0.0),
                 glimmer: 0.0,
@@ -1046,6 +1049,24 @@ pub fn chest_mesh() -> &'static crate::voxel::mesher::MeshData {
 fn lore_book_model() -> &'static AnimatedModel {
     static MODEL:std::sync::OnceLock<AnimatedModel>=std::sync::OnceLock::new();
     MODEL.get_or_init(|| {let mut model=load_glb(include_bytes!("../models/lore_book.glb"));model.texture_layer=Some(35.0);model})
+}
+fn torch_model() -> &'static AnimatedModel {
+    static MODEL:std::sync::OnceLock<AnimatedModel>=std::sync::OnceLock::new();
+    MODEL.get_or_init(|| {let mut m=load_glb(include_bytes!("../models/torch.glb"));m.texture_layer=Some(36.);m})
+}
+/// Supplied torch's looping flame animation, cached at 16 frames per cycle.
+pub fn torch_mesh(time:f32)-> &'static crate::voxel::mesher::MeshData {
+    static FRAMES:std::sync::OnceLock<Vec<crate::voxel::mesher::MeshData>>=std::sync::OnceLock::new();
+    let frames=FRAMES.get_or_init(|| {
+        let m=torch_model();
+        (0..16).map(|frame| {
+            let mut mesh=crate::voxel::mesher::MeshData{vertices:vec![],indices:vec![]};
+            let matrices=compute_world_matrices(m,m.animations.get("on"),frame as f32*1.2/16.);
+            emit_rigid_parts(m,&matrices,&mut mesh.vertices,&mut mesh.indices,Vec3::ZERO,&|x,z|(x,z),white_uv());
+            mesh
+        }).collect()
+    });
+    &frames[((time.max(0.)/1.2*16.) as usize)%16]
 }
 pub fn lore_book_mesh() -> &'static crate::voxel::mesher::MeshData {
     static MESH:std::sync::OnceLock<crate::voxel::mesher::MeshData>=std::sync::OnceLock::new();

@@ -46,9 +46,10 @@ fn render_ui_previews() {
             account.hotbar.slots[5]=Some(crate::equipment::Entry::Resource(crate::voxel::BlockType::Crystal));
             account.resources[4]=12;
             if panel=="recipe_book" {account.adventure.recipe_books=15;account.resources.fill(12);}
-            if panel == "inventory" { account.resources.fill(128); }
+            if panel == "inventory" { account.resources.fill(128); account.gear[crate::equipment::Gear::Torch as usize]=1;account.torch_equipped=true;account.adventure.recipe_books=15; }
             let mut inventory = crate::inventory_ui::Inventory::default();
             inventory.preview_selection(crate::equipment::Entry::Gear(crate::equipment::Gear::Pickaxe));
+            if panel=="inventory" {inventory.preview_selection(crate::equipment::Entry::Gear(crate::equipment::Gear::Torch));}
             if matches!(panel,"food"|"cooking") {
                 for (block,n) in [(crate::voxel::BlockType::Meat,8),(crate::voxel::BlockType::CookedMeat,3),(crate::voxel::BlockType::Pumpkin,4)] {
                     account.resources[crate::voxel::COLLECTIBLE_BLOCKS.iter().position(|b|*b==block).unwrap()]=n;

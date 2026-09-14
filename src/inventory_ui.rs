@@ -102,6 +102,10 @@ impl Inventory {
                 });
                 ui.separator();
                 ui.label("Select an item or resource, then press 1–9 to assign a hotbar slot.");
+                ui.horizontal(|ui| {
+                    ui.label(if crate::torch::equipped(account) {"Left hand: burning torch"}else{"Left hand: empty"});
+                    if ui.add_enabled(account.gear[Gear::Torch as usize]>0,egui::Button::new(if account.torch_equipped {"Put torch away"}else{"Equip torch"})).clicked(){requests.crafting=Some(crate::crafting::Action::EquipTorch(!account.torch_equipped));}
+                });
                 ui.columns(2, |columns| {
                     columns[0].heading("Items");
                     columns[0].small("Tools and weapons");
@@ -118,7 +122,7 @@ impl Inventory {
                     });
                 });
                 ui.separator();
-                ui.label(self.selected.map_or("Nothing selected".into(), |e|format!("Selected: {} — press 1–9 or click a hotbar slot",e.name())));
+                ui.label(self.selected.map_or("Nothing selected".into(), |e|if e==Entry::Gear(Gear::Torch) {"Selected: Torch — use the left-hand Equip torch button above".into()}else{format!("Selected: {} — press 1–9 or click a hotbar slot",e.name())}));
                 self.actions(ui,account,health,registry,requests);
                 if !self.feedback.is_empty() {ui.label(&self.feedback);}
                 if ui.button(format!("Clear slot {} (empty hand)",account.hotbar.active+1)).clicked() {
@@ -130,7 +134,7 @@ impl Inventory {
         let slot = ctx.input(|i|keys.iter().position(|k|i.key_pressed(*k))).or(requests.select_slot);
         if let Some(slot) = slot {
             requests.select_slot=Some(slot);
-            if let Some(entry) = self.selected.filter(|e|e.count(account)>0) { requests.assign_entry=Some(Some(entry)); }
+            if let Some(entry) = self.selected.filter(|e|e.count(account)>0 && *e!=Entry::Gear(Gear::Torch)) { requests.assign_entry=Some(Some(entry)); }
         }
     }
     fn row(&mut self, ui: &mut egui::Ui, entry: Entry, account: &Account) {

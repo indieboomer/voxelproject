@@ -227,6 +227,7 @@ pub struct AudioEngine {
     flight_sinks: Vec<SpatialSink>,
     waterfall_sinks: Vec<SpatialSink>,
     campfire_sinks: Vec<SpatialSink>,
+    torch_sinks: Vec<SpatialSink>,
     aura_sinks: Vec<(crate::automation::Cell, crate::automation::Kind, SpatialSink)>,
     /// Kept alive for as long as the engine exists -- dropping it stops
     /// all playback. Never read otherwise, hence the leading underscore.
@@ -269,7 +270,7 @@ impl AudioEngine {
             Ok((stream, handle)) => Self {
                 flight_sinks: Vec::new(),
                 waterfall_sinks: Vec::new(),
-                campfire_sinks: Vec::new(),
+                campfire_sinks: Vec::new(), torch_sinks: Vec::new(),
                 aura_sinks: Vec::new(),
                 _stream: Some(stream),
                 handle: Some(handle),
@@ -289,7 +290,7 @@ impl AudioEngine {
                 Self {
                     flight_sinks: Vec::new(),
                     waterfall_sinks: Vec::new(),
-                    campfire_sinks: Vec::new(),
+                    campfire_sinks: Vec::new(), torch_sinks: Vec::new(),
                     aura_sinks: Vec::new(),
                     _stream: None,
                     handle: None,
@@ -510,6 +511,27 @@ impl AudioEngine {
             sink.set_emitter_position(emitter);sink.set_left_ear_position(left);sink.set_right_ear_position(right);
             let fade=((24.0-pos.distance(self.listener_pos))/8.0).clamp(0.0,1.0);
             sink.set_volume(0.45*fade*fade);
+        }
+    }
+
+    pub fn update_torches(&mut self, fires:&[Vec3]) {
+        let mut positions:Vec<_>=fires.iter().copied().filter(|p|p.distance_squared(self.listener_pos)<12.0*12.0).collect();
+        positions.sort_by(|a,b|a.distance_squared(self.listener_pos).total_cmp(&b.distance_squared(self.listener_pos)));
+        positions.truncate(4);
+        self.torch_sinks.truncate(positions.len());
+        let Some(handle)=&self.handle else {return};
+        while self.torch_sinks.len()<positions.len() {
+            let Ok(decoder)=Decoder::new(Cursor::new(CAMPFIRE)) else {break};
+            let Ok(sink)=SpatialSink::try_new(handle,[0.0;3],[-0.1,0.0,0.0],[0.1,0.0,0.0]) else {break};
+            sink.set_volume(0.0);sink.append(decoder.repeat_infinite());
+            self.torch_sinks.push(sink);
+        }
+        for (i,pos) in positions.into_iter().enumerate().take(self.torch_sinks.len()) {
+            let (emitter,left,right)=self.spatial_positions(pos,5.0);
+            let sink=&self.torch_sinks[i];
+            sink.set_emitter_position(emitter);sink.set_left_ear_position(left);sink.set_right_ear_position(right);
+            let fade=((12.0-pos.distance(self.listener_pos))/8.0).clamp(0.0,1.0);
+            sink.set_volume(0.28*fade*fade);
         }
     }
 
@@ -781,7 +803,7 @@ mod tests {
         AudioEngine {
             flight_sinks: Vec::new(),
             waterfall_sinks: Vec::new(),
-            campfire_sinks: Vec::new(),
+            campfire_sinks: Vec::new(), torch_sinks: Vec::new(),
             aura_sinks: Vec::new(),
             _stream: None,
             handle: None,
@@ -816,6 +838,8 @@ mod tests {
         engine.update_campfires(&[Vec3::splat(100.0)]);
         engine.update_campfires(&[]);
         assert!(engine.campfire_sinks.is_empty());
+        engine.update_torches(&[Vec3::ZERO]);engine.update_torches(&[]);
+        assert!(engine.torch_sinks.is_empty());
     }
 
     /// A degenerate/missing audio device (as in a headless test run) must

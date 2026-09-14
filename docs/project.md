@@ -8,7 +8,7 @@
 - Resource inventory, crafting, equipment, health and underwater oxygen.
 - Optional campkeeper dialogue, three personal saved contracts, a field journal,
   camp rest and automatic recovery after defeat; see [the adventure guide](ADVENTURE_GUIDE.md).
-- Portable held-crystal light, map waypoints/recovery markers, aimed creature health
+- Portable left-hand torch light, map waypoints/recovery markers, aimed creature health
   and contextual interaction/damage feedback.
 - Host-authoritative multiplayer and saved worlds, creatures and rule modules.
 - Wildlife and hostile creatures, including walking zombies/skeletons, rare
