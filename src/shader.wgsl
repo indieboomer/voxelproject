@@ -291,13 +291,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 let cool=light.w<0.0 && !torch;
                 let flicker=select(0.92+0.08*sin(camera.light_params.z*7.0+light.x),1.0,cool);
                 let tint=select(select(vec3<f32>(1.0,0.38,0.09),vec3<f32>(1.0,0.72,0.22),torch),vec3<f32>(0.72,0.86,1.0),cool);
-                // Steady lantern/crystal light also works in daytime caves.
+                // Portable lights also work in daytime caves.
                 let strength=select(max(night,1.0-in.skylight),1.0,cool || torch);
-                local_light+=tint*fade*fade*(0.2+facing)*strength*flicker*1.8*local_visibility(i,in.world_pos+in.normal*0.08);
+                // AO fully affects the soft fill, but only gently affects
+                // direct light: wall visibility already handles obstruction.
+                let local_diffuse=0.2*in.ao+facing*mix(0.8,1.0,in.ao);
+                local_light+=tint*fade*fade*local_diffuse*strength*flicker*1.8*local_visibility(i,in.world_pos+in.normal*0.08);
             }
         }
     }
-    let lit = base * (fill + direct + local_light * in.ao);
+    let lit = base * (fill + direct + local_light);
 
     // View-dependent sky reflection and roughness-dependent sun highlights.
     // Dry matte blocks stay diffuse; rain adds a reflective surface coat.

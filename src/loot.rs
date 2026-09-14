@@ -36,25 +36,37 @@ impl Drop {
 pub struct Effects {pub drops:Vec<Drop>,puffs:Vec<(Vec3,f32)>}
 const PICKUP_DELAY: f32 = 2.0;
 
-// Try several nearby columns, then the death position itself. A single
-// scattered column can intersect a hillside or cross an unloaded chunk edge.
+// Prefer the scattered columns and death position, then search nearby rings
+// when vegetation occupies those cells. Never remove plants to make room.
 fn landing_position(world: &World, pos: Vec3, angle: f32) -> Option<[f32; 3]> {
     if !pos.is_finite() { return None; }
+    let mut offsets=Vec::with_capacity(85);
     for attempt in 0..5 {
-        let offset = if attempt == 4 { Vec3::ZERO } else {
+        offsets.push(if attempt == 4 { Vec3::ZERO } else {
             let a = angle + attempt as f32 * std::f32::consts::FRAC_PI_2;
             Vec3::new(a.cos(), 0.0, a.sin()) * 1.4
-        };
+        });
+    }
+    for radius in 1i32..=4 {for dz in -radius..=radius {for dx in -radius..=radius {
+        if dx.abs().max(dz.abs())==radius {offsets.push(Vec3::new(dx as f32,0.,dz as f32));}
+    }}}
+    for offset in offsets {
         let x = (pos.x + offset.x).floor() as i32;
         let z = (pos.z + offset.z).floor() as i32;
         if !world.chunks.contains_key(&crate::voxel::chunk::world_to_chunk(x,z)) { continue; }
         let top = (pos.y.ceil() as i32).saturating_add(3).clamp(1, crate::voxel::chunk::CHUNK_Y-1);
         for y in (0..=top).rev() {
             let support = world.get_block(x,y,z);
-            if (support.is_solid() || support == BlockType::Water)
-                && !world.get_block(x,y+1,z).is_solid()
-                && world.get_block(x,y+1,z) != BlockType::Water {
-                return Some([x as f32+0.5,y as f32+1.3,z as f32+0.5]);
+            if support.is_solid() || support == BlockType::Water {
+                // Non-solid plants are targetable and block the pickup ray.
+                // Require genuinely empty space, including the bag's spawn bob.
+                if y+2<crate::voxel::chunk::CHUNK_Y
+                    && world.get_block(x,y+1,z)==BlockType::Air
+                    && world.get_block(x,y+2,z)==BlockType::Air {
+                    return Some([x as f32+0.5,y as f32+1.3,z as f32+0.5]);
+                }
+                // Do not search through the surface into a buried cave.
+                break;
             }
         }
     }
@@ -77,6 +89,30 @@ pub fn rewards(kind:CreatureKind)->Vec<(BlockType,u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn planted_scatter_cells_use_nearby_clear_ground_and_allow_pickup() {
+        let mut world=World::new(1);let mut chunk=crate::voxel::chunk::Chunk::new(0,0);
+        for x in 0..16 {for z in 0..16 {
+            chunk.set_local(x,24,z,BlockType::Stone);
+            chunk.set_local(x,25,z,if (x+z)%2==0 {BlockType::ShortGrass}else{BlockType::WildHerbs});
+        }}
+        chunk.set_local(11,25,8,BlockType::Air);
+        world.chunks.insert((0,0),chunk);
+        let mut fx=Effects::default();fx.spawn(&world,CreatureKind::Sheep,Vec3::new(8.,25.,8.));
+        assert_eq!(fx.drops.len(),1);assert_eq!(fx.drops[0].pos,[11.5,25.3,8.5]);
+        assert_eq!(world.get_block(8,25,8),BlockType::ShortGrass);
+        fx.update(PICKUP_DELAY,true);
+        let mut account=crate::crafting::Account::default();
+        assert_eq!(fx.collect(&world,Vec3::new(11.5,25.,8.5),&mut account),rewards(CreatureKind::Sheep));
+    }
+    #[test]
+    fn fully_occupied_ground_is_not_used_or_cleared() {
+        let mut world=World::new(1);let mut chunk=crate::voxel::chunk::Chunk::new(0,0);
+        for x in 0..16 {for z in 0..16 {chunk.set_local(x,24,z,BlockType::Stone);chunk.set_local(x,25,z,BlockType::WildHerbs);}}
+        world.chunks.insert((0,0),chunk);
+        assert_eq!(landing_position(&world,Vec3::new(8.,25.,8.),0.),None);
+        assert_eq!(world.get_block(8,25,8),BlockType::WildHerbs);
+    }
     #[test]
     fn friendly_creatures_supply_species_sized_meat_rewards() {
         for (kind,n) in [(CreatureKind::Chicken,1),(CreatureKind::Sheep,2),(CreatureKind::Cow,4),(CreatureKind::Fish,1)] {

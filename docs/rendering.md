@@ -1,5 +1,12 @@
 # Lighting and surface weather
 
+Terrain AO selects each quad's diagonal from opposing corner brightness sums,
+connecting the darker pair to reduce triangular interpolation artifacts. Ties
+keep the original diagonal. Vertex/index counts, UVs, AO levels, and render
+passes are unchanged. Local lights apply full AO to soft fill and the same mild
+AO weight as sunlight to their direct component, preserving torch-lit corner
+detail alongside voxel wall visibility. See [AO review](AMBIENT_OCCLUSION_REVIEW.md).
+
 Creature meshes now obey the terrain draw radius and require a terrain mesh in
 their chunk, on host and guests. See [wildlife](wildlife.md) for population limits.
 

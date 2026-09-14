@@ -357,6 +357,17 @@ fn ao_brightness(side1: bool, side2: bool, corner: bool) -> f32 {
     }
 }
 
+/// Connect the darker opposing corners so a bright diagonal does not cut
+/// across the occlusion gradient. Equal sums retain the original split.
+fn ao_quad_indices(base: u32, ao: [f32; 4]) -> [u32; 6] {
+    let corners = if ao[0] + ao[2] > ao[1] + ao[3] {
+        [0, 1, 3, 1, 2, 3]
+    } else {
+        [0, 1, 2, 0, 2, 3]
+    };
+    corners.map(|i| base + i)
+}
+
 /// Builds a mesh for one chunk. Uses simple per-face culling against
 /// neighboring blocks (queried through `world`, so cross-chunk faces are
 /// culled correctly too), textured from the shared atlas, and shaded with
@@ -439,6 +450,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                     } else if def.cutout { 0.5 } else { 0.0 };
                     let base_index = vertices.len() as u32;
 
+                    let mut corner_ao = [1.0; 4];
                     for (corner_idx, corner) in FACE_VERTS[face_idx].iter().enumerate() {
                         let (s1, s2, c) = AO_OFFSETS[face_idx][corner_idx];
                         let ao = if atlas::is_cutout(block) {
@@ -452,6 +464,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                                 sample(wx + c.0, ly + c.1, wz + c.2).is_solid(),
                             )
                         };
+                        corner_ao[corner_idx] = ao;
                         let [uc, vc] = FACE_UV_CORNERS[corner_idx];
                         vertices.push(Vertex {
                             position: [
@@ -473,14 +486,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                             glimmer: block.glimmer(), skylight:1.0,
                         });
                     }
-                    indices.extend_from_slice(&[
-                        base_index,
-                        base_index + 1,
-                        base_index + 2,
-                        base_index,
-                        base_index + 2,
-                        base_index + 3,
-                    ]);
+                    indices.extend_from_slice(&ao_quad_indices(base_index, corner_ao));
                 }
             }
         }
@@ -543,6 +549,47 @@ pub fn push_cuboid(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ao_diagonals_preserve_winding_and_face_area_in_all_orientations() {
+        for face in 0..6 {
+            for ao in [[1.,0.45,1.,0.45],[0.45,1.,0.45,1.],[1.;4]] {
+                let indices=super::ao_quad_indices(0,ao);
+                let shared:Vec<_>=indices[..3].iter().filter(|i|indices[3..].contains(i)).copied().collect();
+                assert_eq!(shared,if ao[0]+ao[2]>ao[1]+ao[3] {vec![1,3]}else{vec![0,2]});
+                let normal=glam::Vec3::from_array(super::FACE_NORMALS[face].map(|n|n as f32));
+                let original=super::FACE_VERTS[face].map(glam::Vec3::from_array);
+                let winding=(original[1]-original[0]).cross(original[2]-original[0]).dot(normal);
+                let mut area=0.;
+                for tri in indices.chunks_exact(3) {
+                    let p=tri.iter().map(|i|glam::Vec3::from_array(super::FACE_VERTS[face][*i as usize])).collect::<Vec<_>>();
+                    let cross=(p[1]-p[0]).cross(p[2]-p[0]);
+                    assert!(cross.dot(normal)*winding>0.);area+=cross.length()*0.5;
+                }
+                assert_eq!(area,1.);
+            }
+        }
+    }
+    #[test]
+    fn meshed_faces_choose_diagonal_from_actual_neighbor_occlusion() {
+        for face in 0..6 {for corner in 0..4 {
+            let mut world=World::new(1);let mut chunk=Chunk::new(0,0);
+            chunk.set_local(5,10,5,BlockType::Stone);
+            let (x,y,z)=super::AO_OFFSETS[face][corner].2;
+            chunk.set_local(5+x,10+y,5+z,BlockType::Stone);
+            world.chunks.insert((0,0),chunk);
+            let mesh=build_chunk_mesh(&world,&world.chunks[&(0,0)]);
+            let normal=super::FACE_NORMALS[face].map(|v|v as f32);
+            let quad=mesh.vertices.chunks_exact(4).position(|q|q.iter().enumerate().all(|(i,v)| {
+                v.normal==normal && v.position==[
+                    5.+super::FACE_VERTS[face][i][0],10.+super::FACE_VERTS[face][i][1],5.+super::FACE_VERTS[face][i][2]]
+            })).unwrap();
+            let vertices=&mesh.vertices[quad*4..quad*4+4];
+            assert!(vertices.iter().any(|v|v.ao<1.));
+            let indices=&mesh.indices[quad*6..quad*6+6];
+            let shared:Vec<_>=indices[..3].iter().filter(|i|indices[3..].contains(i)).map(|i|mesh.vertices[*i as usize].ao).collect();
+            assert_eq!(shared.iter().sum::<f32>(),(vertices[0].ao+vertices[2].ao).min(vertices[1].ao+vertices[3].ao));
+        }}
+    }
     use super::*;
     use std::collections::HashMap;
 
