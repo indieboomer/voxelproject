@@ -106,7 +106,7 @@ impl Inventory {
                     columns[0].heading("Items");
                     columns[0].small("Tools and weapons");
                     egui::ScrollArea::vertical().id_source("inventory_items").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible).max_height(height).min_scrolled_height(height).show(&mut columns[0], |ui| {
-                        for g in Gear::ALL { self.row(ui, Entry::Gear(g), account); }
+                        for g in Gear::available() { self.row(ui, Entry::Gear(g), account); }
                     });
                     let mut resources: Vec<_> = COLLECTIBLE_BLOCKS.iter().copied().map(Entry::Resource).filter(|e| e.count(account)>0).collect();
                     resources.sort_by_key(|e|e.name());

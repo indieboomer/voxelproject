@@ -5,7 +5,7 @@ use crate::crafting::{Action,Element,Registry};
 use crate::equipment::Gear;
 
 pub(super) fn gear(id: &str) -> Option<Gear> {
-    Gear::ALL.into_iter().find(|g|g.id()==id)
+    Gear::available().find(|g|g.id()==id)
 }
 fn element(id: &str) -> Option<Element> {
     Element::ALL.into_iter().find(|e|format!("{e:?}").eq_ignore_ascii_case(id))
@@ -32,7 +32,7 @@ pub(super) fn populate<'lua,'scope>(_lua: &'lua Lua, scope: &mlua::Scope<'lua,'s
         let Some(a)=tx.inventory(id) else {return Ok(None);};
         let result=lua.create_table()?;let resources=lua.create_table()?;let items=lua.create_table()?;
         for (i,b) in COLLECTIBLE_BLOCKS.iter().enumerate() {resources.set(b.id(),a.resources[i])?;}
-        for g in Gear::ALL {items.set(g.id(),a.gear[g as usize])?;}
+        for g in Gear::available() {items.set(g.id(),a.gear[g as usize])?;}
         result.set("resources",resources)?;result.set("items",items)?;result.set("elements",balance_table(lua,&a.elements)?)?;result.set("mana",a.mana)?;
         Ok(Some(result))
     })?)?;

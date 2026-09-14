@@ -2242,6 +2242,7 @@ impl App {
         for npc in &self.npcs {
             if Vec3::from_array(npc.position).distance_squared(self.player.position)<80.*80. {self.models.push_npc(&mut mesh.vertices,&mut mesh.indices,npc);}
         }
+        crate::shelter::Roofs::default().shade(&self.world,&mut mesh);
         self.entity_mesh.update(&self.device, &self.queue, &mesh);
         let entry=self.player.crafting.hotbar.entry().filter(|e|!self.ui.automation.tools_suspended() && e.count(&self.player.crafting)>0);
         let forward=self.camera.forward();let right=self.camera.right();let up=right.cross(forward);
@@ -2253,7 +2254,9 @@ impl App {
         let basis=camera_basis*turn*glam::Mat3::from_rotation_z(-0.30-swing*0.6);
         let motion=Vec3::new(-swing*0.12,0.0,-swing*0.08);
         let origin=self.camera.eye_position()+camera_basis*(Vec3::new(0.32,-0.42,-0.65)+turn*motion);
-        self.held_mesh.update(&self.device,&self.queue,&crate::held_item::mesh(entry,origin,basis,0.45));
+        let mut held=crate::held_item::mesh(entry,origin,basis,0.45);
+        crate::shelter::Roofs::default().shade(&self.world,&mut held);
+        self.held_mesh.update(&self.device,&self.queue,&held);
 
 
         self.toasts.retain(|t| !t.is_expired());
@@ -3747,6 +3750,7 @@ impl App {
     fn write_rain_vertices(&self, cam_pos: Vec3, raining: bool, falls: &[crate::water::Waterfall]) -> u32 {
         let half_h = RAIN_HEIGHT * 0.5;
         let mut verts: Vec<RainVertex> = Vec::with_capacity(self.rain_particles.len() * 2);
+        let mut roofs=crate::shelter::Roofs::default();
         for &(ox, oz, phase) in self.rain_particles.iter().take(if raining {self.rain_particles.len()} else {0}) {
             let y = (phase - self.water_time * RAIN_FALL_SPEED).rem_euclid(RAIN_HEIGHT) - half_h;
             // Fade out near the top/bottom of the volume so a streak
@@ -3754,12 +3758,14 @@ impl App {
             let alpha = RAIN_ALPHA * (half_h - y.abs()).clamp(0.0, 1.0);
             let x = cam_pos.x + ox;
             let z = cam_pos.z + oz;
+            let Some((bottom,top))=roofs.rain_segment(&self.world,x,z,
+                cam_pos.y+y-RAIN_STREAK_LENGTH*0.5,cam_pos.y+y+RAIN_STREAK_LENGTH*0.5) else {continue;};
             verts.push(RainVertex {
-                position: [x, cam_pos.y + y + RAIN_STREAK_LENGTH * 0.5, z],
+                position: [x, top, z],
                 alpha,
             });
             verts.push(RainVertex {
-                position: [x, cam_pos.y + y - RAIN_STREAK_LENGTH * 0.5, z],
+                position: [x, bottom, z],
                 alpha,
             });
         }

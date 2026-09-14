@@ -62,6 +62,7 @@ struct VertexOutput {
     @location(7) tex_layer: f32,
     @location(8) glimmer: f32,
     @location(9) flow: vec2<f32>,
+    @location(10) skylight: f32,
 };
 
 @vertex
@@ -89,7 +90,9 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.world_pos = pos;
     out.normal = in.normal;
     out.uv = in.uv;
-    out.ao = in.ao;
+    let sheltered = select(0.0, 1.0, in.ao < 0.0);
+    out.ao = abs(in.ao);
+    out.skylight = 1.0 - sheltered;
     out.reflectivity = in.reflectivity;
     out.emission = in.emission;
     out.tex_layer = in.tex_layer;
@@ -245,8 +248,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     let ndotl = max(dot(shading_normal, camera.sun_dir.xyz), 0.0);
-    let ambient = camera.light_params.x;
-    let sun_intensity = camera.light_params.y;
+    let ambient = mix(0.012, camera.light_params.x, in.skylight);
+    let sun_intensity = camera.light_params.y * in.skylight;
     var shadow = 1.0;
     // `select` evaluates both operands: the old shader sampled shadows even
     // at night. This branch also skips back-facing surfaces entirely.
@@ -277,7 +280,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 let flicker=select(0.92+0.08*sin(camera.light_params.z*7.0+light.x),1.0,cool);
                 let tint=select(vec3<f32>(1.0,0.38,0.09),vec3<f32>(0.72,0.86,1.0),cool);
                 // Steady lantern/crystal light also works in daytime caves.
-                let strength=select(night,1.0,cool);
+                let strength=select(max(night,1.0-in.skylight),1.0,cool);
                 local_light+=tint*fade*fade*(0.2+facing)*strength*flicker*1.8;
             }
         }
@@ -296,7 +299,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Analytic environment reflection: no cubemap, screen-space ray march,
     // or extra samples. Wet surfaces gain a clear coat at grazing angles.
     let overcast = vec3<f32>(0.48, 0.51, 0.55) * ambient * 2.2;
-    let environment = mix(sky_gradient, overcast, camera.weather_fx.y * 0.7);
+    let environment = mix(sky_gradient, overcast, camera.weather_fx.y * 0.7) * in.skylight;
     let reflection_strength = mix(reflectivity * 0.45, 0.55, material_wet);
     let sky_reflection = environment * reflection_strength * mix(0.08, 1.0, fresnel) * in.ao;
     let half_dir = normalize(view_dir + camera.sun_dir.xyz);
@@ -352,7 +355,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let fog_linear = clamp((dist - fog_start) / (fog_end - fog_start), 0.0, 1.0);
     let fog_amount = fog_linear * fog_linear * (3.0 - 2.0 * fog_linear);
 
-    let fog_tint = mix(camera.fog_color.rgb, vec3<f32>(0.025, 0.16, 0.28), underwater);
+    let fog_tint = mix(camera.fog_color.rgb * in.skylight, vec3<f32>(0.025, 0.16, 0.28), underwater);
     let tinted = mix(reflected, reflected * vec3<f32>(0.50, 0.78, 0.95) + vec3<f32>(0.01, 0.04, 0.09), underwater);
     let final_color = mix(tinted, fog_tint, fog_amount);
     // Lightning flash: a straight blend to white over the final graded
@@ -360,6 +363,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // what was underneath -- applied identically in sky.wgsl so the whole
     // screen (terrain and sky both) flashes together, not just one or the
     // other.
-    let flashed = mix(grade(final_color), vec3<f32>(1.0), camera.weather_fx.x);
+    let flashed = mix(grade(final_color), vec3<f32>(1.0), camera.weather_fx.x * in.skylight);
     return vec4<f32>(flashed, 1.0);
 }

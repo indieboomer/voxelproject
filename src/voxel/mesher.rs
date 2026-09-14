@@ -13,6 +13,7 @@ pub struct Vertex {
     pub color: [f32; 3],
     pub normal: [f32; 3],
     pub uv: [f32; 2],
+    /// AO magnitude; negative means a roof blocks sky illumination.
     pub ao: f32,
     /// Base reflectivity (0..1), plus 2 when the face is exposed to rain.
     /// Packing the flag here keeps the vertex layout/bandwidth unchanged.
@@ -478,7 +479,9 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
         }
     }
 
-    MeshData { vertices, indices }
+    let mut mesh=MeshData { vertices, indices };
+    crate::shelter::Roofs::default().shade(world,&mut mesh);
+    mesh
 }
 
 /// Appends an axis-aligned box (all 6 faces, no culling, no AO) to a mesh
@@ -581,7 +584,7 @@ mod tests {
                 v.position[2].round() as i32,
             );
             if pos.0 >= 5 && pos.0 <= 6 && pos.1 == 11 && pos.2 >= 5 && pos.2 <= 6 {
-                top_face_ao.insert(pos, v.ao);
+                top_face_ao.insert(pos, v.ao.abs());
             }
         }
 
@@ -634,7 +637,7 @@ mod tests {
                 v.position[2].round() as i32,
             );
             if pos.0 == 6 && (pos.1 == 10 || pos.1 == 11) && (pos.2 == 5 || pos.2 == 6) {
-                plus_x_ao.insert(pos, v.ao);
+                plus_x_ao.insert(pos, v.ao.abs());
             }
         }
 
@@ -677,7 +680,7 @@ mod tests {
         let mesh = build_chunk_mesh(&world, chunk_ref);
 
         assert!(
-            mesh.vertices.iter().all(|v| v.ao == 1.0),
+            mesh.vertices.iter().all(|v| v.ao.abs() == 1.0),
             "leaves should never be AO-darkened"
         );
     }

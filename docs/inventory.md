@@ -8,7 +8,7 @@ Press **I** to open or close inventory, or **Esc** to close it. Gameplay movemen
 and mouse actions are suspended while the cursor is available for inventory.
 
 The top row shows Earth, Fire, Water, Life and Death balances. Items on the left
-include four starter tools/weapons and [16 specialist items](EQUIPMENT_AND_RECIPE_BOOKS.md); selecting unowned equipment shows its creation recipe. Specialist crafting requires discovering its recipe book. Resources
+include three starter tools/weapons and [15 specialist items](EQUIPMENT_AND_RECIPE_BOOKS.md); selecting unowned equipment shows its creation recipe. Specialist crafting requires discovering its recipe book. Resources
 on the right show owned stacks alphabetically with counts and world-texture icons.
 Both columns scroll independently and impose no inventory slot limit.
 

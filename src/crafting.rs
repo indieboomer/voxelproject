@@ -9,6 +9,7 @@ pub const RULE_MANA: u32 = 20;
 pub const MANA_REGEN_CAP: u32 = 100;
 /// (iron, oak wood, mana); salvage never exceeds construction inputs.
 pub fn gear_formula(gear: crate::equipment::Gear, salvage: bool) -> Result<(u32,u32,u32), String> {
+    if !gear.enabled() {return Err("Bows are temporarily unavailable".into());}
     use crate::equipment::Gear::*;
     match (gear,salvage) {
         (Sword,false)=>Ok((2,1,4)), (Sword,true)=>Ok((1,1,2)),
@@ -428,6 +429,7 @@ impl Registry {
                 Ok(None)
             }
             Action::CraftGear(gear) | Action::SalvageGear(gear) => {
+                if !gear.enabled() {return Err("Bows are temporarily unavailable".into());}
                 let salvage = matches!(action,Action::SalvageGear(_));
                 if !salvage && !gear.known(account) {return Err(format!("Discover {} to learn this recipe",crate::gear_catalog::BOOK_NAMES[gear.book().unwrap() as usize]));}
                 let (_,_,mana) = gear_formula(*gear,salvage)?;
@@ -966,7 +968,7 @@ mod tests {
         let r = registry();
         let world = World::new(1);
         let mut creatures = Creatures::new();
-        for gear in crate::equipment::Gear::ALL {
+        for gear in crate::equipment::Gear::available() {
             let mut a = rich();
             a.adventure.recipe_books=15;
             a.resources.fill(20);

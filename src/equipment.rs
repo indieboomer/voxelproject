@@ -19,6 +19,8 @@ pub enum Gear {
     TrailCharm, LeapingCharm, DivingCharm, FeatherCharm,
 }
 impl Gear {
+    pub fn enabled(self)->bool { !matches!(self,Self::Bow|Self::Longbow) }
+    pub fn available()->impl Iterator<Item=Self> {Self::ALL.into_iter().filter(|g|g.enabled())}
     pub const ALL: [Self; 20] = [Self::Axe, Self::Pickaxe, Self::Sword, Self::Bow,
         Self::ForesterAxe, Self::ProspectorPick, Self::Spade, Self::Sickle,
         Self::Spear, Self::Dagger, Self::Warhammer, Self::Longbow,
@@ -63,7 +65,7 @@ impl Entry {
                 .iter()
                 .position(|v| *v == b)
                 .map_or(0, |i| account.resources[i]),
-            Self::Gear(g) => account.gear[g as usize],
+            Self::Gear(g) => if g.enabled() {account.gear[g as usize]}else{0},
         }
     }
     pub fn resource(self) -> Option<BlockType> {
@@ -96,7 +98,7 @@ impl Default for Hotbar {
 }
 impl Hotbar {
     pub fn entry(&self) -> Option<Entry> {
-        self.slots.get(self.active).copied().flatten()
+        self.slots.get(self.active).copied().flatten().filter(|e|!matches!(e,Entry::Gear(g) if !g.enabled()))
     }
     pub fn select(&mut self, slot: usize) {
         if slot < 9 && self.active != slot {
@@ -500,7 +502,7 @@ mod tests {
         let restored: Account =
             serde_json::from_str(&serde_json::to_string(&account).unwrap()).unwrap();
         assert_eq!(restored, account);
-        assert_eq!(account.hotbar.entry(),Some(Entry::Gear(Gear::Bow)));
+        assert_eq!(account.hotbar.entry(),None);
         account.gear[3]=0;
         account.hotbar.slots[3]=None;
         let mut forged = account.hotbar.clone();
@@ -510,7 +512,7 @@ mod tests {
     }
     #[test]
     fn specialist_weapons_use_authoritative_damage_mana_and_cooldowns() {
-        for gear in [Gear::Spear,Gear::Dagger,Gear::Warhammer,Gear::Longbow,Gear::EmberWand,Gear::TideWand,Gear::LifeStaff] {
+        for gear in [Gear::Spear,Gear::Dagger,Gear::Warhammer,Gear::EmberWand,Gear::TideWand,Gear::LifeStaff] {
             let (world,mut a,mut intent,feet)=fixture(BlockType::Air,Some(Entry::Gear(gear)));
             a.gear[gear as usize]=1;a.mana=20;intent.action=Action::Attack;
             let mut creatures=crate::creature::Creatures::new();
@@ -537,20 +539,15 @@ mod tests {
         }
     }
     #[test]
-    fn bow_shots_obey_mana_cooldown_range_and_walls() {
-        let (mut world,mut a,mut intent,feet)=fixture(BlockType::Air,Some(Entry::Gear(Gear::Bow)));
-        for x in 0..25 {for y in 40..44 {world.set_block(x,y,2,BlockType::Air);}}
-        a.gear[3]=1;a.mana=3;intent.action=Action::Attack;
-        let mut creatures=crate::creature::Creatures::new();
-        creatures.spawn_one(crate::creature::CreatureKind::Wolf,Vec3::new(12.,40.8,2.5),1);
-        let hp=creatures.snapshot_with_ids()[0].3;let now=std::time::Instant::now();let mut state=Mining::default();
-        attack_at(&world,&mut creatures,&mut a,&mut state,feet,&intent,now).unwrap();
-        assert_eq!(a.mana,2);assert_eq!(creatures.snapshot_with_ids()[0].3,hp-9.);
-        assert!(attack_at(&world,&mut creatures,&mut a,&mut state,feet,&intent,now).is_err());assert_eq!(a.mana,2);
-        world.set_block(6,41,2,BlockType::Stone);
-        attack_at(&world,&mut creatures,&mut a,&mut state,feet,&intent,now+std::time::Duration::from_secs(1)).unwrap();
-        assert_eq!(a.mana,1);assert_eq!(creatures.snapshot_with_ids()[0].3,hp-9.);
-        a.mana=0;assert!(attack_at(&world,&mut creatures,&mut a,&mut Mining::default(),feet,&intent,now).is_err());
+    fn retired_bows_cannot_attack_or_craft_even_when_owned() {
+        for gear in [Gear::Bow,Gear::Longbow] {
+            let (world,mut a,mut intent,feet)=fixture(BlockType::Air,Some(Entry::Gear(gear)));
+            a.gear[gear as usize]=1;a.mana=100;intent.action=Action::Attack;
+            let before=a.clone();let mut creatures=crate::creature::Creatures::new();
+            assert!(attack(&world,&mut creatures,&mut a,&mut Mining::default(),feet,&intent).is_err());
+            assert_eq!(a,before);assert!(crate::crafting::gear_formula(gear,false).is_err());
+            assert!(!Gear::available().any(|g|g==gear));
+        }
     }
     #[test]
     fn all_materials_have_semantic_tool_mapping_and_weapons_never_mine() {

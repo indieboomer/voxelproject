@@ -205,7 +205,7 @@ impl Gear {
         (self as usize >= 4).then(|| (self as u8 - 4) / 4)
     }
     pub fn known(self, account: &Account) -> bool {
-        self.book()
+        self.enabled() && self.book()
             .is_none_or(|b| account.adventure.recipe_books & (1 << b) != 0)
     }
     pub fn path(self) -> usize {
@@ -224,7 +224,7 @@ impl Gear {
         self.name().to_lowercase().replace(' ', "_")
     }
     pub fn ingredients(self, salvage: bool) -> Vec<(BlockType, u32)> {
-        let (iron, wood, _) = crate::crafting::gear_formula(self, salvage).unwrap();
+        let Ok((iron, wood, _)) = crate::crafting::gear_formula(self, salvage) else {return vec![];};
         let mut result = vec![(BlockType::Iron, iron), (BlockType::OakWood, wood)];
         if self.book().is_some() {
             let (b, n) = self.definition().extra;
@@ -242,6 +242,7 @@ impl Gear {
     }
     /// Reach, damage, cooldown in ms, mana. All attacks use terrain occlusion.
     pub fn weapon(self) -> Option<(f32, f32, u64, u32)> {
+        if !self.enabled() {return None;}
         Some(match self {
             Self::Sword => (3.2, 12., 350, 0),
             Self::Bow => (20., 9., 700, 1),
@@ -343,7 +344,7 @@ mod tests {
         let r = crate::crafting::Registry::parse(include_str!("../data/crafting.json")).unwrap();
         let world = crate::voxel::World::new(1);
         let mut creatures = crate::creature::Creatures::new();
-        for g in Gear::ALL.into_iter().skip(4) {
+        for g in Gear::available().filter(|g|g.book().is_some()) {
             let mut a = Account::default();
             a.mana = 100;
             a.resources.fill(50);

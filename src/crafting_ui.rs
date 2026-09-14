@@ -71,7 +71,7 @@ impl CraftingUi {
         });
         ui.small(format!("{} / 4 recipe books discovered. Find floating books on dry land; look at one and press F.",account.adventure.recipe_books.count_ones()));
         let query=self.gear_search.trim().to_lowercase();
-        let rows:Vec<_>=Gear::ALL.into_iter().filter(|g|self.gear_path.is_none_or(|p|p==g.path()))
+        let rows:Vec<_>=Gear::available().filter(|g|self.gear_path.is_none_or(|p|p==g.path()))
             .filter(|g|format!("{} {}",g.name(),g.description()).to_lowercase().contains(&query))
             .filter(|g|!self.craftable_only || registry.preview(account,&Action::CraftGear(*g),world,creatures,pos,players).is_ok()).collect();
         if !rows.contains(&self.selected_gear) {if let Some(g)=rows.first(){self.selected_gear=*g;}}

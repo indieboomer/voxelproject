@@ -260,7 +260,7 @@ impl Actor {
                 .into_iter()
                 .filter_map(|g| crafting::gear_formula(g, false).ok().map(|r| (g, r)))
                 .collect(),
-            gear_materials: equipment::Gear::ALL.into_iter().map(|g|(g,g.ingredients(false))).collect(),
+            gear_materials: equipment::Gear::available().map(|g|(g,g.ingredients(false))).collect(),
             compositions: context.registry.compositions.clone(),
             mana_costs: context.registry.mana_costs,
             mana_free: context.registry.mana_free,

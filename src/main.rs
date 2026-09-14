@@ -19,6 +19,7 @@ mod input;
 mod emoticons;
 mod equipment;
 mod food;
+mod shelter;
 mod gear_catalog;
 mod lore_books;
 mod equipment_ui;

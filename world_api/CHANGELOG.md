@@ -12,6 +12,11 @@ Then update this file by hand with what actually changed and why -- the docs
 regenerate automatically, but "what changed and why" is not mechanically
 derivable from a diff of the schema alone.
 
+## 1.31.0 - Shelter lighting and bow retirement
+
+- Equipment queries now expose 18 available items. Bow and longbow cannot be crafted, equipped, attacked with, or granted through equipment API calls; old save slots remain reserved.
+- The Ranger equipment quest now requires a sword. Rain stops at edited roofs; sheltered meshes suppress sky lighting while keeping local light sources. Multiplayer protocol 37 requires matching builds.
+
 ## 1.30.0 - Food and campfire cooking
 
 - Added `meat` and `cooked_meat` resource IDs to inventory, storage, element composition queries, and saved balances. Existing resource and block indices stay stable; older inventories gain empty food stacks.

@@ -39,7 +39,7 @@ the correct giver. The host checks every claim, including guest claims.
 | 4 | Sage | A Little Reserve | Place a Mana Vessel and store at least 10 mana |
 | 5 | Elf Ranger | Wood for the Watch | Bring 12 oak wood |
 | 6 | Elf Ranger | Hungry Shadows | Defeat 2 wolves |
-| 7 | Elf Ranger | Ready for the Wilds | Equip a bow |
+| 7 | Elf Ranger | Ready for the Wilds | Equip a sword |
 | 8 | Warrior | Your First Blade | Craft a sword |
 | 9 | Warrior | Restless Bones | Defeat 3 skeletons |
 | 10 | Warrior | Back to the Grave | Defeat 3 zombies |
@@ -54,8 +54,8 @@ the correct giver. The host checks every claim, including guest claims.
 | 19 | Necromancer | Borrowed Power | Process 1 Death in an Element Dissipator |
 | 20 | Necromancer | An Unexpected Interest | Craft a bound sheep figurine |
 
-Use **C** for stone, swords, bows and the bound sheep button. Use **I** to assign
-and equip a bow. Use **B** to place machinery and **F** to configure, deposit or
+Use **C** for stone, swords and the bound sheep button. Use **I** to assign
+and equip a sword. Use **B** to place machinery and **F** to configure, deposit or
 charge it. The Sorceress's campfire button costs **3 oak wood + 2 stone** and
 lights a real fire on nearby clear, level ground. No supplies are spent if there
 is no safe space. Her lantern objective requires your placed lantern to actually
@@ -185,7 +185,7 @@ items or appear in `api.creatures()`. Removing the fire removes its keeper. F st
 emits the campfire `on_interact` event, so existing world rules can react.
 
 Current saves retain their format; missing journal fields default safely. Multiplayer
-protocol is **36**, so all players need this build. Playtesting-agent work remains paused.
+protocol is **37**, so all players need this build. Playtesting-agent work remains paused.
 
-Floating recipe books now teach [16 specialist equipment recipes](EQUIPMENT_AND_RECIPE_BOOKS.md).
+Floating recipe books now teach [15 specialist equipment recipes](EQUIPMENT_AND_RECIPE_BOOKS.md).
 Look at a book and press F to read it; C opens the searchable equipment catalog.

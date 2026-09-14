@@ -73,7 +73,7 @@ fn inventory_economy_reads_staged_balances_for_host_and_guest_and_rolls_back() {
             assert(not api.take_mana(id,100)); assert(not api.craft_item(id,'pickaxe'))
             assert(api.get_mana(id)==90)
         end
-        assert(api.get_mana(99)==nil and api.get_item_count(7,'bow')==0)
+        assert(api.get_mana(99)==nil and api.get_item_count(7,'bow')==nil)
         assert(not api.give_element(7,'light',1) and not api.give_mana(7,0))
     "#;
     let mut m=module("on_cast",body);

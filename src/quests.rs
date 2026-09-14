@@ -69,7 +69,7 @@ pub const QUESTS: [Quest; 20] = [
     Quest {
         npc: 1,
         title: "Ready for the Wilds",
-        objective: "Craft a bow [C], assign it in I and select its hotbar slot.",
+        objective: "Equip a sword in your hotbar to prepare for the wilds.",
         target: 1,
     },
     Quest {
@@ -249,7 +249,7 @@ pub fn pay_supplies(a: &mut Account, wood: u32, stone: u32) -> Result<(), String
 }
 pub fn observe(a: &mut Account, state: &crate::automation::State) -> bool {
     let before = a.adventure.quests;
-    if a.hotbar.entry() == Some(Entry::Gear(Gear::Bow)) && a.gear[Gear::Bow as usize] > 0 {
+    if a.hotbar.entry() == Some(Entry::Gear(Gear::Sword)) && a.gear[Gear::Sword as usize] > 0 {
         a.adventure.quests.record(6, 1);
     }
     for (slot, kind, id) in [
@@ -411,7 +411,7 @@ mod tests {
         assert_eq!(progress(&a, 7), 0);
         for action in [
             CraftAction::CraftGear(Gear::Sword),
-            CraftAction::CraftGear(Gear::Bow),
+            CraftAction::CraftGear(Gear::Sword),
             CraftAction::BindSheep,
             CraftAction::Craft([
                 Some(crate::crafting::Slot {
@@ -456,7 +456,7 @@ mod tests {
         }
         assert!(creatures.snapshot().is_empty());
         assert_eq!(a.production_goods["creature:sheep"], 1);
-        a.hotbar.assign(Some(Entry::Gear(Gear::Bow)));
+        a.hotbar.assign(Some(Entry::Gear(Gear::Sword)));
         observe(&mut a, &State::default());
         assert_eq!(progress(&a, 6), 1);
         let saved: Account = serde_json::from_slice(&serde_json::to_vec(&a).unwrap()).unwrap();
