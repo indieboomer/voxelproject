@@ -178,7 +178,7 @@ fn card(mesh: &mut MeshData, base: Vec3, right: Vec3, width: f32, height: f32, k
             emission: 0.0,
             wind: 0.0,
             tex_layer: kind,
-            glimmer: 0.0,
+            glimmer: 0.0, skylight:1.0,
         });
     }
     // Double sided; effects are excluded from the sun shadow pass.

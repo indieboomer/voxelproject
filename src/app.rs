@@ -397,6 +397,7 @@ struct CameraUniform {
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 struct LightUniform {
     view_proj: [[f32; 4]; 4],
+    motion: [f32;4],
 }
 
 /// Places a "virtual light" back along the sun direction from the player
@@ -408,7 +409,10 @@ fn light_view_proj(sun_dir: Vec3, player_pos: Vec3) -> glam::Mat4 {
     let view = glam::Mat4::look_at_rh(light_pos, player_pos, Vec3::Y);
     let h = SHADOW_ORTHO_HALF_SIZE;
     let proj = glam::Mat4::orthographic_rh(-h, h, -h, h, 1.0, SHADOW_LIGHT_DISTANCE * 2.5);
-    proj * view
+    let matrix=proj*view;
+    let anchor=matrix.transform_point3(Vec3::ZERO)* (SHADOW_MAP_SIZE as f32*0.5);
+    let offset=(anchor.round()-anchor)* (2.0/SHADOW_MAP_SIZE as f32);
+    glam::Mat4::from_translation(Vec3::new(offset.x,offset.y,0.))*matrix
 }
 
 #[cfg(test)]
@@ -577,6 +581,8 @@ pub struct App {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     texture_bind_group: wgpu::BindGroup,
+    light_visibility:crate::light_visibility::Visibility,
+    prop_cache:crate::prop_cache::Cache,
 
     shadow_pipeline: wgpu::RenderPipeline,
     shadow_view: wgpu::TextureView,
@@ -1018,11 +1024,12 @@ impl App {
         // skinned model's decoded creature texture up front.
         let models = Models::load();
         let (texture_bgl, texture_bind_group) = create_atlas_bind_group(&device, &queue, &models);
-        let shadow = create_shadow_resources(&device);
+        let shadow = create_shadow_resources(&device,&texture_bgl);
+        let light_visibility=crate::light_visibility::Visibility::new(&device,&queue);
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("pipeline layout"),
-            bind_group_layouts: &[&camera_bgl, &texture_bgl, &shadow.sample_bgl],
+            bind_group_layouts: &[&camera_bgl, &texture_bgl, &shadow.sample_bgl, &light_visibility.layout],
             push_constant_ranges: &[],
         });
 
@@ -1392,6 +1399,8 @@ impl App {
             camera_buffer,
             camera_bind_group,
             texture_bind_group,
+            light_visibility,
+            prop_cache:Default::default(),
             shadow_pipeline: shadow.pipeline,
             shadow_view: shadow.view,
             shadow_light_buffer: shadow.light_buffer,
@@ -2196,10 +2205,11 @@ impl App {
                 && self.chunk_meshes.contains_key(&cell)
         });
         let mut mesh = mesh_for_snapshot(&visible_creatures, &self.models);
+        self.prop_cache.retain(&self.world.automation);
         for d in self.world.automation.devices.values() {
             let cell=chunk_of(crate::automation::center(d.cell));
             if crate::visibility::within_terrain_range(cell,center,RENDER_RADIUS) && self.chunk_meshes.contains_key(&cell) {
-                let mut prop=crate::automation_mesh::device(d,self.water_time,None,&self.world.automation);
+                let mut prop=self.prop_cache.mesh(d,self.water_time,&self.world.automation);
                 self.machine_feedback.decorate(d.cell,&mut prop);
                 mesh.extend(prop);
             }
@@ -3831,11 +3841,13 @@ impl App {
             local_lights[0]=(cam_pos+self.camera.forward()*0.4).extend(-6.0).to_array();
         }
         if crate::torch::equipped(&self.player.crafting) && self.player.health>0. {
-            let position=cam_pos-self.camera.right()*0.35+self.camera.forward()*0.4;
+            let candidate=cam_pos-self.camera.right()*0.35+self.camera.forward()*0.4;
+            let position=if crate::light_visibility::clear_ray(&self.world,cam_pos,candidate) {candidate}else{cam_pos};
             local_lights.rotate_right(1);local_lights[0]=crate::torch::light(position);
             torch_carriers.push(position);
         }
         self.audio.update_torches(&torch_carriers);
+        self.light_visibility.update(&self.world,&local_lights,&self.queue);
         self.campfire_mesh.update(&self.device,&self.queue,&fire_effects);
         let uniform = CameraUniform {
             camp_lights: local_lights,
@@ -3869,7 +3881,7 @@ impl App {
         self.queue.write_buffer(
             &self.shadow_light_buffer,
             0,
-            bytemuck::bytes_of(&LightUniform { view_proj: light_view_proj.to_cols_array_2d() }),
+            bytemuck::bytes_of(&LightUniform { view_proj: light_view_proj.to_cols_array_2d(), motion:[self.water_time,self.weather.current.wind_strength(),0.,0.] }),
         );
 
         let target = if self.cursor_grabbed && !self.ui.automation.tools_suspended() && self.ui.settings.values.gameplay.show_block_target {
@@ -3926,6 +3938,7 @@ impl App {
             });
             shadow_pass.set_pipeline(&self.shadow_pipeline);
             shadow_pass.set_bind_group(0, &self.shadow_light_bind_group, &[]);
+            shadow_pass.set_bind_group(1, &self.texture_bind_group, &[]);
             for (&(cx,cz),mesh) in &self.chunk_meshes {
                 if !sun_frustum.chunk(cx,cz){continue;}
                 shadow_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
@@ -3979,6 +3992,7 @@ impl App {
             rpass.set_bind_group(0, &self.camera_bind_group, &[]);
             rpass.set_bind_group(1, &self.texture_bind_group, &[]);
             rpass.set_bind_group(2, &self.shadow_sample_bind_group, &[]);
+            rpass.set_bind_group(3, &self.light_visibility.bind_group, &[]);
             for (&(cx,cz),mesh) in &self.chunk_meshes {
                 if !crate::visibility::within_terrain_range((cx,cz),(render_cx,render_cz),RENDER_RADIUS) || !camera_frustum.chunk(cx,cz){continue;}
                 rpass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
@@ -4023,6 +4037,7 @@ impl App {
                 occlusion_query_set:None,timestamp_writes:None,
             });
             pass.set_pipeline(&self.render_pipeline);pass.set_bind_group(0,&self.camera_bind_group,&[]);pass.set_bind_group(1,&self.texture_bind_group,&[]);pass.set_bind_group(2,&self.shadow_sample_bind_group,&[]);
+            pass.set_bind_group(3,&self.light_visibility.bind_group,&[]);
             pass.set_vertex_buffer(0,self.held_mesh.vertex_buffer.slice(..));pass.set_index_buffer(self.held_mesh.index_buffer.slice(..),wgpu::IndexFormat::Uint32);pass.draw_indexed(0..self.held_mesh.index_count,0,0..1);
         }
 
@@ -4155,6 +4170,7 @@ fn create_atlas_bind_group(
     let image = image::load_from_memory(ATLAS_BYTES)
         .expect("embedded atlas.png should decode")
         .to_rgba8();
+    let mips=crate::texture_mips::atlas(&image,crate::voxel::atlas_tiles::ATLAS_COLS,crate::voxel::atlas_tiles::ATLAS_ROWS);
     let (width, height) = image.dimensions();
     let size = wgpu::Extent3d {
         width,
@@ -4165,17 +4181,20 @@ fn create_atlas_bind_group(
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("atlas texture"),
         size,
-        mip_level_count: 1,
+        mip_level_count: mips.len() as u32,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8UnormSrgb,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
+    for (level,image) in mips.iter().enumerate() {
+    let (width,height)=image.dimensions();
+    let size=wgpu::Extent3d{width,height,depth_or_array_layers:1};
     queue.write_texture(
         wgpu::ImageCopyTexture {
             texture: &texture,
-            mip_level: 0,
+            mip_level: level as u32,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
@@ -4187,6 +4206,7 @@ fn create_atlas_bind_group(
         },
         size,
     );
+    }
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("atlas sampler"),
@@ -4195,7 +4215,7 @@ fn create_atlas_bind_group(
         address_mode_w: wgpu::AddressMode::Repeat,
         mag_filter: wgpu::FilterMode::Nearest,
         min_filter: wgpu::FilterMode::Nearest,
-        mipmap_filter: wgpu::FilterMode::Nearest,
+        mipmap_filter: wgpu::FilterMode::Linear,
         ..Default::default()
     });
 
@@ -4322,7 +4342,7 @@ struct ShadowResources {
 /// Sets up everything needed for a simple single-cascade directional
 /// shadow map: a depth texture rendered from the sun's point of view each
 /// frame, and the resources the main pass needs to sample it back.
-fn create_shadow_resources(device: &wgpu::Device) -> ShadowResources {
+fn create_shadow_resources(device: &wgpu::Device, atlas_bgl:&wgpu::BindGroupLayout) -> ShadowResources {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("shadow map"),
         size: wgpu::Extent3d { width: SHADOW_MAP_SIZE, height: SHADOW_MAP_SIZE, depth_or_array_layers: 1 },
@@ -4366,21 +4386,16 @@ fn create_shadow_resources(device: &wgpu::Device) -> ShadowResources {
     });
     let shadow_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("shadow pipeline layout"),
-        bind_group_layouts: &[&light_bgl],
+        bind_group_layouts: &[&light_bgl,atlas_bgl],
         push_constant_ranges: &[],
     });
-    // Only position is read; reusing the main Vertex buffer's stride means
-    // no separate shadow-only mesh data is needed.
-    let position_only_layout = wgpu::VertexBufferLayout {
-        array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[wgpu::VertexAttribute { offset: 0, shader_location: 0, format: wgpu::VertexFormat::Float32x3 }],
-    };
+    // Reuse terrain/model vertices for matching wind and alpha-cutout shadows.
+    let shadow_vertex_layout = Vertex::layout();
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("shadow pipeline"),
         layout: Some(&shadow_pipeline_layout),
-        vertex: wgpu::VertexState { module: &shadow_shader, entry_point: "vs_main", buffers: &[position_only_layout] },
-        fragment: None,
+        vertex: wgpu::VertexState { module: &shadow_shader, entry_point: "vs_main", buffers: &[shadow_vertex_layout] },
+        fragment: Some(wgpu::FragmentState {module:&shadow_shader,entry_point:"fs_main",targets:&[]}),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
             strip_index_format: None,

@@ -13,7 +13,7 @@ pub struct Vertex {
     pub color: [f32; 3],
     pub normal: [f32; 3],
     pub uv: [f32; 2],
-    /// AO magnitude; negative means a roof blocks sky illumination.
+    /// Contact ambient occlusion, independent of skylight.
     pub ao: f32,
     /// Base reflectivity (0..1), plus 2 when the face is exposed to rain.
     /// Packing the flag here keeps the vertex layout/bandwidth unchanged.
@@ -35,6 +35,7 @@ pub struct Vertex {
     pub tex_layer: f32,
     /// Resource sparkle strength, independent of water reflectivity.
     pub glimmer: f32,
+    pub skylight: f32,
 }
 
 impl Vertex {
@@ -44,6 +45,7 @@ impl Vertex {
             array_stride: size_of::<Vertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
+                wgpu::VertexAttribute {offset: std::mem::offset_of!(Vertex,skylight) as u64, shader_location:10, format:wgpu::VertexFormat::Float32},
                 wgpu::VertexAttribute { offset: size_of::<[f32; 16]>() as wgpu::BufferAddress, shader_location: 9, format: wgpu::VertexFormat::Float32 },
                 wgpu::VertexAttribute {
                     offset: 0,
@@ -306,7 +308,7 @@ fn push_cross(
                 emission,
                 wind: corner[1],
                 tex_layer: 0.0,
-                glimmer: 0.0,
+                glimmer: 0.0, skylight:1.0,
             });
         }
         indices.extend_from_slice(&[
@@ -364,6 +366,11 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     let (ox, oz) = chunk.world_origin();
+    let sample=|x:i32,y:i32,z:i32| {
+        if world.automation.devices.is_empty() && x>=ox && x<ox+CHUNK_X && z>=oz && z<oz+CHUNK_Z {
+            chunk.get_local(x-ox,y,z-oz)
+        }else{world.get_block(x,y,z)}
+    };
     // One short column scan per mesh build, never per weather change/frame.
     // A roof, leaves, or water above a face shields it from surface rain.
     let rain_height: [[i32; CHUNK_Z as usize]; CHUNK_X as usize] = std::array::from_fn(|x| {
@@ -401,7 +408,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                     let nx = wx + normal[0];
                     let ny = ly + normal[1];
                     let nz = wz + normal[2];
-                    let neighbor = world.get_block(nx, ny, nz);
+                    let neighbor = sample(nx, ny, nz);
 
                     let visible = if def.opacity < 1.0 {
                         neighbor == BlockType::Air
@@ -440,9 +447,9 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                             1.0
                         } else {
                             ao_brightness(
-                                world.is_solid(wx + s1.0, ly + s1.1, wz + s1.2),
-                                world.is_solid(wx + s2.0, ly + s2.1, wz + s2.2),
-                                world.is_solid(wx + c.0, ly + c.1, wz + c.2),
+                                sample(wx + s1.0, ly + s1.1, wz + s1.2).is_solid(),
+                                sample(wx + s2.0, ly + s2.1, wz + s2.2).is_solid(),
+                                sample(wx + c.0, ly + c.1, wz + c.2).is_solid(),
                             )
                         };
                         let [uc, vc] = FACE_UV_CORNERS[corner_idx];
@@ -463,7 +470,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                             emission,
                             wind,
                             tex_layer: 0.0,
-                            glimmer: block.glimmer(),
+                            glimmer: block.glimmer(), skylight:1.0,
                         });
                     }
                     indices.extend_from_slice(&[
@@ -520,7 +527,7 @@ pub fn push_cuboid(
                 emission: 0.0,
                 wind: 0.0,
                 tex_layer: 0.0,
-                glimmer: 0.0,
+                glimmer: 0.0, skylight:1.0,
             });
         }
         indices.extend_from_slice(&[

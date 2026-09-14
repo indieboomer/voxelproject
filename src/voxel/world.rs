@@ -470,7 +470,7 @@ impl World {
 
     fn dirty_neighbors(&mut self,cx:i32,cz:i32) {
         for dx in -1..=1 {for dz in -1..=1 {
-            if let Some(chunk)=self.chunks.get_mut(&(cx+dx,cz+dz)){chunk.dirty=true;}
+            if let Some(chunk)=self.chunks.get_mut(&(cx+dx,cz+dz)){chunk.dirty=true;*chunk.sky_cache.get_mut()=None;}
         }}
     }
 
@@ -525,12 +525,13 @@ impl World {
         if let Some(chunk) = self.chunks.get_mut(&(cx, cz)) {
             chunk.set_local(lx, wy, lz, block);
         }
-        // Mark neighboring chunks dirty too if we edited on a boundary, so
-        // their meshes drop/regain the face against this block.
-        for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
-            if lx + dx < 0 || lx + dx >= CHUNK_X || lz + dz < 0 || lz + dz >= CHUNK_Z {
-                if let Some(neighbor) = self.chunks.get_mut(&(cx + dx, cz + dz)) {
-                    neighbor.dirty = true;
+        // Only chunks within the skylight halo can change (also covers AO and
+        // boundary faces). Avoid rebuilding all nine chunks for every edit.
+        for z in (wz-8).div_euclid(CHUNK_Z)..=(wz+8).div_euclid(CHUNK_Z) {
+            for x in (wx-8).div_euclid(CHUNK_X)..=(wx+8).div_euclid(CHUNK_X) {
+                if let Some(neighbor)=self.chunks.get_mut(&(x,z)) {
+                    neighbor.dirty=true;
+                    *neighbor.sky_cache.get_mut()=None;
                 }
             }
         }

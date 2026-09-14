@@ -6,12 +6,20 @@ at its top surface; rain remains visible outdoors from inside a doorway.
 Roof checks use loaded, edited blocks and refresh each frame, so adding or
 removing a roof takes effect immediately. Unknown columns suppress rain.
 
-Sheltered terrain, creatures, props, and held equipment receive only a faint
-ambient floor (0.012), with no direct sky light, sky reflections, or lightning
-washout. Local torch and lantern lights still illuminate them; campfire light
-also works beneath a roof during the day. Roof columns are cached for each mesh
-build/frame. Terrain receives updated shelter shading when its chunk remeshes.
-This is vertical sky occlusion, not full light propagation through windows.
+Skylight now spreads through openings, fading over seven blocks into covered
+spaces. Fully enclosed rooms retain a faint ambient floor (0.012). Terrain,
+creatures, props, and held equipment use the same field. Local torch and lantern
+lights still illuminate them; campfire light also works beneath a roof during
+the day. Roof heights are updated on block edits. Skylight is cached per chunk;
+edits and chunk streaming invalidate affected neighbors, and terrain updates
+when remeshed. Opaque blocks stop propagation; this is bounded skylight, not
+multi-bounce global illumination. Glass currently follows its existing opaque
+block definition.
+
+Local lights use cached voxel visibility to stop illumination through opaque
+walls, with no additional shadow passes. Moving lights refresh after a quarter
+block of movement; nearby block edits refresh their visibility too. Shadows are
+coarse voxel silhouettes; animated creatures do not cast local-light shadows.
 
 Equip a [torch](TORCHES.md) in inventory's separate left-hand slot for warm
 six-block light while wielding a sword or tool. Torches burn forever; crystals

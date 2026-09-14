@@ -69,10 +69,11 @@ fn render_weather_previews() {
     });
     let models = Models::load();
     let (atlas_bgl, atlas_bg) = create_atlas_bind_group(&device, &queue, &models);
-    let shadow = create_shadow_resources(&device);
+    let shadow = create_shadow_resources(&device,&atlas_bgl);
+    let mut light_visibility=crate::light_visibility::Visibility::new(&device,&queue);
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
-        bind_group_layouts: &[&camera_bgl, &atlas_bgl, &shadow.sample_bgl],
+        bind_group_layouts: &[&camera_bgl, &atlas_bgl, &shadow.sample_bgl,&light_visibility.layout],
         push_constant_ranges: &[],
     });
     let sky_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -175,6 +176,14 @@ fn render_weather_previews() {
     let aura_preview = std::env::var_os("VOXEL_AURA_PREVIEW").is_some();
     let machine_preview = std::env::var_os("VOXEL_MACHINE_PREVIEW").is_some() || aura_preview;
     let mut target = Vec3::new(3.0, 7.0, 0.0);
+    if std::env::var_os("VOXEL_FOREST_PREVIEW").is_some() {
+        for x in [-6,0,6,12] {for z in [-8,-2,4] {
+            for y in 7..13 {world.set_block(x,y,z,BlockType::OakWood);}
+            for dx in -2..=2 {for dz in -2..=2 {for y in 11..15 {
+                if dx!=0||dz!=0||y>=13 {world.set_block(x+dx,y,z+dz,BlockType::OakLeaves);}
+            }}}
+        }}
+    }
     let mut underground_creatures=Creatures::new();
     if underground_preview {
         world=World::new(42);
@@ -377,7 +386,7 @@ fn render_weather_previews() {
         }
         old_meshes.push(upload_mesh(&device, &mesh).unwrap());
     }
-    let (width, height) = (1280, 720);
+    let (width, height) = if std::env::var_os("VOXEL_PREVIEW_1080").is_some() {(1920,1080)}else{(1280,720)};
     let size = wgpu::Extent3d {
         width,
         height,
@@ -442,6 +451,7 @@ fn render_weather_previews() {
         0,
         bytemuck::bytes_of(&LightUniform {
             view_proj: light_vp.to_cols_array_2d(),
+            motion:[10.,1.,0.,0.],
         }),
     );
     for (name, wet, clouds, old) in [
@@ -462,11 +472,23 @@ fn render_weather_previews() {
             (&main, &sky)
         };
         let meshes = if old { &old_meshes } else { &meshes };
+        let mut local_lights=if crystal_preview {let mut lights=[[0.;4];4];if torch_preview {lights[0]=crate::torch::light(eye+Vec3::new(-0.35,0.,-0.4));}lights} else {feedback.lights(&camps, eye)};
+        if std::env::var_os("VOXEL_FOUR_TORCHES_PREVIEW").is_some() {
+            for (i,light) in local_lights.iter_mut().enumerate() {*light=crate::torch::light(eye+Vec3::new((i%2) as f32,0.,-1.-(i/2) as f32*3.));}
+            let mut moving=Vec::new();
+            for frame in 0..40 {
+                let moved=local_lights.map(|mut l|{l[0]+=(frame%8) as f32*0.26;l});
+                let start=std::time::Instant::now();light_visibility.update(&world,&moved,&queue);moving.push(start.elapsed().as_secs_f64()*1000.);
+            }
+            moving.sort_by(f64::total_cmp);
+            println!("four moving lights CPU median {:.3} ms, p95 {:.3} ms",moving[20],moving[38]);
+        }
+        light_visibility.update(&world,&local_lights,&queue);
         queue.write_buffer(
             &camera,
             0,
             bytemuck::bytes_of(&CameraUniform {
-                camp_lights: if crystal_preview {let mut lights=[[0.;4];4];if torch_preview {lights[0]=crate::torch::light(eye+Vec3::new(-0.35,0.,-0.4));}lights} else {feedback.lights(&camps, eye)},
+                camp_lights: local_lights,
                 view_proj: vp.to_cols_array_2d(),
                 inv_view_proj: vp.inverse().to_cols_array_2d(),
                 light_view_proj: light_vp.to_cols_array_2d(),
@@ -517,6 +539,7 @@ fn render_weather_previews() {
                 });
                 pass.set_pipeline(&shadow.pipeline);
                 pass.set_bind_group(0, &shadow.light_bind_group, &[]);
+                pass.set_bind_group(1, &atlas_bg, &[]);
                 for mesh in meshes {
                     pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                     pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
@@ -555,6 +578,7 @@ fn render_weather_previews() {
                 pass.set_pipeline(main);
                 pass.set_bind_group(1, &atlas_bg, &[]);
                 pass.set_bind_group(2, &shadow.sample_bind_group, &[]);
+                pass.set_bind_group(3,&light_visibility.bind_group,&[]);
                 for mesh in meshes {
                     pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                     pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
@@ -605,8 +629,8 @@ fn render_weather_previews() {
         if !times.is_empty() {
             times.sort_by(f64::total_cmp);
             println!(
-                "{name}: median GPU {:.3} ms (shadow + sky + terrain, 1280x720)",
-                times[times.len() / 2]
+                "{name}: median GPU {:.3} ms, p95 {:.3} ms (shadow + sky + scene, {width}x{height})",
+                times[times.len() / 2], times[times.len()*95/100]
             );
         }
         image::save_buffer(

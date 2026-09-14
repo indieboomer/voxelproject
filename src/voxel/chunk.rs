@@ -11,6 +11,10 @@ pub struct Chunk {
     pub cz: i32,
     blocks: Vec<BlockType>,
     pub dirty: bool,
+    pub revision: u64,
+    pub(crate) sky_cache: std::cell::RefCell<Option<crate::shelter::SkyField>>,
+    roof: [u8; 256],
+    sky_roof: [u8; 256],
 }
 
 impl Chunk {
@@ -20,6 +24,10 @@ impl Chunk {
             cz,
             blocks: Vec::with_capacity((CHUNK_X * TERRAIN_HEIGHT * CHUNK_Z) as usize),
             dirty: true,
+            revision: 0,
+            sky_cache: Default::default(),
+            roof: [0; 256],
+            sky_roof: [0; 256],
         }
     }
 
@@ -56,12 +64,40 @@ impl Chunk {
             self.blocks.reserve_exact(new_len - self.blocks.len());
             self.blocks.resize(new_len, BlockType::Air);
         }
+        if self.blocks[index] == block {
+            return;
+        }
         self.blocks[index] = block;
+        self.revision = self.revision.wrapping_add(1);
+        *self.sky_cache.get_mut() = None;
+        let col = (lz * CHUNK_X + lx) as usize;
+        if block.is_solid() {
+            self.roof[col] = self.roof[col].max((ly + 1) as u8);
+        } else if self.roof[col] as i32 == ly + 1 {
+            self.roof[col] = (0..ly)
+                .rev()
+                .find(|&y| self.get_local(lx, y, lz).is_solid())
+                .map_or(0, |y| (y + 1) as u8);
+        }
+        if block.is_opaque() {
+            self.sky_roof[col] = self.sky_roof[col].max((ly + 1) as u8);
+        } else if self.sky_roof[col] as i32 == ly + 1 {
+            self.sky_roof[col] = (0..ly)
+                .rev()
+                .find(|&y| self.get_local(lx, y, lz).is_opaque())
+                .map_or(0, |y| (y + 1) as u8);
+        }
         self.dirty = true;
     }
 
     pub fn stored_height(&self) -> i32 {
         (self.blocks.len() / (CHUNK_X * CHUNK_Z) as usize) as i32
+    }
+    pub fn roof_height(&self, x: i32, z: i32) -> i32 {
+        self.roof[(z * 16 + x) as usize] as i32
+    }
+    pub fn sky_height(&self, x: i32, z: i32) -> i32 {
+        self.sky_roof[(z * 16 + x) as usize] as i32
     }
 
     pub fn world_origin(&self) -> (i32, i32) {
@@ -81,6 +117,19 @@ pub fn world_to_local(wx: i32, wz: i32) -> (i32, i32) {
 #[cfg(test)]
 mod height_tests {
     use super::*;
+    #[test]
+    fn roof_cache_tracks_replaced_roofs_at_build_ceiling() {
+        let mut c = Chunk::new(0, 0);
+        c.set_local(3, 127, 4, BlockType::OakLeaves);
+        assert_eq!(c.roof_height(3, 4), 128);
+        assert_eq!(c.sky_height(3, 4), 0);
+        c.set_local(3, 20, 4, BlockType::Stone);
+        assert_eq!(c.sky_height(3, 4), 21);
+        c.set_local(3, 127, 4, BlockType::Air);
+        assert_eq!(c.roof_height(3, 4), 21);
+        c.set_local(3, 20, 4, BlockType::Air);
+        assert_eq!(c.roof_height(3, 4), 0);
+    }
     #[test]
     fn upper_air_is_free_and_ceiling_blocks_mesh_and_survive_reload() {
         let mut chunk = Chunk::new(0, 0);

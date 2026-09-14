@@ -36,6 +36,15 @@ var creature_texture: texture_2d_array<f32>;
 var shadow_map: texture_depth_2d;
 @group(2) @binding(1)
 var shadow_sampler: sampler_comparison;
+@group(3) @binding(0) var light_visibility:texture_3d<f32>;
+struct LightOrigins {origins:array<vec4<f32>,4>};
+@group(3) @binding(1) var<uniform> light_origins:LightOrigins;
+fn local_visibility(index:u32,pos:vec3<f32>)->f32 {
+    let origin=light_origins.origins[index];if origin.w==0.0 {return 1.0;}
+    let cell=vec3<i32>(floor(pos-origin.xyz));
+    if any(cell<vec3<i32>(0)) || any(cell>=vec3<i32>(18)) {return 0.0;}
+    return textureLoad(light_visibility,cell+vec3<i32>(0,0,i32(index)*18),0).r;
+}
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -48,6 +57,7 @@ struct VertexInput {
     @location(7) wind: f32,
     @location(8) tex_layer: f32,
     @location(9) glimmer: f32,
+    @location(10) skylight: f32,
 };
 
 struct VertexOutput {
@@ -90,9 +100,8 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.world_pos = pos;
     out.normal = in.normal;
     out.uv = in.uv;
-    let sheltered = select(0.0, 1.0, in.ao < 0.0);
     out.ao = abs(in.ao);
-    out.skylight = 1.0 - sheltered;
+    out.skylight = in.skylight;
     out.reflectivity = in.reflectivity;
     out.emission = in.emission;
     out.tex_layer = in.tex_layer;
@@ -257,7 +266,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         shadow = shadow_factor(in.world_pos, ndotl);
     }
     let material_wet = select(wet, 0.0, is_water);
-    let base = tex.rgb * in.color * (1.0 - material_wet * 0.28);
+    let base = tex.rgb * in.color * (1.0 - material_wet * 0.20);
     // Hemisphere fill and a subtle warm ground bounce give normals shape
     // without irradiance probes. AO mainly occludes indirect illumination.
     let hemisphere = shading_normal.y * 0.5 + 0.5;
@@ -284,7 +293,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 let tint=select(select(vec3<f32>(1.0,0.38,0.09),vec3<f32>(1.0,0.72,0.22),torch),vec3<f32>(0.72,0.86,1.0),cool);
                 // Steady lantern/crystal light also works in daytime caves.
                 let strength=select(max(night,1.0-in.skylight),1.0,cool || torch);
-                local_light+=tint*fade*fade*(0.2+facing)*strength*flicker*1.8;
+                local_light+=tint*fade*fade*(0.2+facing)*strength*flicker*1.8*local_visibility(i,in.world_pos+in.normal*0.08);
             }
         }
     }
@@ -303,7 +312,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // or extra samples. Wet surfaces gain a clear coat at grazing angles.
     let overcast = vec3<f32>(0.48, 0.51, 0.55) * ambient * 2.2;
     let environment = mix(sky_gradient, overcast, camera.weather_fx.y * 0.7) * in.skylight;
-    let reflection_strength = mix(reflectivity * 0.45, 0.55, material_wet);
+    let reflection_strength = mix(reflectivity * 0.45, 0.22 + reflectivity * 0.45, material_wet);
     let sky_reflection = environment * reflection_strength * mix(0.08, 1.0, fresnel) * in.ao;
     let half_dir = normalize(view_dir + camera.sun_dir.xyz);
     let spec_angle = max(dot(shading_normal, half_dir), 0.0);
