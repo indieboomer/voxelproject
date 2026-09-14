@@ -58,6 +58,7 @@ struct VertexInput {
     @location(8) tex_layer: f32,
     @location(9) glimmer: f32,
     @location(10) skylight: f32,
+    @location(11) wet: vec2<f32>,
 };
 
 struct VertexOutput {
@@ -73,6 +74,7 @@ struct VertexOutput {
     @location(8) glimmer: f32,
     @location(9) flow: vec2<f32>,
     @location(10) skylight: f32,
+    @location(11) wet: vec2<f32>,
 };
 
 @vertex
@@ -102,6 +104,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.uv = in.uv;
     out.ao = abs(in.ao);
     out.skylight = in.skylight;
+    out.wet = in.wet;
     out.reflectivity = in.reflectivity;
     out.emission = in.emission;
     out.tex_layer = in.tex_layer;
@@ -127,16 +130,25 @@ fn shadow_factor(world_pos: vec3<f32>, ndotl: f32) -> f32 {
     let bias = clamp(0.0035 * (1.0 - ndotl), 0.0007, 0.006);
     let texel = 1.0 / SHADOW_MAP_SIZE;
 
-    // Four bilinear PCF taps cover a soft footprint with fewer fetches than
-    // the previous nine-tap square. Level-zero sampling permits early-outs.
+    // A separable [1,2,1] tent, bilinearly shifted with the receiver's texel
+    // phase. Pair adjacent weights into four hardware bilinear comparisons.
+    // Unlike the sparse rotated pattern, coverage varies smoothly at edges.
     let depth = ndc.z - bias;
-    let lit = textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2<f32>(-0.75, -0.25) * texel, depth)
-        + textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2<f32>(0.25, -0.75) * texel, depth)
-        + textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2<f32>(0.75, 0.25) * texel, depth)
-        + textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2<f32>(-0.25, 0.75) * texel, depth);
+    let grid=uv*SHADOW_MAP_SIZE+0.5;
+    let cell=floor(grid);
+    let phase=grid-cell;
+    let w0=3.0-2.0*phase;
+    let w1=1.0+2.0*phase;
+    let o0=(2.0-phase)/w0-1.0;
+    let o1=phase/w1+1.0;
+    let base_uv=(cell-0.5)*texel;
+    let lit = w0.x*w0.y*textureSampleCompareLevel(shadow_map, shadow_sampler, base_uv+vec2<f32>(o0.x,o0.y)*texel,depth)
+        + w1.x*w0.y*textureSampleCompareLevel(shadow_map, shadow_sampler, base_uv+vec2<f32>(o1.x,o0.y)*texel,depth)
+        + w0.x*w1.y*textureSampleCompareLevel(shadow_map, shadow_sampler, base_uv+vec2<f32>(o0.x,o1.y)*texel,depth)
+        + w1.x*w1.y*textureSampleCompareLevel(shadow_map, shadow_sampler, base_uv+vec2<f32>(o1.x,o1.y)*texel,depth);
     // Avoid a hard moving edge at the limited-resolution shadow coverage.
     let edge = smoothstep(0.85, 1.0, max(abs(ndc.x), abs(ndc.y)));
-    return mix(lit * 0.25, 1.0, edge);
+    return mix(lit * 0.0625, 1.0, edge);
 }
 
 // Water is the only block whose reflectivity is this high (0.85, vs. 0.5
@@ -210,8 +222,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let rain_exposure = step(1.5, in.reflectivity);
     let reflectivity = in.reflectivity - rain_exposure * 2.0;
     let is_water = reflectivity > WATER_REFLECTIVITY_THRESHOLD;
-    let wet = camera.weather_fx.w * rain_exposure * (0.25 + 0.75 * max(in.normal.y, 0.0))
-        * (1.0 - clamp(in.emission, 0.0, 1.0));
+    let absorption=clamp(in.wet.x,0.0,1.0);
+    let terrain_wet=camera.weather_fx.w*rain_exposure*(0.25+0.75*max(in.normal.y,0.0));
+    let moisture=select(clamp(in.wet.y,0.0,1.0)*(0.65+0.35*max(in.normal.y,0.0)),terrain_wet,in.wet.y<0.0);
+    // Broad, stable variation breaks up uniform wet pavement without extra textures.
+    // Models use UVs, so the pattern follows animation instead of sliding in space.
+    let pattern_pos=select(vec3<f32>(in.uv*4.0,0.0),in.world_pos,in.wet.y<0.0);
+    let damp_variation=0.88+0.12*sin(dot(pattern_pos,vec3<f32>(1.31,0.73,1.17)));
+    let wet=moisture*mix(1.0,damp_variation,absorption)*(1.0-clamp(in.emission,0.0,1.0));
 
     // Slightly wavy *still* water: only the shading normal is animated (the
     // sun glint and sky reflection dance across the surface), never the
@@ -266,7 +284,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         shadow = shadow_factor(in.world_pos, ndotl);
     }
     let material_wet = select(wet, 0.0, is_water);
-    let base = tex.rgb * in.color * (1.0 - material_wet * 0.20);
+    let base = tex.rgb * in.color * (1.0 - material_wet * (0.06+0.30*absorption));
+    let view_dir = normalize(camera.camera_pos.xyz - in.world_pos);
+    let roughness = select(mix(0.85 - reflectivity * 0.55, mix(0.16,0.55,absorption), material_wet), 0.15, is_water);
+    let exponent = mix(12.0, 128.0, (1.0 - roughness) * (1.0 - roughness));
     // Hemisphere fill and a subtle warm ground bounce give normals shape
     // without irradiance probes. AO mainly occludes indirect illumination.
     let hemisphere = shading_normal.y * 0.5 + 0.5;
@@ -275,6 +296,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let sun_tint = mix(vec3<f32>(1.0, 0.79, 0.60), vec3<f32>(1.0, 0.98, 0.93), smoothstep(0.0, 0.45, camera.sun_dir.w));
     let direct = sun_tint * sun_intensity * ndotl * shadow * mix(0.8, 1.0, in.ao);
     var local_light=vec3<f32>(0.0);
+    var local_specular=vec3<f32>(0.0);
     let night=1.0-smoothstep(-0.1,0.25,camera.sun_dir.w);
     if camera.camp_lights[0].w!=0.0 {
         for (var i=0u;i<4u;i=i+1u) {
@@ -296,31 +318,35 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 // AO fully affects the soft fill, but only gently affects
                 // direct light: wall visibility already handles obstruction.
                 let local_diffuse=0.2*in.ao+facing*mix(0.8,1.0,in.ao);
-                local_light+=tint*fade*fade*local_diffuse*strength*flicker*1.8*local_visibility(i,in.world_pos+in.normal*0.08);
+                let visibility=local_visibility(i,in.world_pos+in.normal*0.08);
+                let energy=tint*fade*fade*strength*flicker*1.8*visibility;
+                local_light+=energy*local_diffuse;
+                if material_wet>0.005 && facing>0.0 {
+                    let half_vector=normalize(view_dir+delta*inverseSqrt(max(distance2,0.01)));
+                    let highlight=pow(max(dot(shading_normal,half_vector),0.0),exponent);
+                    local_specular+=energy*highlight*facing*material_wet*mix(0.6,0.18,absorption)*mix(0.8,1.0,in.ao);
+                }
             }
         }
     }
-    let lit = base * (fill + direct + local_light);
+    let lit = base * (fill + direct + local_light)+local_specular;
 
     // View-dependent sky reflection and roughness-dependent sun highlights.
     // Dry matte blocks stay diffuse; rain adds a reflective surface coat.
-    let view_dir = normalize(camera.camera_pos.xyz - in.world_pos);
     let grazing = 1.0 - max(dot(shading_normal, view_dir), 0.0);
     let grazing2 = grazing * grazing;
     let fresnel = grazing2 * grazing2 * grazing;
-    let roughness = select(mix(0.85 - reflectivity * 0.55, 0.22, material_wet), 0.15, is_water);
     let reflection_dir = reflect(-view_dir, shading_normal);
     let sky_gradient = mix(camera.fog_color.rgb, camera.zenith_color.rgb, clamp(reflection_dir.y, 0.0, 1.0));
     // Analytic environment reflection: no cubemap, screen-space ray march,
     // or extra samples. Wet surfaces gain a clear coat at grazing angles.
     let overcast = vec3<f32>(0.48, 0.51, 0.55) * ambient * 2.2;
     let environment = mix(sky_gradient, overcast, camera.weather_fx.y * 0.7) * in.skylight;
-    let reflection_strength = mix(reflectivity * 0.45, 0.22 + reflectivity * 0.45, material_wet);
+    let reflection_strength = mix(reflectivity * 0.45, mix(0.32,0.12,absorption) + reflectivity * 0.35, material_wet);
     let sky_reflection = environment * reflection_strength * mix(0.08, 1.0, fresnel) * in.ao;
     let half_dir = normalize(view_dir + camera.sun_dir.xyz);
     let spec_angle = max(dot(shading_normal, half_dir), 0.0);
-    let exponent = mix(12.0, 128.0, (1.0 - roughness) * (1.0 - roughness));
-    let coat = max(reflectivity, material_wet * 0.7);
+    let coat = max(reflectivity, material_wet * mix(0.7,0.3,absorption));
     let specular = pow(spec_angle, exponent) * coat * sun_intensity * shadow * ndotl;
     // Emission is a purely visual glow on the block's own surface (ores),
     // added on top of the lit/reflected result rather than folded into the

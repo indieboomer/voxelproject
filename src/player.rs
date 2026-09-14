@@ -260,6 +260,23 @@ impl Player {
     }
 
     fn move_and_collide(&mut self, world: &World, delta: Vec3) {
+        // A slow frame, sprint modifier or fall can cross an entire voxel.
+        // Endpoint-only collision would skip that wall/floor and expose the
+        // back of cave geometry. Subdivide only unusually large movement.
+        let steps = (delta.abs().max_element() / 0.25).ceil().max(1.0) as u32;
+        let mut step = delta / steps as f32;
+        for _ in 0..steps {
+            let before = self.position;
+            self.move_collision_step(world, step);
+            // Stop a blocked axis for the rest of this frame; keep sliding
+            // on the other axes and retain ground contact after landing.
+            for axis in 0..3 {
+                if self.position[axis] == before[axis] { step[axis] = 0.0; }
+            }
+        }
+    }
+
+    fn move_collision_step(&mut self, world: &World, delta: Vec3) {
         // X axis
         let attempt = self.position + Vec3::new(delta.x, 0.0, 0.0);
         if !Self::collides(world, attempt) {
@@ -323,6 +340,31 @@ impl Player {
 mod tests {
     use super::*;
     use winit::event::ElementState;
+
+    #[test]
+    fn fast_movement_cannot_skip_a_thin_cave_wall_or_floor() {
+        let mut world = World::new(1);
+        let mut chunk = crate::voxel::chunk::Chunk::new(0, 0);
+        for y in 1..8 { chunk.set_local(5, y, 5, BlockType::Stone); }
+        chunk.set_local(2, 2, 5, BlockType::Stone);
+        world.chunks.insert((0, 0), chunk);
+
+        for (start, delta) in [
+            (Vec3::new(3.5, 3., 5.5), Vec3::new(4., 0., 0.)),
+            (Vec3::new(7.5, 3., 5.5), Vec3::new(-4., 0., 0.)),
+        ] {
+            let mut player = Player::new(start);
+            player.move_and_collide(&world, delta);
+            assert!((player.position.x - start.x).abs() < 2.0);
+            assert!(!Player::collides(&world, player.position));
+        }
+        let mut player = Player::new(Vec3::new(2.5, 6., 5.5));
+        player.velocity.y = -50.;
+        player.move_and_collide(&world, Vec3::new(0., -5., 0.));
+        assert!(player.position.y >= 3. && player.position.y <= 3.25);
+        assert!(player.on_ground);
+        assert_eq!(player.velocity.y, 0.);
+    }
 
     #[test]
     fn a_new_player_starts_at_full_health_unpoisoned_with_default_multipliers() {

@@ -24,7 +24,7 @@ use winit::window::{CursorGrabMode, Window};
 
 use crate::audio::AudioEngine;
 use crate::camera::Camera;
-use crate::creature::{mesh_for_snapshot, Creatures};
+use crate::creature::Creatures;
 use crate::daynight::{sky_lighting, DAY_LENGTH_SECS};
 use crate::input::Input;
 use crate::llm::{classify_prompt, derive_rule_name, LlmClient, PendingGeneration, PromptKind};
@@ -405,8 +405,10 @@ struct LightUniform {
 /// shadows anchored to wherever the player currently is, rather than
 /// covering the whole (effectively infinite) world.
 fn light_view_proj(sun_dir: Vec3, player_pos: Vec3) -> glam::Mat4 {
-    let light_pos = player_pos + sun_dir * SHADOW_LIGHT_DISTANCE;
-    let view = glam::Mat4::look_at_rh(light_pos, player_pos, Vec3::Y);
+    // Derive orientation independently of position: subtracting two large
+    // world coordinates in look_at changed the light basis during movement.
+    let view = glam::Mat4::look_at_rh(sun_dir * SHADOW_LIGHT_DISTANCE, Vec3::ZERO, Vec3::Y)
+        * glam::Mat4::from_translation(-player_pos);
     let h = SHADOW_ORTHO_HALF_SIZE;
     let proj = glam::Mat4::orthographic_rh(-h, h, -h, h, 1.0, SHADOW_LIGHT_DISTANCE * 2.5);
     let matrix=proj*view;
@@ -418,6 +420,35 @@ fn light_view_proj(sun_dir: Vec3, player_pos: Vec3) -> glam::Mat4 {
 #[cfg(test)]
 #[path = "render_preview_tests.rs"]
 mod render_preview_tests;
+
+#[cfg(test)]
+mod shadow_stability_tests {
+    use super::*;
+    #[test]
+    fn moving_player_cannot_rotate_the_sun_shadow_camera() {
+        for time in [0.02,0.14,0.25,0.47] {
+            let sun=crate::daynight::sky_lighting(time).sun_dir;
+            let reference=light_view_proj(sun,Vec3::ZERO).to_cols_array_2d();
+            for origin in [-16384.,0.,16384.,999900.] {for step in 0..64 {
+                let pos=Vec3::new(origin+step as f32*0.007,24.,origin+step as f32*0.003);
+                let matrix=light_view_proj(sun,pos).to_cols_array_2d();
+                for column in 0..3 {assert_eq!(matrix[column],reference[column],"light orientation drift at {pos:?}");}
+            }}
+        }
+    }
+    #[test]
+    fn translated_shadow_grid_moves_only_by_whole_texels() {
+        let sun=crate::daynight::sky_lighting(0.14).sun_dir;
+        for origin in [-16384.,0.,16384.] {
+            let base=light_view_proj(sun,Vec3::new(origin,24.,origin)).w_axis;
+            for step in 0..128 {
+                let m=light_view_proj(sun,Vec3::new(origin+step as f32*0.007,24.,origin));
+                let d=(m.w_axis-base)*(SHADOW_MAP_SIZE as f32*0.5);
+                assert!((d.x-d.x.round()).abs()<0.001 && (d.y-d.y.round()).abs()<0.001);
+            }
+        }
+    }
+}
 
 struct GpuMesh {
     vertex_buffer: wgpu::Buffer,
@@ -603,6 +634,7 @@ pub struct App {
     time_of_day: f32,
     weather: WeatherState,
     surface_weather: crate::weather::SurfaceWeather,
+    wet_actors: crate::wetness::Actors,
     /// Sound output -- see `audio::AudioEngine`. Local-only, like
     /// `lightning_flash`/`bird_flock`: every client (host or joined) drives
     /// its own playback independently from the same shared, replicated
@@ -1417,6 +1449,7 @@ impl App {
             time_of_day,
             weather,
             surface_weather: Default::default(),
+            wet_actors: Default::default(),
             audio: AudioEngine::new(),
             lightning_rng: (lightning_seed as u64) ^ 0xB0C7_11C4_71E5,
             lightning_timer: LIGHTNING_MIN_INTERVAL_SECS,
@@ -2204,7 +2237,9 @@ impl App {
             crate::visibility::within_terrain_range(cell, center, RENDER_RADIUS)
                 && self.chunk_meshes.contains_key(&cell)
         });
-        let mut mesh = mesh_for_snapshot(&visible_creatures, &self.models);
+        self.wet_actors.begin();
+        let creature_wet=self.wet_actors.creatures(&visible_creatures,&self.world,self.weather.current,dt);
+        let mut mesh = crate::creature::mesh_for_snapshot_wet(&visible_creatures, &self.models,&creature_wet);
         self.prop_cache.retain(&self.world.automation);
         for d in self.world.automation.devices.values() {
             let cell=chunk_of(crate::automation::center(d.cell));
@@ -2234,23 +2269,32 @@ impl App {
             NetRole::Host(host) => &host.remote_players,
             NetRole::Joined(client) => &client.remote_players,
         };
-        mesh.extend(remote_player::build_mesh(
+        mesh.extend(remote_player::build_mesh_wet(
             remote_players,
             self.local_player_id,
             &self.models,
+            |id,pos|self.wet_actors.sample(crate::wetness::Key::Player(id),&self.world,pos+Vec3::Y*1.7,self.weather.current,dt),
         ));
         #[cfg(feature = "dev-playtest")]
         if let Some(session) = &self.playtest { mesh.extend(remote_player::build_mesh(&session.visual,self.local_player_id,&self.models)); }
         for (camp,position) in self.nearby_guides() {
+            let first=mesh.vertices.len();
             let facing=self.camera.eye_position()-position;
             let delta=facing.z.atan2(facing.x);
             self.models.push_player_animated(&mut mesh.vertices,&mut mesh.indices,
                 crate::remote_player::Appearance{model:1,hat:Some(2)},position,delta,
                 crate::player_animation::Clip::Idle,self.water_time,None);
             let _=camp;
+            let key=crate::wetness::Key::Guide((position.x.floor() as i32,position.y.floor() as i32,position.z.floor() as i32));
+            let wet=self.wet_actors.sample(key,&self.world,position+Vec3::Y*1.7,self.weather.current,dt);
+            crate::wetness::apply(&mut mesh.vertices[first..],wet);
         }
         for npc in &self.npcs {
-            if Vec3::from_array(npc.position).distance_squared(self.player.position)<80.*80. {self.models.push_npc(&mut mesh.vertices,&mut mesh.indices,npc);}
+            if Vec3::from_array(npc.position).distance_squared(self.player.position)<80.*80. {
+                let first=mesh.vertices.len();self.models.push_npc(&mut mesh.vertices,&mut mesh.indices,npc);
+                let wet=self.wet_actors.sample(crate::wetness::Key::Npc(npc.home),&self.world,Vec3::from_array(npc.position)+Vec3::Y*1.7,self.weather.current,dt);
+                crate::wetness::apply(&mut mesh.vertices[first..],wet);
+            }
         }
         crate::shelter::Roofs::default().shade(&self.world,&mut mesh);
         self.entity_mesh.update(&self.device, &self.queue, &mesh);
@@ -2269,6 +2313,8 @@ impl App {
             held.extend(crate::torch::mesh(self.camera.eye_position()+camera_basis*Vec3::new(-0.38,-0.45,-0.65),camera_basis,0.75,self.water_time));
         }
         crate::shelter::Roofs::default().shade(&self.world,&mut held);
+        let wet=self.wet_actors.sample(crate::wetness::Key::Player(self.local_player_id),&self.world,self.camera.eye_position(),self.weather.current,dt);
+        crate::wetness::apply(&mut held.vertices,wet);
         self.held_mesh.update(&self.device,&self.queue,&held);
 
 
@@ -4372,17 +4418,34 @@ fn create_shadow_resources(device: &wgpu::Device, atlas_bgl:&wgpu::BindGroupLayo
                 min_binding_size: None,
             },
             count: None,
+        }, wgpu::BindGroupLayoutEntry {
+            binding:1,visibility:wgpu::ShaderStages::FRAGMENT,
+            ty:wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),count:None,
         }],
+    });
+    let alpha_sampler=device.create_sampler(&wgpu::SamplerDescriptor {
+        label:Some("filtered shadow cutouts"),
+        mag_filter:wgpu::FilterMode::Linear,min_filter:wgpu::FilterMode::Linear,mipmap_filter:wgpu::FilterMode::Linear,
+        address_mode_u:wgpu::AddressMode::ClampToEdge,address_mode_v:wgpu::AddressMode::ClampToEdge,
+        ..Default::default()
     });
     let light_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("shadow light bind group"),
         layout: &light_bgl,
-        entries: &[wgpu::BindGroupEntry { binding: 0, resource: light_buffer.as_entire_binding() }],
+        entries: &[wgpu::BindGroupEntry { binding: 0, resource: light_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry {binding:1,resource:wgpu::BindingResource::Sampler(&alpha_sampler)}],
     });
 
     let shadow_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("shadow shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("shadow.wgsl").into()),
+        source: wgpu::ShaderSource::Wgsl({
+            #[cfg(test)]
+            if std::env::var_os("VOXEL_SHADOW_LEGACY").is_some() {
+                std::fs::read_to_string("target/shadow-caster-before.wgsl").expect("saved pre-fix shadow caster").into()
+            } else {include_str!("shadow.wgsl").into()}
+            #[cfg(not(test))]
+            {include_str!("shadow.wgsl").into()}
+        }),
     });
     let shadow_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("shadow pipeline layout"),

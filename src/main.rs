@@ -23,6 +23,7 @@ mod shelter;
 mod torch;
 mod texture_mips;
 mod light_visibility;
+mod wetness;
 mod prop_cache;
 mod gear_catalog;
 mod lore_books;

@@ -1,5 +1,53 @@
 # Lighting and surface weather
 
+## Cave movement and contact shading
+
+Voxel AO now uses brightness levels 1.0/0.9/0.8/0.7 instead of
+1.0/0.8/0.6/0.45, retaining the adaptive quad diagonals with no added GPU work.
+Atlas UV corners are inset by half a base texel; with the existing nearest
+filtering, all seven mip levels stay inside the intended tile. Previously an
+exact tile boundary could select neighboring black or transparent texels,
+and alpha rejection could expose geometry behind a solid face.
+
+Player collision splits movement into steps no larger than 0.25 blocks per
+axis. Endpoint-only checks could skip a one-block floor during a fast fall or
+a wall with a speed boost and a long frame. Blocked axes stop while other axes
+keep sliding. This adds collision queries for large steps, not render passes.
+The near plane is now 0.05 blocks (previously 0.1), keeping its corners inside
+the player's head clearance through 32:9 aspect ratios at the default FOV.
+This trades some distant depth precision for preventing close ceiling cuts.
+Regression tests cover tile edges at every mip, thin-wall/floor traversal,
+and the near-plane clearance at wide aspect ratios. These address concrete
+failure paths; the original intermittent gameplay report has no recorded replay.
+
+The latest [wet-surface pass](WET_SURFACES.md) adds material-specific blocks,
+character moisture that dries under shelter, and local-light specular
+highlights. See that page for current behavior and costs; historical
+measurements below describe their named revisions.
+
+Sun-shadow edge stability: the light camera's orientation now comes only from
+sun direction, before applying player translation. Previously `look_at` formed
+its direction by subtracting two large world positions; float rounding changed
+the orientation as the player moved, defeating texel-grid snapping. Projection
+translation still snaps to whole texels, and sunlight continues moving normally.
+Cutout casters use a separate linear sampler and footprint-selected atlas mips,
+clamped inside each 64-pixel tile at both mip levels. Main color textures retain
+their pixel filtering. A weighted 3x3 tent replaces sparse rotated shadow taps,
+using the same four bilinear depth comparisons and 2048-square shadow map.
+
+The ignored render preview supports `VOXEL_SHADOW_TEMPORAL=1` together with
+`VOXEL_FOREST_PREVIEW=1`: it shifts the fixture to x/z=16384, fixes the viewing
+camera/sun/wind, and moves only the shadow coverage center by tiny increments.
+It reports pixels whose RGB changes by more than 16/255 between frames. The
+reproduced dry-scene instability changed from median/p95 550/550 pixels to 0/0
+on RTX 3060/Vulkan at 1280x720; GPU median changed from 0.211 to 0.218 ms.
+This isolates spurious movement-induced flicker, not legitimate moving tree or
+sun shadows. CPU regression tests also check position-independent orientation
+and whole-texel grid translation at positive and negative distant coordinates.
+For a historical A/B run only, `VOXEL_SHADOW_LEGACY=1` uses saved pre-fix shaders
+at `target/shadow-edge-before.wgsl` and `target/shadow-caster-before.wgsl`, plus the
+old camera calculation. This test-only switch is absent from the game build.
+
 Terrain AO selects each quad's diagonal from opposing corner brightness sums,
 connecting the darker pair to reduce triangular interpolation artifacts. Ties
 keep the original diagonal. Vertex/index counts, UVs, AO levels, and render
@@ -26,8 +74,9 @@ weather dry it over 45 seconds. Cloud cover transitions smoothly as well.
 Wet surfaces darken and gain a view-dependent reflective coat. Water retains its
 own animated normals and reflectivity. Roof exposure is a conservative vertical
 column test computed during meshing and packed into the existing reflectivity
-attribute. Weather changes do not rebuild meshes. Sheltered terrain, cutout
-foliage, and creature models do not receive this terrain coat.
+attribute. Weather changes do not rebuild meshes. Sheltered terrain and cutout
+foliage do not receive this terrain coat. Characters use accumulated actor
+moisture instead of the terrain exposure flag.
 
 River currents reuse the vertex wind scalar for a direction and animate
 world-space ripples. Lake surfaces retain stationary waves. Waterfalls reuse

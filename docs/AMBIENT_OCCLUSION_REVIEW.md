@@ -10,8 +10,10 @@ separate AO weights for local fill and direct light. Other options remain propos
 
 `src/voxel/mesher.rs` checks two side neighbors and one diagonal per face corner:
 up to 12 block queries per visible opaque quad during mesh creation. It stores
-one float per vertex and interpolates brightness levels 1.0, 0.8, 0.6, and 0.45.
-AO uses 4 of the current 72 vertex bytes. Once a chunk is meshed, there are no
+one float per vertex and interpolates brightness levels 1.0, 0.9, 0.8, and 0.7.
+The lighter curve limits ambient darkening to 30%, avoiding broad dark seams
+that make stacked blocks appear detached. AO uses 4 of the current 80 vertex
+bytes. Once a chunk is meshed, there are no
 AO-specific world queries or render passes each frame; the shader uses simple
 multiplications. This is not a measured isolated AO timing: existing meshing
 benchmarks include culling, geometry, skylight, and AO together.
@@ -27,8 +29,8 @@ describes choosing the diagonal from opposing corner sums.
 but only modestly to direct sunlight. Local lights now follow the same principle:
 their soft fill receives full AO and their directional component uses
 `mix(0.8, 1.0, ao)`, avoiding excessive darkening on top of wall visibility.
-At the darkest AO value (0.45), direct light retains 89% instead of 45%; the
-soft fill still retains 45%. Emissive flames and UI are unaffected.
+At the darkest AO value (0.7), direct light retains 94%; the soft fill retains
+70%. Emissive flames and UI are unaffected.
 
 ## Options and cost
 

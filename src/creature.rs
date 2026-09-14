@@ -1377,10 +1377,15 @@ impl Creatures {
 
 /// Builds a creature mesh straight from a network snapshot, for clients that
 /// don't run creature AI locally.
+#[cfg(test)]
 pub fn mesh_for_snapshot(entries: &[([f32; 3], u8, f32, u8, f32)], models: &Models) -> MeshData {
+    mesh_for_snapshot_wet(entries,models,&[])
+}
+pub fn mesh_for_snapshot_wet(entries: &[([f32; 3], u8, f32, u8, f32)], models: &Models,wet:&[f32]) -> MeshData {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
-    for &(pos, kind, facing, clip, time) in entries {
+    for (i,&(pos, kind, facing, clip, time)) in entries.iter().enumerate() {
+        let first=vertices.len();
         let variant = kind >> 4;
         let kind = CreatureKind::from_u8(kind & 0x0f);
         push_model(
@@ -1393,6 +1398,7 @@ pub fn mesh_for_snapshot(entries: &[([f32; 3], u8, f32, u8, f32)], models: &Mode
             Vec3::from_array(pos),
             facing,
         );
+        crate::wetness::apply(&mut vertices[first..],wet.get(i).copied().unwrap_or(0.));
     }
     MeshData { vertices, indices }
 }

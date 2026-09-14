@@ -10,6 +10,24 @@ pub struct Camera {
     pub zfar: f32,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn near_plane_stays_inside_head_clearance_on_wide_displays() {
+        for aspect in [16. / 9., 21. / 9., 32. / 9.] {
+            let camera = Camera::new(Vec3::ZERO, aspect);
+            let half_height = camera.znear * (camera.fovy * 0.5).tan();
+            let half_width = half_height * aspect;
+            // The bounding sphere covers every pitch and yaw, including
+            // looking diagonally up while touching a cave ceiling.
+            let radius = Vec3::new(half_width, half_height, camera.znear).length();
+            assert!(radius < 1.8 - camera.eye_position().y);
+        }
+    }
+}
+
 impl Camera {
     pub fn new(position: Vec3, aspect: f32) -> Self {
         Self {
@@ -18,7 +36,9 @@ impl Camera {
             pitch: 0.0,
             aspect,
             fovy: 70f32.to_radians(),
-            znear: 0.1,
+            // Keep the whole near plane inside the collider, even under a
+            // low ceiling on an ultrawide screen (eyes have 0.18 clearance).
+            znear: 0.05,
             zfar: 400.0,
         }
     }

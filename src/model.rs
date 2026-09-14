@@ -45,6 +45,7 @@ use crate::voxel::atlas::white_uv;
 use crate::voxel::mesher::Vertex;
 
 struct Primitive {
+    absorption: f32,
     emission: f32,
     colors: Vec<[f32;3]>,
     uvs: Vec<[f32; 2]>,
@@ -99,6 +100,7 @@ struct Skin {
 }
 
 struct SkinnedMesh {
+    absorption: f32,
     positions: Vec<Vec3>,
     normals: Vec<Vec3>,
     /// Up to 4 joint slot indices (into `Skin::joints`) per vertex, as
@@ -440,6 +442,15 @@ fn read_quat(v: Option<&Value>) -> Quat {
     }
 }
 
+fn material_absorption(json:&Value,idx:Option<usize>)->f32 {
+    let Some(mat)=idx.and_then(|i|json["materials"].get(i)) else {return 0.65;};
+    if let Some(value)=mat["extras"]["wetAbsorption"].as_f64() {return (value as f32).clamp(0.,1.);}
+    let pbr=&mat["pbrMetallicRoughness"];
+    let metal=pbr["metallicFactor"].as_f64().unwrap_or(0.) as f32;
+    let rough=pbr["roughnessFactor"].as_f64().unwrap_or(0.8) as f32;
+    (0.15+rough.clamp(0.,1.)*0.65)*(1.-metal.clamp(0.,1.)*0.9)
+}
+
 fn material_color(json: &Value, idx: Option<usize>) -> [f32; 3] {
     let Some(mat) = idx.and_then(|i| json["materials"].get(i)) else {
         return [1.0, 1.0, 1.0];
@@ -539,6 +550,7 @@ fn load_glb(bytes: &[u8]) -> AnimatedModel {
                     }
                     let material_idx = prim.get("material").and_then(Value::as_u64).map(|v| v as usize);
                     mesh.push(Primitive {
+                        absorption: material_absorption(&json,material_idx),
                         emission: json["materials"][material_idx.unwrap_or(usize::MAX)]["emissiveFactor"].as_array().map_or(0.,|v|v.iter().filter_map(Value::as_f64).fold(0f64,f64::max) as f32),
                         colors: attrs.get("COLOR_0").and_then(Value::as_u64).map(|idx| {
                             let components=if json["accessors"][idx as usize]["type"]=="VEC4" {4} else {3};
@@ -683,6 +695,7 @@ fn load_glb(bytes: &[u8]) -> AnimatedModel {
             joints,
             inverse_bind,
             mesh: SkinnedMesh {
+                absorption: material_absorption(&json,material_idx),
                 positions,
                 normals,
                 joint_indices,
@@ -904,7 +917,7 @@ fn emit_rigid_parts(
                     emission: prim.emission,
                     wind: 0.0,
                     tex_layer: model.texture_layer.unwrap_or(0.0),
-                glimmer: 0.0, skylight:1.0,
+                glimmer: 0.0, skylight:1.0, wet:[prim.absorption,0.],
                 });
             }
             for &idx in &prim.indices {
@@ -964,7 +977,7 @@ fn emit_skinned_mesh(
             emission: 0.0,
             wind: 0.0,
             tex_layer,
-            glimmer: 0.0, skylight:1.0,
+            glimmer: 0.0, skylight:1.0, wet:[mesh.absorption,0.],
         });
     }
     for &idx in &mesh.indices {
@@ -1109,6 +1122,16 @@ pub fn loot_bag_mesh() -> &'static crate::voxel::mesher::MeshData {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn wet_materials_respect_absorption_overrides_and_metal_content() {
+        let json=serde_json::json!({"materials":[
+            {"pbrMetallicRoughness":{"metallicFactor":0,"roughnessFactor":1}},
+            {"pbrMetallicRoughness":{"metallicFactor":1,"roughnessFactor":1}},
+            {"extras":{"wetAbsorption":0.42}}
+        ]});
+        assert!(super::material_absorption(&json,Some(0))>super::material_absorption(&json,Some(1)));
+        assert_eq!(super::material_absorption(&json,Some(2)),0.42);
+    }
     #[test]
     fn chest_has_its_embedded_texture_and_fits_one_voxel() {
         let mesh=super::chest_mesh();

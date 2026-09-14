@@ -5,6 +5,9 @@ use super::*;
 #[test]
 #[ignore = "requires GPU; writes target/render-*.png and reports fixed-scene render timings"]
 fn render_weather_previews() {
+    let temporal=std::env::var_os("VOXEL_SHADOW_TEMPORAL").is_some();
+    let legacy=std::env::var_os("VOXEL_SHADOW_LEGACY").is_some();
+    let scene_offset=if temporal {Vec3::new(16384.,0.,16384.)}else{Vec3::ZERO};
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
     println!("Adapter: {:?}", adapter.get_info());
@@ -124,7 +127,8 @@ fn render_weather_previews() {
             multiview: None,
         })
     };
-    let main = make_pipeline(include_str!("shader.wgsl"), false);
+    let main_source=if legacy {std::fs::read_to_string("target/shadow-edge-before.wgsl").unwrap()}else{include_str!("shader.wgsl").to_owned()};
+    let main = make_pipeline(&main_source, false);
     let sky = make_pipeline(include_str!("sky.wgsl"), true);
     let baseline = std::fs::read_to_string("target/render-before.wgsl")
         .ok()
@@ -297,7 +301,7 @@ fn render_weather_previews() {
         effect_mesh.extend(crate::held_item::mesh(Some(crate::equipment::Entry::Gear(crate::equipment::Gear::Sword)),Vec3::new(4.82,8.08,12.85),glam::Mat3::from_rotation_y(std::f32::consts::FRAC_PI_2),0.45));
         crate::shelter::Roofs::default().shade(&world,&mut effect_mesh);
     }
-    let camp_fx = upload_mesh(&device, &effect_mesh);
+    for v in &mut effect_mesh.vertices {v.position=(Vec3::from_array(v.position)+scene_offset).to_array();}
     let falls: Vec<_> = world
         .chunks
         .values()
@@ -368,6 +372,11 @@ fn render_weather_previews() {
     let mut old_meshes = Vec::new();
     for chunk in world.chunks.values() {
         let mut mesh = crate::voxel::mesher::build_chunk_mesh(&world, chunk);
+        for v in &mut mesh.vertices {v.position=(Vec3::from_array(v.position)+scene_offset).to_array();}
+        if std::env::var_os("VOXEL_WET_STRESS_PREVIEW").is_some() {
+            // Worst-case local-light shading: even the sheltered cave is soaked.
+            crate::wetness::apply(&mut mesh.vertices,1.0);
+        }
         meshes.push(upload_mesh(&device, &mesh).unwrap());
         for v in &mut mesh.vertices {
             if v.reflectivity >= 2.0 {
@@ -438,6 +447,7 @@ fn render_weather_previews() {
     } else {
         Vec3::new(-18.0, 15.0, 27.0)
     };
+    let eye=eye+scene_offset;let target=target+scene_offset;
     let vp = glam::Mat4::perspective_rh(
         65.0f32.to_radians(),
         width as f32 / height as f32,
@@ -462,6 +472,11 @@ fn render_weather_previews() {
         ("before-storm", 0.0, 0.85, true),
         ("storm", 1.0, 0.85, false),
     ] {
+        // Exercise actual per-vertex character moisture for every weather case.
+        if std::env::var_os("VOXEL_WET_PREVIEW").is_some() {
+            crate::wetness::apply(&mut effect_mesh.vertices,wet);
+        }
+        let camp_fx=upload_mesh(&device,&effect_mesh);
         let (main, sky) = if old {
             if let Some((m, s)) = &baseline {
                 (m, s)
@@ -484,10 +499,7 @@ fn render_weather_previews() {
             println!("four moving lights CPU median {:.3} ms, p95 {:.3} ms",moving[20],moving[38]);
         }
         light_visibility.update(&world,&local_lights,&queue);
-        queue.write_buffer(
-            &camera,
-            0,
-            bytemuck::bytes_of(&CameraUniform {
+        let mut camera_uniform=CameraUniform {
                 camp_lights: local_lights,
                 view_proj: vp.to_cols_array_2d(),
                 inv_view_proj: vp.inverse().to_cols_array_2d(),
@@ -513,10 +525,25 @@ fn render_weather_previews() {
                     1.0,
                 ],
                 weather_fx: [0.0, clouds, 0.0, wet],
-            }),
-        );
+            };
+        queue.write_buffer(&camera,0,bytemuck::bytes_of(&camera_uniform));
         let mut times = Vec::new();
+        let mut previous:Option<Vec<u8>>=None;let mut temporal_changes=Vec::new();
         for frame in 0..50 {
+            if temporal {
+                let position=eye+Vec3::new(frame as f32*0.007,0.,frame as f32*0.003);
+                let matrix=if legacy {
+                    let view=glam::Mat4::look_at_rh(position+lighting.sun_dir*SHADOW_LIGHT_DISTANCE,position,Vec3::Y);
+                    let h=SHADOW_ORTHO_HALF_SIZE;
+                    let m=glam::Mat4::orthographic_rh(-h,h,-h,h,1.,SHADOW_LIGHT_DISTANCE*2.5)*view;
+                    let a=m.transform_point3(Vec3::ZERO)*(SHADOW_MAP_SIZE as f32*0.5);
+                    let o=(a.round()-a)*(2./SHADOW_MAP_SIZE as f32);
+                    glam::Mat4::from_translation(Vec3::new(o.x,o.y,0.))*m
+                }else{light_view_proj(lighting.sun_dir,position)};
+                camera_uniform.light_view_proj=matrix.to_cols_array_2d();
+                queue.write_buffer(&camera,0,bytemuck::bytes_of(&camera_uniform));
+                queue.write_buffer(&shadow.light_buffer,0,bytemuck::bytes_of(&LightUniform {view_proj:matrix.to_cols_array_2d(),motion:[10.,1.,0.,0.]}));
+            }
             let mut encoder = device.create_command_encoder(&Default::default());
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -600,7 +627,7 @@ fn render_weather_previews() {
                 encoder.resolve_query_set(q, 0..2, &resolve, 0);
                 encoder.copy_buffer_to_buffer(&resolve, 0, &timing, 0, 16);
             }
-            if frame == 49 {
+            if frame == 49 || temporal {
                 encoder.copy_texture_to_buffer(
                     color.as_image_copy(),
                     wgpu::ImageCopyBuffer {
@@ -615,6 +642,14 @@ fn render_weather_previews() {
                 );
             }
             queue.submit(Some(encoder.finish()));
+            if temporal {
+                let pixels=read_buffer(&device,&readback);
+                if let Some(last)=&previous {
+                    let changed=pixels.chunks_exact(4).zip(last.chunks_exact(4)).filter(|(a,b)|(0..3).any(|i|a[i].abs_diff(b[i])>16)).count();
+                    temporal_changes.push(changed);
+                }
+                previous=Some(pixels);
+            }
             if timestamps {
                 let data = read_buffer(&device, &timing);
                 let start = u64::from_le_bytes(data[0..8].try_into().unwrap());
@@ -632,6 +667,9 @@ fn render_weather_previews() {
                 "{name}: median GPU {:.3} ms, p95 {:.3} ms (shadow + sky + scene, {width}x{height})",
                 times[times.len() / 2], times[times.len()*95/100]
             );
+        }
+        if !temporal_changes.is_empty() {
+            temporal_changes.sort();println!("{name}: temporal pixels changing >16/255: median {} p95 {}",temporal_changes[24],temporal_changes[46]);
         }
         image::save_buffer(
             format!("target/render-{name}.png"),

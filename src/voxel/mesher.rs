@@ -36,6 +36,8 @@ pub struct Vertex {
     /// Resource sparkle strength, independent of water reflectivity.
     pub glimmer: f32,
     pub skylight: f32,
+    /// Absorption and moisture. Negative moisture uses exposed terrain weather.
+    pub wet: [f32; 2],
 }
 
 impl Vertex {
@@ -45,6 +47,7 @@ impl Vertex {
             array_stride: size_of::<Vertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
+                wgpu::VertexAttribute {offset: std::mem::offset_of!(Vertex,wet) as u64, shader_location:11, format:wgpu::VertexFormat::Float32x2},
                 wgpu::VertexAttribute {offset: std::mem::offset_of!(Vertex,skylight) as u64, shader_location:10, format:wgpu::VertexFormat::Float32},
                 wgpu::VertexAttribute { offset: size_of::<[f32; 16]>() as wgpu::BufferAddress, shader_location: 9, format: wgpu::VertexFormat::Float32 },
                 wgpu::VertexAttribute {
@@ -308,7 +311,7 @@ fn push_cross(
                 emission,
                 wind: corner[1],
                 tex_layer: 0.0,
-                glimmer: 0.0, skylight:1.0,
+                glimmer: 0.0, skylight:1.0, wet:[0.,0.],
             });
         }
         indices.extend_from_slice(&[
@@ -351,9 +354,9 @@ fn ao_brightness(side1: bool, side2: bool, corner: bool) -> f32 {
     };
     match occlusion {
         3 => 1.0,
-        2 => 0.8,
-        1 => 0.6,
-        _ => 0.45,
+        2 => 0.9,
+        1 => 0.8,
+        _ => 0.7,
     }
 }
 
@@ -377,6 +380,11 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     let (ox, oz) = chunk.world_origin();
+    let side_roof:[[f32;18];18]=std::array::from_fn(|x|std::array::from_fn(|z| {
+        let wx=ox+x as i32-1;let wz=oz+z as i32-1;
+        world.chunks.get(&super::chunk::world_to_chunk(wx,wz)).map_or(super::chunk::CHUNK_Y as f32,
+            |c|c.roof_height(wx.rem_euclid(16),wz.rem_euclid(16)) as f32)
+    }));
     let sample=|x:i32,y:i32,z:i32| {
         if world.automation.devices.is_empty() && x>=ox && x<ox+CHUNK_X && z>=oz && z<oz+CHUNK_Z {
             chunk.get_local(x-ox,y,z-oz)
@@ -433,8 +441,8 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                     let shade = 0.85 + 0.15 * face_shade(face_idx);
                     let color = [shade, shade, shade];
                     let uv_rect = atlas::uv_rect(atlas::tile_for(block, face_idx));
-                    let rain_exposed = ly >= rain_height[lx as usize][lz as usize]
-                        && normal[1] >= 0 && !def.cutout;
+                    let rain_exposed = !def.cutout && (normal[1]>0 && ly>=rain_height[lx as usize][lz as usize]
+                        || normal[1]==0 && side_roof[(nx-ox+1) as usize][(nz-oz+1) as usize]<=ly as f32);
                     let reflectivity = block.reflectivity() + if rain_exposed { 2.0 } else { 0.0 };
                     let emission = def.emission;
                     // Leaves aren't anchored to anything solid, so (unlike
@@ -483,7 +491,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                             emission,
                             wind,
                             tex_layer: 0.0,
-                            glimmer: block.glimmer(), skylight:1.0,
+                            glimmer: block.glimmer(), skylight:1.0, wet:[crate::wetness::absorption(block),-1.],
                         });
                     }
                     indices.extend_from_slice(&ao_quad_indices(base_index, corner_ao));
@@ -533,7 +541,7 @@ pub fn push_cuboid(
                 emission: 0.0,
                 wind: 0.0,
                 tex_layer: 0.0,
-                glimmer: 0.0, skylight:1.0,
+                glimmer: 0.0, skylight:1.0, wet:[0.55,0.],
             });
         }
         indices.extend_from_slice(&[
@@ -659,12 +667,12 @@ mod tests {
         );
         assert_eq!(
             top_face_ao[&(6, 11, 5)],
-            0.8,
+            0.9,
             "corner beside the taller neighbor should be dimmed"
         );
         assert_eq!(
             top_face_ao[&(6, 11, 6)],
-            0.8,
+            0.9,
             "corner beside the taller neighbor should be dimmed"
         );
     }
@@ -702,7 +710,7 @@ mod tests {
         );
         assert_eq!(
             plus_x_ao[&(6, 10, 6)],
-            0.8,
+            0.9,
             "corner diagonally behind the occluder should be dimmed"
         );
         assert_eq!(
@@ -755,5 +763,15 @@ mod tests {
         world.chunks.get_mut(&(0, 0)).unwrap().set_local(5, 9, 5, BlockType::Air);
         let mesh = build_chunk_mesh(&world, &world.chunks[&(0, 0)]);
         assert!(mesh.vertices.iter().filter(|v| v.normal[1] > 0.0).all(|v| v.reflectivity >= 2.0));
+    }
+    #[test]
+    fn vertical_walls_receive_rain_but_overhangs_shelter_them() {
+        let mut world=World::new(1);let mut chunk=Chunk::new(0,0);
+        for y in 1..5 {chunk.set_local(5,y,5,BlockType::Stone);}
+        world.chunks.insert((0,0),chunk);
+        let exposed=|mesh:&MeshData|mesh.vertices.iter().filter(|v|v.normal==[1.,0.,0.]&&v.position[0]==6.&&v.position[1]<4.).all(|v|v.reflectivity>=2.);
+        assert!(exposed(&build_chunk_mesh(&world,&world.chunks[&(0,0)])));
+        world.set_block(6,5,5,BlockType::Stone);
+        assert!(!exposed(&build_chunk_mesh(&world,&world.chunks[&(0,0)])));
     }
 }

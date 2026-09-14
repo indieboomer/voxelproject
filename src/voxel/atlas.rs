@@ -24,10 +24,14 @@ pub fn tile_for(block: BlockType, face: usize) -> u8 {
 pub fn uv_rect(tile: u8) -> [f32; 4] {
     let col = (tile as u32 % ATLAS_COLS) as f32;
     let row = (tile as u32 / ATLAS_COLS) as f32;
-    let u0 = col / ATLAS_COLS as f32;
-    let v0 = row / ATLAS_ROWS as f32;
-    let u1 = (col + 1.0) / ATLAS_COLS as f32;
-    let v1 = (row + 1.0) / ATLAS_ROWS as f32;
+    // Keep every corner inside its tile. Exact boundaries can round into
+    // another tile (including transparent texels) as the camera moves.
+    // Half a base texel also remains inside the tile at every nearest mip.
+    let inset = 0.5 / 64.0;
+    let u0 = (col + inset) / ATLAS_COLS as f32;
+    let v0 = (row + inset) / ATLAS_ROWS as f32;
+    let u1 = (col + 1.0 - inset) / ATLAS_COLS as f32;
+    let v1 = (row + 1.0 - inset) / ATLAS_ROWS as f32;
     [u0, v0, u1, v1]
 }
 
@@ -47,4 +51,26 @@ pub fn white_uv() -> [f32; 4] {
 /// transparency baked in from the source texture.
 pub fn is_cutout(block: BlockType) -> bool {
     block.def().cutout
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tile_edges_never_sample_neighbors_at_any_mip() {
+        for tile in 0..(ATLAS_COLS * ATLAS_ROWS) as u8 {
+            let [u0, v0, u1, v1] = uv_rect(tile);
+            for size in [64, 32, 16, 8, 4, 2, 1] {
+                for u in [u0, u1] {
+                    let texel = (u * (ATLAS_COLS * size) as f32).floor() as u32;
+                    assert_eq!(texel / size, tile as u32 % ATLAS_COLS);
+                }
+                for v in [v0, v1] {
+                    let texel = (v * (ATLAS_ROWS * size) as f32).floor() as u32;
+                    assert_eq!(texel / size, tile as u32 / ATLAS_COLS);
+                }
+            }
+        }
+    }
 }

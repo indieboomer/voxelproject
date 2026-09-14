@@ -108,7 +108,11 @@ impl RemotePlayer {
 
 /// Builds a mesh for every tracked remote player except `exclude` (the
 /// local player, if it appears in the same map).
+#[cfg(feature = "dev-playtest")]
 pub fn build_mesh(players: &HashMap<PlayerId, RemotePlayer>, exclude: PlayerId, models: &crate::model::Models) -> MeshData {
+    build_mesh_wet(players,exclude,models,|_,_|0.)
+}
+pub fn build_mesh_wet(players: &HashMap<PlayerId, RemotePlayer>, exclude: PlayerId, models: &crate::model::Models,mut wet:impl FnMut(PlayerId,Vec3)->f32) -> MeshData {
     let mut vertices: Vec<Vertex> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
 
@@ -118,6 +122,7 @@ pub fn build_mesh(players: &HashMap<PlayerId, RemotePlayer>, exclude: PlayerId, 
             continue;
         }
         let feet = rp.pos;
+        let first=vertices.len();
         models.push_player_animated(&mut vertices, &mut indices, rp.appearance, feet, rp.yaw,
             rp.animation.clip, rp.animation.time + rp.animation_received.elapsed().as_secs_f32().min(0.25), rp.held);
         if rp.torch_lit {
@@ -125,6 +130,7 @@ pub fn build_mesh(players: &HashMap<PlayerId, RemotePlayer>, exclude: PlayerId, 
             let torch=crate::torch::mesh(feet+Vec3::Y*0.9-right*0.4+forward*0.25,glam::Mat3::IDENTITY,0.7,rp.animation.time+rp.animation_received.elapsed().as_secs_f32());
             let base=vertices.len() as u32;vertices.extend(torch.vertices);indices.extend(torch.indices.into_iter().map(|i|i+base));
         }
+        crate::wetness::apply(&mut vertices[first..],wet(id,feet));
         // Small floating marker above crystal carriers, so "sheep hunt
         // players carrying a crystal" is something you can actually see
         // happening, not just trust the log for.
