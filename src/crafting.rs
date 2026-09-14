@@ -241,6 +241,7 @@ pub fn creature_kind(id: &str) -> Option<CreatureKind> {
         "sunscorch" => CreatureKind::Sunscorch,
         "zombie" => CreatureKind::Zombie,
         "skeleton" => CreatureKind::Skeleton,
+        "skeleton_sorcerer" => CreatureKind::SkeletonSorcerer,
         "dragon_green" => CreatureKind::DragonGreen,
         "dragon_red" => CreatureKind::DragonRed,
         "fish" => CreatureKind::Fish,

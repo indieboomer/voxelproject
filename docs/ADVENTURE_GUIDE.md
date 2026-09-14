@@ -89,8 +89,12 @@ reshape terrain. If no safe patch exists, find a natural campfire or use a campf
 spell. Existing worlds gain the same interactions at their existing fires without
 placing a new starter camp over saved construction.
 
-A nearby fire with a clear standing space has a named keeper. Look at the keeper
-or fire and press **F**. This opens the journal dialogue. Camp actions require sight
+About one in five campfires has a named keeper, selected consistently from the
+world seed and fire location. The starting fire always has one. Its location is
+saved and shared with joining players; older saves recover a nearby starter fire
+without adding construction. A keeper also needs clear standing space beside the
+fire. Cooking and resting work at unattended fires; completing a contract requires
+a keeper. Look at the keeper or fire and press **F**. Camp actions require sight
 of the fire within six blocks and fail if a hostile creature is within ten blocks
 of the player. The host rechecks these conditions when processing an action.
 

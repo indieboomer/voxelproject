@@ -27,6 +27,7 @@ const SPECIES: &[&str] = &[
     "sunscorch",
     "zombie",
     "skeleton",
+    "skeleton_sorcerer",
     "dragon_green",
     "dragon_red",
     "fish",
@@ -46,7 +47,7 @@ fn schema() -> Value {
         "execution":{"type":"string","enum":["rule","instant"]},
         "summary":{"type":"string"},
         "condition":{"type":"string","enum":["always","rain","sunny","storm","mist","night","day","custom"]},
-        "actor_kind":{"type":"string","enum":["none","sheep","chicken","cow","wolf","stone_golem","goblin","stinger","sunscorch","zombie","skeleton","dragon_green","dragon_red","fish"]},
+        "actor_kind":{"type":"string","enum":["none","sheep","chicken","cow","wolf","stone_golem","goblin","stinger","sunscorch","zombie","skeleton","dragon_green","dragon_red","fish","skeleton_sorcerer"]},
         "effect":{"type":"string","enum":["protect_players","suppress_attacks","custom"]},
         "targets":{"type":"string","enum":["players","all","custom"]},
         "api_groups":{"type":"array","items":{"type":"string","enum":GROUPS},"maxItems":6},
@@ -308,6 +309,7 @@ fn focused_prompt(plan: &Plan) -> String {
         let relevant = !line.starts_with("- api.")
             || method == "- api.broadcast"
             || method == "- api.players"
+            || method == "- api.get_player"
             || method == "- api.get_equipped_item"
             || method == "- api.get_player_journal"
             || plan.api_groups.iter().any(|g| match g.as_str() {
@@ -329,9 +331,9 @@ fn focused_prompt(plan: &Plan) -> String {
                 "inventory" => ["inventory", "resource", "item", "mana", "element", "decompose"]
                     .iter()
                     .any(|k| method.contains(k)),
-                "weather" => ["weather", "rain"].iter().any(|k| method.contains(k)),
+                "weather" => ["weather", "rain", "is_exposed_to_sky", "is_block_loaded"].iter().any(|k| method.contains(k)),
                 "time" => ["time", "night", "dawn"].iter().any(|k| method.contains(k)),
-                "blocks" => ["block", "terrain", "distance", "campfire", "water", "fish"]
+                "blocks" => ["block", "terrain", "distance", "campfire", "water", "fish", "fill_", "surface_height", "is_exposed_to_sky"]
                     .iter()
                     .any(|k| method.contains(k)),
                 _ => false,
@@ -588,6 +590,7 @@ pub fn verify_policy(plan: &Plan, code: &str) -> Result<(), String> {
         "dragon_green" => 10,
         "dragon_red" => 11,
         "fish" => 12,
+        "skeleton_sorcerer" => 13,
         _ => return Err("Unknown policy species".into()),
     };
     let world = World::new(1);
@@ -684,6 +687,21 @@ pub fn verify_policy(plan: &Plan, code: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn focused_context_includes_world_shaping_and_direct_caster_lookup() {
+        let mut p=plan();p.api_groups=vec!["blocks".into()];
+        let text=focused_prompt(&p);
+        for name in ["get_player","fill_box","fill_sphere","get_block_kinds","get_block_info",
+            "block_matches","surface_height","is_exposed_to_sky","is_block_loaded"] {
+            assert!(text.contains(&format!("- api.{name}(")),"missing {name}");
+        }
+        p.api_groups=vec!["creatures".into()];
+        let text=focused_prompt(&p);
+        assert!(text.contains("- api.heal_creature(") && text.contains("- api.get_creature("));
+        p.api_groups=vec!["weather".into()];
+        assert!(focused_prompt(&p).contains("- api.is_exposed_to_sky("));
+        assert!(!text.contains("no separate equipment-item catalog"));
+    }
     #[test]
     fn focused_block_context_keeps_campfire_placement_and_water_capabilities() {
         let mut p=plan();p.api_groups=vec!["blocks".into()];

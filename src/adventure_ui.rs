@@ -13,6 +13,7 @@ pub struct Journal {
     pub open: bool,
     pub hide_tracker: bool,
     pub camp: Option<Cell>,
+    pub camp_has_keeper: bool,
     pub feedback: String,
     pub hint: Option<String>,
     pub target: Option<(String, f32, f32)>,
@@ -46,8 +47,13 @@ impl Journal {
                 if self.npc.is_some() {self.quest_rows(ui,account);if !self.feedback.is_empty() {ui.label(&self.feedback);}return;}
                 if self.camp.is_none() {self.quest_rows(ui,account);}
                 if let Some(camp)=self.camp {
+                    if self.camp_has_keeper {
                     ui.heading(format!("{} · Campkeeper",adventure::guide_name(camp)));
                     ui.label("“A fire, a few supplies, and a story worth bringing back. That's all a traveler needs.”");
+                    } else {
+                        ui.heading("Campfire");
+                        ui.label("An unattended fire. Cook or rest here; visit a campkeeper to finish contracts.");
+                    }
                     ui.separator();
                     ui.heading("Campfire cooking");
                     let raw=adventure::count(account,crate::voxel::BlockType::Meat);
@@ -72,8 +78,8 @@ impl Journal {
                 if let Some(camp)=self.camp {
                     ui.label("Rest restores health, cures poison, and sets your recovery camp. Nearby hostiles prevent resting, cooking, and trading.");
                     if ui.add_enabled(player.health>0.,egui::Button::new("Rest and set recovery camp")).clicked() {request=Some(Action::Rest{camp});}
-                    if account.adventure.stage < 3 && ui.add_enabled(adventure::ready(account)&&player.health>0.,egui::Button::new(if account.adventure.stage==0 {"Deliver 6 oak wood + 4 stone"} else {"Complete contract"})).clicked() {request=Some(Action::Claim{camp});}
-                } else {ui.label("Find a campfire and press F to speak with its keeper. Contracts are optional; your tools and world remain yours.");}
+                    if self.camp_has_keeper && account.adventure.stage < 3 && ui.add_enabled(adventure::ready(account)&&player.health>0.,egui::Button::new(if account.adventure.stage==0 {"Deliver 6 oak wood + 4 stone"} else {"Complete contract"})).clicked() {request=Some(Action::Claim{camp});}
+                } else {ui.label("Find a staffed campfire and press F to speak with its keeper. Contracts are optional; your tools and world remain yours.");}
                 if !self.feedback.is_empty() {ui.add_space(5.);ui.label(&self.feedback);}
                 ui.separator();
                 ui.collapsing("Expedition notes and controls",|ui| {

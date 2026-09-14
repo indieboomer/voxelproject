@@ -2,6 +2,9 @@
 
 > A lightweight multiplayer voxel sandbox whose rules can be rewritten from inside the game using natural language.
 
+The [World API user guide](world_api/USER_GUIDE.md) combines prompting instructions,
+Lua examples, all current API methods, multiplayer/save behavior and limits in one document.
+
 To create a shareable Windows build with the AI model, llama server and installer,
 run `make_package.bat`. See [PACKAGING.md](PACKAGING.md) for options and installation steps.
 

@@ -1,10 +1,29 @@
-# Prompting with World API 1.22
+# Prompting with World API 1.33
+
+For the complete current walkthrough and API reference in one document, use the
+[World API user guide](../world_api/USER_GUIDE.md).
 
 The host generates and reviews sandboxed Lua modules. The model receives the
 generated compact API reference, so schema updates must be regenerated before
 rebuilding. All methods live directly under `api`; there is no `api.world` or
 `api.player` namespace. See the [complete reference](../world_api/world_api_readme.md)
 for signatures, supported callbacks, resource limits and existing creature control.
+
+## World shaping
+
+The [world-shaping review and guide](../world_api/WORLD_SHAPING.md) covers the
+new box/sphere edits, shared material filters, roof/edited-height queries,
+direct player/creature lookup, and creature healing. Example requests:
+
+- "Build a five-by-five stone platform under me, filling only empty space."
+- "Rain turns exposed soil near players into mud, but roofs protect it."
+- "Interacting with crystal heals nearby sheep and consumes one life element."
+
+The linked guide includes executable Lua examples tested against the real
+sandbox. Keep one-shot structures within 300 changed blocks, or explicitly ask
+for gradual construction. The existing 32-edits-per-rule-callback allowance is
+shared by shape and individual edits. Arbitrary new native material/model
+definitions are not exposed; combine existing blocks with event-driven rules.
 
 ## New environment capabilities
 

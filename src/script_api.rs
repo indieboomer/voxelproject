@@ -93,6 +93,7 @@ fn populate_api<'lua, 'scope>(
     let night = is_night(time_of_day);
     let weather_name = tx.weather.borrow().current.name();
     super::environment::populate(lua,scope,api,tx,block_budget,spawn_budget)?;
+    super::world_edit::populate(lua,scope,api,tx,block_budget)?;
     super::inventory::populate(lua,scope,api,tx)?;
     super::automation_api::populate(lua,scope,api,tx,block_budget)?;
     api.set("time_of_day", time_of_day)?;
@@ -424,15 +425,7 @@ fn populate_api<'lua, 'scope>(
                 // "wood" is a category alias matching any tree species
                 // (oak/spruce/birch/cherry), since rules like rain_mud.lua
                 // search for "a tree" generically rather than one species.
-                let is_match: Box<dyn Fn(BlockType) -> bool> = if kind.eq_ignore_ascii_case("wood")
-                {
-                    Box::new(BlockType::is_wood)
-                } else {
-                    let Some(block) = BlockType::from_name(&kind) else {
-                        return Ok(t);
-                    };
-                    Box::new(move |b| b == block)
-                };
+                let Some(filter) = super::world_edit::BlockFilter::parse(&kind) else { return Ok(t); };
                 let radius = radius.clamp(0.0, MAX_FIND_RADIUS);
                 let r = radius.ceil() as i32;
                 let radius_sq = radius * radius;
@@ -448,7 +441,7 @@ fn populate_api<'lua, 'scope>(
                                 continue;
                             }
                             let (x, y, z) = (cx + dx, cy + dy, cz + dz);
-                            if is_match(tx.get_block(x, y, z)) {
+                            if filter.matches(tx.get_block(x, y, z)) {
                                 let e = lua.create_table()?;
                                 e.set("x", x)?;
                                 e.set("y", y)?;

@@ -12,6 +12,27 @@ Then update this file by hand with what actually changed and why -- the docs
 regenerate automatically, but "what changed and why" is not mechanically
 derivable from a diff of the schema alone.
 
+## 1.33.0 - World shaping and material-aware rules
+
+- Added 11 methods: `get_player`, `get_creature`, `heal_creature`,
+  `get_block_kinds`, `get_block_info`, `block_matches`, `is_block_loaded`,
+  `surface_height`, `is_exposed_to_sky`, `fill_box`, and `fill_sphere`.
+- `find_blocks`, `block_matches`, and shape filters share exact IDs plus
+  `any`, `wood`, `ore`, `leaves`, `plant`, `solid`, and `liquid` categories.
+  Existing exact-ID/wood queries and unknown-filter behavior remain compatible.
+- Shape edits are all-or-nothing per call, loaded-terrain-only, and protect
+  bedrock/device cells. They share the existing callback edit allowance and
+  native-work/time limits, including rollback after callback failure.
+- Creature healing reads its own staged writes, caps at species maximum,
+  and commits through authoritative creature state, replication and saves.
+- Clarified procedural `terrain_height` versus edited `surface_height` and
+  unloaded-air fallback. No world-generation change or save migration required.
+- Updated both interpretation and Lua prompts, focused capability retrieval,
+  material/filter literal validation, and generated docs/stubs/registries.
+  Removed stale restrictions on equipment and `on_interact` from prompts.
+- Added tested [example modules](examples) and an
+  [API review and usage guide](WORLD_SHAPING.md).
+
 ## 1.32.0 - Left-hand torches
 
 - Added `torch` equipment and its Wayfarer book recipe: 2 oak wood, 1 resin, 2 mana. Equipment inventory queries expose 19 available IDs; legacy save arrays pad the appended torch slot with zero.

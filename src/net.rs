@@ -9,7 +9,7 @@ use crate::voxel::block::BlockType;
 pub type PlayerId = u32;
 pub type WorldEdit = ((i32, i32, i32), BlockType);
 pub const MAX_PLAYERS: usize = 4;
-pub const PROTOCOL_VERSION: u32 = 38;
+pub const PROTOCOL_VERSION: u32 = 39;
 pub const HOST_PLAYER_ID: PlayerId = 0;
 pub const DEFAULT_PORT: u16 = 7878;
 pub const RELIABLE_RESEND_INTERVAL: Duration = Duration::from_millis(200);
@@ -57,6 +57,7 @@ pub enum ReliableMsg {
     },
     JoinRejected(String),
     Welcome {
+        starter_camp: Option<(i32, i32, i32)>,
         generation: crate::worldgen::WorldGeneration,
         player_id: PlayerId,
         seed: u32,
@@ -303,12 +304,14 @@ pub fn welcome_messages(
     time_of_day: f32,
     spawn: [f32; 3],
     edits: Vec<((i32, i32, i32), BlockType)>,
+    starter_camp: Option<(i32, i32, i32)>,
 ) -> Result<Vec<ReliableMsg>, &'static str> {
     let count = edits.len().div_ceil(EDITS_PER_CHUNK);
     if count > MAX_WORLD_CHUNKS as usize {
         return Err("World exceeds the supported multiplayer save size");
     }
     let mut messages = vec![ReliableMsg::Welcome {
+        starter_camp,
         generation,
         player_id,
         seed,
@@ -350,6 +353,7 @@ pub fn chat_text(text: &str) -> Option<String> {
     }
 }
 pub struct InitialWorld {
+    pub starter_camp: Option<(i32, i32, i32)>,
     pub generation: crate::worldgen::WorldGeneration,
     pub player_id: PlayerId,
     pub seed: u32,
@@ -376,6 +380,7 @@ impl WorldTransfer {
         self.count = Some(count);
         match msg {
             ReliableMsg::Welcome {
+                starter_camp,
                 generation,
                 player_id,
                 seed,
@@ -385,10 +390,14 @@ impl WorldTransfer {
                 ..
             } => {
                 generation.validate()?;
+                if starter_camp.is_some_and(|p| !crate::automation::valid_cell(p)) {
+                    return Err("Invalid starter camp".into());
+                }
                 if !edits.is_empty() {
                     return Err("World edits must use bounded chunks".into());
                 }
                 self.header = Some(InitialWorld {
+                    starter_camp,
                     generation,
                     player_id,
                     seed,
@@ -746,6 +755,7 @@ mod multiplayer_tests {
             for y in 40..44 {world.set_block(x,y,z,BlockType::Air);}
         }}
         world.set_block(8,40,8,BlockType::Campfire);
+        world.starter_camp = Some(camp);
         let mut account=crate::crafting::Account::default();
         for (block,n) in [(BlockType::OakWood,6),(BlockType::Stone,4)] {
             let i=crate::voxel::COLLECTIBLE_BLOCKS.iter().position(|b|*b==block).unwrap();account.resources[i]=n;
@@ -925,7 +935,7 @@ mod multiplayer_tests {
             creatures: [("sheep".into(),1000), ("cow".into(),0)].into_iter().collect(),
             surface: crate::worldgen::Surface::Sand, trees: 0, ..Default::default()
         };
-        let mut messages = welcome_messages(3, 42, generation.clone(), 0.5, [1., 2., 3.], edits.clone()).unwrap();
+        let mut messages = welcome_messages(3, 42, generation.clone(), 0.5, [1., 2., 3.], edits.clone(), Some((4, 30, 5))).unwrap();
         let header = messages.remove(0);
         let header = match decode(&encode(&Packet::Reliable { id: 2, msg: header })).unwrap() {
             Packet::Reliable { msg, .. } => msg, _ => unreachable!(),
@@ -944,6 +954,7 @@ mod multiplayer_tests {
         let world = transfer.accept(header).unwrap().unwrap();
         assert_eq!(world.edits, edits);
         assert_eq!(world.player_id, 3);
+        assert_eq!(world.starter_camp, Some((4, 30, 5)));
         assert_eq!(world.seed, 42);
         assert_eq!(world.generation, generation);
     }

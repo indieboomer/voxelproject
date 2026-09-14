@@ -56,7 +56,7 @@ impl Default for WorldGeneration {
     }
 }
 // Keep aligned with CreatureKind's stable wire IDs.
-pub const CREATURE_SPECIES: &[&str] = &["sheep", "chicken", "stone_golem", "wolf", "stinger", "cow", "goblin", "sunscorch", "zombie", "skeleton", "dragon_green", "dragon_red", "fish"];
+pub const CREATURE_SPECIES: &[&str] = &["sheep", "chicken", "stone_golem", "wolf", "stinger", "cow", "goblin", "sunscorch", "zombie", "skeleton", "dragon_green", "dragon_red", "fish", "skeleton_sorcerer"];
 
 impl WorldGeneration {
     pub fn abundance(&self, species: &str) -> u16 {

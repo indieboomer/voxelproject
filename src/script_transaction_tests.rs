@@ -1,5 +1,155 @@
 use super::*;
 
+fn shaping_fixture() -> Fixture {
+    let mut f=Fixture::new();
+    for x in -1..=0 { f.world.chunks.insert((x,0),crate::voxel::chunk::Chunk::new(x,0)); }
+    f
+}
+
+#[test]
+fn world_shaping_documented_examples_execute_the_requested_behaviors() {
+    let platform=include_str!("../world_api/examples/stone_platform.lua");
+    let rain=include_str!("../world_api/examples/rain_softens_soil.lua");
+    let shrine=include_str!("../world_api/examples/crystal_healing_shrine.lua");
+    for source in [platform,rain,shrine] {
+        assert!(crate::world_api_validate::validate_source(source).is_empty());
+        Module::load("example".into(),"example".into(),source.into()).unwrap();
+    }
+    let mut f=shaping_fixture();f.players[0].pos=Vec3::new(8.,30.,8.);
+    let mut m=Module::load("platform".into(),"platform".into(),platform.into()).unwrap();
+    let (out,_)=f.invoke(&mut m,"on_cast");
+    assert!(m.error.is_none(),"{:?}",m.error);assert_eq!(out.block_edits.len(),25);
+    assert!(out.block_edits.iter().all(|&(_,y,_,b)| y==29 && b==BlockType::Stone));
+
+    f.world.set_block(8,29,8,BlockType::Soil);f.world.set_block(9,29,8,BlockType::Soil);
+    f.world.set_block(9,31,8,BlockType::Stone);f.weather.set(Weather::Rain);
+    let mut m=Module::load("rain".into(),"rain".into(),rain.into()).unwrap();m.enabled=true;
+    let (out,_)=f.invoke(&mut m,"on_tick");assert!(m.error.is_none(),"{:?}",m.error);
+    assert_eq!(out.block_edits,vec![(8,29,8,BlockType::Mud)]);
+    f.weather.set(Weather::Sunny);
+    assert!(f.invoke(&mut m,"on_tick").0.block_edits.is_empty());
+
+    f.creatures.damage(1,6.);f.players[0].finances.elements[crate::crafting::Element::Life as usize]=1;
+    let source=shrine.replace("function on_tick(api) end", "function on_cast(api,event) on_interact(api,{kind='crystal',x=1,y=30,z=0,player_id=event.player_id}) end");
+    let mut m=Module::load("shrine".into(),"shrine".into(),source).unwrap();
+    let (out,_)=f.invoke(&mut m,"on_cast");assert!(m.error.is_none(),"{:?}",m.error);
+    assert_eq!(f.creatures.snapshot_with_ids().into_iter().find(|c|c.0==1).unwrap().3,10.);
+    assert!(out.player_effects.iter().any(|e|matches!(e,PlayerEffect::Inventory{balances,..} if balances.elements[crate::crafting::Element::Life as usize]==0)));
+}
+
+#[test]
+fn world_shaping_queries_read_staged_materials_roofs_and_players() {
+    let mut f=shaping_fixture();
+    let body=r#"
+        local p=api.get_player(event.player_id); assert(p and p.id==event.player_id)
+        assert(api.get_player(900)==nil and api.get_creature(900)==nil)
+        assert(api.teleport_player(p.id,2,20,2)); assert(api.get_player(p.id).y==20)
+        assert(#api.get_block_kinds()>80)
+        local info=api.get_block_info('iron_ore'); assert(info.ore and info.solid and info.collectible)
+        info.hardness=999; assert(api.get_block_info('iron_ore').hardness~=999)
+        assert(api.get_block_info('invented_ore')==nil)
+        assert(api.block_matches('coal','ore') and api.block_matches('oak_wood','wood'))
+        assert(not api.block_matches('stone','unknown'))
+        assert(api.is_block_loaded(-1,10,1) and not api.is_block_loaded(16,10,1))
+        assert(api.surface_height(1,1)==nil and api.surface_height(99,99)==nil)
+        assert(api.is_exposed_to_sky(99,10,99)==nil)
+        assert(api.fill_box(3,10,3,1,10,1,'stone','air')==9)
+        assert(api.surface_height(1,1)==10)
+        assert(api.is_exposed_to_sky(1,11,1)==true and api.is_exposed_to_sky(1,10,1)==false)
+        assert(api.fill_box(1,10,1,3,10,3,'stone')==0)
+        assert(api.fill_box(1,10,1,3,10,3,'iron_ore','stone')==9)
+        assert(api.fill_sphere(8,10,8,1,'coal','air')==7)
+        assert(#api.find_blocks('ore',8,10,8,1)==7)
+        assert(api.get_block(8,10,8)=='coal' and api.get_block(9,11,8)=='air')
+    "#;
+    let mut m=module("on_cast",body);
+    let (out,_)=f.invoke(&mut m,"on_cast");
+    assert!(m.error.is_none(),"{:?}",m.error);assert_eq!(out.block_edits.len(),25);
+    let mut m=module("on_cast",&format!("{body}\nerror('rollback')"));
+    let (out,_)=f.invoke(&mut m,"on_cast");
+    assert!(m.error.is_some());assert!(out.block_edits.is_empty() && out.player_effects.is_empty());
+}
+
+#[test]
+fn world_shaping_is_atomic_and_shares_existing_edit_limits() {
+    let mut f=shaping_fixture();
+    let mut m=module("on_tick",r#"
+        assert(api.fill_box(0,10,0,7,10,3,'stone')==32)
+        assert(api.fill_box(0,10,0,7,10,3,'stone')==0)
+        assert(api.fill_box(10,10,10,10,10,10,'stone')==nil)
+        assert(not api.replace_block(10,10,10,'stone'))
+    "#);
+    let (out,_)=f.invoke(&mut m,"on_tick");
+    assert!(m.error.is_none(),"{:?}",m.error);assert_eq!(out.block_edits.len(),32);
+    let mut m=module("on_cast",r#"
+        assert(api.fill_box(0,10,0,9,12,9,'stone')==300)
+        assert(api.fill_sphere(12,12,12,0,'gold_ore')==nil)
+        assert(api.get_block(12,12,12)=='air')
+    "#);
+    let (out,_)=f.invoke(&mut m,"on_cast");
+    assert!(m.error.is_none(),"{:?}",m.error);assert_eq!(out.block_edits.len(),300);
+}
+
+#[test]
+fn world_shaping_rejects_protected_unloaded_and_invalid_regions_without_partial_edits() {
+    let mut f=shaping_fixture();
+    f.world.set_block(4,10,4,BlockType::Bedrock);
+    f.world.automation.devices.insert((8,10,8),crate::automation::Device::new(crate::automation::Kind::Chest,(8,10,8),0));
+    let mut m=module("on_cast",r#"
+        assert(api.fill_box(3,10,4,4,10,4,'stone')==nil)
+        assert(api.fill_box(7,10,8,8,10,8,'stone')==nil)
+        assert(api.fill_box(15,10,1,16,10,1,'stone')==nil)
+        assert(api.fill_box(0,10,0,15,25,15,'stone')==nil)
+        assert(api.fill_sphere(1,1,1,8,'stone')==nil)
+        assert(api.fill_box(0,10,0,0,10,0,'bedrock')==nil)
+        assert(api.fill_box(0,10,0,0,10,0,'unknown')==nil)
+        assert(api.fill_box(0,10,0,0,10,0,'stone','unknown')==nil)
+        assert(api.fill_box(0,-1,0,0,0,0,'stone')==nil)
+        assert(api.get_block(3,10,4)=='air' and api.get_block(7,10,8)=='air')
+        assert(api.fill_box(0,10,0,9,12,9,'stone','air')==298)
+    "#);
+    let (out,_)=f.invoke(&mut m,"on_cast");
+    assert!(m.error.is_none(),"{:?}",m.error);
+    assert_eq!(out.block_edits.len(),298);
+}
+
+#[test]
+fn world_shaping_native_limits_cannot_be_caught_and_abort_prior_writes() {
+    let mut f=shaping_fixture();
+    let mut m=module("on_cast",r#"
+        assert(api.fill_box(0,10,0,7,10,3,'stone')==32)
+        pcall(function() api.fill_box(0,10,0,15,25,15,'stone') end)
+        api.broadcast('must not commit')
+    "#);
+    let (out,_)=f.invoke(&mut m,"on_cast");
+    assert!(m.error.is_some());assert!(out.block_edits.is_empty() && out.broadcasts.is_empty());
+    for call in ["api.fill_sphere(0,10,0,0/0,'stone')",
+        "api.fill_box(1000001,10,0,1000001,10,0,'stone')", "api.heal_creature(1,1/0)"] {
+        let mut m=module("on_cast",call);let (out,_)=f.invoke(&mut m,"on_cast");
+        assert!(m.error.is_some(),"{call}");assert!(out.block_edits.is_empty());
+    }
+}
+
+#[test]
+fn creature_healing_reads_own_writes_rolls_back_and_survives_save_restore() {
+    let mut f=shaping_fixture();
+    f.creatures.damage(1,5.);
+    let before=f.creatures.snapshot_with_ids();
+    let body=r#"
+        local c=api.get_creature(1); assert(c.health<c.max_health)
+        assert(api.heal_creature(1,2)); assert(api.get_creature(1).health==c.health+2)
+        assert(api.heal_creature(1,999)); assert(api.get_creature(1).health==c.max_health)
+        assert(not api.heal_creature(999,1) and not api.heal_creature(1,-1))
+        api.destroy(2); assert(api.get_creature(2)==nil and not api.heal_creature(2,99))
+    "#;
+    let mut m=module("on_cast",&format!("{body}\nerror('rollback')"));f.invoke(&mut m,"on_cast");
+    assert!(m.error.is_some());assert_eq!(f.creatures.snapshot_with_ids(),before);
+    let mut m=module("on_cast",body);f.invoke(&mut m,"on_cast");assert!(m.error.is_none(),"{:?}",m.error);
+    let saved=f.creatures.snapshot_with_ids();
+    let mut restored=Creatures::new();restored.restore_saved(&saved,1);
+    let c=restored.snapshot_with_ids().into_iter().find(|c|c.0==1).unwrap();assert_eq!(c.3,c.4);
+}
+
 #[test]
 fn documented_wayfinder_ward_uses_current_progress_and_selection() {
     let source=include_str!("../docs/examples/wayfinder_crystal_ward.lua");

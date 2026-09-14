@@ -28,6 +28,8 @@ use crate::world_api_gen::{
 mod api;
 #[path = "script_environment.rs"]
 mod environment;
+#[path = "script_world_edit.rs"]
+mod world_edit;
 #[path = "script_inventory.rs"]
 mod inventory;
 #[path = "script_automation.rs"]
@@ -520,6 +522,7 @@ fn creature_kind_filter(kind: &str) -> Option<u8> {
         "dragon_green" => Some(10),
         "dragon_red" => Some(11),
         "fish" => Some(12),
+        "skeleton_sorcerer" => Some(13),
         _ => None,
     }
 }
@@ -542,6 +545,7 @@ fn creature_kind_name(kind_u8: u8) -> &'static str {
         10 => "dragon_green",
         11 => "dragon_red",
         12 => "fish",
+        13 => "skeleton_sorcerer",
         _ => "sheep",
     }
 }
@@ -573,6 +577,8 @@ fn parse_creature_kind(kind: &str) -> CreatureKind {
         CreatureKind::DragonGreen
     } else if kind.eq_ignore_ascii_case("dragon_red") {
         CreatureKind::DragonRed
+    } else if kind.eq_ignore_ascii_case("skeleton_sorcerer") {
+        CreatureKind::SkeletonSorcerer
     } else if kind.eq_ignore_ascii_case("fish") {
         CreatureKind::Fish
     } else {

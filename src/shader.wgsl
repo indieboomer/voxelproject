@@ -315,9 +315,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 let tint=select(select(vec3<f32>(1.0,0.38,0.09),vec3<f32>(1.0,0.72,0.22),torch),vec3<f32>(0.72,0.86,1.0),cool);
                 // Portable lights also work in daytime caves.
                 let strength=select(max(night,1.0-in.skylight),1.0,cool || torch);
-                // AO fully affects the soft fill, but only gently affects
-                // direct light: wall visibility already handles obstruction.
-                let local_diffuse=0.2*in.ao+facing*mix(0.8,1.0,in.ao);
+                // Original block AO: occlude the combined local diffuse below.
+                let local_diffuse=0.2+facing;
                 let visibility=local_visibility(i,in.world_pos+in.normal*0.08);
                 let energy=tint*fade*fade*strength*flicker*1.8*visibility;
                 local_light+=energy*local_diffuse;
@@ -329,7 +328,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
         }
     }
-    let lit = base * (fill + direct + local_light)+local_specular;
+    let lit = base * (fill + direct + local_light * in.ao)+local_specular;
 
     // View-dependent sky reflection and roughness-dependent sun highlights.
     // Dry matte blocks stay diffuse; rain adds a reflective surface coat.

@@ -151,6 +151,7 @@ pub struct Models {
     sunscorch: AnimatedModel,
     zombies: [AnimatedModel; 4],
     skeletons: [AnimatedModel; 4],
+    skeleton_sorcerer: [AnimatedModel; 1],
     dragons: [AnimatedModel; 2],
     fish: [AnimatedModel; 1],
 }
@@ -207,6 +208,7 @@ impl Models {
                 include_bytes!("../models/dragon_green.glb"),
                 include_bytes!("../models/dragon_red.glb"),
             ], 25),
+            skeleton_sorcerer: load_variants([include_bytes!("../models/skeleton_sorcerer.glb")], 37),
             fish: load_variants([include_bytes!("../models/fish.glb")], 27),
         }
     }
@@ -223,6 +225,7 @@ impl Models {
             CreatureKind::Sunscorch => &self.sunscorch,
             CreatureKind::Zombie => &self.zombies[0],
             CreatureKind::Skeleton => &self.skeletons[0],
+            CreatureKind::SkeletonSorcerer => &self.skeleton_sorcerer[0],
             CreatureKind::DragonGreen => &self.dragons[0],
             CreatureKind::DragonRed => &self.dragons[1],
             CreatureKind::Fish => &self.fish[0],
@@ -234,7 +237,7 @@ impl Models {
     /// (see this module's doc comment). `app.rs`'s `create_atlas_bind_group`
     /// uploads these once at startup into the `tex_layer`-indexed
     /// `creature_texture` array `emit_skinned_mesh`'s vertices sample from.
-    pub fn creature_texture_layers(&self) -> [Option<&image::RgbaImage>; 36] {
+    pub fn creature_texture_layers(&self) -> [Option<&image::RgbaImage>; 37] {
         [
             self.sheep.texture.as_ref(),
             self.chicken.texture.as_ref(),
@@ -269,6 +272,7 @@ impl Models {
             self.npcs[4].texture.as_ref(),self.npcs[5].texture.as_ref(),
             lore_book_model().texture.as_ref(),
             torch_model().texture.as_ref(),
+            self.skeleton_sorcerer[0].texture.as_ref(),
         ]
     }
 
@@ -1241,7 +1245,7 @@ mod tests {
     #[test]
     fn undead_variants_have_textures_and_render_all_required_animations() {
         let models = Models::load();
-        for kind in [CreatureKind::Zombie, CreatureKind::Skeleton] {
+        for kind in [CreatureKind::Zombie, CreatureKind::Skeleton, CreatureKind::SkeletonSorcerer] {
             for variant in 0..4 {
                 let model = models.for_variant(kind, variant);
                 assert!(model.texture.is_some());

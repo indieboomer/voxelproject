@@ -107,13 +107,36 @@ pub fn cell(p: Vec3) -> Cell {
 /// Campkeepers are fixed, noncombat inhabitants derived from a campfire and a clear
 /// adjacent standing place. Every peer derives the same NPC from authoritative blocks.
 pub fn guide_position(world: &World, camp: Cell) -> Option<Cell> {
-    if world.get_block(camp.0, camp.1, camp.2) != BlockType::Campfire {
+    if !has_keeper(world, camp) || world.get_block(camp.0, camp.1, camp.2) != BlockType::Campfire {
         return None;
     }
     [(2, 0), (-2, 0), (0, 2), (0, -2)]
         .into_iter()
         .map(|(x, z)| (camp.0 + x, camp.1, camp.2 + z))
         .find(|p| clear_feet(world, *p))
+}
+/// Stable across chunk reloads, peers and exploration order. The first fire is
+/// always staffed; other fires have a one-in-five chance.
+pub fn has_keeper(world: &World, camp: Cell) -> bool {
+    world.starter_camp == Some(camp)
+        || crate::voxel::noise::block_rand(camp.0, camp.1, camp.2, world.seed, 0xCA91) < 0.2
+}
+/// Older saves did not record the starting fire. Recover the edited fire nearest
+/// the original procedural spawn, independently of the player's current home.
+pub fn restore_starter_camp(world: &mut World) {
+    if world.starter_camp.is_some() || !world.edits.values().any(|b| *b == BlockType::Campfire) {
+        return;
+    }
+    let mut original = World::new(world.seed);
+    original.generation = world.generation.clone();
+    let spawn = cell(surface_spawn_position(&mut original, 0, 0));
+    world.starter_camp = world.edits.iter()
+        .filter(|(_, b)| **b == BlockType::Campfire)
+        .map(|(&p, _)| p)
+        .filter(|p| (i64::from(p.0)-i64::from(spawn.0)).abs() <= 24
+            && (i64::from(p.2)-i64::from(spawn.2)).abs() <= 24
+            && (i64::from(p.1)-i64::from(spawn.1)).abs() <= 5)
+        .min_by_key(|p| ((p.0-spawn.0).pow(2)+(p.2-spawn.2).pow(2), *p));
 }
 pub fn guide_name(camp: Cell) -> &'static str {
     match (camp.0.wrapping_mul(31) ^ camp.2).rem_euclid(4) {
@@ -174,6 +197,9 @@ pub fn transact(
             "Rested: health restored, poison cured, and recovery camp set.".into()
         }
         Action::Claim { .. } => {
+            if guide_position(world, camp).is_none() {
+                return Err("Find a campkeeper to complete this contract".into());
+            }
             if !ready(account) {
                 return Err(if account.adventure.stage >= 3 {
                     "All campkeeper contracts are complete"
@@ -361,10 +387,51 @@ mod tests {
             }
         }
         w.set_block(CAMP.0, CAMP.1, CAMP.2, BlockType::Campfire);
+        w.starter_camp = Some(CAMP);
         let mut a = Account::default();
         resource(&mut a, BlockType::OakWood, 6).unwrap();
         resource(&mut a, BlockType::Stone, 4).unwrap();
         (w, a, feet((8, 40, 5)))
+    }
+    #[test]
+    fn keepers_staff_about_one_in_five_camps_and_always_the_start() {
+        for seed in [1, 42, 2026] {
+            let mut w = World::new(seed);
+            let count = (-100..100).flat_map(|x| (-100..100).map(move |z| (x*7, 40, z*7)))
+                .filter(|p| has_keeper(&w, *p)).count();
+            assert!((7600..8400).contains(&count), "seed {seed}: {count}/40000");
+            let camp = (0..100).map(|x| (x,40,0)).find(|p| !has_keeper(&w,*p)).unwrap();
+            w.starter_camp = Some(camp);
+            assert!(has_keeper(&w, camp));
+        }
+    }
+    #[test]
+    fn unattended_fire_allows_cooking_and_rest_but_not_claims() {
+        let (mut w, mut a, p) = fixture();
+        w.starter_camp = None;
+        w.seed = (0..100).find(|seed| crate::voxel::noise::block_rand(CAMP.0,CAMP.1,CAMP.2,*seed,0xCA91)>=0.2).unwrap();
+        assert!(guide_position(&w, CAMP).is_none());
+        assert!(transact(&w,&mut a,p,50.,false,Action::Claim{camp:CAMP}).is_err());
+        assert_eq!(count(&a,BlockType::OakWood),6);
+        transact(&w,&mut a,p,50.,false,Action::Rest{camp:CAMP}).unwrap();
+        resource(&mut a,BlockType::Meat,1).unwrap();
+        let revision=a.revision;
+        transact(&w,&mut a,p,50.,false,Action::Cook{camp:CAMP,amount:1,revision}).unwrap();
+        assert_eq!(count(&a,BlockType::CookedMeat),1);
+    }
+    #[test]
+    fn old_save_recovers_original_camp_independently_of_later_fires() {
+        let mut w = World::new(42);
+        let spawn = surface_spawn_position(&mut w, 0, 0);
+        let camp = starter_camp(&mut w, spawn).unwrap();
+        w.set_block(camp.0,camp.1,camp.2,BlockType::Campfire);
+        w.set_block(500,40,500,BlockType::Campfire);
+        restore_starter_camp(&mut w);
+        assert_eq!(w.starter_camp,Some(camp));
+        w.set_block(camp.0,camp.1,camp.2,BlockType::Air);
+        restore_starter_camp(&mut w);
+        assert_eq!(w.starter_camp,Some(camp), "breaking the fire must not move its saved role");
+        assert!(guide_position(&w,camp).is_none());
     }
     #[test]
     fn ordinary_new_worlds_have_an_unobstructed_starter_camp() {
@@ -381,6 +448,7 @@ mod tests {
                 }
             }
             world.set_block(camp.0, camp.1, camp.2, BlockType::Campfire);
+            world.starter_camp = Some(camp);
             assert!(guide_position(&world, camp).is_some());
             assert!(safe_camp(&world, camp).is_some());
         }

@@ -72,7 +72,7 @@ fn attack_sound(kind: CreatureKind) -> Option<&'static [u8]> {
         CreatureKind::StoneGolem => Some(STONE_GOLEM_ATTACK),
         CreatureKind::Sunscorch => Some(SUNSCORCH_ATTACK),
         CreatureKind::Zombie => Some(ZOMBIE_GROWL),
-        CreatureKind::Skeleton => Some(SKELETON),
+        CreatureKind::Skeleton | CreatureKind::SkeletonSorcerer => Some(SKELETON),
         CreatureKind::DragonGreen | CreatureKind::DragonRed => Some(DRAGON_ATTACK),
         CreatureKind::Sheep | CreatureKind::Chicken | CreatureKind::Cow | CreatureKind::Fish => None,
     }
@@ -694,6 +694,7 @@ mod tests {
         assert_eq!(attack_sound(CreatureKind::Zombie), Some(ZOMBIE_GROWL));
         assert_eq!(ambient_sound(CreatureKind::Zombie), Some(ZOMBIE_GROWL));
         assert_eq!(attack_sound(CreatureKind::Skeleton), Some(SKELETON));
+        assert_eq!(attack_sound(CreatureKind::SkeletonSorcerer), Some(SKELETON));
         for kind in [CreatureKind::DragonGreen, CreatureKind::DragonRed] {
             assert_eq!(attack_sound(kind), Some(DRAGON_ATTACK));
         }

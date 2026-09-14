@@ -46,7 +46,59 @@ pub fn validate_source(source: &str) -> Vec<ValidationIssue> {
         issues.push(ValidationIssue { message });
     }
     issues.extend(validate_replace_block_kinds(source));
+    issues.extend(validate_shape_literals(source));
     issues
+}
+
+// Shape material and filter are separate positional arguments. Never mistake
+// the optional filter for the new block kind (e.g. "ore" is not placeable).
+fn validate_shape_literals(source: &str) -> Vec<ValidationIssue> {
+    let mut issues=Vec::new();
+    for (method,kind_index) in [("fill_box",6),("fill_sphere",4)] {
+        for (idx,_) in source.match_indices(&format!("api.{method}")) {
+            let Some(args)=call_args_span(source,idx+4+method.len()) else {continue;};
+            for (index,is_filter) in [(kind_index,false),(kind_index+1,true)] {
+                let Some(literal)=argument_literal(args,index) else {continue;};
+                let lower=literal.to_ascii_lowercase();
+                let valid=BLOCK_KINDS.contains(&lower.as_str()) || is_filter &&
+                    ["any","wood","ore","leaves","plant","solid","liquid"].contains(&lower.as_str());
+                if !valid {
+                    let role=if is_filter {"filter"} else {"block kind"};
+                    issues.push(ValidationIssue{message:format!("api.{method}: unknown {role} \"{literal}\"; use the documented material IDs and block_matches categories")});
+                }
+            }
+        }
+    }
+    issues
+}
+
+fn argument_literal(args: &str, wanted: usize) -> Option<&str> {
+    let (mut start,mut index,mut depth)=(0,0,0i32);
+    let mut quote=None;let mut escaped=false;
+    for (offset,ch) in args.char_indices().chain(std::iter::once((args.len(),','))) {
+        if let Some(q)=quote {
+            if escaped {escaped=false;} else if ch=='\\' {escaped=true;} else if ch==q {quote=None;}
+            continue;
+        }
+        match ch {
+            '\''|'"' => quote=Some(ch),
+            '('|'{'|'[' => depth+=1,
+            ')'|'}'|']' => depth-=1,
+            ',' if depth==0 => {
+                if index==wanted {
+                    let value=args[start..offset].trim();
+                    let q=value.chars().next()?;
+                    if !matches!(q,'\''|'"') || value.len()<2 || !value.ends_with(q) {return None;}
+                    let inner=&value[1..value.len()-1];
+                    // Only simple complete literals, not concatenation or escapes.
+                    return (!inner.contains(q) && !inner.contains('\\')).then_some(inner);
+                }
+                index+=1;start=offset+1;
+            }
+            _=>{}
+        }
+    }
+    None
 }
 
 /// Flags a literal (not a variable/expression) `kind` string argument to
@@ -199,6 +251,16 @@ pub fn extract_api_version(source: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shape_validation_distinguishes_materials_filters_and_expressions() {
+        for source in [
+            "api.fill_box(0,1,0,2,1,2,'gold_ore','ore')",
+            "api.fill_sphere(math.floor(p.x),p.y,p.z,2,choose('x','y'),'solid')",
+            "api.fill_box(0,1,0,2,1,2,prefix .. 'ore','any')",
+        ] { assert!(super::validate_source(source).is_empty(),"{source}"); }
+        assert_eq!(super::validate_source("api.fill_box(0,1,0,2,1,2,'ore')").len(),1);
+        assert_eq!(super::validate_source("api.fill_sphere(0,1,0,2,'stone','rocks')").len(),1);
+    }
     use super::*;
 
     #[test]

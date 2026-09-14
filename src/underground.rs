@@ -322,16 +322,8 @@ pub fn carve(world: &World, chunk: &mut Chunk) {
                     .into_iter()
                     .any(|(a, b, c)| l.hollow(wx + a, y + b, wz + c));
                     if shell && y < height {
-                        let roll = column_rand(wx, wz, world.seed ^ (y as u32), 0xDA05);
-                        let block = if roll < 0.02 {
-                            BlockType::GoldOre
-                        } else if roll < 0.12 {
-                            BlockType::CopperOre
-                        } else if l.dungeon {
-                            BlockType::Bricks
-                        } else {
-                            BlockType::Stone
-                        };
+                        let block = wall_material(world.seed, wx, y, wz,
+                            chunk.get_local(x, y, z), l.dungeon);
                         chunk.set_local(x, y, z, block);
                     } else if shell && y <= 10 {
                         // A solid lining keeps deep passages dry beneath low riverbeds.
@@ -364,6 +356,57 @@ pub fn carve(world: &World, chunk: &mut Chunk) {
                 }
             }
         }
+    }
+}
+
+/// Keep deposits exposed by excavation; the old lining erased every resource
+/// except copper and gold. World-coordinate patches also cross chunk seams.
+fn wall_material(seed: u32, x: i32, y: i32, z: i32, original: BlockType, dungeon: bool) -> BlockType {
+    let material = wall_deposit(seed, x, y, z, original, dungeon);
+    // Keep half the deposits, using a separate roll so every resource retains
+    // its relative rarity and depth limits. Include natural ore exposed by caves.
+    // Roll per two-block patch to retain small clusters rather than loose specks.
+    if (material.id().ends_with("_ore") || matches!(material,
+        BlockType::Coal | BlockType::Sulfur | BlockType::RockSalt | BlockType::Quartz |
+        BlockType::Amethyst | BlockType::Moonstone | BlockType::Amber | BlockType::Crystal))
+        && crate::voxel::noise::block_rand(x.div_euclid(2), y.div_euclid(2), z.div_euclid(2), seed, 0xDA09) >= 0.5
+    {
+        if dungeon { BlockType::Bricks } else { BlockType::Stone }
+    } else { material }
+}
+fn wall_deposit(seed: u32, x: i32, y: i32, z: i32, original: BlockType, dungeon: bool) -> BlockType {
+    use BlockType::*;
+    if original.id().ends_with("_ore") || matches!(original,
+        Coal | Sulfur | RockSalt | Quartz | Amethyst | Moonstone | Amber | Crystal |
+        Clay | Limestone | Marble | Granite | Obsidian | Basalt) {
+        return original;
+    }
+    let fallback = if dungeon { Bricks } else { Stone };
+    // Two-block cells give small patches; thinning their edges avoids solid
+    // checkerboard deposits. The additional retention roll above halves this
+    // original 14% density to approximately 7% of otherwise plain lining.
+    let roll = crate::voxel::noise::block_rand(x.div_euclid(2), y.div_euclid(2), z.div_euclid(2), seed, 0xDA06);
+    if roll >= 0.20 || crate::voxel::noise::block_rand(x,y,z,seed,0xDA07) > 0.7 { return fallback; }
+    let kind = crate::voxel::noise::block_rand(x.div_euclid(2), y.div_euclid(2), z.div_euclid(2), seed, 0xDA08);
+    match kind {
+        r if r < 0.23 => IronOre,
+        r if r < 0.43 => CopperOre,
+        r if r < 0.61 => Coal,
+        r if r < 0.72 => TinOre,
+        r if r < 0.78 => SilverOre,
+        r if r < 0.83 => GoldOre,
+        r if r < 0.87 => Sulfur,
+        r if r < 0.91 => RockSalt,
+        r if r < 0.95 => Quartz,
+        _ if y > 16 => Quartz,
+        r if r < 0.965 => EmeraldOre,
+        r if r < 0.975 => Amethyst,
+        r if r < 0.983 => SapphireOre,
+        r if r < 0.991 => RubyOre,
+        _ if y > 10 => SilverOre,
+        r if r < 0.995 => DiamondOre,
+        r if r < 0.998 => MithrilOre,
+        _ => Moonstone,
     }
 }
 pub fn discover(world: &mut World, creatures: &mut crate::creature::Creatures) {
@@ -416,7 +459,7 @@ pub fn discover(world: &mut World, creatures: &mut crate::creature::Creatures) {
                     && world.get_block(p.0, p.1 + 1, p.2) == BlockType::Air
                 {
                     creatures.spawn_one(
-                        crate::creature::CreatureKind::Skeleton,
+                        if dx == 0 { crate::creature::CreatureKind::SkeletonSorcerer } else { crate::creature::CreatureKind::Skeleton },
                         glam::Vec3::new(p.0 as f32 + 0.5, p.1 as f32, p.2 as f32 + 0.5),
                         world.seed as u64 ^ p.0 as u64,
                     );
@@ -429,7 +472,74 @@ pub fn discover(world: &mut World, creatures: &mut crate::creature::Creatures) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cave_resource_deposits_are_halved_without_changing_common_stone() {
+        use BlockType::*;
+        for block in [IronOre, CopperOre, Coal, TinOre, SilverOre, GoldOre, Sulfur,
+            RockSalt, Quartz, EmeraldOre, Amethyst, SapphireOre, RubyOre, DiamondOre,
+            MithrilOre, Moonstone, Amber, Crystal] {
+            for dungeon in [false, true] {
+                let retained = (-100..100).flat_map(|x| (-100..100).map(move |z| (x*2,z*2)))
+                    .filter(|&(x,z)| wall_material(42,x,6,z,block,dungeon)==block).count();
+                assert!((19000..21000).contains(&retained), "{block:?}: {retained}/40000");
+            }
+        }
+        for block in [Clay, Limestone, Marble, Granite, Obsidian, Basalt] {
+            for x in -100..100 { assert_eq!(wall_material(42,x,6,0,block,false),block); }
+        }
+    }
     use std::collections::{HashSet, VecDeque};
+    #[test]
+    fn cave_lining_preserves_deposits_and_keeps_rare_ores_deep() {
+        use BlockType::*;
+        for block in [IronOre, TinOre, Coal, SilverOre, DiamondOre, MithrilOre, Quartz, Sulfur] {
+            for dungeon in [false,true] {
+                assert_eq!(wall_deposit(42, 4, 6, -8, block, dungeon), block);
+            }
+        }
+        let mut counts = std::collections::HashMap::<&str,usize>::new();
+        for x in -100..100 { for z in -100..100 { for y in [6, 22] {
+            let block = wall_material(42, x, y, z, Stone, false);
+            if y == 22 { assert!(!matches!(block, DiamondOre | MithrilOre | RubyOre | SapphireOre | EmeraldOre)); }
+            *counts.entry(block.id()).or_default() += 1;
+        }}}
+        for block in [IronOre, CopperOre, Coal, TinOre, SilverOre, GoldOre, Sulfur, RockSalt,
+            Quartz, EmeraldOre, Amethyst, SapphireOre, RubyOre, DiamondOre, MithrilOre, Moonstone] {
+            assert!(counts.get(block.id()).copied().unwrap_or(0) > 0, "missing {block:?}");
+        }
+        assert!(counts[IronOre.id()] > counts[MithrilOre.id()] * 20);
+    }
+
+    #[test]
+    fn generated_cave_walls_expose_a_variety_and_mined_ore_stays_mined() {
+        use BlockType::*;
+        for seed in [7,42,2026] {
+            let mut world = World::new(seed);
+            let mut found = HashSet::new();
+            let mut ore_cell = None;
+            for rx in -1..=1 { for rz in -1..=1 {
+                let Some(l) = layout(&world,rx,rz) else { continue; };
+                for &(cx,cy,cz) in &l.rooms {
+                    for x in cx-4..=cx+4 { for z in cz-4..=cz+4 { for y in cy..=cy+5 {
+                        if l.hollow(x,y,z) || ![(1,0,0),(-1,0,0),(0,1,0),(0,-1,0),(0,0,1),(0,0,-1)]
+                            .into_iter().any(|(a,b,c)| l.hollow(x+a,y+b,z+c)) { continue; }
+                        world.ensure_chunk_loaded(x.div_euclid(CHUNK_X), z.div_euclid(CHUNK_Z));
+                        let block = world.get_block(x,y,z);
+                        found.insert(block.id());
+                        if block == IronOre { ore_cell = Some((x,y,z)); }
+                    }}}
+                }
+            }}
+            for block in [CopperOre, IronOre, Coal, TinOre, SilverOre, GoldOre] {
+                assert!(found.contains(block.id()), "seed {seed} missing exposed {block:?}");
+            }
+            let (x,y,z) = ore_cell.unwrap();
+            world.set_block(x,y,z,Air);
+            world.unload_chunk(x.div_euclid(CHUNK_X),z.div_euclid(CHUNK_Z));
+            world.ensure_chunk_loaded(x.div_euclid(CHUNK_X),z.div_euclid(CHUNK_Z));
+            assert_eq!(world.get_block(x,y,z),Air);
+        }
+    }
     #[test]
     fn entrances_are_common_and_every_room_is_reachable_from_the_surface() {
         for seed in [7, 42, 2026] {
@@ -512,9 +622,13 @@ mod tests {
                     }
                     let mut creatures = crate::creature::Creatures::new();
                     discover(&mut world, &mut creatures);
+                    let guardians = creatures.snapshot_with_ids();
+                    assert!(guardians.iter().any(|entry| entry.1 == crate::creature::CreatureKind::SkeletonSorcerer.to_u8()));
+                    assert!(guardians.iter().filter(|entry| entry.1 == crate::creature::CreatureKind::SkeletonSorcerer.to_u8()).all(|entry| entry.3 == 54.0));
                     let p = (l.rooms[4].0 - 1, FLOOR + 1, l.rooms[4].2 + 1);
                     assert!(world.automation.devices.remove(&p).is_some());
                     discover(&mut world, &mut creatures);
+                    assert_eq!(creatures.snapshot_with_ids().len(), guardians.len());
                     assert!(!world.automation.devices.contains_key(&p));
                 }
             }

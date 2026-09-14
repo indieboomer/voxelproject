@@ -685,6 +685,7 @@ pub struct App {
     /// generated/crashed/etc.) plus real player chat, capped at
     /// `CHAT_LOG_CAPACITY`. See `log_message`.
     chat_log: Vec<ChatEntry>,
+    chat_transcript: Vec<String>,
     chat_bubbles: HashMap<PlayerId, remote_player::ChatBubble>,
     chat_open: bool,
     chat_input: String,
@@ -762,6 +763,8 @@ impl App {
     }
     fn crafting_save(&self) -> crate::save::CraftingSave {
         crate::save::CraftingSave {
+            starter_camp: self.world.starter_camp,
+            chat_transcript: self.chat_transcript.clone(),
             npcs: self.npcs.clone(),
             npc_distribution: self.npc_distribution.clone(),
             player: Some(crate::save::PlayerSave::capture(&self.player)),
@@ -1473,6 +1476,7 @@ impl App {
             prompt_input: String::new(),
             toasts: Vec::new(),
             chat_log: Vec::new(),
+            chat_transcript: crafting_save.chat_transcript,
             chat_bubbles: HashMap::new(),
             chat_open: false,
             chat_input: String::new(),
@@ -1731,6 +1735,7 @@ impl App {
     /// Appends one line to the persistent chat/notification scrollback,
     /// dropping the oldest entry once `CHAT_LOG_CAPACITY` is exceeded.
     fn log_message(&mut self, text: String, color: egui::Color32) {
+        self.chat_transcript.push(text.clone());
         if self.chat_log.len() >= CHAT_LOG_CAPACITY {
             self.chat_log.remove(0);
         }
@@ -3313,7 +3318,7 @@ impl App {
                             player_id,
                             remote,
                         );
-                        for msg in net::welcome_messages(player_id,self.world.seed,self.world.generation.clone(),self.time_of_day,spawn.to_array(),edits)
+                        for msg in net::welcome_messages(player_id,self.world.seed,self.world.generation.clone(),self.time_of_day,spawn.to_array(),edits,self.world.starter_camp)
                             .expect("world size checked before admission") {
                             host.reliable.send(&host.socket,from,msg);
                         }
@@ -4179,6 +4184,7 @@ fn join_handshake(
                         reliable.forget(hello_id);
                         let mut world = World::new(initial.seed);
                         world.generation = initial.generation;
+                        world.starter_camp = initial.starter_camp;
                         world.edits.extend(initial.edits);
                         world.rebuild_redstone_positions();
                         return Ok((socket,server_addr,initial.player_id,world,Vec3::from_array(initial.spawn),initial.time_of_day,reliable));
@@ -4624,7 +4630,7 @@ mod join_tests {
                             if !admitted {
                                 admitted = true;
                                 let edits = (0..5000).map(|x| ((x,40,1), BlockType::Stone)).collect();
-                                for msg in net::welcome_messages(1,123,Default::default(),0.7,[2.,70.,2.],edits).unwrap() {
+                                for msg in net::welcome_messages(1,123,Default::default(),0.7,[2.,70.,2.],edits,None).unwrap() {
                                     reliable.send(&host,peer,msg);
                                 }
                             }

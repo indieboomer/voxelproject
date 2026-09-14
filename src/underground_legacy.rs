@@ -95,17 +95,10 @@ pub fn carve(world: &World, chunk: &mut Chunk) {
                     .into_iter()
                     .any(|(a, b, c)| s.hollow(x + a, y + b, z + c));
                     if wall {
-                        let roll = column_rand(x, z, world.seed ^ (y as u32), 0xCA04);
                         let material = if y >= height {
                             block
-                        } else if roll < 0.07 {
-                            BlockType::GoldOre
-                        } else if roll < 0.30 {
-                            BlockType::CopperOre
-                        } else if s.dungeon {
-                            BlockType::Bricks
                         } else {
-                            block
+                            super::wall_material(world.seed, x, y, z, block, s.dungeon)
                         };
                         chunk.set_local(lx, y, lz, material);
                     }
@@ -175,7 +168,7 @@ pub fn discover(world: &mut World, creatures: &mut crate::creature::Creatures) {
                 && world.get_block(s.x + dx, s.floor + 2, s.z) == BlockType::Air
             {
                 creatures.spawn_one(
-                    crate::creature::CreatureKind::Skeleton,
+                    if dx == 0 { crate::creature::CreatureKind::SkeletonSorcerer } else { crate::creature::CreatureKind::Skeleton },
                     pos,
                     (world.seed ^ (s.x as u32) ^ (dx as u32)) as u64,
                 );

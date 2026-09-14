@@ -41,7 +41,7 @@ fn trace(from: Vec3, to: Vec3, blocked: impl Fn(glam::IVec3) -> bool) -> bool {
     );
     let mut next = Vec3::splat(f32::INFINITY);
     for axis in 0..3 {
-        if step[axis] != 0 {
+        if delta[axis] != 0. {
             next[axis] =
                 ((cell[axis] + i32::from(step[axis] > 0)) as f32 - from[axis]) / delta[axis];
         }
@@ -64,6 +64,32 @@ fn trace(from: Vec3, to: Vec3, blocked: impl Fn(glam::IVec3) -> bool) -> bool {
         }
     }
     false
+}
+// A voxel can be partly lit even when its centre is hidden by the edge of a
+// freshly mined opening. Test inset face centres only when the central ray fails.
+// Never light a solid cell: this also avoids tracing thousands of rays into rock.
+fn visible_cell(from: Vec3, center: Vec3, blocked: impl Fn(glam::IVec3) -> bool) -> bool {
+    if blocked(center.floor().as_ivec3()) { return false; }
+    if trace(from, center, &blocked) { return true; }
+    [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z]
+        .into_iter().any(|axis| trace(from, center + axis * 0.45, &blocked))
+}
+fn cache_key(world: &World, pos: Vec3, radius: f32) -> ([i32; 3], u32, u64) {
+    let quantized = (pos * 4.).floor().as_ivec3().to_array();
+    let (cx, cz) = world_to_chunk(pos.x.floor() as i32, pos.z.floor() as i32);
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    world.seed.hash(&mut hash);
+    (cx, cz).hash(&mut hash);
+    for z in cz - 1..=cz + 1 {
+        for x in cx - 1..=cx + 1 {
+            world.chunks.get(&(x, z)).map(|c| c.revision).hash(&mut hash);
+        }
+    }
+    for d in world.automation.devices.values() {
+        d.cell.hash(&mut hash);
+        (d.kind as u8).hash(&mut hash);
+    }
+    (quantized, radius.to_bits(), hash.finish())
 }
 impl Visibility {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
@@ -145,24 +171,7 @@ impl Visibility {
                 continue;
             }
             let pos = Vec3::new(light[0], light[1], light[2]);
-            let quantized = (pos * 4.).floor().as_ivec3().to_array();
-            let (cx, cz) = world_to_chunk(pos.x.floor() as i32, pos.z.floor() as i32);
-            let mut hash = std::collections::hash_map::DefaultHasher::new();
-            world.seed.hash(&mut hash);
-            for z in cz - 1..=cz + 1 {
-                for x in cx - 1..=cx + 1 {
-                    world
-                        .chunks
-                        .get(&(x, z))
-                        .map(|c| c.revision)
-                        .hash(&mut hash);
-                }
-            }
-            for d in world.automation.devices.values() {
-                d.cell.hash(&mut hash);
-                (d.kind as u8).hash(&mut hash);
-            }
-            let key = (quantized, light[3].to_bits(), hash.finish());
+            let key = cache_key(world, pos, light[3]);
             if self.keys[i] == Some(key) {
                 continue;
             }
@@ -200,7 +209,7 @@ impl Visibility {
                         let target =
                             origin + Vec3::new(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5);
                         if target.distance_squared(pos) < (radius + 1.).powi(2)
-                            && trace(pos, target, |cell| {
+                            && visible_cell(pos, target, |cell| {
                                 let p = cell - base;
                                 if p.min_element() < 0 || p.max_element() >= N as i32 {
                                     return true;
@@ -246,6 +255,36 @@ impl Visibility {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn aligned_rays_on_grid_planes_do_not_step_along_zero_axes() {
+        let a = Vec3::new(2.5, 3., 4.5);
+        let b = Vec3::new(8.5, 3., 4.5);
+        assert!(trace(a, b, |_| false));
+        assert!(trace(b, a, |_| false));
+        assert!(!trace(a, b, |p| p.x == 5));
+    }
+    #[test]
+    fn mining_recess_updates_stationary_torch_across_chunk_boundary() {
+        use crate::voxel::{chunk::Chunk, BlockType};
+        let mut w = World::new(42);
+        w.chunks.insert((0, 0), Chunk::new(0, 0));
+        w.chunks.insert((1, 0), Chunk::new(1, 0));
+        let light = Vec3::new(13.5, 2.5, 2.5);
+        let target = Vec3::new(16.5, 2.5, 3.5);
+        w.set_block(15, 2, 3, BlockType::Stone);
+        w.set_block(16, 2, 3, BlockType::Stone);
+        let key = cache_key(&w, light, -106.);
+        let blocked = |p: glam::IVec3| w.get_block(p.x, p.y, p.z).is_opaque();
+        assert!(!visible_cell(light, target, blocked));
+        w.set_block(16, 2, 3, BlockType::Air);
+        assert_ne!(cache_key(&w, light, -106.), key);
+        let blocked = |p: glam::IVec3| w.get_block(p.x, p.y, p.z).is_opaque();
+        assert!(!trace(light, target, blocked), "centre is hidden by the opening's edge");
+        assert!(visible_cell(light, target, blocked), "exposed recess must light without movement");
+        for y in 0..6 { for z in 0..6 { w.set_block(15, y, z, BlockType::Stone); } }
+        assert!(!visible_cell(light, target, |p| w.get_block(p.x, p.y, p.z).is_opaque()),
+            "a complete wall must still block the torch");
+    }
     #[test]
     fn light_rays_stop_at_walls_and_follow_open_doorways() {
         let mut w = World::new(1);

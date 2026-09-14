@@ -3,34 +3,33 @@
 AO darkens places where nearby geometry blocks indirect light, making corners,
 crevices, and contact with the ground easier to read. It complements the recent
 skylight and torch wall-visibility work; those features do not replace contact AO.
-The first option below is now implemented: AO-aware terrain diagonals and
-separate AO weights for local fill and direct light. Other options remain proposals.
+The AO refinement and subsequent strength adjustment have been reverted at the
+player's request. Current terrain uses the original fixed face diagonals,
+brightness curve and local diffuse-light weighting from before that pass.
 
 ## Current implementation
 
 `src/voxel/mesher.rs` checks two side neighbors and one diagonal per face corner:
 up to 12 block queries per visible opaque quad during mesh creation. It stores
-one float per vertex and interpolates brightness levels 1.0, 0.9, 0.8, and 0.7.
-The lighter curve limits ambient darkening to 30%, avoiding broad dark seams
-that make stacked blocks appear detached. AO uses 4 of the current 80 vertex
+one float per vertex and interpolates brightness levels 1.0, 0.8, 0.6, and 0.45.
+AO uses 4 of the current 80 vertex
 bytes. Once a chunk is meshed, there are no
 AO-specific world queries or render passes each frame; the shader uses simple
 multiplications. This is not a measured isolated AO timing: existing meshing
 benchmarks include culling, geometry, skylight, and AO together.
 
 Cutout foliage skips AO. Imported model vertices and procedural cuboids start
-at AO=1, so they do not receive this voxel contact shading. Terrain quads previously
-always used the same triangle diagonal. They now connect the darker opposing
-corners, retaining the original split for equal sums. The classic voxel technique
-describes choosing the diagonal from opposing corner sums.
+at AO=1, so they do not receive this voxel contact shading. Terrain quads use
+the same fixed 0-2 diagonal in every face. The reverted refinement chose the
+darker opposing corners instead; that change was reported to make blocks
+appear detached. The original proposed algorithm is described here:
 [Algorithm and triangulation](https://0fps.net/2013/07/03/ambient-occlusion-for-minecraft-like-worlds/).
 
 `src/shader.wgsl` applies full AO to ambient fill and sky reflection,
-but only modestly to direct sunlight. Local lights now follow the same principle:
-their soft fill receives full AO and their directional component uses
-`mix(0.8, 1.0, ao)`, avoiding excessive darkening on top of wall visibility.
-At the darkest AO value (0.7), direct light retains 94%; the soft fill retains
-70%. Emissive flames and UI are unaffected.
+but only modestly to direct sunlight. The combined local diffuse illumination
+receives full AO, restoring its original behavior. Wet highlights retain their
+separate material treatment. This revert does not change skylight, shadow-map
+stability, atlas sampling, collision or camera clipping.
 
 ## Options and cost
 
@@ -82,7 +81,7 @@ handling rather than indiscriminate full-image multiplication.
 Do not add a second strong AO layer over existing voxel AO without adjusting
 their combination: otherwise corners become muddy and torch-lit details vanish.
 
-## Refinement validation
+## Historical validation of the reverted refinement
 
 Seven mesher tests pass, including both triangle splits on all six face
 orientations, face area/winding preservation, and actual neighboring-block AO.

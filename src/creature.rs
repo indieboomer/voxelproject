@@ -74,6 +74,8 @@ pub enum CreatureKind {
     DragonGreen,
     DragonRed,
     Fish,
+    /// Underground mini-boss.
+    SkeletonSorcerer,
 }
 
 impl CreatureKind {
@@ -101,7 +103,7 @@ impl CreatureKind {
             // `aggro_speed` and this variant's own doc comment.
             CreatureKind::Sunscorch => 1.2,
             CreatureKind::Zombie => 1.2,
-            CreatureKind::Skeleton => 1.5,
+            CreatureKind::Skeleton | CreatureKind::SkeletonSorcerer => 1.5,
             CreatureKind::DragonGreen | CreatureKind::DragonRed => 2.4,
             CreatureKind::Fish => 1.1,
         }
@@ -119,6 +121,7 @@ impl CreatureKind {
             CreatureKind::Sunscorch => 28.0,
             CreatureKind::Zombie => 24.0,
             CreatureKind::Skeleton => 18.0,
+            CreatureKind::SkeletonSorcerer => CreatureKind::Skeleton.max_health() * 3.0,
             CreatureKind::DragonGreen | CreatureKind::DragonRed => 240.0,
             CreatureKind::Fish => 4.0,
         }
@@ -139,6 +142,7 @@ impl CreatureKind {
                 | CreatureKind::Sunscorch
                 | CreatureKind::Zombie
                 | CreatureKind::Skeleton
+                | CreatureKind::SkeletonSorcerer
                 | CreatureKind::DragonGreen
                 | CreatureKind::DragonRed
         )
@@ -152,7 +156,7 @@ impl CreatureKind {
             CreatureKind::Stinger => STINGER_AGGRO_RADIUS,
             CreatureKind::Goblin => GOBLIN_AGGRO_RADIUS,
             CreatureKind::Sunscorch => SUNSCORCH_AGGRO_RADIUS,
-            CreatureKind::Zombie | CreatureKind::Skeleton => 14.0,
+            CreatureKind::Zombie | CreatureKind::Skeleton | CreatureKind::SkeletonSorcerer => 14.0,
             CreatureKind::DragonGreen | CreatureKind::DragonRed => 56.0,
             _ => 0.0,
         }
@@ -195,7 +199,7 @@ impl CreatureKind {
             CreatureKind::Stinger => STINGER_ATTACK_RANGE,
             CreatureKind::Goblin => GOBLIN_ATTACK_RANGE,
             CreatureKind::Sunscorch => SUNSCORCH_ATTACK_RANGE,
-            CreatureKind::Zombie | CreatureKind::Skeleton => 1.8,
+            CreatureKind::Zombie | CreatureKind::Skeleton | CreatureKind::SkeletonSorcerer => 1.8,
             CreatureKind::DragonGreen | CreatureKind::DragonRed => 14.0,
             _ => 0.0,
         }
@@ -210,6 +214,7 @@ impl CreatureKind {
             CreatureKind::Sunscorch => SUNSCORCH_ATTACK_DAMAGE,
             CreatureKind::Zombie => 4.0,
             CreatureKind::Skeleton => 3.0,
+            CreatureKind::SkeletonSorcerer => CreatureKind::Skeleton.attack_damage() * 2.0,
             CreatureKind::DragonGreen | CreatureKind::DragonRed => 8.0,
             _ => 0.0,
         }
@@ -223,7 +228,7 @@ impl CreatureKind {
             CreatureKind::Goblin => GOBLIN_ATTACK_COOLDOWN,
             CreatureKind::Sunscorch => SUNSCORCH_ATTACK_COOLDOWN,
             CreatureKind::Zombie => 2.0,
-            CreatureKind::Skeleton => 1.5,
+            CreatureKind::Skeleton | CreatureKind::SkeletonSorcerer => 1.5,
             CreatureKind::DragonGreen | CreatureKind::DragonRed => 3.0,
             _ => f32::MAX,
         }
@@ -267,6 +272,7 @@ impl CreatureKind {
             CreatureKind::DragonGreen => 10,
             CreatureKind::DragonRed => 11,
             CreatureKind::Fish => 12,
+            CreatureKind::SkeletonSorcerer => 13,
         }
     }
 
@@ -283,6 +289,7 @@ impl CreatureKind {
             10 => CreatureKind::DragonGreen,
             11 => CreatureKind::DragonRed,
             12 => CreatureKind::Fish,
+            13 => CreatureKind::SkeletonSorcerer,
             6 => CreatureKind::Goblin,
             _ => CreatureKind::Sheep,
         }
@@ -668,6 +675,7 @@ enum CreatureCommand {
     Chase(u32, Vec3),
     Behavior(u32, CreatureBehavior),
     Damage(u32, f32),
+    Heal(u32, f32),
     Destroy(u32),
 }
 
@@ -722,6 +730,14 @@ impl CreatureDraft {
         }
     }
 
+    pub fn heal(&mut self, id: u32, amount: f32) -> bool {
+        let Some(entry) = self.snapshot.iter_mut().find(|c| c.0 == id) else { return false; };
+        if amount < 0.0 || !amount.is_finite() { return false; }
+        entry.3 = (entry.3 + amount).min(entry.4);
+        self.commands.push(CreatureCommand::Heal(id, amount));
+        true
+    }
+
     pub fn damage(&mut self, id: u32, amount: f32) -> Option<DeathEvent> {
         let index = self.snapshot.iter().position(|entry| entry.0 == id)?;
         self.snapshot[index].3 -= amount;
@@ -759,6 +775,11 @@ impl CreatureDraft {
                 }
                 CreatureCommand::Chase(id, target) => { creatures.set_chase_target(id, target); }
                 CreatureCommand::Damage(id, amount) => { creatures.damage(id, amount); }
+                CreatureCommand::Heal(id, amount) => {
+                    for (_, (cid, health, kind)) in creatures.ecs.query_mut::<(&CreatureId, &mut Health, &Kind)>() {
+                        if cid.0 == id { health.0 = (health.0 + amount).min(kind.0.max_health()); }
+                    }
+                }
                 CreatureCommand::Destroy(id) => { creatures.destroy(id); }
             }
         }
@@ -873,7 +894,7 @@ impl Creatures {
         let mut next_id = self.next_id;
         for &(id, kind, pos, health, _) in entries {
             if id == u32::MAX
-                || kind > 12
+                || kind > 13
                 || !seen.insert(id)
                 || !Vec3::from_array(pos).is_finite()
                 || !health.is_finite()
@@ -1110,7 +1131,7 @@ impl Creatures {
                 if dist > 0.15 {
                     let dir = to_target / dist;
                     let speed = kind.0.speed()
-                        * if wander.hunting && !matches!(kind.0, CreatureKind::Zombie | CreatureKind::Skeleton) {
+                        * if wander.hunting && !matches!(kind.0, CreatureKind::Zombie | CreatureKind::Skeleton | CreatureKind::SkeletonSorcerer) {
                             HUNT_SPEED_MULTIPLIER
                         } else {
                             1.0
@@ -1428,6 +1449,16 @@ mod tests {
     use std::f32::consts::{FRAC_PI_2, PI};
 
     #[test]
+    fn skeleton_sorcerer_is_an_underground_miniboss() {
+        let kind = CreatureKind::SkeletonSorcerer;
+        assert_eq!(kind.max_health(), 54.0);
+        assert_eq!(kind.attack_damage(), 6.0);
+        assert!(kind.is_hostile());
+        assert!(!STARTER_KIND_WEIGHTS.iter().any(|&(k, _)| k == kind));
+        assert_eq!(CreatureKind::from_u8(kind.to_u8()), kind);
+    }
+
+    #[test]
     fn starter_hostiles_keep_outside_the_player_start_area() {
         let mut world=World::new(42);
         world.generation.shape=crate::worldgen::Shape::Flat;
@@ -1507,7 +1538,7 @@ mod tests {
     fn undead_walk_during_natural_and_scripted_chases_and_attack_in_melee() {
         let world = World::new(1);
         let spawn = Vec3::new(0.0, world.terrain_height(0, 0) as f32 + 1.0, 0.0);
-        for kind in [CreatureKind::Zombie, CreatureKind::Skeleton] {
+        for kind in [CreatureKind::Zombie, CreatureKind::Skeleton, CreatureKind::SkeletonSorcerer] {
             for scripted in [false, true] {
                 let mut creatures = Creatures::new();
                 let id = creatures.spawn_one(kind, spawn, 1);
@@ -1531,7 +1562,7 @@ mod tests {
     fn undead_variants_survive_save_restore_and_render_identically_on_clients() {
         let models = Models::load();
         let mut creatures = Creatures::new();
-        for kind in [CreatureKind::Zombie, CreatureKind::Skeleton] {
+        for kind in [CreatureKind::Zombie, CreatureKind::Skeleton, CreatureKind::SkeletonSorcerer] {
             for i in 0..4 {
                 creatures.spawn_one(kind, Vec3::new(i as f32 * 3.0, 5.0, 0.0), i);
             }
@@ -1541,10 +1572,11 @@ mod tests {
         restored.restore_saved(&saved, 99);
         let mut original = creatures.snapshot();
         let mut loaded = restored.snapshot();
-        original.sort_by_key(|entry| entry.1);
-        loaded.sort_by_key(|entry| entry.1);
+        original.sort_by_key(|entry| (entry.1, entry.0[0].to_bits()));
+        loaded.sort_by_key(|entry| (entry.1, entry.0[0].to_bits()));
         assert_eq!(original, loaded);
-        assert_eq!(original.len(), 8);
+        assert_eq!(original.len(), 12);
+        assert!(loaded.iter().any(|entry| CreatureKind::from_u8(entry.1 & 0x0f) == CreatureKind::SkeletonSorcerer));
         let host = restored.build_mesh(&models);
         let client = mesh_for_snapshot(&restored.snapshot(), &models);
         assert_eq!(host.indices, client.indices);
@@ -1655,7 +1687,7 @@ mod tests {
 
     #[test]
     fn creature_kind_u8_round_trips_for_every_kind() {
-        for v in 0..=12u8 {
+        for v in 0..=13u8 {
             assert_eq!(CreatureKind::from_u8(v).to_u8(), v);
         }
         assert_eq!(CreatureKind::StoneGolem.to_u8(), 2);

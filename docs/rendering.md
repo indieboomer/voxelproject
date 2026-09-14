@@ -2,8 +2,9 @@
 
 ## Cave movement and contact shading
 
-Voxel AO now uses brightness levels 1.0/0.9/0.8/0.7 instead of
-1.0/0.8/0.6/0.45, retaining the adaptive quad diagonals with no added GPU work.
+The AO refinement and later strength adjustment have been reverted. Terrain
+again uses the original fixed 0-2 face diagonal, brightness levels
+1.0/0.8/0.6/0.45, and full AO on combined local diffuse illumination.
 Atlas UV corners are inset by half a base texel; with the existing nearest
 filtering, all seven mip levels stay inside the intended tile. Previously an
 exact tile boundary could select neighboring black or transparent texels,
@@ -48,12 +49,9 @@ For a historical A/B run only, `VOXEL_SHADOW_LEGACY=1` uses saved pre-fix shader
 at `target/shadow-edge-before.wgsl` and `target/shadow-caster-before.wgsl`, plus the
 old camera calculation. This test-only switch is absent from the game build.
 
-Terrain AO selects each quad's diagonal from opposing corner brightness sums,
-connecting the darker pair to reduce triangular interpolation artifacts. Ties
-keep the original diagonal. Vertex/index counts, UVs, AO levels, and render
-passes are unchanged. Local lights apply full AO to soft fill and the same mild
-AO weight as sunlight to their direct component, preserving torch-lit corner
-detail alongside voxel wall visibility. See [AO review](AMBIENT_OCCLUSION_REVIEW.md).
+Terrain AO has returned to its pre-refinement implementation. See the
+[AO review](AMBIENT_OCCLUSION_REVIEW.md) for current behavior and historical
+measurements of the reverted pass.
 
 Creature meshes now obey the terrain draw radius and require a terrain mesh in
 their chunk, on host and guests. See [wildlife](wildlife.md) for population limits.
@@ -137,8 +135,17 @@ faces, and skipping cloud noise in clear weather and star noise during daytime.
 - Four bounded 18-cubed visibility volumes occupy about 23 KiB on the GPU.
   They refresh for movement in quarter-block increments or changed nearby
   terrain/device occupancy, using cached column lookups and voxel ray traversal.
+  For partially exposed cells, inset face samples supplement the centre ray so
+  mining a recess does not leave it black until the torch moves. Solid cells are
+  skipped, and complete walls still block every sample. No GPU layout or shader
+  sampling cost changes are required.
   Unchanged lights reuse their volume. This is coarse wall occlusion, without
   local shadows from moving creatures or soft penumbrae.
+  After the mined-recess visibility fix, the four-moving-torch fixture measures
+  about 1.4 ms CPU median for volume refreshes (up to 2.1 ms p95), compared with
+  the earlier 0.55 ms figure below. Stationary, unchanged lights still reuse their
+  volumes. The RTX 3060 preview passes at 1280x720 with about 0.34 ms dry and
+  0.35 ms rainy GPU medians; these are fixture timings, not whole-game frame times.
 - Roof heights are maintained on edits. Terrain meshing reads local chunk
   blocks directly when no devices require occupancy overrides. Inactive device
   geometry is cached; configuration, rotation, neighbor ports, and activity

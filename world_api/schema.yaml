@@ -18,7 +18,7 @@
 # (air, mud, redstone, crystal, campfire), so it can't drift out of sync with the
 # actual block system the way a third hand-copied list would.
 
-version: "1.32.0"
+version: "1.33.0"
 title: World API
 description: >
   The Lua API exposed to sandboxed rule modules as the `api` table passed
@@ -65,6 +65,10 @@ engine:
     Other environment queries/actions charge 200 units times (1 + staged block edits);
     find_campfires charges twice its bounding cube times (1 + staged block edits).
     Creature snapshots also account for staged-block lookups for in_water.
+    Shape edits charge their bounding volume (at most 4096 cells) times
+    (1 + staged block edits), before scanning. surface_height and
+    is_exposed_to_sky charge at most 128 cells with the same multiplier;
+    material catalog queries charge their catalog size with that multiplier.
     Native work is limited to 65,536 units per callback: find_blocks charges
     its bounding cube candidates times (1 + staged block edits); other methods
     charge 1 + creature count + player count + staged player effects + staged
@@ -122,10 +126,11 @@ authority: >
   item grants, player attributes, player teleports) reach clients purely
   through the replication channels below;
   there is no separate "multiplayer mode" a rule opts into. Only the host
-  can generate, activate, or run a module (a menu/UI restriction, not
-  something this API itself enforces or exposes) -- so an on_cast's
-  `event.player_id` is currently always the host's own id, even though the
-  API shape allows for any player.
+  can activate, disable, delete or run a module. If guest prompting is enabled,
+  guests generate locally and send proposals for host review; receipt never
+  activates them. A host-run guest instant uses the connected requesting
+  guest's player ID and mana account. Otherwise the caster is the host.
+  Always resolve event.player_id through get_player rather than hardcoding it.
 
 replication:
   block_edits: "Retried until acknowledged and deduplicated (ReliableMsg::BlockEdit), but NOT ordered. Reordered writes to the same block can leave a client stale; ordered/revisioned replication is pending."
@@ -138,7 +143,7 @@ replication:
 
 persistence:
   saved_fields: [name, prompt, source, enabled]
-  save_format: "bincode, inside WorldSave.modules (see save.rs) -- ModuleSaveEntry's field set is part of the save file's binary layout, so it cannot gain/lose/reorder fields without breaking old saves; see the changelog for how to evolve it safely."
+  save_format: "Current saves use a VOXEL_SAVE_2 header followed by JSON, with modules in world.modules. The loader also accepts legacy bincode WorldSave files. Preserve legacy decoding when changing saved structures."
   not_saved: >
     A module's Lua runtime state (persistent global tables/variables used to
     remember things between calls, e.g. a "previous tick" table keyed by
@@ -153,7 +158,7 @@ persistence:
     (Module::is_instant). This is deliberate, following the same
     ModuleSaveEntry-stays-frozen discipline api_version_tagging established:
     it keeps the two kinds fully interchangeable in the save format and
-    means this feature needed zero changes to WorldSave's bincode layout.
+    means older saved modules remain compatible.
   player_state_not_saved: >
     Host health, poison, movement multipliers and oxygen are saved in current saves;
     legacy saves without PlayerSave use starting values. Guest transient vitals reset on reconnect.
@@ -275,12 +280,23 @@ budgets:
     applies_to: []
     note: "1 health every 10 seconds -- slow enough to give a player time to notice and surface rather than punishing a moment of carelessness, but a real, escalating cost for staying under with no air. Stacks with poison_tick_secs if a player is unlucky enough to be both."
 
-creature_kinds: [sheep, chicken, stone_golem, wolf, stinger, cow, goblin, sunscorch, zombie, skeleton, dragon_green, dragon_red, fish]
+creature_kinds: [sheep, chicken, stone_golem, wolf, stinger, cow, goblin, sunscorch, zombie, skeleton, dragon_green, dragon_red, fish, skeleton_sorcerer]
 
 # ---------------------------------------------------------------------------
 # Shared table shapes returned by queries / passed to event handlers.
 # ---------------------------------------------------------------------------
 types:
+  BlockInfo:
+    fields:
+      - {name: kind, type: string, desc: "Canonical block ID."}
+      - {name: name, type: string, desc: "Display name."}
+      - {name: resource_type, type: string, desc: "Catalog material category; use block_matches for query filters."}
+      - {name: solid, type: boolean, desc: "Blocks movement and rain."}
+      - {name: opaque, type: boolean, desc: "Blocks skylight and hides adjacent terrain faces."}
+      - {name: collectible, type: boolean, desc: "Can be held as a resource."}
+      - {name: hardness, type: integer, desc: "Base mining hardness, not a mutable setting."}
+      - {name: emission, type: number, desc: "Self illumination; does not imply a local light source."}
+      - {name: ore, type: boolean, desc: "Ore block or coal."}
   PlayerJournal:
     desc: "Detached, read-only view of saved optional campkeeper progress and twenty traveler quests. Mutating this table has no effect."
     fields:
@@ -407,7 +423,7 @@ types:
       - {name: z, type: integer}
       - {name: player_id, type: integer, desc: "id of the player who broke it (matches PlayerSnapshot.id)."}
   InteractEvent:
-    desc: "Passed as `event` to on_interact. Fires on a deliberate, non-destructive 'use' aimed at a block (the E key), never changes the block itself -- same shape as BlockBreakEvent, but the block still exists afterward."
+    desc: "Passed as `event` to on_interact. Fires on a deliberate, non-destructive 'use' aimed at a block (the F key), never changes the block itself -- same shape as BlockBreakEvent, but the block still exists afterward."
     fields:
       - {name: kind, type: string, desc: "Snake_case id of the block interacted with -- see block_kinds. Same vocabulary as get_block's return value."}
       - {name: x, type: integer}
@@ -447,6 +463,130 @@ properties:
 # Callable functions on the `api` table.
 # ---------------------------------------------------------------------------
 methods:
+  - name: get_player
+    namespace: world
+    category: query
+    summary: "Direct lookup by connected player ID, including staged effects. Use get_player(event.player_id) for the caster; event has no coordinates."
+    params: [{name: player_id, type: integer}]
+    returns: {type: "PlayerSnapshot | nil", desc: "Detached snapshot; nil if missing."}
+    errors: []
+    since: "1.33.0"
+
+  - name: get_creature
+    namespace: world
+    category: query
+    summary: "Direct lookup by creature ID, including creatures spawned, healed or damaged in this callback."
+    params: [{name: creature_id, type: integer}]
+    returns: {type: "CreatureSnapshot | nil", desc: "Detached snapshot; nil if missing or dead."}
+    errors: []
+    since: "1.33.0"
+
+  - name: heal_creature
+    namespace: world
+    category: action
+    summary: "Heal a living creature, capped at its species maximum health. Cannot resurrect or increase maximum health. Uses the same transaction, save and replication path as creature damage."
+    params: [{name: creature_id, type: integer}, {name: amount, type: number}]
+    returns: {type: boolean, desc: "False for missing/dead creatures or negative amounts."}
+    errors: []
+    since: "1.33.0"
+
+  - name: get_block_kinds
+    namespace: world
+    category: query
+    summary: "List canonical block IDs in stable catalog order. Use get_block_info to inspect a material; returned tables never change engine definitions."
+    params: []
+    returns: {type: "string[]", desc: "Detached catalog including air, water and bedrock."}
+    errors: []
+    since: "1.33.0"
+
+  - name: get_block_info
+    namespace: world
+    category: query
+    summary: "Inspect a block material by ID, not coordinates. To inspect a cell use get_block_info(get_block(x,y,z))."
+    params: [{name: kind, type: string}]
+    returns: {type: "BlockInfo | nil", desc: "Detached metadata; nil for unknown IDs."}
+    errors: []
+    since: "1.33.0"
+
+  - name: block_matches
+    namespace: world
+    category: query
+    summary: "Check a block ID against an exact ID or a category: any, wood, ore (including coal), leaves, plant (crossed or surface-only decorations except campfire), solid, liquid (water). These same case-insensitive filters work in find_blocks and shape edits. Unknown IDs/filters never match."
+    params: [{name: kind, type: string}, {name: filter, type: string}]
+    returns: {type: boolean, desc: "Whether the material matches."}
+    errors: []
+    since: "1.33.0"
+
+  - name: is_block_loaded
+    namespace: world
+    category: query
+    summary: "Distinguish loaded terrain from get_block's air fallback. Checks chunk presence and Y=0..127; does not generate chunks."
+    params: [{name: x, type: integer}, {name: y, type: integer}, {name: z, type: integer}]
+    returns: {type: boolean, desc: "False outside loaded terrain or vertical bounds."}
+    errors: []
+    since: "1.33.0"
+
+  - name: surface_height
+    namespace: world
+    category: query
+    summary: "Topmost solid block in a loaded column, including trees, construction, devices and staged edits. Unlike terrain_height this reads the actual edited world. It is not the cave floor below a player. Scans at most 128 cells."
+    params: [{name: x, type: integer}, {name: z, type: integer}]
+    returns: {type: "integer | nil", desc: "Top solid Y; nil for an unloaded or entirely empty column."}
+    errors: []
+    since: "1.33.0"
+
+  - name: is_exposed_to_sky
+    namespace: world
+    category: query
+    summary: "True if no solid rain-blocking block exists at or above this loaded cell. Includes staged roofs; query above a surface block to check rain exposure. Leaves block rain, water does not. Not a numeric light-level query. Scans at most 128 cells."
+    params: [{name: x, type: integer}, {name: y, type: integer}, {name: z, type: integer}]
+    returns: {type: "boolean | nil", desc: "nil for unloaded/out-of-bounds cells; false for shelter."}
+    errors: []
+    since: "1.33.0"
+
+  - name: fill_box
+    namespace: world
+    category: action
+    summary: >
+      Fill an inclusive integer box with one block kind; corner order is normalized.
+      Optional filter selects existing materials (same categories as block_matches;
+      omitted means any). Use kind air to excavate, filter air to build only in empty
+      cells, or filter stone to transmute rock. At most 4096 candidate cells; every
+      cell must be loaded and within Y=0..127. Shares replace_block's remaining
+      32 edits per rule callback / 300 per cast; unchanged cells cost no edits.
+      Rejects the whole call if it would exceed that remaining budget or modify
+      bedrock or any occupied device cell. Cannot place bedrock. No partial fills.
+      A nil result stages nothing and consumes no edit allowance. No inventory
+      costs or drops; these are explicit world-edit powers, not player crafting.
+      Larger builds must use small batches across on_tick calls. Shape scans
+      charge candidate volume times (1 + earlier staged edits) native work.
+    params:
+      - {name: x1, type: integer}
+      - {name: y1, type: integer}
+      - {name: z1, type: integer}
+      - {name: x2, type: integer}
+      - {name: y2, type: integer}
+      - {name: z2, type: integer}
+      - {name: kind, type: string}
+      - {name: filter, type: string, optional: true}
+    returns: {type: "integer | nil", desc: "Changed cells (0 is success); nil if invalid, unloaded, protected, or too large for the remaining edit budget."}
+    errors: ["Native work exhaustion aborts the entire callback, including earlier edits."]
+    since: "1.33.0"
+
+  - name: fill_sphere
+    namespace: world
+    category: action
+    summary: "Fill integer cells whose coordinate distance from the integer center is <= radius (0..7). Same filters, all-or-nothing behavior, protected blocks, loaded-cell requirements and shared edit allowance as fill_box. A bounding-cube native-work charge is applied before scanning. For example radius 2 changes at most 33 cells: suitable for a cast, too large for an otherwise empty tick budget."
+    params:
+      - {name: cx, type: integer}
+      - {name: cy, type: integer}
+      - {name: cz, type: integer}
+      - {name: radius, type: number}
+      - {name: kind, type: string}
+      - {name: filter, type: string, optional: true}
+    returns: {type: "integer | nil", desc: "Changed cells (0 is success); nil if invalid or unable to complete this call."}
+    errors: ["Native work exhaustion aborts the entire callback, including earlier edits."]
+    since: "1.33.0"
   - name: get_player_journal
     namespace: world
     category: query
@@ -812,7 +952,7 @@ methods:
     category: query
     summary: "Positions of every block of one kind within a radius of a point."
     params:
-      - {name: kind, type: string, desc: "A block id from block_kinds, OR the special category alias \"wood\" (matches any tree species: oak_wood, spruce_wood, birch_wood, cherry_wood). Unlike find_creatures' kind, an unrecognized string here returns an EMPTY result, not \"match everything\" -- this asymmetry is a real gotcha, not a design you can rely on being consistent across query methods."}
+      - {name: kind, type: string, desc: "Exact block ID or category any, wood, ore, leaves, plant, solid, liquid; see block_matches. Unknown filters return an empty result. Legacy find_creatures instead treats unknown kinds as any; do not rely on that behavior."}
       - {name: cx, type: integer}
       - {name: cy, type: integer}
       - {name: cz, type: integer}
@@ -825,7 +965,7 @@ methods:
   - name: terrain_height
     namespace: world
     category: query
-    summary: "The integer y of the topmost solid ground block at a column. Useful for placing/spawning things at the correct height instead of guessing."
+    summary: "Procedural terrain elevation, ignoring construction and block edits. Use surface_height for the top solid block in actual loaded terrain. Neither method locates an underground cave floor."
     params:
       - {name: x, type: integer}
       - {name: z, type: integer}
@@ -1290,7 +1430,7 @@ events:
     signature: "function on_interact(api, event)"
     event_type: InteractEvent
     desc: >
-      Fires once per real player-caused interact-key press (E) aimed at a
+      Fires once per real player-caused interact-key press (F) aimed at a
       block, whether or not anything is actually done in response -- the
       non-destructive counterpart to on_block_break, for a rule that reacts
       to a player deliberately using/examining something (e.g. a crystal

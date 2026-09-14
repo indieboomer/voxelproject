@@ -12,6 +12,9 @@ use crate::voxel::World;
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct CraftingSave {
+    pub starter_camp: Option<(i32, i32, i32)>,
+    /// Complete scrollback, independent of the bounded on-screen log.
+    pub chat_transcript: Vec<String>,
     pub npcs: Vec<crate::npc::Npc>,
     pub npc_distribution: crate::npc::Distribution,
     pub player: Option<PlayerSave>,
@@ -115,6 +118,7 @@ fn decode_save(
     if let Some(json) = bytes.strip_prefix(MAGIC) {
         let save: SaveV2 = serde_json::from_slice(json).ok()?;
         if !valid_world(&save.world)
+            || save.crafting.starter_camp.is_some_and(|p| !crate::automation::valid_cell(p))
             || save.crafting.player.as_ref().is_some_and(|p| !p.valid())
             || save
                 .crafting
@@ -234,8 +238,9 @@ fn write_save(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let temp = path.with_extension("bin.tmp");
-    let backup = path.with_extension("bin.bak");
+    let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("bin");
+    let temp = path.with_extension(format!("{extension}.tmp"));
+    let backup = path.with_extension(format!("{extension}.bak"));
     let mut file = fs::File::create(&temp)?;
     file.write_all(bytes)?;
     file.sync_all()?;
@@ -277,7 +282,15 @@ pub fn save_world(
 
     let path = world_path(&world.name)?;
     let bytes = encode_save(save, crafting, &world.generation).map_err(|e| e.to_string())?;
-    write_save(&path, &bytes).map_err(|e| format!("Could not save {}: {e}", world.name))
+    write_save(&path, &bytes).map_err(|e| format!("Could not save {}: {e}", world.name))?;
+    export_chat(&path.with_file_name(format!("{}_chat.log", world.name)), &crafting.chat_transcript)
+        .map_err(|e| format!("World saved, but could not export chat for {}: {e}", world.name))
+}
+
+fn export_chat(path: &Path, transcript: &[String]) -> std::io::Result<()> {
+    let mut text = transcript.join("\n");
+    if !transcript.is_empty() { text.push('\n'); }
+    write_save(path, text.as_bytes())
 }
 
 pub fn save_exists() -> bool {
@@ -294,6 +307,7 @@ fn load_path(path: &Path, name: &str) -> Option<LoadedWorld> {
     world.name = name.to_owned();
     world.underground_discovered = crafting.underground_discovered.clone();
     world.automation = crafting.automation.clone();
+    world.starter_camp = crafting.starter_camp;
     world.generation = generation;
     for (pos, block) in save.edits {
         world.edits.insert(pos, block);
@@ -323,6 +337,30 @@ pub fn load_playtest_snapshot(path: &Path) -> Option<LoadedWorld> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn chat_export_retains_full_history_without_duplicates_across_saves() {
+        let dir = std::path::PathBuf::from(format!("target/chat-save-test-{}", std::process::id()));
+        let path = dir.join("Forest World_chat.log");
+        let mut crafting = super::CraftingSave::default();
+        crafting.chat_transcript = (0..600).map(|i| format!("Player: wiadomość {i}")).collect();
+        let bytes = super::encode_save(world_save(), &crafting, &Default::default()).unwrap();
+        let (_, mut restored, _) = super::decode_save(&bytes).unwrap();
+        assert_eq!(restored.chat_transcript, crafting.chat_transcript);
+        super::export_chat(&path, &restored.chat_transcript).unwrap();
+        let first = std::fs::read(&path).unwrap();
+        super::export_chat(&path, &restored.chat_transcript).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), first);
+        restored.chat_transcript.push("Guest: found iron!".into());
+        super::export_chat(&path, &restored.chat_transcript).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.lines().count(), 601);
+        assert!(text.starts_with("Player: wiadomość 0\n"));
+        assert!(text.ends_with("Guest: found iron!\n"));
+        assert_eq!(std::fs::read(path.with_extension("log.bak")).unwrap(), first);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(path.with_extension("log.bak")).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+    }
     use super::*;
     #[cfg(feature = "dev-playtest")]
     #[test]
@@ -331,12 +369,13 @@ mod tests {
         world.set_block(2,127,2,crate::voxel::BlockType::Crystal);
         let mut player=Player::new(Vec3::new(2.5,60.0,2.5));
         player.health=37.0;player.crafting.mana=17;
-        let crafting=CraftingSave {player:Some(PlayerSave::capture(&player)),host:player.crafting.clone(),..Default::default()};
+        let crafting=CraftingSave {starter_camp:Some((4,30,5)),player:Some(PlayerSave::capture(&player)),host:player.crafting.clone(),..Default::default()};
         let bytes=playtest_snapshot(&world,&player,&Camera::new(player.position,1.0),0.35,vec![],&crafting).unwrap();
         let path=std::path::PathBuf::from(format!("target/playtest-save-test-{}.bin",std::process::id()));
         fs::write(&path,bytes).unwrap();
         let loaded=load_path(&path,"diagnostic snapshot").unwrap();
         assert_eq!(loaded.player_pos,player.position);
+        assert_eq!(loaded.world.starter_camp,Some((4,30,5)));
         assert_eq!(loaded.crafting.host.mana,17);
         assert_eq!(loaded.crafting.player.unwrap().health,37.0);
         assert_eq!(loaded.world.edits.get(&(2,127,2)),Some(&crate::voxel::BlockType::Crystal));

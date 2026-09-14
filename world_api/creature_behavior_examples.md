@@ -1,5 +1,9 @@
 # Creature behavior (World API 1.14)
 
+For all current capabilities and the full reference, see the consolidated
+[World API user guide](USER_GUIDE.md). The examples below describe the original
+behavior-control API; the user guide also covers newer temporary protection policies.
+
 Behavior runs on the host. Movement, attack animation, player damage, and creature removal use existing multiplayer replication. Clients do not run a second AI simulation.
 
 | Call | Effect |

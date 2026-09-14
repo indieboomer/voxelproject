@@ -81,7 +81,7 @@ pub fn rewards(kind:CreatureKind)->Vec<(BlockType,u32)> {
         C::Wolf=>vec![(PlantFiber,1),(Resin,1)], C::Stinger=>vec![(Resin,1)],
         C::Goblin=>vec![(IronOre,1),(Cloth,1)], C::StoneGolem=>vec![(Stone,3),(IronOre,1)],
         C::Sunscorch=>vec![(Sulfur,2),(Ash,1)], C::Zombie=>vec![(Ash,1),(Cloth,1)],
-        C::Skeleton=>vec![(Ash,2)], C::Fish=>vec![(PlantFiber,1),(Meat,1)],
+        C::Skeleton | C::SkeletonSorcerer=>vec![(Ash,2)], C::Fish=>vec![(PlantFiber,1),(Meat,1)],
         C::DragonGreen=>vec![(Resin,3),(CrystalDust,2)], C::DragonRed=>vec![(Sulfur,3),(CrystalDust,2)],
     }
 }

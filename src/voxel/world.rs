@@ -123,6 +123,7 @@ struct SurfaceResource { block: BlockType, habitat: &'static str, chance: f32, s
 const SURFACE_RESOURCES: &[SurfaceResource] = include!("resource_surface.rs");
 
 pub struct World {
+    pub starter_camp: Option<(i32, i32, i32)>,
     pub(crate) cave_layouts: std::cell::RefCell<HashMap<(i32,i32),std::sync::Arc<crate::underground::Layout>>>,
     pub name: String,
     pub underground_discovered: std::collections::BTreeSet<(i32,i32)>,
@@ -142,6 +143,7 @@ pub struct World {
 impl World {
     pub fn new(seed: u32) -> Self {
         Self {
+            starter_camp: None,
             seed,
             cave_layouts: Default::default(),            automation: Default::default(),
             generation: Default::default(),

@@ -16,7 +16,7 @@ impl App {
         }
     }
     pub(super) fn submit_camp_action(&mut self, action: Action) {
-        self.ui.journal.feedback = "Asking the campkeeper…".into();
+        self.ui.journal.feedback = "Using the campfire…".into();
         if let NetRole::Joined(client) = &mut self.net {
             client.reliable.send(
                 &client.socket,
@@ -95,6 +95,9 @@ impl App {
         if !matches!(self.net, NetRole::Host(_)) {
             return;
         }
+        if !fresh && self.world.starter_camp.is_none() {
+            adventure::restore_starter_camp(&mut self.world);
+        }
         if self.player.crafting.adventure.home.is_none() {
             let home = adventure::respawn_position(
                 &mut self.world,
@@ -116,6 +119,7 @@ impl App {
                     }
                 }
                 self.apply_block_edit(x, y, z, BlockType::Campfire);
+                self.world.starter_camp = Some((x, y, z));
                 self.ui.map.waypoint = Some(adventure::feet((x, y, z)));
                 self.notify_important("A campkeeper waits by the nearby fire. Press F to talk, or J for your field journal.".into());
             } else {
@@ -125,6 +129,8 @@ impl App {
     }
 
     pub(super) fn update_adventure(&mut self, dt: f32) {
+        self.ui.journal.camp_has_keeper = self.ui.journal.camp
+            .is_some_and(|camp| adventure::guide_position(&self.world, camp).is_some());
         self.ui.journal.tick(self.player.health, dt);
         if !matches!(self.net, NetRole::Host(_)) {
             self.ui.journal.recovery_seconds = if self.player.health <= 0. {
@@ -252,11 +258,11 @@ impl App {
         camps.sort_by(|a, b| a.distance_squared(eye).total_cmp(&b.distance_squared(eye)));
         camps
             .into_iter()
-            .take(4)
             .filter_map(|p| {
                 let camp = adventure::cell(p);
                 adventure::guide_position(&self.world, camp).map(|p| (camp, adventure::feet(p)))
             })
+            .take(4)
             .collect()
     }
     pub(super) fn aimed_camp(&self) -> Option<adventure::Cell> {
@@ -293,10 +299,10 @@ impl App {
             self.ui.journal.hint=Some(format!("F · Talk to {}",crate::quests::NAMES[npc as usize]));return;
         }
         if let Some(camp) = self.aimed_camp() {
-            self.ui.journal.hint = Some(format!(
+            self.ui.journal.hint = Some(if adventure::guide_position(&self.world, camp).is_some() { format!(
                 "F · Talk to {} / rest at camp",
                 adventure::guide_name(camp)
-            ));
+            ) } else { "F · Cook / rest at camp".into() });
             return;
         }
         let eye = self.camera.eye_position();
