@@ -76,11 +76,24 @@ pub(super) fn populate<'lua,'scope>(_lua: &'lua Lua, scope: &mlua::Scope<'lua,'s
         t.set("id",id)?;t.set("kind",creature_kind_name(kind))?;
         t.set("x",pos[0])?;t.set("y",pos[1])?;t.set("z",pos[2])?;
         t.set("health",health)?;t.set("max_health",max_health)?;
+        let status=creatures.magic_statuses.get(&id).copied().unwrap_or_default();
+        t.set("slow_seconds",status.slow)?;t.set("stun_seconds",status.stun)?;
         super::environment::creature_fields(&t,tx,kind,pos)?;
         Ok(Some(t))
     })?)?;
     api.set("heal_creature",scope.create_function(move |_,(id,amount):(u32,f32)| {
         Ok(tx.creatures.borrow_mut().heal(id,amount))
+    })?)?;
+    api.set("apply_creature_status",scope.create_function(move |lua,(id,status,seconds):(u32,String,f32)| {
+        scan_charge(lua,tx,tx.creatures.borrow().snapshot.len() as u32+1);
+        Ok(tx.creatures.borrow_mut().apply_status(id,&status,seconds))
+    })?)?;
+    api.set("push_creature",scope.create_function(move |lua,(id,x,y,z):(u32,f32,f32,f32)| {
+        // At most 40 steps through a small creature body, charged before scanning.
+        scan_charge(lua,tx,4096);
+        Ok(tx.creatures.borrow_mut().push(id,Vec3::new(x,y,z),|x,y,z| {
+            loaded(tx,x,y,z).then(||tx.get_block(x,y,z))
+        }))
     })?)?;
     api.set("get_block_kinds",scope.create_function(move |lua,()| {
         scan_charge(lua,tx,crate::world_api_gen::BLOCK_KINDS.len() as u32);

@@ -1,10 +1,11 @@
 # Targeted Magic and Persistent Spell System
 
-> Stage 1A and the host-side Stage 1B Spellbook are implemented. Remember generated
-> instant spells, manage them with K, and save them with the world. Stable IDs,
-> revisions and compatibility checks are in place. Stage 1C hotbar/guest casting
-> is next. [Implementation notes](docs/SPELLCASTING.md) track checks and limitations.
-> Phase 1 as a whole is not complete.
+> Stages 1A–1D are implemented: targeted casts, a saved Spellbook, host-permitted
+> guest casting, inventory/hotbar integration, casting HUD and particles, plus
+> bounded temporary statuses and creature pushes. Existing APIs cover the other
+> Stage 1D action categories. Phase 1 still needs live multi-player acceptance.
+> [Implementation notes](docs/SPELLCASTING.md) track checks and limitations.
+> Next development phase: 2A, persistent single-object rules.
 
 ## Goal
 

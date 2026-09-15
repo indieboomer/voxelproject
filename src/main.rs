@@ -30,6 +30,8 @@ mod lore_books;
 mod equipment_ui;
 mod inventory_ui;
 mod loot;
+mod spell_fx;
+mod spell_network;
 mod fantasy_name;
 mod held_item;
 mod llm;

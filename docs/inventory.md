@@ -58,6 +58,21 @@ replicate held items and inventory. Steam accounts use Steam identity; Direct gu
 should retain their nickname to recover saved inventory.
 
 Target outlines are configurable in [settings](UI_SETTINGS.md), and remote held-item
-animation is described in [player animations](PLAYER_ANIMATIONS.md). Current hotbar
-entries reference resources or equipment. Stable spell references and repeated
-targeted casting are planned in [the spellcasting plan](../SPELLCASTING_PLAN.md).
+animation is described in [player animations](PLAYER_ANIMATIONS.md).
+
+## Spells
+
+The third inventory column lists remembered spells. Select a spell, then press
+1–9 or click a hotbar slot to assign it. Close inventory, select that slot and
+left-click to cast at your aim. Spell slots show a rune and the selected spell's
+name. They consume mana rather than items; right-click does nothing.
+
+Bindings save with the world, follow renames, and clear when the spell is deleted.
+Spells needing compatibility review remain visible but cannot be assigned or cast.
+K still opens the full Spellbook for inspection, rename, duplicate, delete and casting.
+Successful casts show short purple-and-gold particles, also visible to guests.
+The HUD shows the target, mana cost, cooldown and readiness. The host can enable
+**Allow guests to cast this spell** in K → Spellbook; guests then see it in their
+inventory and read-only Spellbook. The host checks every guest cast and charges
+that guest's mana. Revoking permission clears the guest's corresponding bindings.
+Spell definitions remain host-managed. All players need matching protocol-41 builds.

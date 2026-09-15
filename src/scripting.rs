@@ -104,7 +104,7 @@ pub struct InventoryBalances {
 impl InventoryBalances {
     pub fn from_account(account: &crate::crafting::Account) -> Self {
         Self {mana:account.mana,elements:account.elements,items:account.gear,
-            adventure:account.adventure,held:account.hotbar.entry()}
+            adventure:account.adventure,held:account.hotbar.entry().filter(|e|!matches!(e,crate::equipment::Entry::Spell(_)) || e.count(account)>0)}
     }
 }
 
@@ -1045,6 +1045,49 @@ mod tests {
         assert!(TargetContext::resolve(&world,&creatures,eye,Vec3::X).is_none());
         world.ensure_chunk_loaded(1,0);
         assert!(TargetContext::resolve(&world,&creatures,eye,Vec3::X).is_some());
+    }
+
+    #[test]
+    fn targeted_stage_1d_reference_spells_execute_for_guest_casters() {
+        use crate::spell_target::TargetContext;
+        for (name,source) in [
+            ("slow",include_str!("../modules/target_slow.lua")),
+            ("stun",include_str!("../modules/target_stun.lua")),
+            ("push",include_str!("../modules/target_push.lua")),
+            ("summon",include_str!("../modules/target_summon.lua")),
+        ] {
+            let (mut host,mut world,mut creatures,mut player)=targeted_fixture(source);
+            player.id=7;
+            for x in 0..16 {for z in 0..16 {world.set_block(x,68,z,BlockType::Stone);}}
+            let target=creatures.spawn_one(CreatureKind::StoneGolem,Vec3::new(6.5,69.35,2.5),1);
+            let id=host.spellbook.remember(&host.modules[0],"Host").unwrap();
+            host.spellbook.spells[0].allow_guests=true;
+            let eye=player.pos+Vec3::Y*1.62;
+            let context=TargetContext::resolve(&world,&creatures,eye,Vec3::X).unwrap();
+            let request=crate::spell_network::Request {session:1,sequence:1,spell:id,revision:1,facing:Vec3::X.to_array(),target:Some(context.target)};
+            let context=crate::spell_network::resolve_request(&request,host.spellbook.get(id).unwrap(),&world,&creatures,eye).unwrap().unwrap();
+            let out=host.run_targeted_cast(0,&world,&mut creatures,&[player],&mut 0.5,&mut WeatherState::new(42),7,NO_RESOURCES,context);
+            assert!(host.cast_succeeded(0,7),"{name}: {:?} {:?}",host.modules[0].error,out.crashes);
+            match name {
+                "slow"=>assert_eq!(creatures.magic_statuses[&target].slow,10.),
+                "stun"=>assert_eq!(creatures.magic_statuses[&target].stun,3.),
+                "push"=>assert!(creatures.snapshot_with_ids().iter().find(|c|c.0==target).unwrap().2[0]>10.),
+                "summon"=>assert!(creatures.snapshot_with_ids().iter().any(|c|c.1==CreatureKind::Wolf.to_u8())),
+                _=>unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn targeted_device_spell_uses_device_base_and_stages_authoritative_state() {
+        let (mut host,mut world,mut creatures,player)=targeted_fixture(include_str!("../modules/target_device_toggle.lua"));
+        let cell=(6,70,2);
+        world.automation.devices.insert(cell,crate::automation::Device::new(crate::automation::Kind::Signal,cell,0));
+        let context=crate::spell_target::TargetContext::resolve(&world,&creatures,player.pos+Vec3::Y*1.62,Vec3::X).unwrap();
+        let out=targeted_run(&mut host,&world,&mut creatures,player,context);
+        assert!(host.cast_succeeded(0,0),"{:?}",host.modules[0].error);
+        assert!(out.player_effects.iter().any(|e|matches!(e,PlayerEffect::AutomationState {state} if !state.devices[&cell].config.enabled)));
+        assert!(world.automation.devices[&cell].config.enabled);
     }
 
     #[test]

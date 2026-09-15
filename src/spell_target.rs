@@ -7,7 +7,7 @@ use glam::Vec3;
 
 pub const CAST_RANGE: f32 = 18.0;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Target {
     Creature {
         id: u32,

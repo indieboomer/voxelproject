@@ -9,7 +9,7 @@ use crate::voxel::block::BlockType;
 pub type PlayerId = u32;
 pub type WorldEdit = ((i32, i32, i32), BlockType);
 pub const MAX_PLAYERS: usize = 4;
-pub const PROTOCOL_VERSION: u32 = 39;
+pub const PROTOCOL_VERSION: u32 = 41;
 pub const HOST_PLAYER_ID: PlayerId = 0;
 pub const DEFAULT_PORT: u16 = 7878;
 pub const RELIABLE_RESEND_INTERVAL: Duration = Duration::from_millis(200);
@@ -143,6 +143,10 @@ pub enum ReliableMsg {
     RecipeBookResult(Result<u8,String>),
     EatFood{block:BlockType,revision:u64},
     FoodResult(String),
+    SpellCastFx { origin: [f32;3], target: [f32;3] },
+    SpellCatalog { session:u64, revision:u64, spells:Vec<crate::spell_network::Summary> },
+    CastSpell(crate::spell_network::Request),
+    SpellResult { session:u64, sequence:u64, spell:u64, remaining:f32, message:String },
 }
 
 /// One player's position/status as carried in a `Snapshot` -- see

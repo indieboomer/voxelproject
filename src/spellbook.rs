@@ -46,6 +46,8 @@ impl Default for Validation {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Spell {
+    #[serde(default)]
+    pub allow_guests: bool,
     pub id: SpellId,
     pub revision: u32,
     pub name: String,
@@ -89,6 +91,20 @@ impl Default for Spellbook {
     }
 }
 impl Spellbook {
+    /// Refresh derived ownership and remove bindings to deleted definitions.
+    pub fn sync_hotbar(&self, account: &mut crate::crafting::Account) {
+        let ready: Vec<_> = self.spells.iter().filter(|s|s.ready()).map(|s|s.id).collect();
+        let mut changed = ready != account.known_spells;
+        account.known_spells = ready;
+        for slot in &mut account.hotbar.slots {
+            if matches!(*slot, Some(crate::equipment::Entry::Spell(id)) if self.get(id).is_none()) {
+                *slot=None;
+                account.hotbar.revision=account.hotbar.revision.saturating_add(1);
+                changed=true;
+            }
+        }
+        if changed {account.revision=account.revision.saturating_add(1);}
+    }
     pub fn get(&self, id: SpellId) -> Option<&Spell> {
         self.spells.iter().find(|s| s.id == id)
     }
@@ -128,6 +144,7 @@ impl Spellbook {
             _ => TargetRequirement::Optional,
         };
         let spell = Spell {
+            allow_guests: false,
             id: 0,
             revision: 1,
             name: module.name.chars().take(80).collect(),
@@ -179,6 +196,7 @@ impl Spellbook {
         let mut spell = self.get(id).ok_or("Spell no longer exists")?.clone();
         spell.name = format!("{} copy", spell.name.chars().take(75).collect::<String>());
         spell.revision = 1;
+        spell.allow_guests = false;
         self.insert(spell)
     }
 
@@ -322,6 +340,46 @@ mod tests {
             include_str!("../modules/target_heal.lua").into(),
         )
         .unwrap()
+    }
+    #[test]
+    fn hotbar_bindings_survive_reload_and_rename_but_not_deletion() {
+        use crate::equipment::Entry;
+        let mut book=Spellbook::default();
+        let id=book.remember(&module(),"Host").unwrap();
+        let mut account=crate::crafting::Account::default();
+        book.sync_hotbar(&mut account);
+        account.hotbar.select(8);
+        account.hotbar.assign(Some(Entry::Spell(id)));
+        let saved=serde_json::to_vec(&(book,account)).unwrap();
+        let (mut book,mut account):(Spellbook,crate::crafting::Account)=serde_json::from_slice(&saved).unwrap();
+        book.revalidate();book.sync_hotbar(&mut account);
+        assert_eq!(account.hotbar.entry(),Some(Entry::Spell(id)));
+        assert_eq!(Entry::Spell(id).count(&account),1);
+        book.update(id,"New name".into(),TargetRequirement::Creature).unwrap();
+        book.sync_hotbar(&mut account);
+        assert_eq!(crate::equipment_ui::entry_name(account.hotbar.entry().unwrap(),&book),"New name");
+        book.spells[0].validation=Validation::Review {reason:"Invalid API".into()};
+        book.sync_hotbar(&mut account);
+        assert_eq!(Entry::Spell(id).count(&account),0);
+        assert_eq!(account.hotbar.entry(),Some(Entry::Spell(id)));
+        let revision=account.hotbar.revision;
+        book.delete(id).unwrap();book.sync_hotbar(&mut account);
+        assert_eq!(account.hotbar.entry(),None);
+        assert!(account.hotbar.revision>revision);
+    }
+    #[test]
+    fn spell_assignment_requires_authoritative_ownership() {
+        use crate::equipment::{Entry,accept_hotbar};
+        let mut book=Spellbook::default();
+        let id=book.remember(&module(),"Host").unwrap();
+        let mut host=crate::crafting::Account::default();
+        book.sync_hotbar(&mut host);
+        let mut proposed=host.hotbar.clone();proposed.assign(Some(Entry::Spell(id)));
+        let mut guest=crate::crafting::Account::default();
+        assert!(accept_hotbar(&mut guest,&proposed).is_err());
+        assert!(accept_hotbar(&mut host,&proposed).is_ok());
+        assert!(!crate::equipment::can_mine(host.hotbar.entry(),crate::voxel::BlockType::Stone,&host));
+        assert_eq!(Entry::Spell(id).resource(),None);
     }
     #[test]
     fn spellbook_ids_survive_rename_duplicate_delete_and_reload() {

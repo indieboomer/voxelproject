@@ -87,6 +87,8 @@ pub fn totals(slots: &[Slot]) -> Result<Composition, String> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Account {
+    /// Derived by the host from validated spell definitions; clients cannot grant these.
+    pub known_spells: Vec<crate::spellbook::SpellId>,
     pub torch_equipped: bool,
     pub adventure: crate::adventure::Progress,
     pub packed_devices: Vec<crate::automation::Device>,
@@ -104,6 +106,7 @@ impl Default for Account {
     fn default() -> Self {
         Self {
             torch_equipped: false,
+            known_spells: Vec::new(),
             adventure: Default::default(),
             gear: crate::gear_catalog::starter_counts(),
             packed_devices: Vec::new(),

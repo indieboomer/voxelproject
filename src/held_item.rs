@@ -12,6 +12,10 @@ pub fn parts(entry: Option<Entry>) -> Vec<(Vec3, Vec3, [f32; 3])> {
         |a: [f32; 3], b: [f32; 3], c| p.push((Vec3::from_array(a), Vec3::from_array(b), c));
     match entry {
         None => add([-0.12, 0.0, -0.12], [0.12, 0.42, 0.12], [0.70, 0.47, 0.30]),
+        Some(Entry::Spell(_)) => {
+            add([-0.12, 0.0, -0.12], [0.12, 0.42, 0.12], [0.70, 0.47, 0.30]);
+            add([-0.07, 0.55, -0.07], [0.07, 0.69, 0.07], [0.65, 0.35, 1.0]);
+        }
         Some(Entry::Resource(_)) => add([-0.30, 0.18, -0.30], [0.30, 0.78, 0.30], [1.0; 3]),
         Some(Entry::Gear(g)) => {
             let metal=if g.book().is_some(){g.definition().color}else{metal};

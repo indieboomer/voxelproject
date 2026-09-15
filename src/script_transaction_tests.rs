@@ -7,6 +7,32 @@ fn shaping_fixture() -> Fixture {
 }
 
 #[test]
+fn creature_magic_reads_staged_changes_respects_walls_and_rolls_back() {
+    let mut f=shaping_fixture();
+    f.creatures=Creatures::new();f.creatures.spawn_one(CreatureKind::Sheep,Vec3::new(4.,30.,4.),1);
+    let before=f.creatures.snapshot_with_ids();
+    let body=r#"
+        assert(api.apply_creature_status(1,'slow',10))
+        assert(api.apply_creature_status(1,'stun',3))
+        assert(api.get_creature(1).slow_seconds==10 and api.get_creature(1).stun_seconds==3)
+        assert(not api.apply_creature_status(1,'slow',31))
+        assert(not api.apply_creature_status(1,'invented',2))
+        assert(not api.apply_creature_status(999,'slow',2))
+        assert(not api.push_creature(1,9,0,0))
+        assert(api.fill_box(7,30,3,7,32,5,'stone')==9)
+        assert(api.push_creature(1,4,0,0))
+        local c=api.get_creature(1);assert(c.x>4 and c.x<6.4)
+        assert(api.apply_creature_status(1,'stun',0));assert(api.get_creature(1).stun_seconds==0)
+    "#;
+    let mut failed=module("on_cast",&format!("{body}\nerror('rollback')"));f.invoke(&mut failed,"on_cast");
+    assert!(failed.error.as_ref().unwrap().contains("rollback"),"{:?}",failed.error);
+    assert_eq!(f.creatures.snapshot_with_ids(),before);assert!(f.creatures.magic_statuses.is_empty());
+    let mut m=module("on_cast",body);f.invoke(&mut m,"on_cast");assert!(m.error.is_none(),"{:?}",m.error);
+    assert_eq!(f.creatures.magic_statuses[&1].slow,10.);
+    assert!(f.creatures.snapshot_with_ids()[0].2[0]>4.);
+}
+
+#[test]
 fn world_shaping_documented_examples_execute_the_requested_behaviors() {
     let platform=include_str!("../world_api/examples/stone_platform.lua");
     let rain=include_str!("../world_api/examples/rain_softens_soil.lua");
@@ -162,6 +188,25 @@ fn documented_wayfinder_ward_uses_current_progress_and_selection() {
     assert!(f.creatures.attack_policies.values().flatten().any(|p|matches!(p,crate::creature::AttackPolicy::ProtectPlayer(0,k) if *k==CreatureKind::Goblin as u8)));
     f.players[0].finances.held=None;
     f.invoke(&mut m,"on_tick");assert!(f.creatures.attack_policies.is_empty());
+}
+
+#[test]
+fn equipped_spell_survives_staged_mana_changes() {
+    let mut f=Fixture::new();
+    let mut account=crate::crafting::Account::default();
+    account.known_spells.push(42);
+    account.hotbar.assign(Some(crate::equipment::Entry::Spell(42)));
+    f.players[0].finances=InventoryBalances::from_account(&account);
+    let mut m=module("on_cast",r#"
+        assert(api.get_equipped_item(0)=='spell:42')
+        assert(api.give_mana(0,1))
+        assert(api.get_equipped_item(0)=='spell:42')
+    "#);
+    f.invoke(&mut m,"on_cast");assert!(m.error.is_none(),"{:?}",m.error);
+    account.known_spells.clear();
+    f.players[0].finances=InventoryBalances::from_account(&account);
+    let mut m=module("on_cast","assert(api.get_equipped_item(0)==nil)");
+    f.invoke(&mut m,"on_cast");assert!(m.error.is_none(),"{:?}",m.error);
 }
 
 #[test]

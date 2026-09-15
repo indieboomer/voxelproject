@@ -243,6 +243,12 @@ fn render_weather_previews() {
         .collect();
     let camp_eye = target + Vec3::new(-3.0, 1.3, if machine_preview {-4.5} else {4.5});
     let mut effect_mesh=crate::campfire::effects(&camps, camp_eye, 10.0);
+    if std::env::var_os("VOXEL_SPELL_PREVIEW").is_some() {
+        let mut fx=crate::spell_fx::Effects::default();
+        fx.cast(target+Vec3::new(-2.,1.,1.),target+Vec3::Y*0.5);
+        fx.update(0.2);
+        effect_mesh.extend(fx.mesh(|_|true));
+    }
     if adventure_preview {
         let appearance=crate::remote_player::Appearance{model:1,hat:Some(2)};
         models.push_player_animated(&mut effect_mesh.vertices,&mut effect_mesh.indices,appearance,

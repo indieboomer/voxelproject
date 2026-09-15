@@ -99,6 +99,7 @@ impl<'a> CallbackTransaction<'a> {
         let mut account = crate::crafting::Account {mana:p.finances.mana,elements:p.finances.elements,gear:p.finances.items,..Default::default()};
         account.adventure=p.finances.adventure;
         account.hotbar.slots[0]=p.finances.held;
+        if let Some(crate::equipment::Entry::Spell(id))=p.finances.held {account.known_spells.push(id);}
         account.resources=*self.resources.get(&player_id)?;
         for effect in self.effects.borrow().iter() {
             match *effect {

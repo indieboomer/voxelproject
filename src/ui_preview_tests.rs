@@ -13,7 +13,7 @@ fn render_ui_previews() {
             .unwrap();
     let width = 1280;
     for (theme, name) in [(UiTheme::Generic, "generic"), (UiTheme::Fantasy, "fantasy")] {
-        for panel in ["settings", "crafting", "recipe_book", "resources", "hotbar", "hotbar_machine", "inventory", "food", "cooking", "chat", "automation", "chest", "map", "hud", "journal", "adventure", "recovery", "spellbook"] {
+        for panel in ["settings", "crafting", "recipe_book", "resources", "hotbar", "hotbar_machine", "inventory", "food", "cooking", "chat", "automation", "chest", "map", "hud", "journal", "adventure", "recovery", "spellbook", "spellbook_guest"] {
             if std::env::var("UI_PREVIEW_PANEL").is_ok_and(|filter|filter!=panel) { continue; }
             let height = if panel == "resources" { 1024 } else { 720 };
             let ctx = egui::Context::default();
@@ -104,10 +104,14 @@ fn render_ui_previews() {
             let mut settings = crate::settings::SettingsPanel::new(&ctx);
             let mut spellbook=crate::spellbook::Spellbook::default();
             let mut spell_panel=crate::spellbook_ui::Panel::default();
-            if panel=="spellbook" {
+            if matches!(panel,"spellbook"|"spellbook_guest"|"inventory"|"hotbar") {
                 let module=crate::scripting::Module::load("Healing Touch".into(),
                     "Heal the creature I am aiming at.".into(),include_str!("../modules/target_heal.lua").into()).unwrap();
                 spell_panel.selected=Some(spellbook.remember(&module,"Host").unwrap());spell_panel.open=true;
+                spellbook.sync_hotbar(&mut account);
+                account.hotbar.select(8);
+                account.hotbar.assign(Some(crate::equipment::Entry::Spell(spell_panel.selected.unwrap())));
+                if panel=="inventory" {inventory.preview_selection(crate::equipment::Entry::Spell(spell_panel.selected.unwrap()));}
             }
             #[cfg(feature = "dev-playtest")]
             {settings.playtest_in_game=true;}
@@ -135,7 +139,7 @@ fn render_ui_previews() {
                             let p=egui::pos2(850.,320.);
                             crate::compass::machine(ctx,&[Some(p),Some(p+egui::vec2(-24.,-29.)),Some(p+egui::vec2(42.,-17.)),Some(p+egui::vec2(24.,29.)),Some(p+egui::vec2(-42.,17.))]);
                         }
-                        if panel=="spellbook" {spell_panel.draw(ctx,&spellbook,true,false);}
+                        if matches!(panel,"spellbook"|"spellbook_guest") {spell_panel.draw(ctx,&spellbook,panel=="spellbook",false);}
                         else if matches!(panel,"journal"|"cooking") {journal.draw(ctx,&player);}
                         else if panel == "adventure" || panel == "recovery" {
                             crate::ui::status_hud(ctx,&player,60.0);
@@ -168,10 +172,11 @@ fn render_ui_previews() {
                             }
                         } else if matches!(panel,"inventory"|"food") {
                             let mut requests = crate::ui::UiRequests::default();
-                            requests.select_slot = crate::equipment_ui::hotbar(ctx,&account,true,true,false);
-                            inventory.show(ctx,&account,player.health,&registry,&mut requests);
+                            requests.select_slot = crate::equipment_ui::hotbar_with_spells(ctx,&account,true,true,false,&spellbook);
+                            inventory.show(ctx,&account,player.health,&registry,&mut requests,&spellbook);
                         } else if panel == "hotbar" || panel == "hotbar_machine" {
-                            crate::equipment_ui::hotbar(ctx,&account,false,true,panel == "hotbar_machine");
+                            crate::equipment_ui::hotbar_with_spells(ctx,&account,false,true,panel == "hotbar_machine",&spellbook);
+                            if panel=="hotbar" {crate::equipment_ui::spell_hud(ctx,"Cow · 5 mana · Cooldown 0.8s",false);}
                         } else if panel == "crafting" || panel == "recipe_book" {
                             craft.draw(
                                 ctx,

@@ -9,6 +9,8 @@ mod npc_app;
 mod lore_books_app;
 #[path = "food_app.rs"]
 mod food_app;
+#[path = "spell_app.rs"]
+mod spell_app;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use crate::transport::{Peer, Transport, JoinTarget};
@@ -715,6 +717,8 @@ pub struct App {
     machine_feedback: crate::machine_feedback::Feedback,
     inventory_ready: bool,
     loot: crate::loot::Effects,
+    spell_fx: crate::spell_fx::Effects,
+    spell_network: crate::spell_network::State,
     mana_timer: f32,
     /// Position of the block the player is currently chipping away at with
     /// left-click, and hits landed on it so far -- reset whenever a click
@@ -764,6 +768,7 @@ impl App {
     fn crafting_save(&self) -> crate::save::CraftingSave {
         crate::save::CraftingSave {
             spellbook: self.scripting.spellbook.clone(),
+            creature_statuses: self.creatures.magic_statuses.clone(),
             starter_camp: self.world.starter_camp,
             chat_transcript: self.chat_transcript.clone(),
             npcs: self.npcs.clone(),
@@ -1392,6 +1397,8 @@ impl App {
             creatures.spawn_around(&world, spawn_pos, CREATURE_COUNT, world.seed);
         }
         creatures.restore_dragons(crafting_save.dragons);
+        let creature_ids:std::collections::HashSet<_>=creatures.snapshot_with_ids().iter().map(|c|c.0).collect();
+        creatures.magic_statuses=crafting_save.creature_statuses.into_iter().filter(|(id,s)|creature_ids.contains(id)&&s.valid()&&s.active()).collect();
         creatures.restore_fish(crafting_save.fish);
         creatures.wildlife.extend(crafting_save.wildlife);
         let weather = crafting_save.weather.unwrap_or_else(||WeatherState::new(world.seed));
@@ -1504,6 +1511,8 @@ impl App {
             machine_feedback: Default::default(),
             inventory_ready: false,
             loot: crate::loot::Effects::restore_machine(crafting_save.loot.unwrap_or(crafting_save.machine_loot)),
+            spell_fx: crate::spell_fx::Effects::default(),
+            spell_network: crate::spell_network::State::default(),
             mana_timer: 0.0,
             mining_target: None,
             mining_hits: 0,
@@ -1515,6 +1524,11 @@ impl App {
             water_time: 0.0,
         };
 
+        if matches!(app.net,NetRole::Host(_)) {
+            app.scripting.spellbook.sync_hotbar(&mut app.player.crafting);
+            let book=crate::spell_network::guest_book(&app.scripting.spellbook);
+            for account in app.guest_accounts.values_mut() {book.sync_hotbar(account);}
+        } else {app.player.crafting.known_spells.clear();}
         app.grab_cursor(true);
         crate::crafting::load_interaction_area(&mut app.world,app.player.position);
         app.initialize_adventure(launch.fresh);
@@ -2040,6 +2054,12 @@ impl App {
             use crate::equipment::{Entry,Action,Intent};
             let entry=self.player.crafting.hotbar.entry();
             if self.input.left_clicked || self.input.right_clicked {
+                if let Some(Entry::Spell(id))=entry {
+                    if self.input.left_clicked {
+                        self.cast_remembered_spell(id);
+                        self.toasts.push(Toast::new(self.ui.spellbook.feedback.clone()));
+                    }
+                } else {
                 let action=if self.input.right_clicked {Action::Place} else {match entry {Some(Entry::Resource(_))=>Action::Place,Some(Entry::Gear(g)) if g.weapon().is_some()=>Action::Attack,_=>Action::Mine}};
                 let intent=Intent{hotbar:self.player.crafting.hotbar.clone(),item:entry,target:raycast(&self.world,self.camera.eye_position(),self.camera.forward(),REACH).map(|h|h.target),direction:self.camera.forward().to_array(),action};
                 if entry.is_none() || entry.is_some_and(|e|e.count(&self.player.crafting)>0) {
@@ -2050,6 +2070,7 @@ impl App {
                 }
                 if let NetRole::Joined(client)=&mut self.net {client.reliable.send(&client.socket,client.server_addr,ReliableMsg::ItemAction(intent));}
                 else {self.perform_item_action(None,intent);}
+                }
             }
         }
 
@@ -2237,6 +2258,7 @@ impl App {
             if changed {self.sync_guest_mana();}
         }
         self.loot.update(dt,matches!(self.net,NetRole::Host(_)));
+        self.spell_fx.update(dt);
         for (cell,cue) in self.machine_feedback.update(&self.world.automation,dt,self.camera.eye_position()) {
             self.audio.play_machine(crate::automation::center(cell),cue);
         }
@@ -2281,6 +2303,7 @@ impl App {
             }
         }
         mesh.extend(self.loot.mesh(|pos|{let cell=chunk_of(pos);crate::visibility::within_terrain_range(cell,center,RENDER_RADIUS)&&self.chunk_meshes.contains_key(&cell)}));
+        mesh.extend(self.spell_fx.mesh(|pos|{let cell=chunk_of(pos);crate::visibility::within_terrain_range(cell,center,RENDER_RADIUS)&&self.chunk_meshes.contains_key(&cell)}));
         let books=crate::lore_books::nearby(&self.world,self.player.position).into_iter().filter(|b|self.chunk_meshes.contains_key(&chunk_of(b.pos))).collect::<Vec<_>>();
         mesh.extend(crate::lore_books::mesh(&books,self.water_time));
         let remote_players = match &self.net {
@@ -2369,6 +2392,7 @@ impl App {
         let spellbook_was_open=self.ui.spellbook.open;
         let map_was_open=self.ui.map.open;
         let automation_was_open=self.ui.automation.open;
+        self.update_spell_hud();
         let (full_output, requests) = self.ui.draw(
             &self.window,
             self.console_open,
@@ -2403,7 +2427,7 @@ impl App {
                 let result=self.scripting.modules.get(index).ok_or_else(||"Spell no longer exists".to_string())
                     .and_then(|module|self.scripting.spellbook.remember(module,&self.local_nickname));
                 match result {
-                    Ok(id)=>{self.ui.spellbook.selected=Some(id);self.ui.spellbook.open=true;
+                    Ok(id)=>{self.publish_spell_catalog();self.ui.spellbook.selected=Some(id);self.ui.spellbook.open=true;
                         self.console_open=false;self.ui.spellbook.feedback="Remembered. Save the world with F5 to keep this spell.".into();self.sync_settings_input();}
                     Err(error)=>self.notify_important(error),
                 }
@@ -3170,6 +3194,7 @@ impl App {
         } else { HOST_PLAYER_ID };
         let Some(caster) = players.iter().find(|player| player.id == caster_id) else { return; };
         let caster_resources = caster.resources;
+        let cast_eye=caster.pos+Vec3::Y*1.62;
         // Stage 1A uses the host's current aim. Guest proposals retain their
         // original untargeted execution until guest cast requests are implemented.
         let target_context = if caster_id == HOST_PLAYER_ID {
@@ -3208,6 +3233,14 @@ impl App {
         ) };
         self.apply_tick_outcome(outcome);
         if self.scripting.cast_succeeded(index, caster_id) {
+            let direction=if caster_id==HOST_PLAYER_ID {self.camera.forward()} else {Vec3::Z};
+            let origin=cast_eye+direction*0.6-Vec3::Y*0.3;
+            let target=target_context.map_or(cast_eye+direction*3.,|c|c.hit_position);
+            self.spell_fx.cast(origin,target);
+            if let NetRole::Host(host)=&mut self.net {
+                for &peer in host.clients.keys() {host.reliable.send(&host.socket,peer,ReliableMsg::SpellCastFx {origin:origin.to_array(),target:target.to_array()});}
+            }
+            if caster_id==HOST_PLAYER_ID {self.use_animation=0.28;}
             self.notify_all(format!("Host requested cast '{name}'"));
         } else {
             let account = if let Some(key)=caster_account {self.guest_accounts.get_mut(&key).unwrap()} else {&mut self.player.crafting};
@@ -3219,8 +3252,14 @@ impl App {
 
     fn spellbook_action(&mut self,action:crate::spellbook_ui::Action) {
         use crate::spellbook_ui::Action;
+        if let Action::Cast(id)=action {self.cast_remembered_spell(id);return;}
         if !matches!(self.net,NetRole::Host(_)) {return;}
         let result=match action {
+            Action::AllowGuests(id,allowed)=>self.scripting.spellbook.spells.iter_mut().find(|s|s.id==id)
+                .ok_or_else(||"Spell no longer exists".to_string()).and_then(|s|{
+                    s.revision=s.revision.checked_add(1).ok_or("Spell revision exhausted")?;
+                    s.allow_guests=allowed;Ok("Guest casting permission updated. Save with F5.".into())
+                }),
             Action::Update(id,name,target)=>self.scripting.spellbook.update(id,name,target)
                 .map(|()|"Spell updated. Save the world with F5.".to_string()),
             Action::Duplicate(id)=>self.scripting.spellbook.duplicate(id).map(|new_id|{
@@ -3233,9 +3272,13 @@ impl App {
             Action::Cast(id)=>{self.cast_remembered_spell(id);return;}
         };
         self.ui.spellbook.feedback=result.unwrap_or_else(|error|error);
+        self.publish_spell_catalog();
     }
 
     fn cast_remembered_spell(&mut self,id:crate::spellbook::SpellId) {
+        if !matches!(self.net,NetRole::Host(_)) {
+            self.request_guest_spell(id);return;
+        }
         let result=(||->Result<(usize,crate::spellbook::Spell),String>{
             if !self.scripting.can_cast_immediately() {return Err("Rules are busy; try again. No mana spent.".into());}
             let spell=self.scripting.spellbook.get(id).ok_or("Spell no longer exists")?.clone();
@@ -3433,6 +3476,8 @@ impl App {
                         let account = self.guest_accounts.entry(key).or_default().clone();
                         host.reliable.send(&host.socket, from, ReliableMsg::CraftRegistry((*self.crafting_registry).clone()));
                         host.reliable.send(&host.socket, from, ReliableMsg::CraftState { account, feedback: None });
+                        self.spell_network.peers.insert(from,crate::spell_network::Session::new((random_world_seed() as u64)<<32 | random_world_seed() as u64));
+                        self.publish_spell_catalog();
                         log::info!("Player {player_id} ('{nickname}') joined from {from}");
                         self.notify_all(format!("{nickname} joined"));
                     }
@@ -3449,6 +3494,7 @@ impl App {
                         self.handle_crafting_request(from, revision, action);
                     }
                     ReliableMsg::Hotbar(hotbar)=>self.handle_remote_hotbar(from,hotbar),
+                    ReliableMsg::CastSpell(request)=>self.handle_guest_spell(from,request),
                     ReliableMsg::ItemAction(intent)=>self.perform_item_action(Some(from),intent),
                     ReliableMsg::AutomationAction(action)=>self.perform_automation(Some(from),action),
                     ReliableMsg::CampAction(action)=>self.perform_camp_action(Some(from),action),
@@ -3620,6 +3666,19 @@ impl App {
                     }
                     ReliableMsg::RecipeBookResult(result) => {
                         match result {Ok(kind)=>self.open_recipe_book(kind),Err(e)=>self.toasts.push(Toast::new(e))}
+                    }
+                    ReliableMsg::SpellCastFx {origin,target} => {
+                        self.spell_fx.cast(Vec3::from_array(origin),Vec3::from_array(target));
+                    }
+                    ReliableMsg::SpellCatalog {session,revision,spells} => {self.receive_spell_catalog(session,revision,spells);}
+                    ReliableMsg::SpellResult {session,sequence,spell,remaining,message} => {
+                        if self.spell_network.session==Some(session) && self.spell_network.pending==Some((sequence,spell)) {
+                            self.spell_network.pending=None;
+                            if remaining.is_finite() && (0.0..=1.5).contains(&remaining) {
+                                self.spell_network.ready_at.insert(spell,Instant::now()+Duration::from_secs_f32(remaining));
+                            }
+                            self.ui.spellbook.feedback=message.clone();self.toasts.push(Toast::new(message));
+                        }
                     }
                     ReliableMsg::LootCollected(contents) => {
                         self.audio.play_loot();

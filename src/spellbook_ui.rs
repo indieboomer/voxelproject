@@ -5,6 +5,7 @@ pub enum Action {
     Duplicate(SpellId),
     Delete(SpellId),
     Cast(SpellId),
+    AllowGuests(SpellId,bool),
 }
 #[derive(Default)]
 pub struct Panel {
@@ -32,8 +33,8 @@ impl Panel {
         egui::Window::new("Spellbook").open(&mut open).default_width(720.0)
             .max_height(ctx.screen_rect().height()*0.8).vscroll(true)
             .show(ctx,|ui| {
-                ui.label("Remember a generated spell from the Rules panel, then manage it here.");
-                if !is_host {ui.label("Only the host can manage remembered spells in this world.");return;}
+                if is_host {ui.label("Remember a generated spell from the Rules panel, then manage it here.");}
+                if !is_host {ui.label("Spells shared by the host. You can inspect, assign and cast them; the host manages their definitions.");}
                 ui.horizontal(|ui|{ui.label("Search");ui.text_edit_singleline(&mut self.search);});
                 let query=self.search.to_lowercase();
                 egui::ScrollArea::vertical().id_source("spell_list").max_height(190.0).show(ui,|ui| {
@@ -61,8 +62,8 @@ impl Panel {
                     });ui.label(&spell.description);
                     ui.horizontal_wrapped(|ui|{
                         if ui.add_enabled(spell.ready(),egui::Button::new("Cast at current aim")).clicked(){action=Some(Action::Cast(spell.id));}
-                        if ui.button("Duplicate").clicked(){action=Some(Action::Duplicate(spell.id));}
-                        if ui.button("Delete").clicked(){action=Some(Action::Delete(spell.id));}
+                        if ui.add_enabled(is_host,egui::Button::new("Duplicate")).clicked(){action=Some(Action::Duplicate(spell.id));}
+                        if ui.add_enabled(is_host,egui::Button::new("Delete")).clicked(){action=Some(Action::Delete(spell.id));}
                     });
                     ui.small("Aim before opening the book. Casting spends mana and affects the world.");
                     ui.label(format!("Target: {}  |  Range: {} blocks  |  Cost: {} mana  |  Cooldown: {} s",
@@ -72,6 +73,9 @@ impl Panel {
                         Validation::Ready{..}=>{ui.colored_label(egui::Color32::LIGHT_GREEN,"Compatible with this game. Review the effect before casting.");}
                         Validation::Review{reason}=>{ui.colored_label(egui::Color32::LIGHT_RED,reason);}
                     }
+                    if is_host {
+                    let mut allowed=spell.allow_guests;
+                    if ui.checkbox(&mut allowed,"Allow guests to cast this spell").on_hover_text("Guests can execute this saved code with its normal World API capabilities. The host validates each cast and charges the caster's mana.").changed() {action=Some(Action::AllowGuests(spell.id,allowed));}
                     ui.horizontal(|ui|{ui.label("Name");ui.text_edit_singleline(&mut self.name);});
                     egui::ComboBox::from_id_source("spell_target_requirement").selected_text(self.target.label()).show_ui(ui,|ui|{
                         for target in [TargetRequirement::Optional,TargetRequirement::Creature,TargetRequirement::Block] {
@@ -89,9 +93,10 @@ impl Panel {
                         ui.add(egui::Label::new(egui::RichText::new(&spell.source).monospace()).wrap(true));
                         if let Some(plan)=&spell.interpretation {ui.label(plan.to_string());}
                     });
+                    }
                 }
                 if !self.feedback.is_empty(){ui.separator();ui.label(&self.feedback);}
-                ui.small("Save your world with F5 to keep changes.");
+                ui.small(if is_host {"Save your world with F5 to keep changes."} else {"The host saves shared spells and your hotbar assignments."});
             });
         self.open = open;
         action

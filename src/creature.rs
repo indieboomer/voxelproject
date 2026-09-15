@@ -2,6 +2,8 @@ use glam::Vec3;
 
 #[path = "creature_collision.rs"]
 mod collision;
+#[path = "creature_magic.rs"]
+pub(crate) mod magic;
 
 #[path = "dragon.rs"]
 mod dragon;
@@ -654,6 +656,7 @@ pub struct Creatures {
     pub behaviors: std::collections::BTreeMap<u32, CreatureBehavior>,
     pub combat_deaths: Vec<DeathEvent>,
     pub attack_policies: std::collections::BTreeMap<(u64, u64), Vec<AttackPolicy>>,
+    pub magic_statuses: std::collections::BTreeMap<u32,magic::Status>,
 }
 
 #[path = "wildlife.rs"]
@@ -663,6 +666,7 @@ mod wildlife;
 /// mutation occurs until commit, so discarded drafts also preserve AI,
 /// animation, entity IDs, and the spawn sequence without cloning the ECS.
 pub(crate) struct CreatureDraft {
+    pub magic_statuses: std::collections::BTreeMap<u32,magic::Status>,
     dragon_homes: Vec<Vec3>,
     pub snapshot: Vec<(u32, u8, [f32; 3], f32, f32)>,
     next_id: u32,
@@ -671,6 +675,8 @@ pub(crate) struct CreatureDraft {
 }
 
 enum CreatureCommand {
+    Status(u32,magic::Status),
+    Move(u32,Vec3),
     Spawn(u32, CreatureKind, Vec3, u64),
     Chase(u32, Vec3),
     Behavior(u32, CreatureBehavior),
@@ -688,7 +694,7 @@ impl CreatureDraft {
         let mut snapshot = creatures.snapshot_with_ids();
         snapshot.sort_by_key(|entry| entry.0);
         let dragon_homes = creatures.ecs.query::<&dragon::Dragon>().iter().map(|(_, d)| d.home).collect();
-        Self { snapshot, next_id: creatures.next_id, commands: Vec::new(), behaviors: creatures.behaviors.clone(), dragon_homes }
+        Self { snapshot, next_id: creatures.next_id, commands: Vec::new(), behaviors: creatures.behaviors.clone(), dragon_homes, magic_statuses:creatures.magic_statuses.clone() }
     }
 
     pub fn spawn(&mut self, kind: CreatureKind, pos: Vec3, seed: u64) -> Option<u32> {
@@ -760,6 +766,10 @@ impl CreatureDraft {
     pub fn commit(self, creatures: &mut Creatures) {
         for command in self.commands {
             match command {
+                CreatureCommand::Status(id,status)=>{creatures.magic_statuses.insert(id,status);}
+                CreatureCommand::Move(id,destination)=>{
+                    for (_, (cid,pos)) in creatures.ecs.query_mut::<(&CreatureId,&mut Pos)>() {if cid.0==id {pos.0=destination;}}
+                }
                 CreatureCommand::Spawn(id, kind, pos, seed) => {
                     let actual = creatures.spawn_one(kind, pos, seed);
                     debug_assert_eq!(actual, id, "callbacks commit before simulation advances");
@@ -805,6 +815,7 @@ impl Creatures {
             combat_deaths: Vec::new(),
             player_kills: Vec::new(),
             attack_policies: Default::default(),
+            magic_statuses: Default::default(),
         }
     }
 
@@ -968,6 +979,9 @@ impl Creatures {
                 Option<&mut fish::Fish>,
             )>()
         {
+            let rate=self.magic_statuses.get(&cid.0).map_or(1.,|s|s.rate());
+            if rate==0. {continue;}
+            let dt=dt*rate;
             if let Some(fish) = fish {
                 let state = self.behaviors.get(&cid.0).unwrap();
                 let target = state.target.and_then(|target| match target {
@@ -1176,6 +1190,10 @@ impl Creatures {
             }
         }
 
+        self.magic_statuses.retain(|id,status| {
+            status.tick(dt);
+            status.active() && targets.iter().any(|c|c.0==*id)
+        });
         self.separate_bodies(world, collision_players);
         for (id, amount) in creature_hits {
             if let Some(death) = self.damage(id, amount) { self.combat_deaths.push(death); }

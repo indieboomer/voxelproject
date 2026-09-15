@@ -59,6 +59,7 @@ pub(super) fn populate<'lua,'scope>(_lua: &'lua Lua, scope: &mlua::Scope<'lua,'s
         Ok(a.hotbar.entry().filter(|entry|entry.count(&a)>0).map(|entry|match entry {
             crate::equipment::Entry::Resource(block)=>block.id().to_string(),
             crate::equipment::Entry::Gear(gear)=>gear.id(),
+            crate::equipment::Entry::Spell(id)=>format!("spell:{id}"),
         }))
     })?)?;
     api.set("get_element_count",scope.create_function(move |_,(id,name):(PlayerId,String)|Ok(element(&name).and_then(|e|tx.inventory(id).map(|a|a.elements[e.index()]))))?)?;

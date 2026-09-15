@@ -18,7 +18,7 @@
 # (air, mud, redstone, crystal, campfire), so it can't drift out of sync with the
 # actual block system the way a third hand-copied list would.
 
-version: "1.34.0"
+version: "1.36.0"
 title: World API
 description: >
   The Lua API exposed to sandboxed rule modules as the `api` table passed
@@ -496,7 +496,7 @@ methods:
   - name: get_creature
     namespace: world
     category: query
-    summary: "Direct lookup by creature ID, including creatures spawned, healed or damaged in this callback."
+    summary: "Direct lookup by creature ID, including creatures spawned, healed, damaged or pushed in this callback. Includes slow_seconds and stun_seconds (remaining durations, zero when inactive)."
     params: [{name: creature_id, type: integer}]
     returns: {type: "CreatureSnapshot | nil", desc: "Detached snapshot; nil if missing or dead."}
     errors: []
@@ -510,6 +510,24 @@ methods:
     returns: {type: boolean, desc: "False for missing/dead creatures or negative amounts."}
     errors: []
     since: "1.33.0"
+
+  - name: apply_creature_status
+    namespace: world
+    category: action
+    summary: "Apply a temporary creature status: slow halves movement and action speed; stun pauses movement and actions. Duration is 0–30 seconds of host simulation time; 0 clears that status. Reapplication replaces the remaining duration, statuses do not multiply, and stun takes precedence over slow. Remaining durations save with creatures; effects expire automatically. Changes are transactional."
+    params: [{name: creature_id, type: integer}, {name: status, type: string}, {name: seconds, type: number}]
+    returns: {type: boolean, desc: "False for missing creatures, unsupported status or out-of-range duration."}
+    errors: []
+    since: "1.36.0"
+
+  - name: push_creature
+    namespace: world
+    category: action
+    summary: "Displace a creature by dx/dy/dz, at most 8 blocks per call. Checks its body along the whole segment against loaded terrain and staged block edits; stops before obstacles. Returns false if no movement is possible, the ID is missing or displacement is invalid. Dragons are unsupported; fish remain in water. Normal host movement and body separation resume afterward. Transactional; get_creature sees the staged position. For pushing away, normalize target minus caster and multiply by the desired distance."
+    params: [{name: creature_id, type: integer}, {name: dx, type: number}, {name: dy, type: number}, {name: dz, type: number}]
+    returns: {type: boolean}
+    errors: []
+    since: "1.36.0"
 
   - name: get_block_kinds
     namespace: world
@@ -621,7 +639,7 @@ methods:
   - name: get_equipped_item
     namespace: world
     category: query
-    summary: "Read the selected resource/equipment ID, e.g. crystal or pickaxe. Returns nil for missing players, empty slots or depleted stacks; respects staged inventory changes. Crystals are ordinary held resources and emit no portable light. Torches occupy a separate left-hand slot, so this query continues to report the right-hand tool. Unlike carrying_crystal, this reflects the current selection and inventory."
+    summary: "Read the selected resource/equipment ID, e.g. crystal or pickaxe, or spell:<id> for an available remembered spell. Returns nil for missing players, empty slots, unavailable spells or depleted stacks; respects staged inventory changes. Crystals are ordinary held resources and emit no portable light. Torches occupy a separate left-hand slot, so this query continues to report the right-hand tool. Unlike carrying_crystal, this reflects the current selection and inventory."
     params:
       - {name: player_id, type: integer}
     returns: {type: "string | nil"}

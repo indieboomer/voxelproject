@@ -93,6 +93,7 @@ pub struct UiRequests {
 
 pub struct Ui {
     pub spellbook: crate::spellbook_ui::Panel,
+    pub spell_hud: Option<(String,bool)>,
     pub compass_yaw:f32,
     pub machine_compass:[Option<egui::Pos2>;5],
     pub journal: crate::adventure_ui::Journal,
@@ -142,6 +143,7 @@ impl Ui {
         let renderer = Renderer::new(device, output_format, None, 1);
         Self {
             spellbook: Default::default(),
+            spell_hud: None,
             pickup_rows:Vec::new(),
             journal: Default::default(),
             automation: Default::default(),
@@ -384,10 +386,15 @@ impl Ui {
             if self.last_hotbar!=Some((active,entry)) {
                 self.last_hotbar=Some((active,entry));self.selected_until=Instant::now()+Duration::from_secs(2);
             }
-            requests.select_slot=crate::equipment_ui::hotbar(ctx,&player.crafting,self.inventory_open,self.inventory_open || Instant::now()<self.selected_until,self.automation.tools_suspended());
+            requests.select_slot=crate::equipment_ui::hotbar_with_spells(ctx,&player.crafting,self.inventory_open,self.inventory_open || Instant::now()<self.selected_until,self.automation.tools_suspended(),&scripting.spellbook);
+            if !self.inventory_open && !self.automation.tools_suspended() {
+                if let Some((text,ready))=&self.spell_hud {
+                    crate::equipment_ui::spell_hud(ctx,text,*ready);
+                }
+            }
             if self.inventory_open {
                 self.inventory.feedback = crafting_ui.feedback.clone();
-                self.inventory.show(ctx, &player.crafting, player.health, registry, &mut requests);
+                self.inventory.show(ctx, &player.crafting, player.health, registry, &mut requests, &scripting.spellbook);
                 if requests.crafting.is_some() {
                     if crafting_ui.pending {requests.crafting=None;}
                     else {crafting_ui.pending=true;}

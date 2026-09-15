@@ -13,6 +13,7 @@ use crate::voxel::World;
 #[serde(default)]
 pub struct CraftingSave {
     pub spellbook: crate::spellbook::Spellbook,
+    pub creature_statuses: std::collections::BTreeMap<u32,crate::creature::magic::Status>,
     pub starter_camp: Option<(i32, i32, i32)>,
     /// Complete scrollback, independent of the bounded on-screen log.
     pub chat_transcript: Vec<String>,

@@ -52,12 +52,14 @@ impl Gear {
 pub enum Entry {
     Resource(BlockType),
     Gear(Gear),
+    Spell(crate::spellbook::SpellId),
 }
 impl Entry {
     pub fn name(self) -> &'static str {
         match self {
             Self::Resource(b) => b.name(),
             Self::Gear(g) => g.name(),
+            Self::Spell(_) => "Spell",
         }
     }
     pub fn count(self, account: &Account) -> u32 {
@@ -67,6 +69,7 @@ impl Entry {
                 .position(|v| *v == b)
                 .map_or(0, |i| account.resources[i]),
             Self::Gear(g) => if g.enabled() {account.gear[g as usize]}else{0},
+            Self::Spell(id) => u32::from(account.known_spells.contains(&id)),
         }
     }
     pub fn resource(self) -> Option<BlockType> {

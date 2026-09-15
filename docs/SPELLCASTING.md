@@ -6,14 +6,15 @@
 enchantments. Phase 1 can reuse the existing Lua sandbox, callback transactions,
 creature queries/healing/damage, block edits, inventory authority and cast fees.
 Stage 1B now stores a distinct saved spell definition alongside legacy module
-saves. Hotbar entries still contain only resource or equipment references.
+saves. Hotbar entries now also contain stable spell references.
 
 Keep implementation in the plan's order. Stage 1A establishes hand-written target
 semantics before generation depends on them. Stage 1B adds stable spell IDs,
 revisions, target requirements, mana/cooldown/range metadata, compatibility review,
-saved definitions and the dedicated Spellbook. Stage 1C can then add hotbar spell
+saved definitions and the dedicated Spellbook. Stage 1C adds hotbar spell
 references, host-validated guest requests, replay protection and targeting HUD.
-Stage 1D expands capabilities based on playable spell requirements.
+Stage 1D adds bounded temporary statuses and creature pushes; existing APIs cover
+healing/damage, block transforms, spawning, devices and inventory operations.
 
 Durable world identity/revisions need an explicit definition in those stages;
 a world seed or a module's list index is not a durable identity. A global revision
@@ -54,7 +55,7 @@ Target IDs are supplied at casting time, not embedded in the Lua source.
 Modules use normal rule-save persistence; adding starter files does not insert
 them into an existing saved world's module list.
 
-### Stage 1A scope
+### Original Stage 1A scope (historical)
 
 - The initial fixtures run through the Rules panel. Stage 1B below adds a
   Spellbook for these and generated instant spells; hotbar assignment is pending.
@@ -147,13 +148,60 @@ that execution module. It never leaves a second saved module or running rule.
 Lua globals reset between remembered casts. Cooldown timers are session-local;
 the configured duration is saved, but reopening a world starts ready.
 
-### Next stage and remaining checks
+### Stage 1C: hotbar and guest casting
 
-Stage 1C adds hotbar spell references, target/cooldown HUD, host-to-guest metadata
-delivery and permitted guest cast requests with replay protection. The Stage 1B
-book is host-managed; guests do not receive its definitions yet. Costs/range are
-saved but fixed to supported defaults in this stage. Source editing, natural-language
-revision and revision history are not added by rename or duplicate.
+The inventory now has an independent Spells column. Select a remembered spell,
+press 1–9 or click a hotbar slot, then close inventory and left-click with that
+slot selected. The Spellbook retains all its management and cast controls.
+Stable hotbar references save with accounts, follow renames and clear on deletion.
+Incompatible spells cannot be assigned or cast. Mana, cooldown and aim failures
+appear as gameplay toasts. Successful casts produce bounded, short-lived emissive
+particles, replicated from host to guests. Failed casts produce no particles.
+World API 1.36.0 reports an available selected spell as `spell:<id>` through
+`get_equipped_item`. Network protocol 41 requires matching game builds.
+
+The HUD shows target, cost, cooldown, invalid aim and pending-host status.
+In the host's Spellbook, enable **Allow guests to cast this spell**. New spells
+and duplicates default to private. Shared spells appear in guests' inventory and
+read-only Spellbook; guests can assign or cast them but cannot edit definitions.
+Revoking permission removes guest bindings. Permission and assignments save with
+the world. The grant permits the reviewed code's normal World API capabilities.
+
+Only bounded display metadata travels to guests; Lua stays on the host. Requests
+contain connection token, sequence, spell ID/revision, direction and expected target.
+The host derives caster identity and eye position, re-resolves aim, checks permission,
+health, mana, cooldown and scheduler readiness, then executes the saved definition.
+Repeated/out-of-order requests and previous-connection tokens cannot execute.
+Failed callbacks refund the fee; cooldown and particles start only on success.
+Guest cooldowns are per account/spell and survive reconnection within the session.
+They reset when reopening the world, like host cooldowns.
+
+Costs/range remain fixed at supported defaults (5 mana, 1.5 seconds, 18 blocks).
+Source editing, natural-language revision and revision history remain Phase 2 work.
+
+### Stage 1D: composable spell actions
+
+- `apply_creature_status(id, "slow" | "stun", seconds)` accepts 0–30 seconds.
+  Slow halves movement/action speed; stun pauses them. Reapplication replaces the
+  duration and 0 clears that status. Stun takes precedence; durations do not multiply.
+  Remaining duration saves with creatures and expires on host simulation time.
+- `push_creature(id, dx, dy, dz)` moves up to 8 blocks per call, checking the whole
+  body path against loaded terrain and staged block edits. It stops at obstacles.
+  Dragons are unsupported; fish must remain in water. Normal body separation and
+  movement resume afterward. Changes roll back with failed callbacks.
+- Existing heal/damage, block replacement, spawning, player teleport, device enable/
+  configuration, and give/take/craft/decompose APIs supply the other action categories.
+- New starter spells: `target_slow`, `target_stun`, `target_push`, `target_summon`,
+  and `target_device_toggle`. New worlds load these from `modules/`; existing saves
+  retain their module lists. Generate equivalent spells using the updated API docs.
+
+### Next: acceptance, then Phase 2A
+
+Verify a host and guest sharing a spell, casting at different targets, invalid casts,
+permission revocation, reconnect and save/reload in a live session. Automated checks
+cover the underlying paths; they do not replace this graphical multi-PC check.
+Phase 2A will attach persistent rules to durable creature/block/device references,
+save those relationships and define what happens when their targets disappear.
 
 The user reported successful generated casting (including killing a cow in front
 of the player) after Stage 1A. Automated checks and UI previews are separate evidence;
@@ -169,3 +217,24 @@ an end-to-end graphical save/reload and multi-PC acceptance session remains usef
 - The offscreen Spellbook preview passed and was inspected in Generic and Fantasy
   themes. Primary cast/duplicate/delete actions remain visible in the initial view.
 - Documentation links resolve and `git diff --check` passes.
+
+### Inventory/hotbar validation (2026-09-15)
+
+- Direct suite: 546 passed, 24 opt-in tests ignored before the final equipped-spell regression.
+- Steam plus `dev-playtest`: 569 passed, 27 opt-in tests ignored, including that regression.
+- Regressions cover spell assignment permissions, keyboard assignment, save/reload,
+  rename/delete bindings, staged inventory queries, particle bounds and expiration.
+- Inventory previews inspected in Generic and Fantasy themes; particle scene rendered
+  on the GPU. Live gameplay and a multi-PC session were not run for this change.
+
+### Stage 1C/1D validation (2026-09-15)
+
+- Steam plus `dev-playtest`: **577 passed**, 27 opt-in tests ignored.
+- Direct: 553 passed before the final two reference-spell regressions; all seven
+  targeted tests then passed, including guest slow/stun/push/summon and device casting.
+- Tests cover metadata packet bounds, permissions and revocation, stale spell revisions,
+  changed/obstructed targets, invalid directions, repeated/reordered requests and old
+  connection tokens, rate limits, staged terrain collision, rollback, status expiry,
+  slowdown behavior and saved remaining durations.
+- Host and guest Spellbook and casting-HUD GPU previews passed in Generic and Fantasy
+  themes. A live host/guest game session remains an acceptance task.
