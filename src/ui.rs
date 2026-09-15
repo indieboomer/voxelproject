@@ -69,6 +69,8 @@ pub struct UiRequests {
     pub remember_index: Option<usize>,
     pub spellbook_action: Option<crate::spellbook_ui::Action>,
     pub open_spellbook: bool,
+    pub attach_rule:Option<usize>,
+    pub detach_rule:Option<usize>,
     pub eat_food: Option<crate::voxel::BlockType>,
     pub camp_action: Option<crate::adventure::Action>,
     pub quest_action: Option<crate::quests::Action>,
@@ -94,6 +96,9 @@ pub struct UiRequests {
 pub struct Ui {
     pub spellbook: crate::spellbook_ui::Panel,
     pub spell_hud: Option<(String,bool)>,
+    pub aimed_object:String,
+    pub aimed_enchantments:Vec<String>,
+    pub attach_generation:bool,
     pub compass_yaw:f32,
     pub machine_compass:[Option<egui::Pos2>;5],
     pub journal: crate::adventure_ui::Journal,
@@ -144,6 +149,7 @@ impl Ui {
         Self {
             spellbook: Default::default(),
             spell_hud: None,
+            aimed_object:String::new(),aimed_enchantments:Vec::new(),attach_generation:false,
             pickup_rows:Vec::new(),
             journal: Default::default(),
             automation: Default::default(),
@@ -301,6 +307,7 @@ impl Ui {
             status_hud(ctx,player,fps);
             if !console_open && !chat_open && !quit_dialog_open && !crafting_ui.open && !self.inventory_open && !self.automation.open {
                 self.journal.hud(ctx,player,self.map.waypoint);
+                crate::enchantment::hud(ctx,&self.aimed_object,&self.aimed_enchantments);
             }
 
             egui::Window::new("Rules")
@@ -314,6 +321,11 @@ impl Ui {
                 .collapsible(true)
                 .show(ctx, |ui| {
                     if ui.button("Spellbook (K)").clicked() {requests.open_spellbook=true;}
+                    if !self.aimed_object.is_empty() {
+                        ui.strong(format!("Target: {}",self.aimed_object));
+                        if is_host {ui.small("Attach stops callbacks on target loss. Previous changes remain; packing ends device attachments.");}
+                        for text in &self.aimed_enchantments {ui.small(text);}
+                    }
                     if scripting.modules.is_empty() {
                         ui.label("No rules or spells loaded. Press ~ to describe one.");
                     }
@@ -347,8 +359,11 @@ impl Ui {
                                         requests.run_index = Some(i);
                                     }
                                 } else {
+                                    if m.attachment.is_none() {
+                                        if ui.small_button("Attach + enable").clicked() {requests.attach_rule=Some(i);}
+                                    }else if ui.small_button("Detach").clicked() {requests.detach_rule=Some(i);}
                                     let label = if m.enabled { "Disable" } else { "Enable" };
-                                    if ui.small_button(label).clicked() {
+                                    if ui.add_enabled(m.attachment_candidate.is_none(),egui::Button::new(label).small()).clicked() {
                                         requests.toggle_index = Some(i);
                                     }
                                 }
@@ -357,6 +372,11 @@ impl Ui {
                                 }
                             }
                         });
+                        if let Some(binding)=&m.attachment {
+                            ui.small(format!("Attached to {} · {}",binding.target.label(),binding.lost.as_deref().unwrap_or("Stops if target disappears; prior changes remain")));
+                        }else if let Some(target)=&m.attachment_candidate {
+                            ui.small(format!("Review attachment to {}. Stops on target loss; prior changes remain.",target.label()));
+                        }
                         // Spell it out for something that just came out of
                         // generation -- easy to miss otherwise, since the
                         // toast announcing it fades after a few seconds. A
@@ -371,7 +391,7 @@ impl Ui {
                             } else if !m.enabled {
                                 ui.colored_label(
                                     IMPORTANT_TOAST_COLOR,
-                                    "New -- click Enable above to activate it",
+                                    if m.attachment_candidate.is_some() {"New -- review the target, then Attach + enable"}else{"New -- click Enable above to activate it"},
                                 );
                             }
                         }
@@ -509,6 +529,13 @@ impl Ui {
                         ui.set_min_width(420.0);
                         if can_prompt {
                             ui.label("Describe a rule, or an instant action, then press Enter:");
+                            if is_host {
+                                ui.checkbox(&mut self.attach_generation,"Persistent rule attached to the aimed object");
+                                if self.attach_generation {
+                                    ui.strong(format!("Target: {}",if self.aimed_object.is_empty(){"Aim at a creature, block or device"}else{&self.aimed_object}));
+                                    ui.small("Review code, then Attach + enable in Rules. Target loss stops callbacks; existing world changes remain. Packing ends device attachments.");
+                                }
+                            }
                             ui.small(format!("New rule: {} mana on successful creation. Instant: {} mana per successful cast. Failed generation/casts are free.",registry.mana_charge(crate::crafting::RULE_MANA),registry.mana_charge(crate::crafting::INSTANT_MANA)));
                             if !is_host { ui.small("Generated on this device; sent to the host for review and activation."); }
                             let response = ui.text_edit_singleline(prompt_input);

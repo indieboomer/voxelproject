@@ -11,6 +11,8 @@ mod lore_books_app;
 mod food_app;
 #[path = "spell_app.rs"]
 mod spell_app;
+#[path = "enchantment_app.rs"]
+mod enchantment_app;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use crate::transport::{Peer, Transport, JoinTarget};
@@ -719,6 +721,10 @@ pub struct App {
     loot: crate::loot::Effects,
     spell_fx: crate::spell_fx::Effects,
     spell_network: crate::spell_network::State,
+    generation_attachment:Option<crate::enchantment::Reference>,
+    enchantment_summaries:Vec<crate::enchantment::Summary>,
+    enchantment_revision:u64,
+    generation_original_prompt:Option<String>,
     mana_timer: f32,
     /// Position of the block the player is currently chipping away at with
     /// left-click, and hits landed on it so far -- reset whenever a click
@@ -767,6 +773,9 @@ impl App {
     }
     fn crafting_save(&self) -> crate::save::CraftingSave {
         crate::save::CraftingSave {
+            world_identity:self.world.identity.clone(),
+            creature_next_id:self.creatures.next_identity(),
+            enchantments:self.scripting.save_enchantments(),
             spellbook: self.scripting.spellbook.clone(),
             creature_statuses: self.creatures.magic_statuses.clone(),
             starter_camp: self.world.starter_camp,
@@ -1275,7 +1284,7 @@ impl App {
 
         let mut crafting_save = crate::save::CraftingSave::default();
         let (
-            world,
+            mut world,
             spawn_pos,
             yaw,
             pitch,
@@ -1397,6 +1406,16 @@ impl App {
             creatures.spawn_around(&world, spawn_pos, CREATURE_COUNT, world.seed);
         }
         creatures.restore_dragons(crafting_save.dragons);
+        creatures.reserve_identities(crafting_save.creature_next_id);
+        if matches!(net,NetRole::Host(_)) {
+            world.identity=std::mem::take(&mut crafting_save.world_identity);
+            world.automation.ensure_device_ids();
+            for saved in &crafting_save.enchantments {
+                world.identity.next_creation=world.identity.next_creation.max(saved.binding.id.saturating_add(1));
+                if let crate::enchantment::Object::Creature{id,..}=saved.binding.target.object {creatures.reserve_identities(id.saturating_add(1));}
+            }
+            scripting.load_enchantments(std::mem::take(&mut crafting_save.enchantments));
+        }
         let creature_ids:std::collections::HashSet<_>=creatures.snapshot_with_ids().iter().map(|c|c.0).collect();
         creatures.magic_statuses=crafting_save.creature_statuses.into_iter().filter(|(id,s)|creature_ids.contains(id)&&s.valid()&&s.active()).collect();
         creatures.restore_fish(crafting_save.fish);
@@ -1513,6 +1532,8 @@ impl App {
             loot: crate::loot::Effects::restore_machine(crafting_save.loot.unwrap_or(crafting_save.machine_loot)),
             spell_fx: crate::spell_fx::Effects::default(),
             spell_network: crate::spell_network::State::default(),
+            generation_attachment:None,enchantment_summaries:Vec::new(),
+            enchantment_revision:0,generation_original_prompt:None,
             mana_timer: 0.0,
             mining_target: None,
             mining_hits: 0,
@@ -2392,6 +2413,7 @@ impl App {
         let spellbook_was_open=self.ui.spellbook.open;
         let map_was_open=self.ui.map.open;
         let automation_was_open=self.ui.automation.open;
+        self.update_enchantment_view();
         self.update_spell_hud();
         let (full_output, requests) = self.ui.draw(
             &self.window,
@@ -2434,6 +2456,8 @@ impl App {
             }
         }
         if let Some(action)=requests.spellbook_action {self.spellbook_action(action);}
+        if let Some(index)=requests.attach_rule {self.attach_rule(index);}
+        if let Some(index)=requests.detach_rule {self.detach_rule(index);}
         if map_was_open!=self.ui.map.open {self.sync_settings_input();}
         if automation_was_open!=self.ui.automation.open {self.sync_settings_input();}
         if let Some(action)=requests.automation {self.submit_automation(action);}
@@ -2654,15 +2678,30 @@ impl App {
         // hard requirement -- it just tells the model which contract to
         // write; `poll_generation` validates the generated contract
         // after at most one corrective retry.
-        let kind = classify_prompt(&user_request);
+        self.generation_attachment=None;
+        self.generation_original_prompt=None;
+        if self.ui.attach_generation && matches!(self.net,NetRole::Host(_)) {
+            match self.capture_enchantment_target() {
+                Ok(target)=>{self.generation_attachment=Some(target);self.generation_original_prompt=Some(user_request.clone());},
+                Err(error)=>{self.notify_important(error);return;}
+            }
+        }
+        let kind = if self.generation_attachment.is_some() {PromptKind::Rule}else{classify_prompt(&user_request)};
+        let user_request=if let Some(target)=&self.generation_attachment {
+            format!("{user_request}\n[BOUND_OBJECT_RULE] Persistent single-object rule for {}. Use api.get_rule_target() in on_tick to read the bound target and creator_id; do not hard-code IDs or coordinates. If there is no bound target, return. The engine stops the rule when this object disappears or is replaced.",target.label())
+        }else{user_request};
+        if user_request.len()>crate::rule_sharing::MAX_PROMPT_BYTES {
+            self.notify_important("Shorten this prompt slightly to leave room for the attachment context.".into());return;
+        }
         if kind == PromptKind::Rule && self.player.crafting.mana < self.crafting_registry.mana_charge(crate::crafting::RULE_MANA) {
             self.notify_important(format!("Creating a rule requires {} mana. Mana recovers over time; convert elements in Crafting [C] to refill faster.",self.crafting_registry.mana_charge(crate::crafting::RULE_MANA)));
             return;
         }
         let noun = generation_noun(kind);
-        log::info!("Generating a {noun} from: {user_request}");
+        let displayed_request=self.generation_original_prompt.as_deref().unwrap_or(&user_request);
+        log::info!("Generating a {noun} from: {displayed_request}");
         if matches!(self.net, NetRole::Host(_)) {
-            self.notify_all(format!("Host is generating a {noun}: \"{user_request}\""));
+            self.notify_all(format!("Host is generating a {noun}: \"{displayed_request}\""));
         } else {
             self.notify_important(format!("Generating a {noun} locally for host review..."));
         }
@@ -2781,7 +2820,7 @@ impl App {
         let validation_issues = world_api_validate::validate_source(&code);
         let load_result = if validation_issues.is_empty() {
             let tagged_code = world_api_validate::tag_with_api_version(&code);
-            Module::load(name.clone(), user_request.clone(), tagged_code)
+            Module::load(name.clone(), self.generation_original_prompt.clone().unwrap_or_else(||user_request.clone()), tagged_code)
         } else {
             let joined = validation_issues
                 .iter()
@@ -2861,9 +2900,12 @@ impl App {
                     }
                 };
                 self.last_generated_index = Some(idx);
+                if !is_instant {self.scripting.modules[idx].attachment_candidate=self.generation_attachment.take();}
                 if !is_instant {self.player.crafting = charged;}
                 let (label, action) = if is_instant {
                     ("spell", "click Run to cast it")
+                } else if self.scripting.modules[idx].attachment_candidate.is_some() {
+                    ("attached rule", "review the target and click Attach + enable")
                 } else {
                     ("rule", "click Enable to activate it")
                 };
@@ -3478,6 +3520,7 @@ impl App {
                         host.reliable.send(&host.socket, from, ReliableMsg::CraftState { account, feedback: None });
                         self.spell_network.peers.insert(from,crate::spell_network::Session::new((random_world_seed() as u64)<<32 | random_world_seed() as u64));
                         self.publish_spell_catalog();
+                        self.send_enchantment_summaries(Some(from));
                         log::info!("Player {player_id} ('{nickname}') joined from {from}");
                         self.notify_all(format!("{nickname} joined"));
                     }
@@ -3671,6 +3714,7 @@ impl App {
                         self.spell_fx.cast(Vec3::from_array(origin),Vec3::from_array(target));
                     }
                     ReliableMsg::SpellCatalog {session,revision,spells} => {self.receive_spell_catalog(session,revision,spells);}
+                    ReliableMsg::Enchantments{revision,summaries}=>{if revision>self.enchantment_revision && summaries.len()<=crate::world_api_gen::SCRIPT_MODULES_MAX {self.enchantment_revision=revision;self.enchantment_summaries=summaries;}}
                     ReliableMsg::SpellResult {session,sequence,spell,remaining,message} => {
                         if self.spell_network.session==Some(session) && self.spell_network.pending==Some((sequence,spell)) {
                             self.spell_network.pending=None;

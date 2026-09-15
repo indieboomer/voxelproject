@@ -598,7 +598,10 @@ fn packing_and_failed_placement_preserve_inventory_and_progress() {
         &r,
     )
     .unwrap();
-    assert_eq!(s.devices[&p], original);
+    let mut replaced=s.devices[&p].clone();
+    assert_ne!(replaced.persistent_id,original.persistent_id);
+    replaced.persistent_id=original.persistent_id;
+    assert_eq!(replaced, original);
     assert!(account.packed_devices.is_empty());
 }
 

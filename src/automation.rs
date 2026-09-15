@@ -357,6 +357,8 @@ pub struct Batch {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Device {
+    #[serde(default)]
+    pub persistent_id: u64,
     /// Completed metal ingots, Death dissipation, and bound sheep production.
     #[serde(default)]
     pub quest_production: [u64; 3],
@@ -396,6 +398,7 @@ impl Device {
         }
         Self {
             quest_production: [0; 3],
+            persistent_id: 0,
             powered_ticks: 0,
             feedback_events: [0; 3],
             fuel_heat: 0,
@@ -486,6 +489,8 @@ impl Device {
 }
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct State {
+    #[serde(default)]
+    pub next_device_id: u64,
     pub tick: u64,
     #[serde(with = "device_map")]
     pub devices: BTreeMap<Cell, Device>,
@@ -586,6 +591,18 @@ pub fn validate_account(account: &Account, b: &Balance, recipes: &Registry) -> R
 }
 
 impl State {
+    pub fn ensure_device_ids(&mut self) {
+        self.next_device_id=self.next_device_id.max(1);
+        for d in self.devices.values() {self.next_device_id=self.next_device_id.max(d.persistent_id.saturating_add(1));}
+        let mut seen=std::collections::HashSet::new();
+        for d in self.devices.values_mut() {
+            if d.persistent_id==0 || !seen.insert(d.persistent_id) {
+                d.persistent_id=self.next_device_id;
+                self.next_device_id=self.next_device_id.saturating_add(1);
+                seen.insert(d.persistent_id);
+            }
+        }
+    }
     /// Multi-block props are stored once, at their base. Resolve any occupied voxel.
     pub fn device_at(&self, p: Cell) -> Option<&Device> {
         if !valid_cell(p) { return None; }
@@ -804,6 +821,9 @@ pub fn apply(
                     d }
             };
             device.cell = p;
+            next.ensure_device_ids();
+            device.persistent_id=next.next_device_id;
+            next.next_device_id=next.next_device_id.checked_add(1).ok_or("Device identity limit")?;
             device.rotation = *rotation;
             if matches!(device.kind, Kind::Chest | Kind::Smelter) {
                 device.last_ejection_tick = next.tick;

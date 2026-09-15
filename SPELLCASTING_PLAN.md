@@ -5,7 +5,9 @@
 > bounded temporary statuses and creature pushes. Existing APIs cover the other
 > Stage 1D action categories. Phase 1 still needs live multi-player acceptance.
 > [Implementation notes](docs/SPELLCASTING.md) track checks and limitations.
-> Next development phase: 2A, persistent single-object rules.
+> Stage 2A is implemented: saved creature/block/device attachments, target-loss
+> handling, host review and shared targeting labels. See [enchantments](docs/ENCHANTMENTS.md).
+> Next development phase: 2B, owned effects and composition. Live acceptance remains open.
 
 ## Goal
 

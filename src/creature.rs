@@ -797,6 +797,8 @@ impl CreatureDraft {
 }
 
 impl Creatures {
+    pub fn next_identity(&self)->u32 {self.next_id}
+    pub fn reserve_identities(&mut self,next:u32) {self.next_id=self.next_id.max(next);}
     pub fn new() -> Self {
         Self {
             start_protection: Default::default(),

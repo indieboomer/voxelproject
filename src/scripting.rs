@@ -231,6 +231,8 @@ pub struct ModuleSaveEntry {
 /// never leak into another's, and a crashed module can't corrupt the rest),
 /// with instruction/time/memory budgets enforced at the VM level.
 pub struct Module {
+    pub attachment: Option<crate::enchantment::Binding>,
+    pub attachment_candidate: Option<crate::enchantment::Reference>,
     pub name: String,
     pub prompt: String,
     pub source: String,
@@ -304,6 +306,7 @@ impl Module {
         });
 
         Ok(Module {
+            attachment:None,attachment_candidate:None,
             name,
             prompt,
             source,
@@ -331,6 +334,22 @@ impl Module {
     }
 
     fn execute(&mut self, input: &mut TickInput, event: Callback) -> mlua::Result<()> {
+        self.last_work=WorkUsage::default();
+        if let Some(binding)=&mut self.attachment {
+            let validity=if let Some(reason)=&binding.lost {Err(reason.clone())} else {binding.target.available(input.world,input.creatures)};
+            match validity {
+                Ok(false)=>{input.creatures.attack_policies.remove(&(self.runtime_id,self.activation_epoch));return Ok(());},
+                Ok(true)=>{},
+                Err(reason)=>{binding.lost=Some(reason.clone());input.creatures.attack_policies.remove(&(self.runtime_id,self.activation_epoch));return Err(mlua::Error::RuntimeError(reason));}
+            }
+            if let crate::enchantment::Object::Block{cell,material,..}=binding.target.object {
+                if input.block_edits.iter().any(|&(x,y,z,b)|(x,y,z)==cell && b!=material) {
+                    binding.lost=Some("Block was replaced by another callback".into());
+                    input.creatures.attack_policies.remove(&(self.runtime_id,self.activation_epoch));
+                    return Err(mlua::Error::RuntimeError(binding.lost.clone().unwrap()));
+                }
+            }
+        }
         let registry = self.lua.app_data_ref::<std::sync::Arc<crate::crafting::Registry>>().map(|r|r.clone()).unwrap_or_else(default_inventory_registry);
         self.last_work = WorkUsage::default();
         let initialization_work = if self.needs_reload {
@@ -349,11 +368,20 @@ impl Module {
             replacement.spawn_seed.set(seed);
             replacement.runtime_id = self.runtime_id;
             replacement.activation_epoch = self.activation_epoch;
+            replacement.attachment=self.attachment.clone();replacement.attachment_candidate=self.attachment_candidate.clone();
             *self = replacement;
         }
         self.lua.set_app_data(registry);
         let result = self.budget.run(|| {
             let mut tx = CallbackTransaction::new(input, self.spawn_seed.get());
+            tx.attachment=self.attachment.clone();
+            if let Some(binding)=&tx.attachment {
+                if let crate::enchantment::Object::Device{id,cell,kind}=binding.target.object {
+                    if !tx.automation.borrow().devices.get(&cell).is_some_and(|d|d.persistent_id==id&&d.kind==kind) {
+                        return Err(mlua::Error::RuntimeError("Attached device was removed by another callback".into()));
+                    }
+                }
+            }
             if matches!(event, Callback::Tick) { tx.policy_owner = Some((self.runtime_id, self.activation_epoch)); }
             api::call(&self.lua, &tx, event)?;
             Ok(tx)
@@ -644,6 +672,7 @@ fn random_offset_in_disk(seed: u64, radius: f32) -> (f32, f32) {
 /// (block edits replicate reliably, creature positions ride the existing
 /// snapshot broadcast).
 pub struct ScriptHost {
+    unloaded_enchantments:Vec<crate::enchantment::Saved>,
     pub spellbook: crate::spellbook::Spellbook,
     pub spell_cooldowns: std::collections::HashMap<crate::spellbook::SpellId,std::time::Instant>,
     pub inventory_registry: std::sync::Arc<crate::crafting::Registry>,
@@ -657,6 +686,7 @@ impl ScriptHost {
     pub fn new() -> Self {
         Self {
             spellbook: Default::default(),
+            unloaded_enchantments:Vec::new(),
             spell_cooldowns: Default::default(),
             inventory_registry: default_inventory_registry(),
             modules: Vec::new(),
@@ -891,9 +921,41 @@ impl ScriptHost {
     pub fn save_entries(&self) -> Vec<ModuleSaveEntry> {
         self.modules
             .iter()
+            .filter(|m|m.attachment.is_none())
             .map(Module::to_save_entry)
             .chain(self.unloaded_entries.iter().cloned())
             .collect()
+    }
+    pub fn save_enchantments(&self)->Vec<crate::enchantment::Saved> {
+        self.modules.iter().filter_map(|m|m.attachment.clone().map(|binding|crate::enchantment::Saved{binding,module:m.to_save_entry()}))
+            .chain(self.unloaded_enchantments.iter().cloned()).collect()
+    }
+    pub fn attach_at(&mut self,index:usize,binding:crate::enchantment::Binding)->Result<(),String> {
+        let old=self.modules.get(index).ok_or("Rule no longer exists")?;
+        if old.is_instant || old.attachment.is_some() {return Err("Choose an unattached continuous rule".into());}
+        let mut module=Module::load(old.name.clone(),old.prompt.clone(),old.source.clone())?;
+        self.scheduler.cancel(old.runtime_id);
+        module.attachment=Some(binding);module.enabled=true;self.modules[index]=module;Ok(())
+    }
+    pub fn detach_at(&mut self,index:usize) {
+        if let Some(module)=self.modules.get_mut(index) {
+            if module.attachment.take().is_some() {
+                module.enabled=false;module.attachment_candidate=None;module.needs_reload=true;
+                self.scheduler.cancel(module.runtime_id);
+            }
+        }
+    }
+    pub fn load_enchantments(&mut self,entries:Vec<crate::enchantment::Saved>) {
+        let mut ids=std::collections::HashSet::new();
+        for mut entry in entries {
+            if !ids.insert(entry.binding.id) || entry.binding.id==0 {entry.binding.lost=Some("Invalid duplicate creation ID".into());entry.module.enabled=false;}
+            if self.modules.len()>=crate::world_api_gen::SCRIPT_MODULES_MAX {self.unloaded_enchantments.push(entry);continue;}
+            let mut restored=Self::load_from_save(&[entry.module.clone()]);
+            if let Some(mut module)=restored.modules.pop() {
+                if module.is_instant {module.enabled=false;module.error=Some("Attachments require a continuous rule".into());}
+                module.attachment=Some(entry.binding);self.modules.push(module);
+            }else{self.unloaded_enchantments.push(entry);}
+        }
     }
 }
 

@@ -18,7 +18,7 @@
 # (air, mud, redstone, crystal, campfire), so it can't drift out of sync with the
 # actual block system the way a third hand-copied list would.
 
-version: "1.36.0"
+version: "1.37.0"
 title: World API
 description: >
   The Lua API exposed to sandboxed rule modules as the `api` table passed
@@ -492,6 +492,15 @@ methods:
     returns: {type: "PlayerSnapshot | nil", desc: "Detached snapshot; nil if missing."}
     errors: []
     since: "1.33.0"
+
+  - name: get_rule_target
+    namespace: world
+    category: query
+    summary: "Read this continuous rule's persistent single-object attachment, or nil for an unattached rule or a target removed earlier in this callback. Includes kind (creature/block/device), creation_id, creator_id, world_id and creation-time world_revision. Creature targets provide id, species and current x/y/z; block targets provide x/y/z and material; devices provide durable placement id, device_type and base x/y/z. Call this in on_tick instead of hard-coding a target ID. The host validates the binding before each callback. Lost/replaced targets disable the rule; unloaded block/device targets pause it. Prior world changes are not undone by detach."
+    params: []
+    returns: {type: "table | nil"}
+    errors: []
+    since: "1.37.0"
 
   - name: get_creature
     namespace: world

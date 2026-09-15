@@ -13,7 +13,7 @@ fn render_ui_previews() {
             .unwrap();
     let width = 1280;
     for (theme, name) in [(UiTheme::Generic, "generic"), (UiTheme::Fantasy, "fantasy")] {
-        for panel in ["settings", "crafting", "recipe_book", "resources", "hotbar", "hotbar_machine", "inventory", "food", "cooking", "chat", "automation", "chest", "map", "hud", "journal", "adventure", "recovery", "spellbook", "spellbook_guest"] {
+        for panel in ["settings", "crafting", "recipe_book", "resources", "hotbar", "hotbar_machine", "inventory", "food", "cooking", "chat", "automation", "chest", "map", "hud", "journal", "adventure", "recovery", "spellbook", "spellbook_guest", "enchantment"] {
             if std::env::var("UI_PREVIEW_PANEL").is_ok_and(|filter|filter!=panel) { continue; }
             let height = if panel == "resources" { 1024 } else { 720 };
             let ctx = egui::Context::default();
@@ -139,7 +139,10 @@ fn render_ui_previews() {
                             let p=egui::pos2(850.,320.);
                             crate::compass::machine(ctx,&[Some(p),Some(p+egui::vec2(-24.,-29.)),Some(p+egui::vec2(42.,-17.)),Some(p+egui::vec2(24.,29.)),Some(p+egui::vec2(-42.,17.))]);
                         }
-                        if matches!(panel,"spellbook"|"spellbook_guest") {spell_panel.draw(ctx,&spellbook,panel=="spellbook",false);}
+                        if panel=="enchantment" {
+                            crate::enchantment::hud(ctx,"Sheep #42 · 10/10 health",&["Crystal follower · Active".into(),"Rain ward · Disabled".into()]);
+                        }
+                        else if matches!(panel,"spellbook"|"spellbook_guest") {spell_panel.draw(ctx,&spellbook,panel=="spellbook",false);}
                         else if matches!(panel,"journal"|"cooking") {journal.draw(ctx,&player);}
                         else if panel == "adventure" || panel == "recovery" {
                             crate::ui::status_hud(ctx,&player,60.0);

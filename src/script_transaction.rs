@@ -4,6 +4,7 @@ use crate::creature::CreatureDraft;
 use std::collections::HashMap;
 
 pub(super) struct CallbackTransaction<'a> {
+    pub attachment:Option<crate::enchantment::Binding>,
     pub world: &'a World,
     pub automation: RefCell<crate::automation::State>,
     pub automation_changed: Cell<bool>,
@@ -37,6 +38,7 @@ impl<'a> CallbackTransaction<'a> {
             resources.insert(player.id, counts);
         }
         Self {
+            attachment:None,
             world: input.world,
             automation: RefCell::new(input.player_effects.iter().rev().find_map(|e|match e {
                 PlayerEffect::AutomationState{state}=>Some((**state).clone()),_=>None,

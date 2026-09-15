@@ -12,6 +12,7 @@ work. [Archived plans and reports](archive/README.md) retain historical material
 | Guide | Contents |
 | --- | --- |
 | [Spellcasting implementation](SPELLCASTING.md) | Targeted casts, persistent host Spellbook, validation and pending stages |
+| [Object enchantments](ENCHANTMENTS.md) | Persistent creature/block/device rules, attachment flow and target-loss behavior |
 | [Windows packaging](../PACKAGING.md) / [macOS](../macos/README.md) | Build and distribute playable bundles |
 | [Steam and Direct multiplayer](STEAM_MULTIPLAYER.md) | Hosting, joining, identity, compatibility and open manual checks |
 | [Crafting](CRAFTING.md) / [Resources](RESOURCES.md) | Ordered formulas, catalog, authoring and save behavior |

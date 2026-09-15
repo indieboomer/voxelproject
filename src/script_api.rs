@@ -123,6 +123,29 @@ fn populate_api<'lua, 'scope>(
     super::world_edit::populate(lua,scope,api,tx,block_budget)?;
     super::inventory::populate(lua,scope,api,tx)?;
     super::automation_api::populate(lua,scope,api,tx,block_budget)?;
+    api.set("get_rule_target",scope.create_function(move |lua,()| {
+        let Some(binding)=&tx.attachment else{return Ok(None);};
+        let t=lua.create_table()?;
+        t.set("creation_id",binding.id)?;t.set("creator_id",binding.creator)?;
+        t.set("world_id",binding.target.world_id.as_str())?;t.set("world_revision",binding.target.world_revision)?;
+        match binding.target.object {
+            crate::enchantment::Object::Creature{id,species}=>{
+                let c=tx.creatures.borrow();let Some(c)=c.snapshot.iter().find(|c|c.0==id&&c.1==species) else{return Ok(None);};
+                t.set("kind","creature")?;t.set("id",id)?;t.set("species",creature_kind_name(species))?;
+                t.set("x",c.2[0])?;t.set("y",c.2[1])?;t.set("z",c.2[2])?;
+            }
+            crate::enchantment::Object::Block{cell,material,..}=>{
+                if tx.get_block(cell.0,cell.1,cell.2)!=material {return Ok(None);}
+                t.set("kind","block")?;t.set("material",material.id())?;t.set("x",cell.0)?;t.set("y",cell.1)?;t.set("z",cell.2)?;
+            }
+            crate::enchantment::Object::Device{id,cell,kind}=>{
+                if !tx.automation.borrow().devices.get(&cell).is_some_and(|d|d.persistent_id==id) {return Ok(None);}
+                t.set("kind","device")?;t.set("id",id)?;t.set("device_type",kind.id())?;
+                t.set("x",cell.0)?;t.set("y",cell.1)?;t.set("z",cell.2)?;
+            }
+        }
+        Ok(Some(t))
+    })?)?;
     api.set("time_of_day", time_of_day)?;
     api.set("is_night", night)?;
     api.set("weather", weather_name)?;

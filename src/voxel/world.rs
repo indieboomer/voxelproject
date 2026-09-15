@@ -123,6 +123,7 @@ struct SurfaceResource { block: BlockType, habitat: &'static str, chance: f32, s
 const SURFACE_RESOURCES: &[SurfaceResource] = include!("resource_surface.rs");
 
 pub struct World {
+    pub identity: crate::enchantment::WorldIdentity,
     pub starter_camp: Option<(i32, i32, i32)>,
     pub(crate) cave_layouts: std::cell::RefCell<HashMap<(i32,i32),std::sync::Arc<crate::underground::Layout>>>,
     pub name: String,
@@ -143,6 +144,7 @@ pub struct World {
 impl World {
     pub fn new(seed: u32) -> Self {
         Self {
+            identity: Default::default(),
             starter_camp: None,
             seed,
             cave_layouts: Default::default(),            automation: Default::default(),
@@ -516,6 +518,7 @@ impl World {
             return;
         }
         let was = self.get_block(wx, wy, wz);
+        if was!=block {self.identity.block_changed((wx,wy,wz));}
         if was == BlockType::RedStone && block != BlockType::RedStone {
             self.redstone_positions.retain(|&p| p != (wx, wy, wz));
         } else if block == BlockType::RedStone && was != BlockType::RedStone {

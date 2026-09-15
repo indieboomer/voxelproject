@@ -310,6 +310,7 @@ fn focused_prompt(plan: &Plan) -> String {
             || method == "- api.broadcast"
             || method == "- api.players"
             || method == "- api.get_player"
+            || method == "- api.get_rule_target"
             || method == "- api.get_equipped_item"
             || method == "- api.get_player_journal"
             || plan.api_groups.iter().any(|g| match g.as_str() {
@@ -333,7 +334,7 @@ fn focused_prompt(plan: &Plan) -> String {
                     .any(|k| method.contains(k)),
                 "weather" => ["weather", "rain", "is_exposed_to_sky", "is_block_loaded"].iter().any(|k| method.contains(k)),
                 "time" => ["time", "night", "dawn"].iter().any(|k| method.contains(k)),
-                "blocks" => ["block", "terrain", "distance", "campfire", "water", "fish", "fill_", "surface_height", "is_exposed_to_sky"]
+                "blocks" => ["block", "device", "terrain", "distance", "campfire", "water", "fish", "fill_", "surface_height", "is_exposed_to_sky"]
                     .iter()
                     .any(|k| method.contains(k)),
                 _ => false,
@@ -409,6 +410,9 @@ pub(super) fn generate_prepared(
     url: &str, prompt: &str, kind: PromptKind,
     correction: Option<(&str, &str)>, plan: Plan,
 ) -> Result<String, String> {
+    let mut plan=plan;
+    let attached=prompt.contains("[BOUND_OBJECT_RULE]");
+    if attached {plan.effect="custom".into();plan.targets="custom".into();}
     if let Some(code) = plan.compile() {
         crate::world_api_validate::validate_source(&code)
             .first()
@@ -442,6 +446,8 @@ pub(super) fn generate_prepared(
                     .collect::<Vec<_>>()
                     .join("; "),
             )
+        } else if attached && !code.contains("get_rule_target") {
+            Some("This attached rule must use api.get_rule_target() to address its saved object. Return if the target is nil.".into())
         } else if let Err(error) = smoke_code(&code, kind) {
             Some(error)
         } else {
@@ -691,7 +697,7 @@ mod tests {
     fn focused_context_includes_world_shaping_and_direct_caster_lookup() {
         let mut p=plan();p.api_groups=vec!["blocks".into()];
         let text=focused_prompt(&p);
-        for name in ["get_player","fill_box","fill_sphere","get_block_kinds","get_block_info",
+        for name in ["get_player","get_rule_target","get_device","set_device_enabled","fill_box","fill_sphere","get_block_kinds","get_block_info",
             "block_matches","surface_height","is_exposed_to_sky","is_block_loaded"] {
             assert!(text.contains(&format!("- api.{name}(")),"missing {name}");
         }

@@ -32,6 +32,7 @@ mod inventory_ui;
 mod loot;
 mod spell_fx;
 mod spell_network;
+mod enchantment;
 mod fantasy_name;
 mod held_item;
 mod llm;

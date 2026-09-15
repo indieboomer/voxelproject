@@ -12,6 +12,9 @@ use crate::voxel::World;
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct CraftingSave {
+    pub world_identity: crate::enchantment::WorldIdentity,
+    pub creature_next_id: u32,
+    pub enchantments: Vec<crate::enchantment::Saved>,
     pub spellbook: crate::spellbook::Spellbook,
     pub creature_statuses: std::collections::BTreeMap<u32,crate::creature::magic::Status>,
     pub starter_camp: Option<(i32, i32, i32)>,
@@ -307,6 +310,7 @@ fn load_path(path: &Path, name: &str) -> Option<LoadedWorld> {
     let (save, crafting, generation) = decode_save(&bytes)?;
     let mut world = World::new(save.seed);
     world.name = name.to_owned();
+    world.identity=crafting.world_identity.clone();
     world.underground_discovered = crafting.underground_discovered.clone();
     world.automation = crafting.automation.clone();
     world.starter_camp = crafting.starter_camp;

@@ -16,10 +16,9 @@ references, host-validated guest requests, replay protection and targeting HUD.
 Stage 1D adds bounded temporary statuses and creature pushes; existing APIs cover
 healing/damage, block transforms, spawning, devices and inventory operations.
 
-Durable world identity/revisions need an explicit definition in those stages;
-a world seed or a module's list index is not a durable identity. A global revision
-must not accidentally invalidate every cast when an unrelated block changes.
-General owned modifiers and enchantment lifecycle remain Phase 2 work.
+[Stage 2A](ENCHANTMENTS.md) now defines saved world and object identities,
+attachment lifecycle and target-loss handling. Unrelated block changes do not
+invalidate attachments. General owned modifiers and composition remain Stage 2B.
 
 ## Stage 1A implementation
 
@@ -195,13 +194,16 @@ Source editing, natural-language revision and revision history remain Phase 2 wo
   and `target_device_toggle`. New worlds load these from `modules/`; existing saves
   retain their module lists. Generate equivalent spells using the updated API docs.
 
-### Next: acceptance, then Phase 2A
+### Next: acceptance and Phase 2B
 
 Verify a host and guest sharing a spell, casting at different targets, invalid casts,
 permission revocation, reconnect and save/reload in a live session. Automated checks
 cover the underlying paths; they do not replace this graphical multi-PC check.
-Phase 2A will attach persistent rules to durable creature/block/device references,
-save those relationships and define what happens when their targets disappear.
+Phase 2A now attaches persistent rules to durable creature/block/device references,
+saves those relationships and defines what happens when their targets disappear.
+See the [enchantment guide](ENCHANTMENTS.md) for usage and validation. Stage 2B adds
+owned effects, cleanup and composition; disabling a 2A rule stops future callbacks
+but does not undo its previous world changes.
 
 The user reported successful generated casting (including killing a cow in front
 of the player) after Stage 1A. Automated checks and UI previews are separate evidence;
