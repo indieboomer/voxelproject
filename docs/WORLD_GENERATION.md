@@ -9,7 +9,7 @@ For example:
 - `Rugged mountains with dense forests`
 - `This world is full of sheep but no cows`
 
-Leave the description empty to use the original generator immediately. A description
+Leave the description empty to use the current default generator immediately. A description
 uses the configured local model; the full Windows and macOS packages already include
 the required runtime and model. A package built without AI needs a running configured
 server for this feature. Loading and joining a world require no inference.
@@ -44,7 +44,47 @@ the same configured llama endpoint as rule generation. No new dependencies, asse
 or platform-specific build steps are required. Rebuild packages with the existing
 Windows or separate macOS tools to distribute this version.
 
+## Lake shapes and plant colonies
+
+New worlds use saved `landscape_version: 3`: the original rolling hills and
+mountains, with irregular lake basins. The geological faults, rubble, erosion
+cuts and undercuts added in versions 1 and 2 are disabled for new worlds.
+
+Lake outlines have seed-selected orientation, elongation, broad bays and
+headlands. Each basin keeps a connected interior around its original river
+connection. Water levels, winding rivers and raised tributaries are preserved;
+terrain outside the old/new lake footprints uses the original height profile.
+Visual currents and the water API use the same lake outlines. Flat and island
+presets keep their original shape logic; lake changes affect mainland and
+mountain presets that use the shared lake generator.
+Low cave landings have enough space to pass around staircase treads when a
+changed shoreline selects a different entrance height.
+
+Grassy, unshaded, non-wet ground can carry irregular elliptical plant colonies,
+roughly 18–54 blocks wide. Some mix lavender, red poppies, clover and flax;
+others favor one species in 88% of their selections. Ragged edges and gaps break
+up the patches. Existing trees, props and plants take precedence, so actual
+density and species proportions vary with habitat and overlapping colonies.
+Existing wetland and shade-specific scattering remains available.
+
+Old saves missing the version use `0`, preserving their generated terrain and
+vegetation, including newly explored chunks. Create a **new world** to see these
+changes. Version-1 and version-2 worlds retain their saved experimental relief.
+Both blank and AI-described new worlds select version 3. Clouds are a
+separate visual change and appear in existing worlds too. Multiplayer protocol
+45 carries the setting; all players need the updated build.
+
 ## Verification
+
+Version-3 validation: **589 passed**, 28 opt-in tests ignored in the Steam plus
+`dev-playtest` suite; Steam executable rebuilt without warnings.
+
+Lake regressions sample three seeds for irregular outlines, connected wet basin
+interiors, still lake centers and unchanged terrain away from lake footprints.
+Legacy geology tests remain to protect version-1/2 saves. Generate the inspected
+top-down comparison with `cargo test --offline --no-default-features lake_shape_preview -- --ignored --nocapture`.
+`target/lake-shapes.png` shows original lakes above and current lakes below for
+seeds 7, 42 and 2026. Live multiplayer exploration remains a manual acceptance check.
 
 Automated tests cover blank prompts without an AI server, original height equivalence,
 island land/water distribution and dry origins, surface materials and tree removal,

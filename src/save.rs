@@ -85,6 +85,7 @@ fn legacy_generation() -> crate::worldgen::WorldGeneration {
     crate::worldgen::WorldGeneration {
         underground: false,
         cave_version: 0,
+        landscape_version: 0,
         ..Default::default()
     }
 }

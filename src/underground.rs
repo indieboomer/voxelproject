@@ -245,6 +245,13 @@ fn layout(world: &World, rx: i32, rz: i32) -> Option<Arc<Layout>> {
         // One-block approach stays level through the three-block-wide gate.
         for dz in -3..0 { l.steps.push((mouth.0, mouth.1, mouth.2 + dz)); }
     }
+    if world.generation.landscape_version>=3 {
+        // A changed shore can choose a different entrance height. Low spiral
+        // treads may then cross the room graph's one-block corridor. Widen the
+        // landing locally so players can pass around those solid treads.
+        let landing:Vec<_>=l.steps.iter().copied().filter(|p|p.1<=FLOOR+4).collect();
+        for (x,_,z) in landing {l.passage_size((x,FLOOR,z),5,4);}
+    }
     for &(x, y, z) in &l.steps {
         if let Some(i) = Layout::index(x - ox, y, z - oz) {
             l.air[i] = false;
@@ -339,7 +346,10 @@ pub fn carve(world: &World, chunk: &mut Chunk) {
             }
             // Keep trees and surface props from hiding the doorway and its approach.
             if (wx - l.mouth.0).abs() <= 5 && (-8..=1).contains(&(wz - l.mouth.2)) {
-                for y in height + 1..CHUNK_Y {
+                // Geological depressions can sit below the entrance stairs.
+                // Clearing foliage must not erase those constructed treads.
+                let clear_above=if world.generation.landscape_version>0 {height.max(l.mouth.1)}else{height};
+                for y in clear_above + 1..CHUNK_Y {
                     chunk.set_local(x, y, z, BlockType::Air);
                 }
             }
@@ -617,7 +627,8 @@ mod tests {
                     for room in &l.rooms {
                         assert!(
                             reached.contains(&(room.0, room.1 + 1, room.2)),
-                            "unreachable room seed={seed} mouth={start:?} room={room:?}"
+                            "unreachable room seed={seed} mouth={start:?} room={room:?}, reached_rooms={:?}, last_steps={:?}",
+                            l.rooms.iter().filter(|p|reached.contains(&(p.0,p.1+1,p.2))).collect::<Vec<_>>(),l.steps.iter().rev().take(12).collect::<Vec<_>>()
                         );
                     }
                     let mut creatures = crate::creature::Creatures::new();

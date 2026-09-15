@@ -23,6 +23,9 @@ pub enum Surface {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorldGeneration {
+    /// Zero preserves worlds saved before geological detail and flower patches.
+    #[serde(default)]
+    pub landscape_version: u8,
     #[serde(default)]
     pub underground: bool,
     #[serde(default)]
@@ -43,6 +46,7 @@ pub struct WorldGeneration {
 impl Default for WorldGeneration {
     fn default() -> Self {
         Self {
+            landscape_version: 3,
             underground: true,
             cave_version: 2,
             description: String::new(),
@@ -65,6 +69,7 @@ impl WorldGeneration {
     pub fn validate(&self) -> Result<(), String> {
         if self.creatures.iter().any(|(key, value)| !CREATURE_SPECIES.contains(&key.as_str()) || *value > 1000)
             || self.cave_version > 2
+            || self.landscape_version > 3
             || self.description.len() > 2048
             || self.trees > 300
             || self.relief > 200
@@ -75,8 +80,14 @@ impl WorldGeneration {
         Ok(())
     }
     pub fn height(&self, x: i32, z: i32, seed: u32) -> i32 {
+        let h=self.base_height(x,z,seed);
+        if self.landscape_version==0 || self.landscape_version>=3 || self.shape==Shape::Flat || self.relief==0 {return h;}
+        if self.shape==Shape::Mainland && crate::voxel::terrain::tributary(x,z,seed).is_some() {return h;}
+        crate::voxel::terrain::geological_height(x,z,seed,h,self.relief as f32/100.,self.landscape_version)
+    }
+    fn base_height(&self, x: i32, z: i32, seed: u32) -> i32 {
         use crate::voxel::{chunk::TERRAIN_HEIGHT as CHUNK_Y, noise::fbm, world::SEA_LEVEL};
-        let original = || crate::voxel::terrain::height(x, z, seed);
+        let original = || crate::voxel::terrain::height_with_lakes(x, z, seed,self.landscape_version>=3);
         if self.shape == Shape::Mainland && self.relief == 100 {
             return crate::voxel::terrain::tributary(x,z,seed).map(|p|p.0).unwrap_or_else(original);
         }
@@ -121,7 +132,9 @@ pub fn resolve(description: &str, base_url: &str) -> Result<WorldGeneration, Str
         return Err("World description must fit in 2048 UTF-8 bytes".into());
     }
     crate::llm_server::ensure_ready(base_url)?;
-    crate::llm::describe_world(description, base_url)
+    let mut config=crate::llm::describe_world(description, base_url)?;
+    config.landscape_version=3;
+    Ok(config)
 }
 
 #[cfg(test)]
@@ -138,9 +151,11 @@ mod tests {
         let mut old = serde_json::to_value(&config).unwrap();
         old.as_object_mut().unwrap().remove("creatures");
         old.as_object_mut().unwrap().remove("cave_version");
+        old.as_object_mut().unwrap().remove("landscape_version");
         let old: WorldGeneration = serde_json::from_value(old).unwrap();
         assert_eq!(old.abundance("cow"), 100);
         assert_eq!(old.cave_version,0);
+        assert_eq!(old.landscape_version,0);
         assert_eq!(config.cave_version,2);
         config.creatures.insert("cow".into(), 1001);
         assert!(config.validate().is_err());
@@ -149,8 +164,10 @@ mod tests {
         assert!(config.validate().is_err());
     }
     #[test]
-    fn blank_description_needs_no_model_and_preserves_terrain() {
-        let config = resolve("  \n ", "invalid://no-model").unwrap();
+    fn blank_description_needs_no_model_and_legacy_preserves_terrain() {
+        let mut config = resolve("  \n ", "invalid://no-model").unwrap();
+        assert_eq!(config.landscape_version,3);
+        config.landscape_version=0;
         for x in -100..100 {
             assert_eq!(
                 config.height(x, x * 3, 42),

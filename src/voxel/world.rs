@@ -192,10 +192,14 @@ impl World {
                 } else { SEA_LEVEL };
                 let slope=[halo[x-1][z],halo[x+1][z],halo[x][z-1],halo[x][z+1]].into_iter().map(|h|(h-height).abs()).max().unwrap_or(0);
                 let mountain_surface=super::terrain::mountain_surface_with_slope(wx,wz,height,self.seed,slope);
+                let undercut=matches!(self.generation.landscape_version,1|2) && self.generation.shape!=crate::worldgen::Shape::Flat
+                    && super::terrain::undercut(wx,wz,self.seed,height,slope,self.generation.landscape_version);
 
                 for ly in 0..super::chunk::TERRAIN_HEIGHT {
                     let block = if ly < BEDROCK_DEPTH {
                         BlockType::Bedrock
+                    } else if undercut && ly>=height-5 && ly<=height-2 {
+                        BlockType::Air
                     } else if ly > height {
                         if ly <= water_level {
                             BlockType::Water
@@ -314,6 +318,11 @@ impl World {
                 let block=chunk.get_local(lx+dx,y+dy,lz+dz);
                 block.is_wood() || block.def().cutout
             })));
+            if self.generation.landscape_version>0 && surface==BlockType::Grass && !shaded && !wet {
+                if let Some(plant)=super::terrain::meadow_plant(wx,wz,self.seed) {
+                    chunk.set_local(lx,y+1,lz,plant);continue;
+                }
+            }
             for resource in SURFACE_RESOURCES {
                 let suitable=match resource.habitat {
                     "shade"=>shaded,

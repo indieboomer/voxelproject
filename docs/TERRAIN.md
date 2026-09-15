@@ -2,6 +2,11 @@
 
 World generation now includes narrow winding rivers joining large lake basins and occasional rocky mountains. Terrain remains a deterministic function of world seed and position, independent of chunk loading order.
 
+New worlds retain the original land relief and add irregular lake outlines with
+bays and headlands. See [world generation](WORLD_GENERATION.md#lake-shapes-and-plant-colonies)
+for lake shapes, plant colonies and compatibility. The baseline survey below
+describes the version-0 landscape with its earlier rounded lakes.
+
 ## Generation
 
 `src/voxel/terrain.rs` layers the features over the existing rolling terrain. Rivers meander along several sine/noise scales, with lake centers placed directly on their paths. Channels are generally around 5-8 blocks wide, widening where they meet lakes or existing lowlands. Lake radii are roughly 24-52 blocks, with noise-varied shorelines and up to six blocks of water. Rivers and lakes share the existing sea level (Y=18), guaranteeing connected water without a flow simulation. Their paths cross chunk boundaries using global coordinates. The MVP uses roughly spaced river corridors; it does not model drainage basins or fluid flow. Raised tributaries, visual currents and waterfalls are described in [water](water.md).

@@ -180,6 +180,24 @@ fn render_weather_previews() {
     let aura_preview = std::env::var_os("VOXEL_AURA_PREVIEW").is_some();
     let machine_preview = std::env::var_os("VOXEL_MACHINE_PREVIEW").is_some() || aura_preview;
     let mut target = Vec3::new(3.0, 7.0, 0.0);
+    let landscape_preview=std::env::var("VOXEL_LANDSCAPE_PREVIEW").ok();
+    if let Some(mode)=&landscape_preview {
+        world=World::new(42);
+        let mut best=(i32::MIN,0,0);
+        for x in (-192..192).step_by(4) {for z in (-192..192).step_by(4) {
+            let h=world.terrain_height(x,z);
+            let score=if mode=="meadow" {
+                if !(22..30).contains(&h) {continue;}
+                (-5..=5).flat_map(|dx|(-5..=5).map(move|dz|(dx,dz)))
+                    .filter(|&(dx,dz)|crate::voxel::terrain::meadow_plant(x+dx,z+dz,42).is_some()).count() as i32
+            }else {(h-world.terrain_height(x-3,z)).abs()+(h-world.terrain_height(x,z+3)).abs()};
+            if score>best.0 {best=(score,x,z);}
+        }}
+        let (_,x,z)=best;let (cx,cz)=crate::voxel::chunk::world_to_chunk(x,z);
+        for dx in -4..=4 {for dz in -4..=4 {world.ensure_chunk_loaded(cx+dx,cz+dz);}}
+        target=Vec3::new(x as f32,world.terrain_height(x,z) as f32,z as f32);
+        println!("Landscape preview {mode}: seed 42 at {x}, {z}");
+    }
     if std::env::var_os("VOXEL_FOREST_PREVIEW").is_some() {
         for x in [-6,0,6,12] {for z in [-8,-2,4] {
             for y in 7..13 {world.set_block(x,y,z,BlockType::OakWood);}
@@ -436,7 +454,9 @@ fn render_weather_previews() {
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let eye = if std::env::var_os("VOXEL_BOOK_PREVIEW").is_some() {
+    let eye = if landscape_preview.is_some() {
+        target+Vec3::new(-22.,18.,30.)
+    } else if std::env::var_os("VOXEL_BOOK_PREVIEW").is_some() {
         Vec3::new(0.5,10.,6.)
     } else if std::env::var_os("VOXEL_NPC_PREVIEW").is_some() {
         Vec3::new(1.5,10.,11.)
@@ -527,7 +547,7 @@ fn render_weather_previews() {
                 light_params: [
                     lighting.ambient * if old { 1.0 } else { 1.0 - clouds * 0.12 },
                     lighting.sun_intensity * if old { 1.0 } else { 1.0 - clouds * 0.72 },
-                    10.0,
+                    std::env::var("VOXEL_CLOUD_TIME").ok().and_then(|s|s.parse().ok()).unwrap_or(10.0),
                     1.0,
                 ],
                 weather_fx: [0.0, clouds, 0.0, wet],

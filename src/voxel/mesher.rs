@@ -442,7 +442,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                     // values encode current heading without growing vertices.
                     let wind = if block == BlockType::Water && normal[1] > 0
                         && world.generation.shape == crate::worldgen::Shape::Mainland {
-                        let flow = super::terrain::current(wx,wz,world.seed,ly>super::world::SEA_LEVEL);
+                        let flow = super::terrain::current_with_lakes(wx,wz,world.seed,ly>super::world::SEA_LEVEL,world.generation.landscape_version>=3);
                         if flow == [0.0;2] {0.0} else {-(flow[1].atan2(flow[0])+std::f32::consts::PI+1.0)}
                     } else if def.cutout { 0.5 } else { 0.0 };
                     let base_index = vertices.len() as u32;

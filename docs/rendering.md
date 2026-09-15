@@ -1,5 +1,26 @@
 # Lighting and surface weather
 
+## Visual voxel clouds
+
+The sky shader renders an 8-block voxel grid at Y=160–184, above the build ceiling.
+Coherent noise produces connected, irregular footprints with one to three layers
+of thickness. Face shading distinguishes their undersides and vertical edges.
+The whole field drifts continuously at 0.65 blocks/second along X and 0.22 along Z;
+individual cells do not flicker or reroll as the camera moves. This is steady
+visual wind, independent of simulation weather forces.
+
+Clear weather has scattered clouds; rain and storms increase cover and darken it.
+Clouds dim at night, obscure celestial lights and fade into distant horizon haze.
+They are purely visual: no blocks, collision, saves, shadow-map geometry or network
+entities. A bounded traversal of at most 48 cells per sky pixel keeps work limited.
+The underwater sky path skips them.
+
+Offscreen previews: `cargo test --offline --no-default-features render_weather_previews -- --ignored --nocapture`.
+Set `VOXEL_LANDSCAPE_PREVIEW` to `geology` or `meadow` for generated-world scenes;
+`VOXEL_CLOUD_TIME` selects an elapsed time in seconds for checking drift. Images
+are written to `target/render-*.png`. Timings are fixed-scene GPU measurements,
+not whole-game frame-rate guarantees.
+
 ## Exploration scheduling
 
 Terrain generation caches height samples and streams missing chunks nearest-first.

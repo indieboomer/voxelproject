@@ -75,4 +75,4 @@ The HUD shows the target, mana cost, cooldown and readiness. The host can enable
 **Allow guests to cast this spell** in K → Spellbook; guests then see it in their
 inventory and read-only Spellbook. The host checks every guest cast and charges
 that guest's mana. Revoking permission clears the guest's corresponding bindings.
-Spell definitions remain host-managed. All players need matching protocol-41 builds.
+Spell definitions remain host-managed. All players need matching game builds.

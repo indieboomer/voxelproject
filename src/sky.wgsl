@@ -96,6 +96,39 @@ fn cloud_density(p: vec2<f32>) -> f32 {
     return n1 * 0.65 + n2 * 0.35;
 }
 
+// A bounded voxel traversal through a visual-only layer above the build ceiling.
+// Translating the whole grid gives steady wind without reshuffling cloud cells.
+fn voxel_clouds(dir: vec3<f32>, coverage: f32) -> vec2<f32> {
+    if dir.y < 0.035 || camera.camera_pos.y >= 184.0 { return vec2<f32>(0.0); }
+    let start = max(0.0, (160.0-camera.camera_pos.y)/dir.y);
+    let wind = vec3<f32>(camera.light_params.z*0.65, 0.0, camera.light_params.z*0.22);
+    let origin = (camera.camera_pos.xyz + dir*(start+0.001)-wind)/8.0;
+    var cell = floor(origin);
+    let step_dir = sign(dir);
+    let delta = 1.0/max(abs(dir),vec3<f32>(0.00001));
+    var next = (select(origin-cell,cell+1.0-origin,dir>=vec3<f32>(0.0)))*delta;
+    var shade = 0.72;
+    var travel = 0.0;
+    for (var i=0; i<48; i=i+1) {
+        if cell.y >= 23.0 { break; }
+        let density = cloud_density(cell.xz*0.19);
+        let threshold = 0.58-coverage*0.24;
+        let thickness = 1.0+floor(clamp((density-threshold)*10.0,0.0,2.0));
+        if cell.y>=20.0 && cell.y<20.0+thickness && density>threshold {
+            let fade = (1.0-smoothstep(1100.0,1800.0,start+travel*8.0))*smoothstep(0.035,0.12,dir.y);
+            return vec2<f32>(fade,shade);
+        }
+        if next.x < next.y && next.x < next.z {
+            travel=next.x; next.x+=delta.x; cell.x+=step_dir.x; shade=0.85;
+        } else if next.z < next.y {
+            travel=next.z; next.z+=delta.z; cell.z+=step_dir.z; shade=0.95;
+        } else {
+            travel=next.y; next.y+=delta.y; cell.y+=step_dir.y; shade=0.72;
+        }
+    }
+    return vec2<f32>(0.0);
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if camera.weather_fx.z > 0.5 {
@@ -119,26 +152,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let haze = pow(1.0 - abs(dir.y), 5.0) * 0.2;
     color += camera.fog_color.rgb * haze;
 
-    // Skip cloud noise in clear weather; blend distant detail into haze
-    // before its projected frequency becomes visible as horizon stripes.
+    // Sunny skies retain scattered voxel clouds; weather adds overcast cover.
+    // Distant detail fades into haze before it becomes horizon stripes.
     let cloud_coverage = camera.weather_fx.y;
     var cloud_alpha = 0.0;
-    if cloud_coverage > 0.001 && dir.y > 0.02 {
-        let drift = vec2<f32>(camera.light_params.z * 0.015, camera.light_params.z * 0.008);
-        let cloud_uv = dir.xz / dir.y * 0.12 + drift;
-        let density = cloud_density(cloud_uv);
-        // Higher coverage lowers the threshold a puff needs to clear, so
-        // more of the noise field reads as cloud instead of clear sky.
-        let threshold = 1.0 - cloud_coverage;
-        cloud_alpha = smoothstep(threshold, threshold + 0.3, density)
-            * smoothstep(0.02, 0.18, dir.y);
-    }
+    let voxel = voxel_clouds(dir,cloud_coverage);
+    cloud_alpha = voxel.x;
     // Dark, faintly blue-gray overcast tone; dims further at night via the
     // same ambient term the terrain's own lighting uses, so clouds don't
     // read as glowing white at midnight.
     let cloud_color = vec3<f32>(0.34, 0.35, 0.39) * camera.light_params.x * 2.2;
     color = mix(color, cloud_color * 1.2, cloud_coverage * 0.65);
-    color = mix(color, cloud_color, cloud_alpha);
+    let voxel_color = mix(vec3<f32>(1.0,0.98,0.95),vec3<f32>(0.53,0.56,0.61),cloud_coverage)
+        * min(1.0,camera.light_params.x*1.8+camera.light_params.y*0.35)*voxel.y;
+    color = mix(color, voxel_color, cloud_alpha);
     // How much of the sun/moon/stars' own light still gets through -- 1
     // where the sky is clear, fading toward 0 under thick cloud so a
     // storm's clouds actually hide the sky behind them instead of just

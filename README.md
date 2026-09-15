@@ -21,6 +21,12 @@ acceptance work, and [AGENTS.md](AGENTS.md) for development instructions.
 
 ## Build and play
 
+The sky now has drifting visual voxel clouds. New worlds use the original land
+relief with irregular lake shores and mixed or dominant-species plant colonies. See
+[world generation](docs/WORLD_GENERATION.md#lake-shapes-and-plant-colonies)
+and [rendering](docs/rendering.md#visual-voxel-clouds). Existing saves retain their
+terrain generation version.
+
 ```powershell
 cargo build --no-default-features
 cargo test --no-default-features --quiet -- --test-threads=1

@@ -164,11 +164,12 @@ pub(super) fn populate<'lua, 'scope>(
                 bottom -= 1;
             }
             let flow = if tx.world.generation.shape == crate::worldgen::Shape::Mainland {
-                crate::voxel::terrain::current(
+                crate::voxel::terrain::current_with_lakes(
                     x,
                     z,
                     tx.world.seed,
                     top > crate::voxel::world::SEA_LEVEL,
+                    tx.world.generation.landscape_version>=3,
                 )
             } else {
                 [0.0; 2]

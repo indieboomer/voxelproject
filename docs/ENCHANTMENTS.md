@@ -53,7 +53,7 @@ separately from ordinary module list positions.
 
 The shared module limit still applies. At most 1,024 block positions can be tracked
 for attachments per world. Guest clients receive bounded display summaries, not
-Lua source. Protocol 42 requires all peers to use the same build.
+Lua source. All peers must use the same build.
 
 ## Authoring
 
