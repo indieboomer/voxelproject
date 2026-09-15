@@ -13,7 +13,7 @@ fn render_ui_previews() {
             .unwrap();
     let width = 1280;
     for (theme, name) in [(UiTheme::Generic, "generic"), (UiTheme::Fantasy, "fantasy")] {
-        for panel in ["settings", "crafting", "recipe_book", "resources", "hotbar", "hotbar_machine", "inventory", "food", "cooking", "chat", "automation", "chest", "map", "hud", "journal", "adventure", "recovery"] {
+        for panel in ["settings", "crafting", "recipe_book", "resources", "hotbar", "hotbar_machine", "inventory", "food", "cooking", "chat", "automation", "chest", "map", "hud", "journal", "adventure", "recovery", "spellbook"] {
             if std::env::var("UI_PREVIEW_PANEL").is_ok_and(|filter|filter!=panel) { continue; }
             let height = if panel == "resources" { 1024 } else { 720 };
             let ctx = egui::Context::default();
@@ -102,6 +102,13 @@ fn render_ui_previews() {
                 amount: 1,
             });
             let mut settings = crate::settings::SettingsPanel::new(&ctx);
+            let mut spellbook=crate::spellbook::Spellbook::default();
+            let mut spell_panel=crate::spellbook_ui::Panel::default();
+            if panel=="spellbook" {
+                let module=crate::scripting::Module::load("Healing Touch".into(),
+                    "Heal the creature I am aiming at.".into(),include_str!("../modules/target_heal.lua").into()).unwrap();
+                spell_panel.selected=Some(spellbook.remember(&module,"Host").unwrap());spell_panel.open=true;
+            }
             #[cfg(feature = "dev-playtest")]
             {settings.playtest_in_game=true;}
             settings.values.appearance.ui_theme = theme;
@@ -128,7 +135,8 @@ fn render_ui_previews() {
                             let p=egui::pos2(850.,320.);
                             crate::compass::machine(ctx,&[Some(p),Some(p+egui::vec2(-24.,-29.)),Some(p+egui::vec2(42.,-17.)),Some(p+egui::vec2(24.,29.)),Some(p+egui::vec2(-42.,17.))]);
                         }
-                        if matches!(panel,"journal"|"cooking") {journal.draw(ctx,&player);}
+                        if panel=="spellbook" {spell_panel.draw(ctx,&spellbook,true,false);}
+                        else if matches!(panel,"journal"|"cooking") {journal.draw(ctx,&player);}
                         else if panel == "adventure" || panel == "recovery" {
                             crate::ui::status_hud(ctx,&player,60.0);
                             journal.hud(ctx,&player,Some(glam::Vec3::new(40.,8.,-25.)));

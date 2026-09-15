@@ -1,3 +1,6 @@
+> Archived 2026-09-15. Historical exploration benchmark; newer rendering work has changed the measured costs.
+> See [current documentation](../rendering.md). Claims and measurements below describe the historical revision.
+
 # Exploration performance
 
 The investigation found two travel-related costs. All 11 new chunks at a chunk-boundary crossing were generated synchronously, followed by up to eight mesh builds/uploads in the same frame. Additionally, the world retains chunks out to radius 7 for reuse (up to 225), but the renderer submitted every retained mesh to both terrain and shadow passes. Spawn initially has only the radius-5 neighborhood (121 chunks), so exploration could substantially increase rendered work even when standing still afterward.

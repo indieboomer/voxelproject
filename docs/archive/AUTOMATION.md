@@ -1,3 +1,6 @@
+> Archived 2026-09-15. Original implementation request; current devices and remaining verification are documented in the guide.
+> See [current documentation](../AUTOMATION_GUIDE.md). Claims and measurements below describe the historical revision.
+
 Implement an initial magical production and automation system for Voxel Project, integrated with the existing Rust voxel engine, host-authoritative multiplayer, persistence, crafting, and five elements: Earth, Fire, Water, Life, and Death.
 
 The visual style is low-poly, between Minecraft and World of Warcraft, with Slavic fantasy influences. Machines should resemble objects from a folk mage’s workshop: carved wood, ceramic vessels, copper rings, runestones, and captured sparks.

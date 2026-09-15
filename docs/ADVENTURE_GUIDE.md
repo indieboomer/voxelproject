@@ -141,7 +141,7 @@ different inventory and journal.
 The top HUD compass follows your view; north is -Z and east is +X, matching the map.
 When inspecting a machine with F or positioning one in build mode, a small N/E/S/W
 compass floats over it. These are world directions and do not rotate with its ports.
-See [crafting recipes](../CRAFTING.md) for twelve additional elemental formulas.
+See [crafting recipes](CRAFTING.md) for twelve additional elemental formulas.
 
 Equip a [torch](TORCHES.md) in the inventory's left-hand slot for permanent warm
 light while using right-hand tools. Crystals no longer cast held light. Nearby

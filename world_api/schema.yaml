@@ -18,7 +18,7 @@
 # (air, mud, redstone, crystal, campfire), so it can't drift out of sync with the
 # actual block system the way a third hand-copied list would.
 
-version: "1.33.0"
+version: "1.34.0"
 title: World API
 description: >
   The Lua API exposed to sandboxed rule modules as the `api` table passed
@@ -404,9 +404,30 @@ types:
       - {name: y, type: integer}
       - {name: z, type: integer}
   CastEvent:
-    desc: "Passed as `event` to on_cast. Contains only player_id, no coordinates or position. Find the caster by matching PlayerSnapshot.id in api.players(), or pass event.player_id directly to a documented near-player placement helper."
+    desc: "Passed to on_cast. Host Run resolves the current aimed creature or block within 18 blocks, rechecking identity, range and terrain obstruction. Target fields are absent when nothing is aimed at or for legacy/guest-proposal casts. Assert the required target kind before making changes. Stage 1A context is immediate and transient; world_revision, selected_region, durable spell IDs and guest targeted requests are not implemented. Top-level x/y/z are not provided."
     fields:
-      - {name: player_id, type: integer, desc: "id of the player who clicked Run (matches PlayerSnapshot.id). Only the host can run a spell, so this is currently always the host's id, but treat it as any connected player's id -- don't hardcode 0."}
+      - {name: player_id, type: integer, desc: "Caster ID matching PlayerSnapshot.id. Host-approved guest proposals use the connected author's ID; do not hardcode 0."}
+      - {name: target, type: "CastTarget|nil", desc: "Authoritatively resolved target for this invocation; never embed its ID in reusable source."}
+      - {name: cast_id, type: "integer|nil", desc: "Process-local invocation ID for targeted casts, assigned by the host. Not persisted and not a network replay token."}
+      - {name: origin, type: "CastVector|nil", desc: "Authoritative eye position for a targeted cast."}
+      - {name: facing, type: "CastVector|nil", desc: "Normalized aim direction."}
+      - {name: hit_position, type: "CastVector|nil", desc: "Block surface entry or creature body picking point."}
+      - {name: hit_normal, type: "CastVector|nil", desc: "Block entry face normal; zero for creature proxies or an origin inside a block."}
+  CastVector:
+    desc: "Three-dimensional cast coordinate or direction."
+    fields:
+      - {name: x, type: number}
+      - {name: y, type: number}
+      - {name: z, type: number}
+  CastTarget:
+    desc: "Stage 1A creature or block target. Only fields appropriate to kind are present. This is targeting context, not a restriction on the other reviewed World API capabilities."
+    fields:
+      - {name: kind, type: string, enum: [creature, block]}
+      - {name: id, type: "integer|nil", desc: "Creature ID; absent for blocks."}
+      - {name: x, type: "integer|nil", desc: "Block coordinate; absent for creatures."}
+      - {name: y, type: "integer|nil"}
+      - {name: z, type: "integer|nil"}
+      - {name: material, type: "string|nil", desc: "Canonical block ID observed at validation."}
   DeathEvent:
     desc: "Passed as `event` to on_death. The creature no longer exists by the time this fires."
     fields:

@@ -1,3 +1,6 @@
+> Archived 2026-09-15. Historical hotbar implementation report with obsolete controls and compatibility claims; useful current details consolidated into inventory.
+> See [current documentation](../inventory.md). Claims and measurements below describe the historical revision.
+
 # Hotbar and inventory
 
 The nine-slot hotbar is centered at the bottom of the screen. Press **1-9** to select a slot, or use the **mouse wheel** to cycle assigned slots (including depleted assignments). **E** opens/closes Resources / Inventory and releases the cursor. While typing in search, E types normally; Escape closes the inventory. Click any hotbar slot while inventory is open, then choose **Assign to slot N** or **Clear active slot / empty hand**. Owned only is enabled by default; search matches names and semantic/display categories.
@@ -20,4 +23,4 @@ The E inventory panel sits above the hotbar, keeping assignments visible and cli
 
 The axe additionally twists 1270 degrees around its local handle axis (equivalent to 190 degrees, including the additional 90-degree counterclockwise adjustment), before the shared held animation transform.
 
-Multiplayer held tools and resources now follow the animated right-hand grip, including work and attack poses. Empty/depleted selections show no held mesh. See [PLAYER_ANIMATIONS.md](PLAYER_ANIMATIONS.md) for gestures, action animations, and protocol compatibility.
+Multiplayer held tools and resources now follow the animated right-hand grip, including work and attack poses. Empty/depleted selections show no held mesh. See [PLAYER_ANIMATIONS.md](../PLAYER_ANIMATIONS.md) for gestures, action animations, and protocol compatibility.

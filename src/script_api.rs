@@ -5,6 +5,7 @@ use super::*;
 pub(super) enum Callback<'a> {
     Tick,
     Cast(PlayerId),
+    TargetedCast(PlayerId, crate::spell_target::TargetContext),
     Death(&'a DeathEvent),
     BlockBreak(&'a BlockBreakEvent),
     Interact(&'a InteractEvent),
@@ -14,7 +15,7 @@ impl Callback<'_> {
     pub fn name(self) -> &'static str {
         match self {
             Self::Tick => "on_tick",
-            Self::Cast(_) => "on_cast",
+            Self::Cast(_) | Self::TargetedCast(..) => "on_cast",
             Self::Death(_) => "on_death",
             Self::BlockBreak(_) => "on_block_break",
             Self::Interact(_) => "on_interact",
@@ -26,7 +27,7 @@ pub(super) fn call(lua: &Lua, tx: &CallbackTransaction, event: Callback) -> mlua
     let Some(function) = lua.globals().raw_get::<_, Option<Function>>(event.name())? else {
         return Ok(());
     };
-    let instant = matches!(event, Callback::Cast(_));
+    let instant = matches!(event, Callback::Cast(_) | Callback::TargetedCast(..));
     let block_budget = Cell::new(if instant {
         MAX_BLOCK_EDITS_PER_CAST
     } else {
@@ -46,6 +47,32 @@ pub(super) fn call(lua: &Lua, tx: &CallbackTransaction, event: Callback) -> mlua
         let table = lua.create_table()?;
         match event {
             Callback::Cast(player_id) => table.set("player_id", player_id)?,
+            Callback::TargetedCast(player_id, context) => {
+                static NEXT_CAST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+                table.set("cast_id", NEXT_CAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed))?;
+                table.set("player_id", player_id)?;
+                for (name, value) in [("origin", context.origin), ("facing", context.facing),
+                    ("hit_position", context.hit_position), ("hit_normal", context.hit_normal)] {
+                    let vector = lua.create_table()?;
+                    vector.set("x", value.x)?;
+                    vector.set("y", value.y)?;
+                    vector.set("z", value.z)?;
+                    table.set(name, vector)?;
+                }
+                let target = lua.create_table()?;
+                match context.target {
+                    crate::spell_target::Target::Creature { id } => {
+                        target.set("kind", "creature")?;
+                        target.set("id", id)?;
+                    }
+                    crate::spell_target::Target::Block { position: (x,y,z), material } => {
+                        target.set("kind", "block")?;
+                        target.set("x", x)?; target.set("y", y)?; target.set("z", z)?;
+                        target.set("material", material.id())?;
+                    }
+                }
+                table.set("target", target)?;
+            }
             Callback::Death(event) => {
                 table.set("kind", creature_kind_name(event.kind.to_u8()))?;
                 table.set("x", event.pos.x)?;
@@ -762,7 +789,7 @@ fn populate_api<'lua, 'scope>(
                     if lua.coerce_number(value)?.is_none() {
                         return Err(mlua::Error::RuntimeError(format!(
                             "nearest_player(x, y, z): argument #{} must be a numeric coordinate. \
-                             on_cast event contains only player_id, not x/y/z or position. \
+                             on_cast has no top-level x/y/z or position. \
                              Find the caster in api.players() by p.id == event.player_id. \
                              For a nearby campfire use api.place_campfire_near_player(event.player_id, 6) directly.",
                             index + 1

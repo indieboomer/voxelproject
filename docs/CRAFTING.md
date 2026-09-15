@@ -11,16 +11,13 @@ The initially expanded **Tools and weapons** section in C exposes these recipes:
 | Sword | 2 iron + 1 oak wood | 4 |
 | Axe | 3 iron + 2 oak wood | 4 |
 | Pickaxe | 3 iron + 2 oak wood | 6 |
-| Bow | 1 iron + 4 oak wood | 6 |
 
 These use the same host-authoritative transactions as inventory crafting. Missing
 materials disable crafting. The third campkeeper contract requires a newly crafted
 sword while active; old completion credit is preserved.
 
-The bow fires an immediate mana shot up to 20 blocks for 9 damage, costing
-1 mana per shot with a 0.7-second cooldown. Terrain blocks shots. Assign the bow
-in **I**, select its hotbar slot, then left-click. Bows can be stored in machines
-as `item:bow`, and existing saved bows are retained.
+Bow and longbow are currently disabled by `Gear::enabled`; their legacy data does
+not make them available for crafting or use. See [inventory and hotbar](inventory.md).
 
 **Craft bound sheep figurine** in C uses the sheep formula (2 Life and the
 formula's normal mana cost) but puts `creature:sheep` into your carried production
@@ -70,7 +67,9 @@ Recipes contain a unique `id`, one to five `inputs` (`element`, positive integer
 
 Compositions are central `compositions` entries with `kind`, canonical `id`, and `elements` in **Earth, Fire, Water, Life, Death** order. Missing entries yield zero. Items/resources/placeable blocks share the existing block registry and composition namespace; creatures have a separate namespace. `Registry::composition`, `Account::add_elements`, `can_afford_elements`, and `consume_elements` provide the gameplay APIs. Mutating helpers are used inside private transactions; network clients only send intentions.
 
-Extraction consumes existing stackable resources. Water and crystal compositions are queryable metadata, but those objects are not stackable in the existing inventory. Creature compositions are metadata; this change does not add creature harvesting or melee.
+Extraction consumes existing stackable resources, including collected crystals.
+Water remains nonstackable. Creature compositions are metadata; normal creature
+loot and combat are documented separately in [creature loot](creature-loot.md).
 
 ## Resource catalog
 
@@ -78,7 +77,11 @@ The world has **84 stackable resources**, with 38 resource formulas and 11 creat
 
 Resource outputs use `kind: resource`. Equipment uses the separate material recipes above. Creature formulas may use one to five slots. Resource compositions must be present, and recoverable elements multiplied by output quantity must not exceed inputs in any element; invalid registries fail loading.
 
-Inventory `item`, `block`, and `resource` outputs all add to the current block-resource inventory and can be selected in Resources for placement. There is no separate consumable-item system or fixed slot capacity; `u32` stack overflow reports Inventory full. The poison/preservative/lava examples are therefore adapted to existing mud/redstone/basalt content.
+Inventory `item`, `block`, and `resource` outputs use the resource inventory.
+Placeable resources can be assigned to the hotbar; food also has explicit eating
+actions in [inventory](inventory.md), and meat is not placeable terrain.
+There is no fixed slot capacity; `u32` stack overflow reports Inventory full.
+The original poison/preservative/lava examples use mud/redstone/basalt content.
 
 Creature outputs use `CreatureDraft`, the existing ECS staging path and global creature cap. Every creature reserves a distinct nearby position with a solid 3 x 3 floor and 3 blocks of air above it, separated from players and creatures. A failed reservation or exhausted budget discards the whole batch. Host snapshots replicate committed creatures as usual.
 

@@ -1,5 +1,28 @@
 # Current project state
 
+## Active development plan
+
+[Spellcasting](../SPELLCASTING_PLAN.md) defines the next work order: Phase 1 targeted
+casts, persistent Spellbook and hotbar assignment, followed by Phase 2 persistent
+object enchantments, owned effects, revision history and regions.
+
+Existing callback transactions, budgets, interpreted prompting, saved accounts and
+creature IDs are foundations to reuse. Current hotbar entries are resource/equipment
+references; they do not yet reference saved spell IDs. The
+[spellcasting implementation](SPELLCASTING.md) supplies host-targeted creature/block
+casts and a persistent host Spellbook with stable IDs, compatibility checks and
+management controls. Hotbar and guest casting remain pending.
+
+The [older World API roadmap](archive/WORLD_API_ROADMAP.md) is historical. Its
+bulk-construction jobs, blueprints, explicit Lua state, broader events/timers,
+conflict-aware world undo and creation bundles remain proposals to reassess when a
+concrete spellcasting stage needs them. Archiving does not mark those items complete.
+The [playtesting plan](PLAYTESTING_PLAN.md) separately retains its unfinished gates.
+
+Compatibility sources of truth are `src/net.rs::PROTOCOL_VERSION` (39 at the
+2026-09-15 documentation review) and `world_api/schema.yaml` (1.34.0). Version
+numbers in historical implementation results describe those revisions only.
+
 ## Playable systems
 
 - First-person movement, collision, jumping, mining and block placement.
@@ -36,7 +59,7 @@ can affect regenerated unedited terrain while explicit saved edits take priority
 `adventure_app.rs` connects them to authoritative accounts/networking, and
 `adventure_ui.rs` renders the journal/feedback. Keepers reuse animated player assets
 and are derived from fires rather than added to the creature ECS. Progress is saved
-inside crafting accounts. Protocol 31 carries camp requests, recovery and creature
+inside crafting accounts. The shared protocol carries camp requests, recovery and creature
 health; World API 1.27 exposes journal state and current held items to reviewed rules.
 
 The [sandbox/RPG review](SANDBOX_RPG_REVIEW.md) records strengths, weaknesses,

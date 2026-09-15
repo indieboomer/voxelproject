@@ -4,7 +4,7 @@ World generation now includes narrow winding rivers joining large lake basins an
 
 ## Generation
 
-`src/voxel/terrain.rs` layers the features over the existing rolling terrain. Rivers meander along several sine/noise scales, with lake centers placed directly on their paths. Channels are generally around 5-8 blocks wide, widening where they meet lakes or existing lowlands. Lake radii are roughly 24-52 blocks, with noise-varied shorelines and up to six blocks of water. Rivers and lakes share the existing sea level (Y=18), guaranteeing connected water without a flow simulation. Their paths cross chunk boundaries using global coordinates. The MVP uses roughly spaced river corridors; it does not model drainage basins, currents or waterfalls.
+`src/voxel/terrain.rs` layers the features over the existing rolling terrain. Rivers meander along several sine/noise scales, with lake centers placed directly on their paths. Channels are generally around 5-8 blocks wide, widening where they meet lakes or existing lowlands. Lake radii are roughly 24-52 blocks, with noise-varied shorelines and up to six blocks of water. Rivers and lakes share the existing sea level (Y=18), guaranteeing connected water without a flow simulation. Their paths cross chunk boundaries using global coordinates. The MVP uses roughly spaced river corridors; it does not model drainage basins or fluid flow. Raised tributaries, visual currents and waterfalls are described in [water](water.md).
 
 Mountain candidates are sparse, seed-selected patches with variable elliptical footprints and roughened peaks. Peaks fit inside the existing 48-block world height, reaching roughly Y=41-44. From Y=32 upward, coherent snow patches extend onto upper slopes. Snow becomes more likely with elevation, while steep faces retain more exposed rock. Above Y=34 the remaining ground is predominantly rock, with rare grassy ledges. Snow is one block deep and always has stone directly beneath it; trees stop below the alpine zone. Lower slopes retain the existing biome and resources. Rivers and lakes carve valleys through terrain after mountain elevation is applied.
 
@@ -18,7 +18,7 @@ The effect uses the reserved `weather_fx.z` uniform component, preserving unifor
 
 ## Compatibility and checks
 
-Existing saved block edits and inventories are preserved. Unedited terrain regenerates with the new geography when a save loads; player edits can still obstruct a generated river. Use New World for a clean example of the new terrain. Multiplayer protocol is now 10 so old terrain generators cannot silently join a new session: all Direct/Steam players need this build.
+Existing saved block edits and inventories are preserved. Unedited terrain regenerates with the new geography when a save loads; player edits can still obstruct a generated river. Use New World for a clean example of the new terrain. Protocol checks prevent mismatched builds from joining: all Direct/Steam players need the same build.
 
 Tests verify continuous wet paths between lake centers, orthogonally connected channel steps, positive/negative chunk boundaries and reverse load order, lake width, sparse high peaks, terrain height bounds, natural resource availability and buried ore placement. Eye-position tests distinguish submersion from wading, and an opt-in GPU check validates both modified WGSL shaders.
 

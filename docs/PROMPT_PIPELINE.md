@@ -74,7 +74,7 @@ persist with the saved source. Guest instant spells run with the requesting play
 caster identity when approved; they cannot be cast while that account is disconnected.
 Direct identities retain the existing nickname-based limitations.
 
-Protocol is now 12; all players need the updated build. Proposal delivery uses the
+All players need the same build; see `src/net.rs::PROTOCOL_VERSION`. Proposal delivery uses the
 existing reliable channel, shared by Steam and Direct. Nothing executes merely from
 receiving a proposal. Host-generated and guest-generated effects use the same existing
 authoritative simulation and replication.

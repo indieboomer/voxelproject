@@ -1,3 +1,6 @@
+> Archived 2026-09-15. Original implementation request; crafting now has a runtime and user guide.
+> See [current documentation](../CRAFTING.md). Claims and measurements below describe the historical revision.
+
 Implement a complete Elemental Crafting system in the existing Voxel Project, including gameplay logic, data definitions, persistence, multiplayer authority, and an in-game crafting UI.
 
 First inspect the repository and identify:

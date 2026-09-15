@@ -1,6 +1,6 @@
 # Development playtesting implementation plan
 
-Source: [AGENTS_TESTING_SUBSYSTEM.md](../AGENTS_TESTING_SUBSYSTEM.md).
+Source: [AGENTS_TESTING_SUBSYSTEM.md](archive/AGENTS_TESTING_SUBSYSTEM.md).
 
 Implement phases in order and keep exit criteria as gates, rather than claiming an
 AI report proves a game bug. No API credentials are required for phases 1–2.

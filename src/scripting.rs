@@ -644,6 +644,8 @@ fn random_offset_in_disk(seed: u64, radius: f32) -> (f32, f32) {
 /// (block edits replicate reliably, creature positions ride the existing
 /// snapshot broadcast).
 pub struct ScriptHost {
+    pub spellbook: crate::spellbook::Spellbook,
+    pub spell_cooldowns: std::collections::HashMap<crate::spellbook::SpellId,std::time::Instant>,
     pub inventory_registry: std::sync::Arc<crate::crafting::Registry>,
     last_cast_success: Option<(u64, PlayerId)>,
     pub modules: Vec<Module>,
@@ -654,6 +656,8 @@ pub struct ScriptHost {
 impl ScriptHost {
     pub fn new() -> Self {
         Self {
+            spellbook: Default::default(),
+            spell_cooldowns: Default::default(),
             inventory_registry: default_inventory_registry(),
             modules: Vec::new(),
             scheduler: scheduler::Scheduler::default(),
@@ -824,6 +828,40 @@ impl ScriptHost {
         )
     }
 
+    /// Immediate Stage 1A casting. Re-resolves the supplied target before Lua and
+    /// cancels unexecuted work so a refunded cast cannot execute on a later tick.
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_targeted_cast(
+        &mut self, index: usize, world: &World, creatures: &mut Creatures,
+        players: &[PlayerSnapshot], time_of_day: &mut f32, weather: &mut WeatherState,
+        caster_id: PlayerId, host_resources: [u32; COLLECTIBLE_BLOCKS.len()],
+        context: crate::spell_target::TargetContext,
+    ) -> TickOutcome {
+        self.last_cast_success = None;
+        let validation = (|| {
+            if !self.can_cast_immediately() { return Err("Rules are busy; try again".into()); }
+            if !self.modules.get(index).is_some_and(|m|m.is_instant) {
+                return Err("Select an instant spell".into());
+            }
+            let caster = players.iter().find(|p|p.id == caster_id).ok_or("Caster is not connected")?;
+            if caster.health <= 0.0 { return Err("Defeated players cannot cast".into()); }
+            context.validate(world, creatures, caster.pos + Vec3::Y * 1.62)
+        })();
+        let context = match validation {
+            Ok(context) => context,
+            Err(error) => return TickOutcome { warnings: vec![error], ..TickOutcome::default() },
+        };
+        self.enqueue_targeted_cast(index, caster_id, context);
+        let mut outcome = self.dispatch_world(world, creatures, players, time_of_day, weather, host_resources);
+        if !self.cast_succeeded(index, caster_id) {
+            self.scheduler.cancel(self.modules[index].runtime_id);
+            if outcome.crashes.is_empty() {
+                outcome.warnings.push("Cast did not execute; try again".into());
+            }
+        }
+        outcome
+    }
+
     fn dispatch_world(
         &mut self,
         world: &World,
@@ -880,6 +918,156 @@ mod tests {
         creatures.spawn_around(&world, Vec3::new(0.0, 0.0, 0.0), 6, seed);
         creatures.spawn_one(CreatureKind::Sheep, Vec3::new(0.0, 5.0, 0.0), seed as u64);
         creatures
+    }
+
+    fn targeted_fixture(source: &str) -> (ScriptHost, World, Creatures, PlayerSnapshot) {
+        let mut host = ScriptHost::new();
+        host.modules.push(Module::load("target test".into(), "manual".into(), source.into()).unwrap());
+        let mut world = World::new(42);
+        world.ensure_chunk_loaded(0, 0);
+        for x in 0..16 { for z in 0..16 { for y in 65..75 {
+            world.set_block(x, y, z, BlockType::Air);
+        } } }
+        (host, world, Creatures::new(), snapshot(0, Vec3::new(2.5, 68.38, 2.5), false))
+    }
+
+    fn targeted_run(host: &mut ScriptHost, world: &World, creatures: &mut Creatures,
+        player: PlayerSnapshot, context: crate::spell_target::TargetContext) -> TickOutcome {
+        host.run_targeted_cast(0, world, creatures, &[player], &mut 0.5,
+            &mut WeatherState::new(42), player.id, NO_RESOURCES, context)
+    }
+
+    #[test]
+    fn targeted_reference_heal_reuses_source_for_different_creatures_and_damage_works() {
+        use crate::spell_target::TargetContext;
+        let (mut host, world, mut creatures, player) = targeted_fixture(include_str!("../modules/target_heal.lua"));
+        let a = creatures.spawn_one(CreatureKind::StoneGolem, Vec3::new(6.5,69.35,2.5), 1);
+        let b = creatures.spawn_one(CreatureKind::StoneGolem, Vec3::new(2.5,69.35,6.5), 2);
+        creatures.damage(a, 25.0); creatures.damage(b, 25.0);
+        let before = creatures.snapshot_with_ids();
+        for direction in [Vec3::X, Vec3::Z] {
+            let context = TargetContext::resolve(&world, &creatures, player.pos + Vec3::Y*1.62, direction).unwrap();
+            let out = targeted_run(&mut host,&world,&mut creatures,player,context);
+            assert!(out.crashes.is_empty(), "{:?}", out.crashes);
+            assert!(host.cast_succeeded(0,0));
+        }
+        for (id,_,_,health,_) in creatures.snapshot_with_ids() {
+            assert_eq!(health, before.iter().find(|c|c.0==id).unwrap().3 + 20.0);
+        }
+        host.modules[0] = Module::load("damage".into(), "manual".into(), include_str!("../modules/target_damage.lua").into()).unwrap();
+        let context = TargetContext::resolve(&world,&creatures,player.pos+Vec3::Y*1.62,Vec3::X).unwrap();
+        targeted_run(&mut host,&world,&mut creatures,player,context);
+        assert!(host.cast_succeeded(0,0));
+        assert_eq!(creatures.snapshot_with_ids().iter().find(|c|c.0==a).unwrap().3,
+            before.iter().find(|c|c.0==a).unwrap().3);
+    }
+
+    #[test]
+    fn targeted_block_replacement_and_wrong_kind_are_transactional() {
+        use crate::spell_target::TargetContext;
+        let (mut host, mut world, mut creatures, player) = targeted_fixture(include_str!("../modules/target_stone.lua"));
+        world.set_block(6,70,2,BlockType::Soil);
+        let context = TargetContext::resolve(&world,&creatures,player.pos+Vec3::Y*1.62,Vec3::X).unwrap();
+        assert_eq!(context.hit_normal, -Vec3::X);
+        assert!((context.hit_position.x-6.0).abs()<0.001);
+        let out = targeted_run(&mut host,&world,&mut creatures,player,context);
+        assert_eq!(out.block_edits, [(6,70,2,BlockType::Stone)]);
+        assert!(host.cast_succeeded(0,0));
+        host.modules[0] = Module::load("heal".into(), "manual".into(), include_str!("../modules/target_heal.lua").into()).unwrap();
+        let out = targeted_run(&mut host,&world,&mut creatures,player,context);
+        assert!(!host.cast_succeeded(0,0));
+        assert_eq!(out.crashes.len(),1);
+        assert!(out.block_edits.is_empty());
+        assert!(out.player_effects.is_empty());
+    }
+
+    #[test]
+    fn targeted_stale_obstructed_moved_and_forged_casts_never_execute() {
+        use crate::spell_target::{TargetContext, Target};
+        let (mut host, mut world, mut creatures, player) = targeted_fixture("function on_cast(api,e) api.broadcast('executed') end");
+        let id = creatures.spawn_one(CreatureKind::Sheep, Vec3::new(6.5,69.35,2.5), 1);
+        let eye = player.pos + Vec3::Y*1.62;
+        let context = TargetContext::resolve(&world,&creatures,eye,Vec3::X).unwrap();
+        for bad in [TargetContext{target:Target::Creature{id:id+1},..context},
+            TargetContext{origin:eye+Vec3::X,..context},
+            TargetContext{facing:Vec3::splat(f32::NAN),..context},
+            TargetContext{facing:Vec3::ZERO,..context}] {
+            let out = targeted_run(&mut host,&world,&mut creatures,player,bad);
+            assert!(!host.cast_succeeded(0,0)); assert!(out.broadcasts.is_empty());
+        }
+        world.set_block(4,70,2,BlockType::Stone);
+        let out = targeted_run(&mut host,&world,&mut creatures,player,context);
+        assert!(out.broadcasts.is_empty()); assert!(!host.cast_succeeded(0,0));
+        world.set_block(4,70,2,BlockType::Air);
+        creatures.damage(id,999.0);
+        let out = targeted_run(&mut host,&world,&mut creatures,player,context);
+        assert!(out.broadcasts.is_empty()); assert!(!host.cast_succeeded(0,0));
+        assert!(TargetContext::resolve(&world,&creatures,eye,Vec3::ZERO).is_none());
+        creatures.spawn_one(CreatureKind::Sheep,Vec3::new(24.5,69.35,2.5),2);
+        assert!(TargetContext::resolve(&world,&creatures,eye,Vec3::X).is_none());
+    }
+
+    #[test]
+    fn targeted_lua_error_rolls_back_damage_blocks_and_mana_commands() {
+        use crate::spell_target::TargetContext;
+        let source = "function on_cast(api,e) api.damage(e.target.id,20); api.replace_block(3,70,3,'stone'); api.give_mana(e.player_id,20); error('rollback') end";
+        let (mut host, world, mut creatures, player) = targeted_fixture(source);
+        creatures.spawn_one(CreatureKind::Sheep, Vec3::new(6.5,69.35,2.5), 1);
+        let before = creatures.snapshot_with_ids();
+        let context = TargetContext::resolve(&world,&creatures,player.pos+Vec3::Y*1.62,Vec3::X).unwrap();
+        let out = targeted_run(&mut host,&world,&mut creatures,player,context);
+        assert!(!host.cast_succeeded(0,0)); assert_eq!(out.crashes.len(),1);
+        assert!(out.block_edits.is_empty()); assert!(out.player_effects.is_empty());
+        assert_eq!(creatures.snapshot_with_ids(), before);
+        let out = host.run_tick(&world,&mut creatures,&[player],&mut 0.5,&mut WeatherState::new(42),&[],&[],NO_RESOURCES);
+        assert!(out.crashes.is_empty()); assert!(out.block_edits.is_empty());
+        assert_eq!(creatures.snapshot_with_ids(),before);
+    }
+
+    #[test]
+    fn targeted_context_recomputes_hit_and_rejects_changed_material_or_unloaded_visibility() {
+        use crate::spell_target::TargetContext;
+        let source = "function on_cast(api,e) assert(e.cast_id>0); assert(e.target.kind=='block'); assert(e.target.material=='soil'); assert(e.hit_position.x==6); assert(e.hit_normal.x==-1); assert(e.origin.x==2.5); assert(e.facing.x==1) end";
+        let (mut host, mut world, mut creatures, player) = targeted_fixture(source);
+        world.set_block(6,70,2,BlockType::Soil);
+        let eye=player.pos+Vec3::Y*1.62;
+        let mut context=TargetContext::resolve(&world,&creatures,eye,Vec3::X).unwrap();
+        context.hit_position=Vec3::splat(f32::NAN);
+        context.hit_normal=Vec3::splat(123.0);
+        let out=targeted_run(&mut host,&world,&mut creatures,player,context);
+        assert!(out.crashes.is_empty(),"{:?}",out.crashes);
+        assert!(host.cast_succeeded(0,0));
+        world.set_block(6,70,2,BlockType::Stone);
+        let out=targeted_run(&mut host,&world,&mut creatures,player,context);
+        assert!(!host.cast_succeeded(0,0)); assert!(!out.warnings.is_empty());
+        world.set_block(6,70,2,BlockType::Air);
+        creatures.spawn_one(CreatureKind::Sheep,Vec3::new(18.0,69.35,2.5),1);
+        assert!(TargetContext::resolve(&world,&creatures,eye,Vec3::X).is_none());
+        world.ensure_chunk_loaded(1,0);
+        assert!(TargetContext::resolve(&world,&creatures,eye,Vec3::X).is_some());
+    }
+
+    #[test]
+    fn spellbook_restored_definition_casts_without_replacing_or_saving_a_second_module() {
+        use crate::spell_target::TargetContext;
+        let (mut host,world,mut creatures,player)=targeted_fixture(include_str!("../modules/target_stone.lua"));
+        let id=host.spellbook.remember(&host.modules[0],"Host").unwrap();
+        host.spellbook=serde_json::from_slice(&serde_json::to_vec(&host.spellbook).unwrap()).unwrap();
+        host.spellbook.revalidate();
+        let original=host.save_entries();
+        let mut world=world;world.set_block(6,70,2,BlockType::Soil);
+        let context=TargetContext::resolve(&world,&creatures,player.pos+Vec3::Y*1.62,Vec3::X).unwrap();
+        for _ in 0..2 {
+            let index=host.add_generated(host.spellbook.get(id).unwrap().compiled().unwrap()).unwrap();
+            let out=host.run_targeted_cast(index,&world,&mut creatures,&[player],&mut 0.5,
+                &mut WeatherState::new(42),player.id,NO_RESOURCES,context);
+            assert!(host.cast_succeeded(index,player.id));
+            assert_eq!(out.block_edits,[(6,70,2,BlockType::Stone)]);
+            host.remove(index);
+        }
+        assert_eq!(host.save_entries().len(),original.len());
+        assert_eq!(host.save_entries()[0].source,original[0].source);
+        assert_eq!(host.spellbook.spells.len(),1);assert_eq!(host.spellbook.spells[0].id,id);
     }
 
     /// Empty resource counts for tests that don't care about inventory --

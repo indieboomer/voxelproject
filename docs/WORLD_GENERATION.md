@@ -29,7 +29,7 @@ keep your text so you can retry or clear it to create a normal world.
    island around the origin.
 4. Save the settings in the existing JSON save wrapper and include them in the
    reliable multiplayer welcome transfer. Old JSON and binary saves default to
-   the original terrain. Protocol 21 requires peers to use the updated build.
+   the original terrain. All peers must use the same build.
 
 Shapes are mainland, islands, flat terrain, and mountains. Surfaces are natural,
 sand, snow, and stone. Tree density ranges from zero to three times normal; relief

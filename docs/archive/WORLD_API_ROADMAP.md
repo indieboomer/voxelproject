@@ -1,3 +1,6 @@
+> Archived 2026-09-15. Historical roadmap with an obsolete baseline and work order; spellcasting is the active product plan. Unfinished proposals remain historical, not completed.
+> See [current documentation](../../SPELLCASTING_PLAN.md). Claims and measurements below describe the historical revision.
+
 **World API and prompt-driven sandbox roadmap**
 
 Prepared 2026-09-07 from the current working tree, including its uncommitted changes. This is an implementation plan, not a claim that the proposed capabilities exist. Prioritize the World API and the player creation loop; keep the existing Rust runtime, local LLM, Lua, and four-player listen-server scope.
@@ -57,7 +60,7 @@ This exercises spatial grounding, building, persistent named objects, region-sco
 | Persistence | One `saves/world.bin`; seed, block edits, camera/player position, time, and module name/prompt/source/enabled. | Add versioned worlds and durable rule state before creations depend on them. |
 | Multiplayer | Custom UDP retry/ack channel and best-effort snapshots. Player movement is client-simulated; inventory queries/removal work only for the host. | Lua authority exists, but gameplay authority is incomplete. |
 
-Evidence: [schema](world_api/schema.yaml), [runtime](src/scripting.rs), [generation](src/llm.rs), [generation orchestration](src/app.rs), [UI](src/ui.rs), [save code](src/save.rs), [networking](src/net.rs).
+Evidence: [schema](../../world_api/schema.yaml), [runtime](../../src/scripting.rs), [generation](../../src/llm.rs), [generation orchestration](../../src/app.rs), [UI](../../src/ui.rs), [save code](../../src/save.rs), [networking](../../src/net.rs).
 
 **Gaps that directly limit player creativity**
 

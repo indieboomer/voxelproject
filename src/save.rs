@@ -12,6 +12,7 @@ use crate::voxel::World;
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct CraftingSave {
+    pub spellbook: crate::spellbook::Spellbook,
     pub starter_camp: Option<(i32, i32, i32)>,
     /// Complete scrollback, independent of the bounded on-screen log.
     pub chat_transcript: Vec<String>,
@@ -487,6 +488,26 @@ mod tests {
         assert_eq!(world.seed, 42);
         assert_eq!(crafting.host, crate::crafting::Account::default());
         assert!(crafting.creatures.is_none());
+        assert!(crafting.spellbook.spells.is_empty());
+    }
+    #[test]
+    fn spellbook_survives_world_envelope_and_old_json_defaults_without_changing_modules() {
+        let mut crafting=CraftingSave::default();
+        let source=include_str!("../modules/target_heal.lua");
+        let module=crate::scripting::Module::load("Heal".into(),"Heal my target".into(),source.into()).unwrap();
+        let id=crafting.spellbook.remember(&module,"Host").unwrap();
+        let mut world=world_save();world.modules.push(module.to_save_entry());
+        let bytes=encode_save(world,&crafting,&Default::default()).unwrap();
+        let (world,mut restored,_)=decode_save(&bytes).unwrap();
+        restored.spellbook.revalidate();
+        let spell=restored.spellbook.get(id).unwrap();
+        assert!(spell.ready());assert_eq!(spell.source,source);
+        assert_eq!(world.modules[0].source,source);
+        let mut json:serde_json::Value=serde_json::from_slice(bytes.strip_prefix(MAGIC).unwrap()).unwrap();
+        json["crafting"].as_object_mut().unwrap().remove("spellbook");
+        let mut old=MAGIC.to_vec();old.extend(serde_json::to_vec(&json).unwrap());
+        let (world,restored,_)=decode_save(&old).unwrap();
+        assert!(restored.spellbook.spells.is_empty());assert_eq!(world.modules[0].source,source);
     }
     #[test]
     fn automation_save_preserves_paid_batches_and_packed_devices() {

@@ -1220,6 +1220,11 @@ impl Creatures {
 
     /// Weapon reach is measured to the body, not the feet origin of a giant model.
     pub fn weapon_target(&self, world: &World, eye: Vec3, dir: Vec3, reach: f32) -> Option<u32> {
+        self.aimed_body(world, eye, dir, reach).map(|(id, _)| id)
+    }
+
+    /// Shared creature targeting for equipment and reviewed spells.
+    pub fn aimed_body(&self, world: &World, eye: Vec3, dir: Vec3, reach: f32) -> Option<(u32, f32)> {
         let mut best = None;
         let mut distance = reach;
         for (_, (id, kind, pos, facing)) in self.ecs.query::<(&CreatureId, &Kind, &Pos, &Facing)>().iter() {
@@ -1232,7 +1237,7 @@ impl Creatures {
             };
             if let Some(t) = hit {
                 if t < distance && crate::raycast::raycast(world, eye, dir, t).is_none() {
-                    best = Some(id.0);
+                    best = Some((id.0, t));
                     distance = t;
                 }
             }

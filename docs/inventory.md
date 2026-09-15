@@ -1,4 +1,4 @@
-# Inventory
+# Inventory and hotbar
 
 Health and mana appear in the top row. Selecting equipment exposes creation and
 decomposition; selecting a resource exposes elemental extraction. See
@@ -37,3 +37,27 @@ their food. Eating does not cure poison. The host validates inventory revisions,
 consumes one item, and applies healing; duplicate requests cannot consume twice.
 Raw and cooked meat are inventory resources and cannot be placed as terrain.
 Aim at a campfire and press **F** to cook raw meat individually or in batches of up to 64.
+
+## Hotbar use and authority
+
+During gameplay, **1–9** selects a slot and the **mouse wheel** cycles assigned
+slots, including depleted assignments. New accounts assign axe, pickaxe and sword
+to slots 1–3. Clearing a slot leaves its inventory intact and enables empty hands.
+Existing depleted assignments become usable again when their stack is replenished.
+
+Resources place blocks; compatible tools mine; weapons use their equipment action.
+Empty hands gather explicitly hand-pickable plants. A depleted resource assignment
+does not count as an empty hand. Axes handle wood/plants and pickaxes handle
+stone/ore/soil; specialist equipment supplies additional categories. Bow and longbow
+are currently disabled by `Gear::enabled` in `src/equipment.rs`.
+
+Accounts save equipment counts, all nine assignments and the selected slot. The host
+validates item actions against ownership, revisions, range, visibility, tool rules,
+placement constraints and balances. Guests send intentions; authoritative snapshots
+replicate held items and inventory. Steam accounts use Steam identity; Direct guests
+should retain their nickname to recover saved inventory.
+
+Target outlines are configurable in [settings](UI_SETTINGS.md), and remote held-item
+animation is described in [player animations](PLAYER_ANIMATIONS.md). Current hotbar
+entries reference resources or equipment. Stable spell references and repeated
+targeted casting are planned in [the spellcasting plan](../SPELLCASTING_PLAN.md).

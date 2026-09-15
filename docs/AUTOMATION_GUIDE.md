@@ -1,6 +1,6 @@
 # Magical production
 
-Implemented from [AUTOMATION.md](../AUTOMATION.md). Sixteen devices run on the authoritative host, including in single-player. Production does not call the LLM.
+Implemented from [AUTOMATION.md](archive/AUTOMATION.md). Sixteen devices run on the authoritative host, including in single-player. Production does not call the LLM.
 
 ## Build and operate
 
@@ -110,7 +110,7 @@ Sensors latch on at `value >= upper` and off at `value <= lower`. State emits 0/
 
 **Settings → Gameplay → Mana-free actions (testing)** disables mana requirements and spending for crafting/decomposition, gear, generated rules, instant casts, explicit Lua `take_mana`, condensers, workshops, and personal vessel charging. Materials, processing time, storage limits, and other checks still apply. The option defaults off and is saved in `settings.json`. The host controls it for all players; changing it while joined only changes your preference for a future hosted session. Turn it off to restore costs; existing paid batches finish with their original payment. Actual balances are preserved rather than filled to an artificial maximum. Custom Lua checks against hard-coded mana thresholds still see real balances; use the API cost constants for engine fees.
 
-[data/automation.json](data/automation.json) contains build costs, capacities, throughput, durations, default ports, and element conversion costs/returns. It is embedded at build time, like the existing recipe registry. Edit and rebuild all peers together. Existing ordered recipes and their mana costs remain in [data/crafting.json](data/crafting.json).
+[data/automation.json](../data/automation.json) contains build costs, capacities, throughput, durations, default ports, and element conversion costs/returns. It is embedded at build time, like the existing recipe registry. Edit and rebuild all peers together. Existing ordered recipes and their mana costs remain in [data/crafting.json](../data/crafting.json).
 
 The default is 64 active devices and a 100 ms fixed host tick. Each tick measures/propagates signals, gathers shared ambient supply, transfers mana, transfers matter, then advances production. Stable cell/port order with rotating source and mana-destination priority makes allocation deterministic. Sources cannot forward newly received stock in the same tick; both inbound and outbound throughput are bounded. No network graph cache needs invalidation when devices rotate or disappear.
 
@@ -122,7 +122,7 @@ Multiplayer uses protocol **31**. Clients send requests; only the host changes i
 
 ## Prompting / World API 1.25.0
 
-The generated [World API reference](world_api/world_api_readme.md), compact prompt documentation, and Lua stubs include:
+The generated [World API reference](../world_api/world_api_readme.md), compact prompt documentation, and Lua stubs include:
 
 - `get_device(x,y,z)` and `get_devices()` for host snapshots, inventory counts, and activity.
 - `set_device_enabled(x,y,z,enabled)` for conditional production rules.
@@ -143,7 +143,7 @@ end
 
 ## Art and replacement assets
 
-Original procedural meshes in [src/automation_mesh.rs](src/automation_mesh.rs) use carved-looking wooden frames, ceramic pots, copper rings, stone markers, moving sparks, workshop rotation, and visible valve positions. They need no downloads, textures, or external licenses. Simulation and rendering are separate; final assets are not loaded yet.
+Original procedural meshes in [src/automation_mesh.rs](../src/automation_mesh.rs) use carved-looking wooden frames, ceramic pots, copper rings, stone markers, moving sparks, workshop rotation, and visible valve positions. They need no downloads, textures, or external licenses. Simulation and rendering are separate; final assets are not loaded yet.
 
 Manually supplied models can replace these props: `mana_collector.glb`, `mana_vessel.glb`, `element_condenser.glb`, `element_dissipator.glb`, `mana_conduit.glb`, `matter_channel.glb`, `filter_splitter.glb`, `feeding_chest.glb`, `formula_workshop.glb`, `threshold_sensor.glb`, `controlled_valve.glb`, and `signal_connector.glb`. A distinct matter-valve variant and modular straight/corner/vertical connector pieces would improve readability.
 

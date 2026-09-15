@@ -45,7 +45,7 @@ compression so large model packaging remains quick. Plan for roughly three copie
 of the payload while keeping the ZIP, extracted folder and installed game.
 
 Steam editions start with Steam selected (test App ID 480); Direct remains available
-in Settings. See `STEAM_MULTIPLAYER.md` for current multiplayer limitations.
+in Settings. See [Steam multiplayer](docs/STEAM_MULTIPLAYER.md) for current multiplayer limitations.
 Hosting prewarms inference. Guests start their local server on their first prompt
 when the host enables guest prompting in Settings. Menu-only and non-prompting guests
 do not start a server. The default full package includes AI for both hosts and guests;

@@ -763,6 +763,7 @@ impl App {
     }
     fn crafting_save(&self) -> crate::save::CraftingSave {
         crate::save::CraftingSave {
+            spellbook: self.scripting.spellbook.clone(),
             starter_camp: self.world.starter_camp,
             chat_transcript: self.chat_transcript.clone(),
             npcs: self.npcs.clone(),
@@ -1277,7 +1278,7 @@ impl App {
             net,
             local_player_id,
             spawn_creatures,
-            scripting,
+            mut scripting,
         ) = match launch.connect {
             None => {
                 let loaded = if launch.fresh { None } else { Some(load_world(&launch.world_name).ok_or_else(||format!("Could not load world {}. The save is missing, corrupt or incompatible.",launch.world_name))?) };
@@ -1372,6 +1373,8 @@ impl App {
             }
         };
 
+        scripting.spellbook=std::mem::take(&mut crafting_save.spellbook);
+        scripting.spellbook.revalidate();
         let mut camera = Camera::new(spawn_pos, config.width as f32 / config.height as f32);
         camera.yaw = yaw;
         camera.pitch = pitch;
@@ -1573,6 +1576,14 @@ impl App {
                 let PhysicalKey::Code(code) = key_event.physical_key else {
                     return;
                 };
+                if self.ui.spellbook.open {
+                    if code==KeyCode::F5 && !key_event.repeat {self.input.save_requested=true;}
+                    if code==KeyCode::Escape && !key_event.repeat {self.ui.spellbook.open=false;self.sync_settings_input();}
+                    return;
+                }
+                if code==KeyCode::KeyK && !key_event.repeat && self.cursor_grabbed {
+                    self.ui.spellbook.open=true;self.sync_settings_input();return;
+                }
                 if self.ui.journal.open {
                     if !key_event.repeat && matches!(code,KeyCode::Escape|KeyCode::KeyJ) {
                         self.ui.journal.open=false;self.sync_settings_input();
@@ -1668,7 +1679,7 @@ impl App {
                 }
             }
             WindowEvent::MouseInput { state, button, .. }
-                if !self.ui.journal.open && !self.ui.automation.open && !self.ui.map.open && !self.ui.inventory_open && !self.ui.settings.open && !self.crafting_ui.open && !self.console_open && !self.quit_dialog_open && !self.chat_open => {
+                if !self.ui.spellbook.open && !self.ui.journal.open && !self.ui.automation.open && !self.ui.map.open && !self.ui.inventory_open && !self.ui.settings.open && !self.crafting_ui.open && !self.console_open && !self.quit_dialog_open && !self.chat_open => {
                     self.input.mouse_button_event(*button, *state);
                     if *state == ElementState::Pressed
                         && *button == MouseButton::Left
@@ -1687,7 +1698,7 @@ impl App {
 
     fn sync_settings_input(&mut self) {
         self.input.release_all();self.input.end_frame();
-        self.grab_cursor(!self.ui.map.open && !self.ui.inventory_open && !self.ui.settings.open && !self.console_open && !self.chat_open
+        self.grab_cursor(!self.ui.spellbook.open && !self.ui.map.open && !self.ui.inventory_open && !self.ui.settings.open && !self.console_open && !self.chat_open
             && !self.crafting_ui.open && !self.quit_dialog_open && !self.ui.automation.open && !self.ui.journal.open);
     }
 
@@ -2107,7 +2118,9 @@ impl App {
                     self.scripting.save_entries(),
                     &self.crafting_save(),
                 );
-                match result {Ok(())=>self.notify_important(format!("Saved world: {}",self.world.name)),Err(e)=>self.notify_important(e)}
+                let message=match result {Ok(())=>format!("Saved world: {}",self.world.name),Err(e)=>e};
+                if self.ui.spellbook.open {self.ui.spellbook.feedback=message.clone();}
+                self.notify_important(message);
             } else {
                 log::warn!("Only the host can save the world.");
             }
@@ -2353,6 +2366,7 @@ impl App {
             NetRole::Joined(client) => client.socket.lobby_code(),
         };
         let settings_was_open = self.ui.settings.open;
+        let spellbook_was_open=self.ui.spellbook.open;
         let map_was_open=self.ui.map.open;
         let automation_was_open=self.ui.automation.open;
         let (full_output, requests) = self.ui.draw(
@@ -2379,6 +2393,23 @@ impl App {
             lobby_code.as_deref(),
         );
         self.pending_egui_output = Some(full_output);
+        if spellbook_was_open!=self.ui.spellbook.open {self.sync_settings_input();}
+        if requests.open_spellbook {
+            self.console_open=false;self.chat_open=false;self.crafting_ui.open=false;
+            self.ui.inventory_open=false;self.ui.spellbook.open=true;self.sync_settings_input();
+        }
+        if let Some(index)=requests.remember_index {
+            if matches!(self.net,NetRole::Host(_)) {
+                let result=self.scripting.modules.get(index).ok_or_else(||"Spell no longer exists".to_string())
+                    .and_then(|module|self.scripting.spellbook.remember(module,&self.local_nickname));
+                match result {
+                    Ok(id)=>{self.ui.spellbook.selected=Some(id);self.ui.spellbook.open=true;
+                        self.console_open=false;self.ui.spellbook.feedback="Remembered. Save the world with F5 to keep this spell.".into();self.sync_settings_input();}
+                    Err(error)=>self.notify_important(error),
+                }
+            }
+        }
+        if let Some(action)=requests.spellbook_action {self.spellbook_action(action);}
         if map_was_open!=self.ui.map.open {self.sync_settings_input();}
         if automation_was_open!=self.ui.automation.open {self.sync_settings_input();}
         if let Some(action)=requests.automation {self.submit_automation(action);}
@@ -3107,6 +3138,10 @@ impl App {
     /// the UI, checked again here since `requests.run_index` is plain user
     /// input the UI layer can't fully trust on its own).
     fn run_instant(&mut self, index: usize) {
+        self.run_instant_with_target(index,None);
+    }
+
+    fn run_instant_with_target(&mut self, index: usize, remembered_target:Option<crate::spellbook::TargetRequirement>) {
         if !matches!(self.net, NetRole::Host(_)) {
             return;
         }
@@ -3120,7 +3155,9 @@ impl App {
             self.notify_important("Rules are busy. Try casting again shortly; no mana spent.".into());return;
         }
         let name = module.name.clone();
-        let caster_account = crate::rule_sharing::caster_account(&module.source);
+        // Authorship is retained in the Spellbook, but a remembered spell casts
+        // as its current user. Legacy guest proposals keep their original caster.
+        let caster_account = if remembered_target.is_some() {None} else {crate::rule_sharing::caster_account(&module.source)};
         let players = self.host_player_positions();
         let caster_id = if let Some(ref account) = caster_account {
             let NetRole::Host(host) = &self.net else { return; };
@@ -3133,6 +3170,18 @@ impl App {
         } else { HOST_PLAYER_ID };
         let Some(caster) = players.iter().find(|player| player.id == caster_id) else { return; };
         let caster_resources = caster.resources;
+        // Stage 1A uses the host's current aim. Guest proposals retain their
+        // original untargeted execution until guest cast requests are implemented.
+        let target_context = if caster_id == HOST_PLAYER_ID {
+            crate::spell_target::TargetContext::resolve(&self.world, &self.creatures,
+                self.camera.eye_position(), self.camera.forward())
+        } else { None };
+        if let Some(required)=remembered_target {
+            if !required.accepts(target_context.map(|c|c.target)) {
+                self.ui.spellbook.feedback=format!("Aim at a {} within 18 blocks. No mana spent.",required.label().to_lowercase());
+                return;
+            }
+        }
         let balance = caster_account.as_ref().and_then(|key|self.guest_accounts.get(key)).unwrap_or(&self.player.crafting);
         let mut check = balance.clone();
         if let Err(error) = check.spend_mana(self.crafting_registry.mana_charge(crate::crafting::INSTANT_MANA)) {
@@ -3143,7 +3192,11 @@ impl App {
         account.mana-=self.crafting_registry.mana_charge(crate::crafting::INSTANT_MANA);
         account.revision=account.revision.saturating_add(1);
         let players=self.host_player_positions();
-        let outcome = self.scripting.run_cast(
+        let outcome = if let Some(context) = target_context {
+            self.scripting.run_targeted_cast(index, &self.world, &mut self.creatures,
+                &players, &mut self.time_of_day, &mut self.weather, caster_id,
+                caster_resources, context)
+        } else { self.scripting.run_cast(
             index,
             &self.world,
             &mut self.creatures,
@@ -3152,7 +3205,7 @@ impl App {
             &mut self.weather,
             caster_id,
             caster_resources,
-        );
+        ) };
         self.apply_tick_outcome(outcome);
         if self.scripting.cast_succeeded(index, caster_id) {
             self.notify_all(format!("Host requested cast '{name}'"));
@@ -3162,6 +3215,56 @@ impl App {
             account.revision=account.revision.saturating_add(1);
         }
         self.sync_guest_mana();
+    }
+
+    fn spellbook_action(&mut self,action:crate::spellbook_ui::Action) {
+        use crate::spellbook_ui::Action;
+        if !matches!(self.net,NetRole::Host(_)) {return;}
+        let result=match action {
+            Action::Update(id,name,target)=>self.scripting.spellbook.update(id,name,target)
+                .map(|()|"Spell updated. Save the world with F5.".to_string()),
+            Action::Duplicate(id)=>self.scripting.spellbook.duplicate(id).map(|new_id|{
+                self.ui.spellbook.selected=Some(new_id);"Spell duplicated. Save the world with F5.".into()
+            }),
+            Action::Delete(id)=>self.scripting.spellbook.delete(id).map(|()|{
+                self.scripting.spell_cooldowns.remove(&id);self.ui.spellbook.selected=None;
+                "Spell deleted. Its previously cast effects remain in the world.".into()
+            }),
+            Action::Cast(id)=>{self.cast_remembered_spell(id);return;}
+        };
+        self.ui.spellbook.feedback=result.unwrap_or_else(|error|error);
+    }
+
+    fn cast_remembered_spell(&mut self,id:crate::spellbook::SpellId) {
+        let result=(||->Result<(usize,crate::spellbook::Spell),String>{
+            if !self.scripting.can_cast_immediately() {return Err("Rules are busy; try again. No mana spent.".into());}
+            let spell=self.scripting.spellbook.get(id).ok_or("Spell no longer exists")?.clone();
+            if !spell.ready() {return Err("This spell needs compatibility review".into());}
+            if self.player.health<=0. {return Err("Defeated players cannot cast".into());}
+            let cost=self.crafting_registry.mana_charge(spell.mana_cost);
+            if self.player.crafting.mana<cost {return Err(format!("This spell needs {cost} mana"));}
+            if let Some(last)=self.scripting.spell_cooldowns.get(&id) {
+                let remaining=spell.cooldown_seconds-last.elapsed().as_secs_f32();
+                if remaining>0.0 {return Err(format!("Ready in {remaining:.1} seconds. No mana spent."));}
+            }
+            let module=spell.compiled()?;
+            let index=self.scripting.add_generated(module)?;
+            Ok((index,spell))
+        })();
+        let (index,spell)=match result {
+            Ok(value)=>value,Err(error)=>{self.ui.spellbook.feedback=error;return;}
+        };
+        self.ui.spellbook.feedback="Cast failed; no mana spent.".into();
+        self.run_instant_with_target(index,Some(spell.target));
+        if self.scripting.cast_succeeded(index,HOST_PLAYER_ID) {
+            self.scripting.spell_cooldowns.insert(id,std::time::Instant::now());
+            self.ui.spellbook.feedback=format!("Cast {}.",spell.name);
+        } else if let Some(error)=self.scripting.modules.get(index).and_then(|m|m.error.as_ref()) {
+            self.ui.spellbook.feedback=format!("Cast failed: {error}. No mana spent.");
+        }
+        // The definition lives in Spellbook; the temporary execution module must
+        // not become a second saved rule or continue running after a failed cast.
+        self.scripting.remove(index);
     }
 
     fn poll_network(&mut self, dt: f32) {

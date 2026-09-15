@@ -1,5 +1,14 @@
 # Lighting and surface weather
 
+## Exploration scheduling
+
+Terrain generation caches height samples and streams missing chunks nearest-first.
+The immediate collision neighborhood loads before physics. Terrain and shadow
+passes cull cached meshes to their respective visible areas, while neighboring
+chunk changes invalidate boundary meshes. The [original exploration report](archive/PERFORMANCE.md)
+preserves earlier benchmarks; use the newer measurements and profiling commands
+below when assessing the current renderer.
+
 ## Cave movement and contact shading
 
 The AO refinement and later strength adjustment have been reverted. Terrain

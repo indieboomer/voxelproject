@@ -1,3 +1,6 @@
+> Archived 2026-09-15. Pre-implementation investigation; the interpreted pipeline is now implemented.
+> See [current documentation](../PROMPT_PIPELINE.md). Claims and measurements below describe the historical revision.
+
 # Natural-language rule interpretation analysis
 
 ## Finding
@@ -8,7 +11,7 @@ Less technical requests are feasible with a local model, but the current direct-
 
 Confirmed running model: Qwen2.5-Coder-7B-Instruct Q4_K_M, served by llama.cpp on localhost:8090. Tests used temperature 0.2, max_tokens 800 (400 for a constrained plan), fixed seed 42. Current full system prompt plus request used about 8,700 input tokens. The server reported 111,616 context tokens per slot, so these requests were not exceeding its context window. This is a small qualitative probe, not an accuracy benchmark. Outputs were inspected; generated rules were not enabled in the game.
 
-Raw requests' resulting outputs and timings: [target/prompt-intent-analysis.json](target/prompt-intent-analysis.json).
+Raw requests' resulting outputs and timings: [target/prompt-intent-analysis.json](../../target/prompt-intent-analysis.json).
 
 | Experiment | Finding |
 |---|---|

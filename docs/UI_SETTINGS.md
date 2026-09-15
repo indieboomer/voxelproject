@@ -79,4 +79,4 @@ The Multiplayer section now selects Direct / LAN or Steam friends for the next s
 
 ## Hotbar and targeting
 
-See [HOTBAR.md](HOTBAR.md) for the nine-slot hotbar, E inventory assignment panel, tool requirements and multiplayer persistence. Settings > Gameplay > Show block targeting outlines toggles the local gold/green/red target previews.
+See [inventory and hotbar](inventory.md) for the nine-slot hotbar, I inventory assignment panel, tool requirements and multiplayer persistence. Settings > Gameplay > Show block targeting outlines toggles the local gold/green/red target previews.

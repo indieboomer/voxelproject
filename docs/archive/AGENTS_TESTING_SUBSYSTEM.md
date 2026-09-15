@@ -1,3 +1,6 @@
+> Archived 2026-09-15. Original playtesting proposal; implementation status and open phases are tracked separately.
+> See [current documentation](../PLAYTESTING_PLAN.md). Claims and measurements below describe the historical revision.
+
 Build a **development-only AI playtesting system**, starting with one agent completing short tasks through normal player actions. Expand only after it produces reproducible, useful findings.
 
 The first goal is to discover broken or confusing gameplay sequences. Feedback about enjoyment should remain a hypothesis for human playtesting.

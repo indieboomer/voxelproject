@@ -66,6 +66,9 @@ pub struct ChatEntry {
 /// state directly.
 #[derive(Default)]
 pub struct UiRequests {
+    pub remember_index: Option<usize>,
+    pub spellbook_action: Option<crate::spellbook_ui::Action>,
+    pub open_spellbook: bool,
     pub eat_food: Option<crate::voxel::BlockType>,
     pub camp_action: Option<crate::adventure::Action>,
     pub quest_action: Option<crate::quests::Action>,
@@ -89,6 +92,7 @@ pub struct UiRequests {
 }
 
 pub struct Ui {
+    pub spellbook: crate::spellbook_ui::Panel,
     pub compass_yaw:f32,
     pub machine_compass:[Option<egui::Pos2>;5],
     pub journal: crate::adventure_ui::Journal,
@@ -137,6 +141,7 @@ impl Ui {
         let state = State::new(ctx.clone(), egui::ViewportId::ROOT, window, None, None);
         let renderer = Renderer::new(device, output_format, None, 1);
         Self {
+            spellbook: Default::default(),
             pickup_rows:Vec::new(),
             journal: Default::default(),
             automation: Default::default(),
@@ -276,6 +281,11 @@ impl Ui {
                 self.settings.draw(ctx);
                 return;
             }
+            if self.spellbook.open {
+                requests.spellbook_action=self.spellbook.draw(ctx,&scripting.spellbook,is_host,
+                    registry.mana_charge(crate::crafting::INSTANT_MANA)==0);
+                return;
+            }
             if self.journal.open {
                 requests.camp_action=self.journal.draw(ctx,player);
                 requests.quest_action=self.journal.quest_request.take();
@@ -301,6 +311,7 @@ impl Ui {
                 .resizable(false)
                 .collapsible(true)
                 .show(ctx, |ui| {
+                    if ui.button("Spellbook (K)").clicked() {requests.open_spellbook=true;}
                     if scripting.modules.is_empty() {
                         ui.label("No rules or spells loaded. Press ~ to describe one.");
                     }
@@ -329,6 +340,7 @@ impl Ui {
                             }
                             if is_host {
                                 if m.is_instant {
+                                    if ui.small_button("Remember").clicked() {requests.remember_index=Some(i);}
                                     if ui.small_button(format!("Run ({} mana)",registry.mana_charge(crate::crafting::INSTANT_MANA))).clicked() {
                                         requests.run_index = Some(i);
                                     }

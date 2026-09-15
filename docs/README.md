@@ -3,10 +3,32 @@
 Voxel Project is a Rust voxel sandbox with a custom wgpu renderer, authoritative
 multiplayer simulation, and local-AI-assisted sandboxed Lua rules.
 
+**Active plan:** [Targeted spells and persistent enchantments](../SPELLCASTING_PLAN.md).
+Read [project state](project.md) for the implementation baseline and open acceptance
+work. [Archived plans and reports](archive/README.md) retain historical material.
+
+## Build and feature references
+
+| Guide | Contents |
+| --- | --- |
+| [Spellcasting implementation](SPELLCASTING.md) | Targeted casts, persistent host Spellbook, validation and pending stages |
+| [Windows packaging](../PACKAGING.md) / [macOS](../macos/README.md) | Build and distribute playable bundles |
+| [Steam and Direct multiplayer](STEAM_MULTIPLAYER.md) | Hosting, joining, identity, compatibility and open manual checks |
+| [Crafting](CRAFTING.md) / [Resources](RESOURCES.md) | Ordered formulas, catalog, authoring and save behavior |
+| [Automation](AUTOMATION_GUIDE.md) | Devices, connections, production and World API |
+| [Prompt pipeline](PROMPT_PIPELINE.md) | Interpretation, validation, review, guest proposals and measured latency |
+| [World generation](WORLD_GENERATION.md) / [Terrain](TERRAIN.md) | Prompted presets, geography and underwater presentation |
+| [UI and settings](UI_SETTINGS.md) | Themes, preferences and targeting feedback |
+| [Player animations and chat](PLAYER_ANIMATIONS.md) | Gestures, held items, bubbles and emoticons |
+| [Adventure](ADVENTURE_GUIDE.md) / [Storage and underground](STORAGE_AND_UNDERGROUND.md) | Camp progression, exploration, chests and saves |
+| [Development playtesting](PLAYTESTING_PLAN.md) | Development-only agent tooling and unfinished acceptance gates |
+
+## System guides
+
 | Guide | Contents |
 | --- | --- |
 | [Project state](project.md) | Implemented systems, architecture, remaining acceptance work |
-| [Prompting](prompting.md) | World API 1.22, examples, transactions and limits |
+| [Prompting](prompting.md) | World API usage, examples, transactions and limits |
 | [Campfires](campfires.md) | Generation, visuals, light, persistence, API |
 | [Fish](fish.md) | Habitat, swimming, spawning and rule control |
 | [Wildlife](wildlife.md) | Creature visibility, exploration population, recycling and limits |

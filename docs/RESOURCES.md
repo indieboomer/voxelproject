@@ -111,7 +111,7 @@ Deposit parameters live in `data/resources.json`; the generator emits `src/voxel
 
 The automated survey samples **432 chunks across seeds 7, 42 and 2026**, spanning positive and negative coordinates. It finds every naturally available resource and no crafting-only material. Sample block totals: iron ore 12,331, coal 13,711, mithril ore 1,243, moonstone 462, peat 1,594 and flax 911. Iron and coal are about three times as frequent as before this ground-cover expansion (previously 4,025 and 4,492). Basic stone remains over half of solid terrain. Full survey output is `target/resource-distribution.csv`; these are deterministic sample counts, not guaranteed yields for every world or spawn point. Underground access and player pacing still warrant playtesting.
 
-Legacy enum values and the first 23 inventory positions are unchanged. Old 23-slot and 72-slot JSON inventory arrays are padded with zeroes for the new slots; host and guest accounts retain their counts. Existing saved block edits remain. Unedited terrain is regenerated from the seed, so loading an older world exposes the new deposits and plants even in previously visited terrain. Back up an old save if its exact unedited landscape matters. Network protocol is now **5**: all Steam/Direct participants need the new build.
+Legacy enum values and the first 23 inventory positions are unchanged. Old 23-slot and 72-slot JSON inventory arrays are padded with zeroes for the new slots; host and guest accounts retain their counts. Existing saved block edits remain. Unedited terrain is regenerated from the seed, so loading an older world exposes the new deposits and plants even in previously visited terrain. Back up an old save if its exact unedited landscape matters. All Steam/Direct participants need the same build; see `src/net.rs::PROTOCOL_VERSION`.
 
 Gold, diamond and emerald ore extraction yields were increased to better reward their rarity and hardness. Grass now yields Earth and Life; grass tufts and grass terrain have distinct display names. Stone now uses Earth 1 -> Water 1; pumpkin uses Earth 1 -> Water 1 -> Life 2. Redstone and pumpkin are classified as resources, with no new item system. Water remains nonstackable; use leaves, reeds or rock salt for extractable Water.
 
@@ -119,7 +119,7 @@ Gold, diamond and emerald ore extraction yields were increased to better reward 
 
 All **94 resource source PNGs** are now drawn by local procedural generators, including the unused placeholder. The live atlas contains **93 resource face tiles plus the synthetic white tile**. The provenance audit identified 62 previously generated active tiles and 30 legacy active tiles; the legacy art was replaced from scratch, and all locally generated art was regenerated too. Separate log bark/end-grain, basalt faces, grass sides/soil bottom and pumpkin top/side/underside are preserved or corrected. Leaves and plants retain cutout transparency. No external image files are inputs to the generators. Glass remains an opaque patterned material block rather than a window pane.
 
-See [texture inventory](textures/RESOURCE_TEXTURES.md). `target/resource-textures.png` is the generated contact sheet. All new texture art is generated locally from deterministic drawing code; it has no external asset dependency.
+See [texture inventory](../textures/RESOURCE_TEXTURES.md). `target/resource-textures.png` is the generated contact sheet. All new texture art is generated locally from deterministic drawing code; it has no external asset dependency.
 
 Resource authoring uses `data/resources.json`; base terrain and multi-face texture specifications use `data/base_textures.json`. Resource edits generate crafting entries while preserving existing creature entries:
 
@@ -141,6 +141,6 @@ Verification on 2026-09-09: 263 automated tests passed in each of the Direct and
 
 Ten additional natural resources provide ground-level visual variety: fern, clover, lavender, red poppy, bluebell, cattail, brown mushroom, glowcap, thorn bush and dry shrub. Each has a distinct pixel texture, extraction composition and inventory entry. Flowers and shrubs favor meadow/upland terrain, cattails favor wet ground, and ferns, bluebells and mushrooms favor tree shade. Coarse deterministic patches and local placement rolls create clumps; existing terrain decorations are preserved. Glowcaps have gentle self-emission. These resources are gathered and extracted, with no new crafting formulas or consumable-item effects.
 
-The same 432-chunk survey found all ten additions, including 238 glowcaps and 1,245 dry shrubs. Ore coverage now includes the buried soil stratum while leaving surface blocks and bedrock intact. Both Direct and Steam participants must update to protocol 5.
+The same 432-chunk survey found all ten additions, including 238 glowcaps and 1,245 dry shrubs. Ore coverage now includes the buried soil stratum while leaving surface blocks and bedrock intact. Both Direct and Steam participants must use the same build.
 
 Landscape generation now also includes rivers, lakes and rocky mountain tops. See [terrain notes](TERRAIN.md). The latest distribution counts above include these features.

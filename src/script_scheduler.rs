@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 pub(super) enum Event {
     Tick,
     Cast(PlayerId),
+    TargetedCast(PlayerId, crate::spell_target::TargetContext),
     Death(DeathEvent),
     BlockBreak(BlockBreakEvent),
     Interact(InteractEvent),
@@ -218,13 +219,14 @@ impl Event {
         match self {
             Self::Tick => Callback::Tick,
             Self::Cast(id) => Callback::Cast(*id),
+            Self::TargetedCast(id, context) => Callback::TargetedCast(*id, *context),
             Self::Death(e) => Callback::Death(e),
             Self::BlockBreak(e) => Callback::BlockBreak(e),
             Self::Interact(e) => Callback::Interact(e),
         }
     }
     fn accepts(self, m: &Module) -> bool {
-        (if matches!(self, Self::Cast(_)) {
+        (if matches!(self, Self::Cast(_) | Self::TargetedCast(..)) {
             m.is_instant
         } else {
             m.enabled && !m.is_instant
@@ -373,6 +375,11 @@ impl ScriptHost {
         }
     }
     pub fn can_cast_immediately(&self) -> bool { self.scheduler.pending == 0 }
+    pub(super) fn enqueue_targeted_cast(&mut self, index: usize, caster: PlayerId, context: crate::spell_target::TargetContext) {
+        if let Some(module) = self.modules.get(index) {
+            self.scheduler.enqueue(module, Event::TargetedCast(caster, context));
+        }
+    }
     pub fn cast_succeeded(&self, index: usize, caster: PlayerId) -> bool {
         self.modules.get(index).is_some_and(|m|self.last_cast_success==Some((m.runtime_id,caster)))
     }
@@ -423,13 +430,13 @@ impl ScriptHost {
             budget.record(module.last_work);
             match result {
                 Ok(()) => {
-                    if let Event::Cast(caster) = event {
+                    if let Event::Cast(caster) | Event::TargetedCast(caster, _) = event {
                         self.last_cast_success = Some((module.runtime_id,caster));
                         module.error = None;
                     }
                 }
                 Err(error) => {
-                    if matches!(event, Event::Cast(_)) {
+                    if matches!(event, Event::Cast(_) | Event::TargetedCast(..)) {
                         module.error = Some(error.to_string());
                         outcome
                             .crashes
