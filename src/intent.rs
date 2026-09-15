@@ -448,7 +448,7 @@ pub(super) fn generate_prepared(
             )
         } else if attached && !code.contains("get_rule_target") {
             Some("This attached rule must use api.get_rule_target() to address its saved object. Return if the target is nil.".into())
-        } else if let Err(error) = smoke_code(&code, kind) {
+        } else if let Err(error) = smoke_generated_code(&code, kind, prompt) {
             Some(error)
         } else {
             review(url, prompt, &plan, Some(&code))?
@@ -482,6 +482,22 @@ pub(crate) fn validate_candidate(code: &str, kind: PromptKind) -> Result<(), Str
 }
 
 fn smoke_code(code: &str, kind: PromptKind) -> Result<(), String> {
+    smoke_code_with_attachment(code,kind,None)
+}
+
+fn smoke_generated_code(code:&str,kind:PromptKind,prompt:&str)->Result<(),String> {
+    smoke_code(code,kind)?;
+    if prompt.contains("[BOUND_OBJECT_RULE]") {
+        for target in ["creature","block","device"] {
+            if !prompt.contains("[BOUND_TARGET:") || prompt.contains(&format!("[BOUND_TARGET:{target}]")) {
+                smoke_code_with_attachment(code,kind,Some(target))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn smoke_code_with_attachment(code: &str, kind: PromptKind, attachment:Option<&str>) -> Result<(), String> {
     use crate::{
         creature::{CreatureKind, Creatures},
         scripting::{Module, PlayerSnapshot, ScriptHost},
@@ -508,10 +524,24 @@ fn smoke_code(code: &str, kind: PromptKind) -> Result<(), String> {
     let pos = Vec3::new(8.5, 25.0, 8.5);
     let mut creatures = Creatures::new();
     creatures.spawn_one(CreatureKind::Wolf, pos, 1);
-    creatures.spawn_one(CreatureKind::Sheep, pos + Vec3::X, 2);
+    let sheep=creatures.spawn_one(CreatureKind::Sheep, pos + Vec3::X, 2);
     let mut host = ScriptHost::new();
     host.modules.push(module);
     host.modules[0].enabled = true;
+    if let Some(kind)=attachment {
+        use crate::{enchantment::{Binding,Reference},spell_target::Target,voxel::BlockType};
+        let target=match kind {
+            "creature"=>Target::Creature{id:sheep},
+            "device"=>{
+                let cell=(8,25,8);
+                world.automation.devices.insert(cell,crate::automation::Device::new(crate::automation::Kind::Chest,cell,0));
+                Target::Block{position:cell,material:BlockType::AutomationDevice}
+            },
+            _=>Target::Block{position:(8,24,8),material:BlockType::Stone},
+        };
+        let reference=Reference::capture(&mut world,&creatures,target)?;
+        host.attach_at(0,Binding{id:1,creator:0,target:reference,lost:None})?;
+    }
     for (weather_name, mut time) in [
         ("sunny", 0.25),
         ("rain", 0.25),
@@ -519,7 +549,7 @@ fn smoke_code(code: &str, kind: PromptKind) -> Result<(), String> {
         ("sunny", 0.75),
     ] {
         let players = [0, 7].map(|id| PlayerSnapshot {
-            finances: crate::scripting::InventoryBalances {mana:100,elements:[20;5],items:crate::gear_catalog::starter_counts(),..Default::default()},
+            finances: crate::scripting::InventoryBalances {held:Some(crate::equipment::Entry::Resource(crate::voxel::BlockType::Crystal)),mana:100,elements:[20;5],items:crate::gear_catalog::starter_counts(),..Default::default()},
             id,
             pos,
             resources: [1; COLLECTIBLE_BLOCKS.len()],
@@ -762,6 +792,24 @@ mod tests {
         p.actor_kind = "wolf\"; api.die(1)".into();
         assert!(p.validate(PromptKind::Rule).is_err());
         assert!(verify_policy(&plan(), "function on_tick(api) end").is_err());
+    }
+    #[test]
+    fn attached_smoke_exercises_creature_ids_and_equipped_item_branch() {
+        let prompt="[BOUND_OBJECT_RULE] [BOUND_TARGET:creature]";
+        let valid=include_str!("../modules/attached_crystal_follower.lua");
+        smoke_generated_code(valid,PromptKind::Rule,prompt).unwrap();
+        for field in ["creature_id","entity_id"] {
+            let broken=valid.replace("api.chase(target.id,",&format!("api.chase(target.{field},"));
+            // The old unattached-only fixture silently skipped the broken call.
+            smoke_code(&broken,PromptKind::Rule).unwrap();
+            let error=smoke_generated_code(&broken,PromptKind::Rule,prompt).unwrap_err();
+            assert!(error.contains("nil") && error.contains("chase"),"{error}");
+        }
+        for (kind,source) in [("block",include_str!("../modules/attached_block_ward.lua")),("device",include_str!("../modules/attached_device_ward.lua"))] {
+            smoke_generated_code(source,PromptKind::Rule,&format!("[BOUND_OBJECT_RULE] [BOUND_TARGET:{kind}]")).unwrap();
+            let broken=source.replace("local target = api.get_rule_target()","local target = api.get_rule_target(); if target then api.chase(nil,0,0,0) end");
+            assert!(smoke_generated_code(&broken,PromptKind::Rule,&format!("[BOUND_OBJECT_RULE] [BOUND_TARGET:{kind}]")).is_err());
+        }
     }
     #[test]
     fn custom_smoke_checks_callback_and_runtime_contract() {

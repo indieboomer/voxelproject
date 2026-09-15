@@ -722,6 +722,7 @@ pub struct App {
     spell_fx: crate::spell_fx::Effects,
     spell_network: crate::spell_network::State,
     generation_attachment:Option<crate::enchantment::Reference>,
+    console_attachment:Result<crate::enchantment::Reference,String>,
     enchantment_summaries:Vec<crate::enchantment::Summary>,
     enchantment_revision:u64,
     generation_original_prompt:Option<String>,
@@ -1533,6 +1534,7 @@ impl App {
             spell_fx: crate::spell_fx::Effects::default(),
             spell_network: crate::spell_network::State::default(),
             generation_attachment:None,enchantment_summaries:Vec::new(),
+            console_attachment:Err("Open the console while aiming at an object.".into()),
             enchantment_revision:0,generation_original_prompt:None,
             mana_timer: 0.0,
             mining_target: None,
@@ -1685,7 +1687,7 @@ impl App {
                     }
                     return;
                 }
-                if code == KeyCode::Backquote && !self.quit_dialog_open && !self.chat_open {
+                if code == KeyCode::Backquote && !key_event.repeat && !self.quit_dialog_open && !self.chat_open {
                     self.toggle_console();
                     return;
                 }
@@ -1757,6 +1759,9 @@ impl App {
     }
 
     fn open_console(&mut self) {
+        if self.console_open {return;}
+        self.update_enchantment_view();
+        self.console_attachment=self.capture_enchantment_target();
         self.console_open = true;
         self.input.release_all();
         self.grab_cursor(false);
@@ -2681,14 +2686,15 @@ impl App {
         self.generation_attachment=None;
         self.generation_original_prompt=None;
         if self.ui.attach_generation && matches!(self.net,NetRole::Host(_)) {
-            match self.capture_enchantment_target() {
+            match self.selected_enchantment_target() {
                 Ok(target)=>{self.generation_attachment=Some(target);self.generation_original_prompt=Some(user_request.clone());},
                 Err(error)=>{self.notify_important(error);return;}
             }
         }
         let kind = if self.generation_attachment.is_some() {PromptKind::Rule}else{classify_prompt(&user_request)};
         let user_request=if let Some(target)=&self.generation_attachment {
-            format!("{user_request}\n[BOUND_OBJECT_RULE] Persistent single-object rule for {}. Use api.get_rule_target() in on_tick to read the bound target and creator_id; do not hard-code IDs or coordinates. If there is no bound target, return. The engine stops the rule when this object disappears or is replaced.",target.label())
+            let kind=match target.object {crate::enchantment::Object::Creature{..}=>"creature",crate::enchantment::Object::Block{..}=>"block",crate::enchantment::Object::Device{..}=>"device"};
+            format!("{user_request}\n[BOUND_OBJECT_RULE] [BOUND_TARGET:{kind}] Persistent single-object rule for {}. Use api.get_rule_target() in on_tick to read the bound target and creator_id; do not hard-code IDs or coordinates. Creature ID is target.id, not target.creature_id or target.entity_id. Use api.chase(target.id, player.x, player.y, player.z) only for kind='creature'. If there is no bound target, return. The engine stops the rule when this object disappears or is replaced.",target.label())
         }else{user_request};
         if user_request.len()>crate::rule_sharing::MAX_PROMPT_BYTES {
             self.notify_important("Shorten this prompt slightly to leave room for the attachment context.".into());return;

@@ -1,6 +1,12 @@
 use super::*;
 use crate::enchantment::{Binding,Reference,Summary};
 impl App {
+    pub(super) fn selected_enchantment_target(&mut self)->Result<Reference,String> {
+        let target=if self.console_open {self.console_attachment.clone().map_err(|_|"No target was selected when the console opened. Close it, aim at an object, and reopen it.".to_string())?}
+            else {self.capture_enchantment_target()?};
+        if !target.available(&self.world,&self.creatures)? {return Err("Selected target is unloaded. Close the console and return to it.".into());}
+        Ok(target)
+    }
     pub(super) fn capture_enchantment_target(&mut self)->Result<Reference,String> {
         let target=crate::spell_target::TargetContext::resolve(&self.world,&self.creatures,self.camera.eye_position(),self.camera.forward())
             .ok_or("Aim at a creature, block or device within 18 blocks")?.target;
@@ -11,7 +17,7 @@ impl App {
         let result=(||->Result<String,String>{
             let module=self.scripting.modules.get(index).ok_or("Rule no longer exists")?;
             if module.is_instant || module.attachment.is_some() {return Err("Choose an unattached continuous rule".into());}
-            let reference=if let Some(candidate)=&module.attachment_candidate {candidate.clone()}else{self.capture_enchantment_target()?};
+            let reference=if let Some(candidate)=&module.attachment_candidate {candidate.clone()}else{self.selected_enchantment_target()?};
             if !reference.available(&self.world,&self.creatures)? {return Err("Target is unloaded; return to it before attaching".into());}
             let id=self.world.identity.next_creation.max(1);
             self.world.identity.next_creation=id.checked_add(1).ok_or("Creation ID limit reached")?;
@@ -48,6 +54,18 @@ impl App {
     }
     pub(super) fn update_enchantment_view(&mut self) {
         self.send_enchantment_summaries(None);
+        if self.console_open {
+            if let Ok(target)=&self.console_attachment {
+                self.ui.aimed_object=target.label();
+                match target.available(&self.world,&self.creatures) {
+                    Ok(true)=>{},Ok(false)=>self.ui.aimed_object.push_str(" (unloaded)"),
+                    Err(_)=>self.ui.aimed_object.push_str(" (target lost)"),
+                }
+                self.ui.aimed_enchantments=self.enchantment_summaries.iter().filter(|s|s.target==*target)
+                    .map(|s|format!("{} · {}",s.name,s.status)).collect();
+            }else {self.ui.aimed_object.clear();self.ui.aimed_enchantments.clear();}
+            return;
+        }
         self.ui.aimed_object.clear();self.ui.aimed_enchantments.clear();
         if let Some(context)=crate::spell_target::TargetContext::resolve(&self.world,&self.creatures,self.camera.eye_position(),self.camera.forward()) {
             self.ui.aimed_object=match context.target {

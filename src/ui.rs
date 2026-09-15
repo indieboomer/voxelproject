@@ -530,9 +530,10 @@ impl Ui {
                         if can_prompt {
                             ui.label("Describe a rule, or an instant action, then press Enter:");
                             if is_host {
+                                ui.strong(format!("Locked target: {}",if self.aimed_object.is_empty(){"None — close, aim, and reopen the console"}else{&self.aimed_object}));
+                                ui.small("Target selected when the console opened. Close and reopen to choose another object.");
                                 ui.checkbox(&mut self.attach_generation,"Persistent rule attached to the aimed object");
                                 if self.attach_generation {
-                                    ui.strong(format!("Target: {}",if self.aimed_object.is_empty(){"Aim at a creature, block or device"}else{&self.aimed_object}));
                                     ui.small("Review code, then Attach + enable in Rules. Target loss stops callbacks; existing world changes remain. Packing ends device attachments.");
                                 }
                             }

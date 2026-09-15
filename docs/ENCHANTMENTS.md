@@ -9,7 +9,10 @@ statuses when aiming at the object. Rules execute on the authoritative host.
 1. Aim at an object within 18 blocks and open the prompt console (`~`).
 2. Select **Persistent rule attached to the aimed object** and describe the rule.
    For example: "This creature follows me while I hold a crystal."
-3. Submit. The target is captured at submission and retained during generation.
+3. Submit. The target is captured when the console opens and stays fixed while
+   typing and during generation, even if the creature walks away. Close and reopen
+   the console to select another object. Missing or replaced targets are rejected;
+   the console never substitutes the grass or another object behind them.
 4. Review the generated source and target in **Rules**, then **Attach + enable**.
 5. Aim at the object to see its enchantments. Use **Disable** or **Detach** in
    Rules to stop it. Save normally to retain activated attachments.
@@ -68,9 +71,18 @@ Guard against `nil` and query current state inside callbacks. See the generated
 [API reference](../world_api/world_api_readme.md) and the three starter modules.
 Lua globals are recreated on load; arbitrary script-local state is not persisted.
 
+For creature movement, use `api.chase(target.id, player.x, player.y, player.z)`
+after checking `target.kind == 'creature'` and looking up the player. The target
+does not have `creature_id` or `entity_id` fields. Generation checks now run both
+without an attachment and with the requested target kind, including a player
+holding a crystal, so guarded attachment code is exercised before review.
+Existing generated source is not rewritten by an executable update; regenerate
+or correct a rule that already contains an invalid call.
+
 ## Validation and next stage
 
-- Steam plus `dev-playtest`: **584 passed**, 27 opt-in tests ignored.
+- Steam plus `dev-playtest`: **585 passed**, 27 opt-in tests ignored, including
+  the bound-target generation regression for missing creature IDs.
 - Direct: **561 passed**, 24 ignored before the final ward regression and prompt
   changes; the final Steam suite includes those changes.
 - Seven attachment regressions cover reference identity, unload/resume, save/reload,
