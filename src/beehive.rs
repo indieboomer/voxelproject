@@ -7,10 +7,22 @@ pub fn nearby(world: &World, center: Vec3) -> Vec<Vec3> {
     let mut out = Vec::new();
     for x in (cx - 48)..=(cx + 48) { for z in (cz - 48)..=(cz + 48) {
         let y = world.terrain_height(x, z);
-        if world.get_block(x, y + 1, z) == BlockType::OakWood
-            && world.get_block(x + 1, y + 3, z) == BlockType::OakLeaves
-            && crate::voxel::noise::block_rand(x, y, z, world.seed, 0xbee5) < 0.035 {
-            out.push(Vec3::new(x as f32 + 1.15, y as f32 + 2.6, z as f32 + 0.5));
+        let trunk_kind = world.get_block(x, y + 1, z);
+        let (trunk, leaves) = match trunk_kind {
+            BlockType::OakWood => (true, BlockType::OakLeaves),
+            BlockType::BirchWood => (true, BlockType::BirchLeaves),
+            BlockType::CherryWood => (true, BlockType::CherryLeaves),
+            _ => (false, BlockType::Air),
+        };
+        let leaf = (-2..=2).flat_map(|dx| (-2..=2).map(move |dz| (dx, dz)))
+            .find(|(dx, dz)| world.get_block(x + dx, y + 3, z + dz) == leaves);
+        // Roughly one hive for every five mature oak, birch, or cherry trees.
+        // The first leaf found is replaced visually by the hive model.
+        // found is replaced visually by the hive model at the canopy edge.
+        if trunk && leaf.is_some()
+            && crate::voxel::noise::block_rand(x, y, z, world.seed, 0xbee5) < 0.20 {
+            let (dx, dz) = leaf.unwrap();
+            out.push(Vec3::new(x as f32 + dx as f32 + 0.5, y as f32 + 3.0, z as f32 + dz as f32 + 0.5));
         }
     }}
     out
