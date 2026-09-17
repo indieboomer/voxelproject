@@ -355,7 +355,11 @@ pub(crate) fn block_action_at(
     if !dir.is_finite() || dir.length_squared() < 0.5 {
         return Err("Invalid aim".into());
     }
-    let hit = crate::raycast::raycast(world, feet + Vec3::Y * 1.62, dir, 6.0)
+    // Placement uses a slightly shorter reach than mining so the player
+    // cannot build through an intervening surface; mining keeps the full
+    // interaction distance.
+    let reach = if matches!(intent.action, Action::Place) { 5.5 } else { 6.0 };
+    let hit = crate::raycast::raycast(world, feet + Vec3::Y * 1.62, dir, reach)
         .ok_or("No block in reach")?;
     if Some(hit.target) != intent.target {
         return Err("Target changed or is obstructed".into());

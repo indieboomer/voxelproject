@@ -257,6 +257,7 @@ pub enum Action {
     Delete(SpellId),
     Cast(SpellId),
     AllowGuests(SpellId, bool),
+    Transfer(SpellId, String),
 }
 #[derive(Default)]
 pub struct Panel {
@@ -267,6 +268,7 @@ pub struct Panel {
     name: String,
     target: TargetRequirement,
     pub feedback: String,
+    trade_target: String,
     quote_job: Option<QuoteJob>,
 }
 struct QuoteJob {
@@ -370,6 +372,13 @@ impl Panel {
                         if ui.add_enabled(spell.ready(),egui::Button::new("Cast at current aim")).clicked(){action=Some(Action::Cast(spell.id));}
                         if ui.add_enabled(is_host,egui::Button::new("Duplicate")).clicked(){action=Some(Action::Duplicate(spell.id));}
                         if ui.add_enabled(is_host,egui::Button::new("Delete")).clicked(){action=Some(Action::Delete(spell.id));}
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Trade card to");
+                        ui.text_edit_singleline(&mut self.trade_target);
+                        if ui.add_enabled(spell.ready() && !self.trade_target.trim().is_empty(), egui::Button::new("Give card")).clicked() {
+                            action = Some(Action::Transfer(spell.id, self.trade_target.trim().to_string()));
+                        }
                     });
                     ui.small("Aim before opening the book. Casting spends mana and affects the world.");
                     ui.label(format!("Target: {}  |  Range: {} blocks  |  Cost: {} mana  |  Cooldown: {} s",

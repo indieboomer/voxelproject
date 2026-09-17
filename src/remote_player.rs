@@ -79,6 +79,8 @@ pub struct RemotePlayer {
     /// frame by `App`'s oxygen pass (drains while submerged, regenerates
     /// otherwise -- see `player::OXYGEN_DRAIN_PER_SEC`/`_REGEN_PER_SEC`).
     pub oxygen: f32,
+    pub satiety: f32,
+    pub wetness: f32,
 }
 
 impl RemotePlayer {
@@ -110,6 +112,8 @@ impl RemotePlayer {
             speed_multiplier: 1.0,
             jump_multiplier: 1.0,
             oxygen: crate::player::MAX_OXYGEN,
+            satiety: crate::player::MAX_SATIETY,
+            wetness: 0.0,
         }
     }
 }

@@ -41,25 +41,38 @@ pub struct CraftingSave {
 pub struct PlayerSave {
     pub health: f32,
     pub oxygen: f32,
+    #[serde(default = "default_satiety")]
+    pub satiety: f32,
+    #[serde(default)]
+    pub wetness: f32,
     pub poisoned: bool,
     pub speed: f32,
     pub jump: f32,
+}
+fn default_satiety() -> f32 {
+    crate::player::MAX_SATIETY
 }
 impl PlayerSave {
     pub fn capture(player: &Player) -> Self {
         Self {
             health: player.health,
             oxygen: player.oxygen,
+            satiety: player.satiety,
+            wetness: player.wetness,
             poisoned: player.poisoned,
             speed: player.speed_multiplier,
             jump: player.jump_multiplier,
         }
     }
-    fn valid(&self) -> bool {
+fn valid(&self) -> bool {
         self.health.is_finite()
             && (0.0..=crate::player::MAX_HEALTH).contains(&self.health)
             && self.oxygen.is_finite()
             && (0.0..=crate::player::MAX_OXYGEN).contains(&self.oxygen)
+            && self.satiety.is_finite()
+            && (0.0..=crate::player::MAX_SATIETY).contains(&self.satiety)
+            && self.wetness.is_finite()
+            && (0.0..=1.0).contains(&self.wetness)
             && self.speed.is_finite()
             && self.speed >= 0.0
             && self.jump.is_finite()
@@ -68,6 +81,8 @@ impl PlayerSave {
     pub fn restore(&self, player: &mut Player) {
         player.health = self.health;
         player.oxygen = self.oxygen;
+        player.satiety = self.satiety.clamp(0.0, crate::player::MAX_SATIETY);
+        player.wetness = self.wetness.clamp(0.0, 1.0);
         player.poisoned = self.poisoned;
         player.speed_multiplier = self.speed;
         player.jump_multiplier = self.jump;

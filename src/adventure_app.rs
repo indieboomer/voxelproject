@@ -2,6 +2,78 @@ use super::*;
 use crate::adventure::{self, Action};
 
 impl App {
+    pub(super) fn aimed_harvest_hint(&self) -> Option<Vec3> {
+        let eye = self.camera.eye_position();
+        let dir = self.camera.forward().normalize_or_zero();
+        let entries: Vec<Vec3> = match &self.net {
+            NetRole::Host(_) => self.creatures.snapshot_with_ids().into_iter().map(|(_, _, p, _, _)| Vec3::from_array(p)).collect(),
+            NetRole::Joined(client) => client.creature_snapshot.iter().map(|(p, _, _, _, _)| Vec3::from_array(*p)).collect(),
+        };
+        entries.into_iter().filter_map(|p| {
+            let along = (p - eye).dot(dir);
+            if !(0.0..=6.0).contains(&along) { return None; }
+            let distance = (p - (eye + dir * along)).length();
+            (distance <= 1.0).then_some((distance, p))
+        }).min_by(|a,b| a.0.total_cmp(&b.0)).map(|(_, p)| p)
+    }
+    pub(super) fn aimed_hive_hint(&self) -> Option<Vec3> {
+        let eye = self.camera.eye_position(); let dir = self.camera.forward().normalize_or_zero();
+        crate::beehive::nearby(&self.world, self.player.position).into_iter().filter(|p| !self.destroyed_hives.contains(&crate::beehive::key(*p))).filter_map(|p| { let along=(p-eye).dot(dir); if !(0.0..=6.0).contains(&along) { return None; } let d=(p-(eye+dir*along)).length(); (d<0.8).then_some((d,p)) }).min_by(|a,b| a.0.total_cmp(&b.0)).map(|(_,p)| p)
+    }
+    pub(super) fn harvest_hive(&mut self, from: Option<Peer>, pos: Vec3) {
+        let (player_id, feet, key) = if let Some(peer)=from { let NetRole::Host(host)=&self.net else{return}; let Some(&id)=host.clients.get(&peer) else{return}; let Some(p)=host.remote_players.get(&id) else{return}; (id, p.pos,Some(peer.account_key(&p.nickname))) } else {(self.local_player_id, self.player.position,None)};
+        if pos.distance(feet)>3.5 || !crate::beehive::nearby(&self.world, feet).iter().any(|p| p.distance(pos)<0.2) { self.notify_important("Move closer to the beehive".into()); return; }
+        let key_id = pos.x.to_bits() ^ pos.z.to_bits();
+        if self.harvest_cooldowns.get(&key_id).is_some_and(|t| t.elapsed().as_secs_f32() < crate::harvesting::HIVE_COOLDOWN_SECONDS) { self.notify_important("This hive is still recovering".into()); return; }
+        let updated = { let account=if let Some(k)=key {self.guest_accounts.entry(k).or_default()} else {&mut self.player.crafting}; *account.production_goods.entry("harvest:honey".into()).or_default() += 1; account.revision=account.revision.saturating_add(1); account.clone() };
+        self.harvest_cooldowns.insert(key_id,Instant::now());
+        self.audio.play_beehive(pos);
+        self.audio.play_loot();
+        self.harvest_fx.spawn(pos, [0.95, 0.78, 0.08]);
+        self.apply_player_effect(PlayerEffect::Health { player_id, delta: -3.0 });
+        if let Some(peer)=from { if let NetRole::Host(host)=&mut self.net { host.reliable.send(&host.socket, peer, ReliableMsg::CraftState { account: updated, feedback: Some("Collected honey".into()) }); } } else { self.notify_important("Collected honey".into()); }
+    }
+    pub(super) fn destroy_hive(&mut self, from: Option<Peer>, pos: Vec3) {
+        let (id, feet) = if let Some(peer)=from { let NetRole::Host(host)=&self.net else{return}; let Some(&id)=host.clients.get(&peer) else{return}; let Some(p)=host.remote_players.get(&id) else{return}; (id,p.pos) } else {(self.local_player_id,self.player.position)};
+        if pos.distance(feet)>3.5 || !crate::beehive::nearby(&self.world, feet).iter().any(|p| p.distance(pos)<0.2) { return; }
+        self.destroyed_hives.insert(crate::beehive::key(pos));
+        self.audio.play_beehive(pos);
+        self.apply_player_effect(PlayerEffect::Health { player_id: id, delta: -8.0 });
+        if from.is_none() { self.notify_important("The hive broke; angry bees sting you!".into()); }
+    }
+
+    pub(super) fn harvest_animal(&mut self, from: Option<Peer>, hint: Vec3) {
+        let (_player_id, feet, key) = if let Some(peer) = from {
+            let NetRole::Host(host) = &self.net else { return; };
+            let Some(&id) = host.clients.get(&peer) else { return; };
+            let Some(p) = host.remote_players.get(&id) else { return; };
+            (id, p.pos, Some(peer.account_key(&p.nickname)))
+        } else { (self.local_player_id, self.player.position, None) };
+        if !hint.is_finite() || hint.distance(feet) > 3.5 { self.notify_important("Move closer to the animal".into()); return; }
+        let candidate = self.creatures.snapshot_with_ids().into_iter().filter_map(|(id, kind, pos, _, _)| {
+            let pos = Vec3::from_array(pos);
+            crate::harvesting::output(crate::creature::CreatureKind::from_u8(kind))
+                .filter(|_| pos.distance(feet) <= 3.5 && pos.distance(hint) <= 2.0)
+                .map(|_| (id, crate::creature::CreatureKind::from_u8(kind), pos))
+        }).min_by(|a,b| a.2.distance_squared(hint).total_cmp(&b.2.distance_squared(hint)));
+        let Some((id, kind, _)) = candidate else { self.notify_important("Aim at a sheep, chicken, or cow".into()); return; };
+        if self.harvest_cooldowns.get(&id).is_some_and(|t| t.elapsed().as_secs_f32() < crate::harvesting::COOLDOWN_SECONDS) {
+            let left = crate::harvesting::COOLDOWN_SECONDS - self.harvest_cooldowns[&id].elapsed().as_secs_f32();
+            self.notify_important(format!("This animal will recover in {:.0}s", left));
+            return;
+        }
+        let roll = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64 ^ id as u64);
+        let Some((item, amount)) = crate::harvesting::output_random(kind, roll) else { return; };
+        let account = if let Some(key) = key { self.guest_accounts.entry(key).or_default() } else { &mut self.player.crafting };
+        *account.production_goods.entry(item.into()).or_default() = account.production_goods.get(item).copied().unwrap_or(0).saturating_add(amount);
+        account.revision = account.revision.saturating_add(1);
+        self.harvest_cooldowns.insert(id, Instant::now());
+        self.audio.play_loot();
+        self.harvest_fx.spawn(feet + Vec3::Y * 1.0, match item { "harvest:wool" => [0.65, 0.65, 0.65], "harvest:milk" | "harvest:egg" => [0.95, 0.95, 0.95], _ => [0.95, 0.95, 0.95] });
+        let message = match kind { crate::creature::CreatureKind::Sheep => "Harvested wool", crate::creature::CreatureKind::Chicken => "Collected an egg", crate::creature::CreatureKind::Cow => "Collected milk", _ => "Harvested" };
+        if let Some(peer) = from { if let NetRole::Host(host) = &mut self.net { host.reliable.send(&host.socket, peer, ReliableMsg::CraftState { account: account.clone(), feedback: Some(message.into()) }); } } else { self.notify_important(message.into()); }
+    }
+
     pub(super) fn adventure_actor_alive(&self, from: Option<Peer>) -> bool {
         if let Some(peer) = from {
             let NetRole::Host(host) = &self.net else {
@@ -58,7 +130,7 @@ impl App {
             &mut self.player.crafting
         };
         let result =
-            adventure::transact(&self.world, account, position, health, threatened, action);
+            adventure::transact(&self.world, account, position, health, threatened, action.clone());
         let success = result.is_ok();
         let message = result.unwrap_or_else(|e| e);
         let updated = account.clone();

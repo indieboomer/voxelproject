@@ -50,6 +50,12 @@ pub fn undercut(x: i32, z: i32, seed: u32, h: i32, slope: i32, version: u8) -> b
         ) > 0.48
 }
 
+/// Flower patch bounds in blocks. Keeping these explicit makes world-generation
+/// tuning cheap without changing the patch algorithm or saved worlds.
+pub const FLOWER_PATCH_MIN_RADIUS: f32 = 4.0;
+pub const FLOWER_PATCH_MAX_RADIUS_X: f32 = 13.0;
+pub const FLOWER_PATCH_MAX_RADIUS_Z: f32 = 11.0;
+
 /// Jittered elliptical meadow colonies, with ragged edges. Each colony chooses
 /// either a colorful mixture or an 88% dominant flower species.
 pub fn meadow_plant(x: i32, z: i32, seed: u32) -> Option<super::BlockType> {
@@ -68,8 +74,12 @@ pub fn meadow_plant(x: i32, z: i32, seed: u32) -> Option<super::BlockType> {
             }
             let px = a as f32 * 48. + column_rand(a, b, seed, 0xF101) * 48.;
             let pz = b as f32 * 48. + column_rand(a, b, seed, 0xF102) * 48.;
-            let rx = 9. + column_rand(a, b, seed, 0xF103) * 18.;
-            let rz = 8. + column_rand(a, b, seed, 0xF104) * 15.;
+            let rx = FLOWER_PATCH_MIN_RADIUS
+                + column_rand(a, b, seed, 0xF103)
+                    * (FLOWER_PATCH_MAX_RADIUS_X - FLOWER_PATCH_MIN_RADIUS);
+            let rz = FLOWER_PATCH_MIN_RADIUS
+                + column_rand(a, b, seed, 0xF104)
+                    * (FLOWER_PATCH_MAX_RADIUS_Z - FLOWER_PATCH_MIN_RADIUS);
             let d = ((x as f32 - px) / rx).powi(2) + ((z as f32 - pz) / rz).powi(2);
             if d > 1.3 {
                 continue;

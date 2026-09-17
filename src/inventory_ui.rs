@@ -287,6 +287,11 @@ impl Inventory {
                     egui::ScrollArea::vertical().id_source("inventory_resources").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible).max_height(height).min_scrolled_height(height).show(&mut columns[1], |ui| {
                         if resources.is_empty() {ui.label("No resources yet. Gather plants by hand or use your tools to mine.");}
                         for e in resources { self.row(ui,e,account); }
+                        for item in ["harvest:wool", "harvest:egg", "harvest:cooked_egg", "harvest:milk", "harvest:cooked_milk", "harvest:honey", "harvest:cooked_honey", "harvest:cooked_pumpkin"] {
+                            if let Some(&count) = account.production_goods.get(item) {
+                                ui.horizontal(|ui| { crate::equipment_ui::harvest_icon(ui, item); ui.label(format!("{item} ×{count}")); if crate::food::harvest_healing(item).is_some_and(|h| h > 0.) && ui.button("Eat").clicked() { requests.eat_harvest = Some(item.into()); } });
+                            }
+                        }
                     });
                     columns[2].heading("Spells");
                     columns[2].small("Remembered spells");

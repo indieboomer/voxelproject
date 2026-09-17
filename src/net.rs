@@ -40,6 +40,14 @@ pub enum NotifyKind {
 pub enum ReliableMsg {
     Hotbar(crate::equipment::Hotbar),
     ItemAction(crate::equipment::Intent),
+    /// Transfer one physical saved-spell card. The host resolves both
+    /// accounts and the immutable spell definition; clients never send code.
+    TransferSpellCard { spell_id: crate::spellbook::SpellId, target: String },
+    /// Client request to harvest a nearby passive animal. Position is only a
+    /// hint; the host resolves the creature and checks range/cooldown.
+    HarvestAnimal { pos: [f32; 3] },
+    HarvestHive { pos: [f32; 3] },
+    DestroyHive { pos: [f32; 3] },
     /// Client intention; the host resolves the recipe and checks its own account revision.
     CraftRequest {
         revision: u64,
@@ -160,6 +168,7 @@ pub enum ReliableMsg {
         block: BlockType,
         revision: u64,
     },
+    EatHarvest { item: String, revision: u64 },
     FoodResult(String),
     SpellCastFx {
         origin: [f32; 3],

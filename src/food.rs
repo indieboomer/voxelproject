@@ -6,15 +6,44 @@ use crate::{
 };
 
 pub const MAX_COOK_BATCH: u32 = 64;
+pub fn harvest_healing(item: &str) -> Option<f32> {
+    Some(match item { "harvest:egg" => 0., "harvest:cooked_egg" => 8., "harvest:milk" => 4., "harvest:cooked_milk" => 12., "harvest:honey" => 12., "harvest:cooked_honey" => 8., "harvest:cooked_pumpkin" => 20., _ => return None })
+}
+pub fn harvest_satiety(item: &str) -> f32 {
+    match item { "harvest:egg" => 0., "harvest:cooked_egg" => 12., "harvest:milk" => 10., "harvest:cooked_milk" => 18., "harvest:honey" => 16., "harvest:cooked_honey" => 10., "harvest:cooked_pumpkin" => 30., _ => 0. }
+}
+pub fn cook_harvest(account: &mut Account, item: &str, amount: u32) -> Result<(), String> {
+    if !(1..=MAX_COOK_BATCH).contains(&amount) { return Err("Cook between 1 and 64 items at a time".into()); }
+    let cooked = match item { "harvest:egg" => "harvest:cooked_egg", "harvest:milk" => "harvest:cooked_milk", "harvest:honey" => "harvest:cooked_honey", _ => return Err("This resource cannot be cooked".into()) };
+    let raw_count = account.production_goods.get(item).copied().unwrap_or(0);
+    if raw_count < amount { return Err("Not enough raw ingredients".into()); }
+    let cooked_count = account.production_goods.get(cooked).copied().unwrap_or(0);
+    let new_count = cooked_count.checked_add(amount).ok_or("Cooked stack is full")?;
+    if raw_count == amount { account.production_goods.remove(item); } else { account.production_goods.insert(item.into(), raw_count - amount); }
+    account.production_goods.insert(cooked.into(), new_count);
+    Ok(())
+}
+pub fn cook_pumpkin(account: &mut Account, amount: u32) -> Result<(), String> {
+    if !(1..=MAX_COOK_BATCH).contains(&amount) { return Err("Cook between 1 and 64 pumpkins at a time".into()); }
+    let raw = crate::voxel::COLLECTIBLE_BLOCKS.iter().position(|b| *b == BlockType::Pumpkin).ok_or("Pumpkin resource unavailable")?;
+    let remaining = account.resources[raw].checked_sub(amount).ok_or("Not enough raw pumpkins")?;
+    let cooked = account.production_goods.get("harvest:cooked_pumpkin").copied().unwrap_or(0).checked_add(amount).ok_or("Cooked stack is full")?;
+    account.resources[raw] = remaining;
+    account.production_goods.insert("harvest:cooked_pumpkin".into(), cooked);
+    Ok(())
+}
 pub fn healing(block: BlockType) -> Option<f32> {
-    Some(match block {
-        BlockType::Meat => 8.,
-        BlockType::CookedMeat => 25.,
-        BlockType::Pumpkin => 10.,
-        BlockType::WildHerbs => 5.,
-        BlockType::BrownMushroom => 6.,
-        _ => return None,
-    })
+    let definition = crate::resource_defs::definition(block);
+    definition.edible.then_some(definition.raw_health_change.max(0) as f32)
+}
+pub fn satiety(block: BlockType) -> f32 {
+    match block {
+        BlockType::CookedMeat => 32.,
+        BlockType::Meat => 16.,
+        BlockType::Pumpkin => 18.,
+        BlockType::WildHerbs | BlockType::BrownMushroom => 10.,
+        _ => 0.,
+    }
 }
 pub fn inventory_only(block: BlockType) -> bool {
     matches!(block, BlockType::Meat | BlockType::CookedMeat)
@@ -40,9 +69,6 @@ pub fn eat(
     let amount = healing(block).ok_or("This resource cannot be eaten")?;
     if !health.is_finite() || health <= 0. {
         return Err("Recover before eating".into());
-    }
-    if health >= MAX_HEALTH {
-        return Err("Health is already full; food was kept".into());
     }
     let i = index(block);
     let count = account.resources[i]
@@ -127,6 +153,17 @@ mod tests {
             assert!(cook(&mut a, amount).is_err());
             assert_eq!(a, before);
         }
+    }
+    #[test]
+    fn pumpkins_are_edible_raw_and_gain_value_when_cooked() {
+        let mut account = Account::default();
+        let index = crate::voxel::COLLECTIBLE_BLOCKS.iter().position(|b| *b == BlockType::Pumpkin).unwrap();
+        account.resources[index] = 2;
+        cook_pumpkin(&mut account, 1).unwrap();
+        assert_eq!(account.resources[index], 1);
+        assert_eq!(account.production_goods.get("harvest:cooked_pumpkin"), Some(&1));
+        assert_eq!(harvest_healing("harvest:cooked_pumpkin"), Some(20.));
+        assert!(harvest_satiety("harvest:cooked_pumpkin") > satiety(BlockType::Pumpkin));
     }
     #[test]
     fn legacy_inventory_and_food_roundtrip() {

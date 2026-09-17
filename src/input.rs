@@ -29,9 +29,9 @@ mod tests {
     fn gesture_keys_are_edges_and_clear_with_gameplay_input() {
         let mut input = Input::new();
         for (key, clip) in [
-            (KeyCode::Comma, crate::player_animation::Clip::Dance),
-            (KeyCode::Period, crate::player_animation::Clip::Angry),
-            (KeyCode::Slash, crate::player_animation::Clip::Jump),
+            (KeyCode::Comma, crate::player_animation::Clip::Hello),
+            (KeyCode::Period, crate::player_animation::Clip::Dance),
+            (KeyCode::Slash, crate::player_animation::Clip::Angry),
         ] {
             input.key_event(key, ElementState::Pressed);
             assert_eq!(input.gesture, Some(clip));
@@ -58,9 +58,9 @@ impl Input {
                 let first_press = self.keys_down.insert(key);
                 if first_press {
                     self.gesture = match key {
-                        KeyCode::Comma => Some(crate::player_animation::Clip::Dance),
-                        KeyCode::Period => Some(crate::player_animation::Clip::Angry),
-                        KeyCode::Slash => Some(crate::player_animation::Clip::Jump),
+                        KeyCode::Comma => Some(crate::player_animation::Clip::Hello),
+                        KeyCode::Period => Some(crate::player_animation::Clip::Dance),
+                        KeyCode::Slash => Some(crate::player_animation::Clip::Angry),
                         _ => self.gesture,
                     };
                 }

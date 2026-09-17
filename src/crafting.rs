@@ -105,6 +105,10 @@ pub fn totals(slots: &[Slot]) -> Result<Composition, String> {
 pub struct Account {
     /// Derived by the host from validated spell definitions; clients cannot grant these.
     pub known_spells: Vec<crate::spellbook::SpellId>,
+    /// Physical saved-spell cards owned by this account. Cards contain only
+    /// immutable spell IDs; the host resolves the definition before use.
+    #[serde(default)]
+    pub spell_cards: Vec<crate::spellbook::SpellId>,
     pub torch_equipped: bool,
     pub adventure: crate::adventure::Progress,
     pub packed_devices: Vec<crate::automation::Device>,
@@ -123,6 +127,7 @@ impl Default for Account {
         Self {
             torch_equipped: false,
             known_spells: Vec::new(),
+            spell_cards: Vec::new(),
             adventure: Default::default(),
             gear: crate::gear_catalog::starter_counts(),
             packed_devices: Vec::new(),
@@ -175,6 +180,22 @@ mod resource_counts {
     }
 }
 impl Account {
+    pub fn has_spell_card(&self, id: crate::spellbook::SpellId) -> bool {
+        self.spell_cards.contains(&id)
+    }
+    pub fn add_spell_card(&mut self, id: crate::spellbook::SpellId) -> Result<(), String> {
+        if self.has_spell_card(id) { return Ok(()); }
+        if self.spell_cards.len() >= crate::spellbook::MAX_SPELLS { return Err("Spell card inventory is full".into()); }
+        self.spell_cards.push(id);
+        self.revision = self.revision.saturating_add(1);
+        Ok(())
+    }
+    pub fn remove_spell_card(&mut self, id: crate::spellbook::SpellId) -> Result<(), String> {
+        let Some(index) = self.spell_cards.iter().position(|&card| card == id) else { return Err("You do not own that spell card".into()); };
+        self.spell_cards.remove(index);
+        self.revision = self.revision.saturating_add(1);
+        Ok(())
+    }
     pub fn prune_hotbar(&mut self) -> bool {
         let mut hotbar = self.hotbar.clone();
         if !hotbar.prune_unavailable(self) {
@@ -1580,5 +1601,23 @@ mod resource_progression_tests {
             .unwrap();
         assert_eq!(account.resources[resource_index("iron").unwrap()], 1);
         assert_eq!(account.mana, 0);
+    }
+}
+
+#[cfg(test)]
+mod spell_card_tests {
+    use super::Account;
+    #[test]
+    fn cards_are_unique_bounded_and_persistent() {
+        let mut account = Account::default();
+        account.add_spell_card(7).unwrap();
+        account.add_spell_card(7).unwrap();
+        assert!(account.has_spell_card(7));
+        assert_eq!(account.spell_cards.len(), 1);
+        let restored: Account = serde_json::from_value(serde_json::json!({"mana": 3})).unwrap();
+        assert!(restored.spell_cards.is_empty());
+        account.remove_spell_card(7).unwrap();
+        assert!(!account.has_spell_card(7));
+        assert!(account.remove_spell_card(7).is_err());
     }
 }

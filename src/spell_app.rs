@@ -1,6 +1,46 @@
 use super::*;
 use crate::spell_network::{Request, Summary};
 impl App {
+    /// Host-authoritative physical card transfer. Only the spell ID crosses
+    /// the network; source and metadata always come from the host spellbook.
+    pub(super) fn transfer_spell_card(&mut self, from: Option<Peer>, spell_id: u64, target: String) {
+        let NetRole::Host(host) = &self.net else { return; };
+        let target = target.trim();
+        if target.is_empty() || target.len() > 64 { self.notify_important("Invalid card recipient".into()); return; }
+        let Some(spell) = self.scripting.spellbook.get(spell_id) else { self.notify_important("That spell no longer exists".into()); return; };
+        if !spell.ready() { self.notify_important("Only validated spells can be traded".into()); return; }
+        let sender_key = if let Some(peer) = from {
+            let Some(&id) = host.clients.get(&peer) else { return; };
+            let Some(player) = host.remote_players.get(&id) else { return; };
+            peer.account_key(&player.nickname)
+        } else { String::new() };
+        let target_host = target.eq_ignore_ascii_case("host") || target.eq_ignore_ascii_case(&self.local_nickname);
+        let target_id = host.remote_players.iter().find_map(|(id, p)|
+            (p.nickname.eq_ignore_ascii_case(target) || p.display_name.eq_ignore_ascii_case(target)).then_some(*id));
+        if !target_host && target_id.is_none() { self.notify_important(format!("Player '{target}' is not connected")); return; }
+        if target_host && from.is_none() { self.notify_important("Choose another player".into()); return; }
+        let target_key = target_id.and_then(|target_id| host.clients.iter().find_map(|(peer, id)| (*id == target_id).then(|| peer.account_key(&host.remote_players.get(id).unwrap().nickname))));
+        let owns = if from.is_none() { self.player.crafting.has_spell_card(spell_id) } else { self.guest_accounts.get(&sender_key).map_or(false, |a| a.has_spell_card(spell_id)) };
+        if !owns { self.notify_important("You do not own that spell card".into()); return; }
+        if target_key.as_ref().is_some_and(|key| *key == sender_key) { self.notify_important("Choose another player".into()); return; }
+        // Remove first, then add; rollback on a full recipient inventory.
+        let removed = if from.is_none() { self.player.crafting.remove_spell_card(spell_id).is_ok() } else { self.guest_accounts.get_mut(&sender_key).map_or(false, |a| a.remove_spell_card(spell_id).is_ok()) };
+        if !removed { return; }
+        let recipient_result = if target_host { self.player.crafting.add_spell_card(spell_id) } else { self.guest_accounts.entry(target_key.clone().unwrap()).or_default().add_spell_card(spell_id) };
+        if let Err(error) = recipient_result {
+            if from.is_none() { let _ = self.player.crafting.add_spell_card(spell_id); } else if let Some(a) = self.guest_accounts.get_mut(&sender_key) { let _ = a.add_spell_card(spell_id); }
+            self.notify_important(error);
+            return;
+        }
+        let sender_snapshot = if from.is_none() { self.player.crafting.clone() } else { self.guest_accounts.get(&sender_key).cloned().unwrap_or_default() };
+        let recipient_snapshot = if target_host { self.player.crafting.clone() } else { self.guest_accounts.get(target_key.as_ref().unwrap()).cloned().unwrap_or_default() };
+        if let NetRole::Host(host) = &mut self.net {
+            if let Some(peer) = from { host.reliable.send(&host.socket, peer, ReliableMsg::CraftState { account: sender_snapshot, feedback: Some("Spell card traded".into()) }); }
+            if let Some(target_id) = target_id { if let Some((&peer, _)) = host.clients.iter().find(|(_, id)| **id == target_id) { host.reliable.send(&host.socket, peer, ReliableMsg::CraftState { account: recipient_snapshot, feedback: Some("You received a spell card".into()) }); } }
+        }
+        self.notify_all(format!("A spell card for '{}' was traded", spell.name));
+    }
+
     pub(super) fn update_spell_hud(&mut self) {
         self.ui.spell_hud = None;
         let Some(crate::equipment::Entry::Spell(id)) = self.player.crafting.hotbar.entry() else {
@@ -247,8 +287,8 @@ impl App {
                 .guest_accounts
                 .get(&key)
                 .ok_or("Player inventory unavailable")?;
-            if !account.known_spells.contains(&spell.id) {
-                return Err("Spell permission removed".into());
+            if !account.has_spell_card(spell.id) {
+                return Err("You need the physical spell card to cast this spell".into());
             }
             if account.mana < cost {
                 return Err(format!("This spell needs {cost} mana"));

@@ -36,6 +36,7 @@ const DRAGON_ATTACK: &[u8] = include_bytes!("../sounds/dragon_attack.mp3");
 const DRAGON_FLY: &[u8] = include_bytes!("../sounds/dragon_fly.mp3");
 const WATERFALL: &[u8] = include_bytes!("../sounds/waterfall.mp3");
 const CAMPFIRE: &[u8] = include_bytes!("../sounds/campfire.mp3");
+const BEEHIVE: &[u8] = include_bytes!("../sounds/beehive.mp3");
 const LOOT: &[u8] = include_bytes!("../sounds/loot.mp3");
 const MACHINE_TRANSFER: &[u8] = include_bytes!("../sounds/machine/silent_clunk.mp3");
 const MACHINE_CHANGED: &[u8] = include_bytes!("../sounds/machine/clunk1.mp3");
@@ -437,6 +438,7 @@ impl AudioEngine {
     pub fn play_loot(&mut self) {
         self.play_varied(LOOT, 0.55, 0.0, 0.0);
     }
+    pub fn play_beehive(&mut self, pos: Vec3) { self.play_spatial(BEEHIVE, 0.18, 0.08, 0.05, pos, 8.0); }
     pub fn play_lore_book(&mut self) {
         self.play_varied(include_bytes!("../sounds/lore_book.mp3"), 0.55, 0.0, 0.0);
     }

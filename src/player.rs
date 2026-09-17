@@ -23,6 +23,9 @@ pub const MIN_ATTRIBUTE_MULTIPLIER: f32 = 0.1;
 pub const MAX_ATTRIBUTE_MULTIPLIER: f32 = 5.0;
 /// Every player starts here every session too, same as health.
 pub const MAX_OXYGEN: f32 = 100.0;
+/// Hidden food meter. It drains slowly so eating supports exploration without
+/// becoming a constant HUD task.
+pub const MAX_SATIETY: f32 = 100.0;
 /// Oxygen lost per second while submerged in water -- full depletion in 50s.
 /// Chosen instead of a literal "1 per 10 seconds" (1000s / ~16 minutes to
 /// fully drain) because that's slow enough to never actually matter: a
@@ -80,6 +83,12 @@ pub struct Player {
     /// `is_in_water`). Read-only from Lua (`api.players()[i].oxygen`);
     /// nothing sets it directly except submersion itself.
     pub oxygen: f32,
+    /// Hidden 0..=MAX_SATIETY hunger meter.
+    pub satiety: f32,
+    /// Rain exposure, 0..=1. Used by survival damage and presentation.
+    pub wetness: f32,
+    /// Shared timed effects used by survival and future equipment/status rules.
+    pub statuses: crate::status_effects::Effects,
     /// Horizontal ground distance walked/sprinted since the last footstep
     /// sound, in blocks -- only accumulates while `on_ground` (airborne
     /// movement produces no footsteps). Consumed via `take_steps`.
@@ -100,6 +109,9 @@ impl Player {
             speed_multiplier: 1.0,
             jump_multiplier: 1.0,
             oxygen: MAX_OXYGEN,
+            satiety: MAX_SATIETY,
+            wetness: 0.0,
+            statuses: Default::default(),
             step_distance: 0.0,
         }
     }
@@ -143,6 +155,10 @@ impl Player {
     /// Clamped at `MAX_OXYGEN` -- called by `App`'s oxygen pass otherwise.
     pub fn regenerate_oxygen(&mut self, amount: f32) {
         self.oxygen = (self.oxygen + amount).min(MAX_OXYGEN);
+    }
+
+    pub fn restore_satiety(&mut self, amount: f32) {
+        self.satiety = (self.satiety + amount).min(MAX_SATIETY);
     }
 
     pub fn set_jump_multiplier(&mut self, multiplier: f32) {
@@ -384,6 +400,8 @@ mod tests {
     fn a_new_player_starts_at_full_health_unpoisoned_with_default_multipliers() {
         let player = Player::new(Vec3::ZERO);
         assert_eq!(player.health, MAX_HEALTH);
+        assert_eq!(player.satiety, MAX_SATIETY);
+        assert_eq!(player.wetness, 0.0);
         assert!(!player.poisoned);
         assert_eq!(player.speed_multiplier, 1.0);
         assert_eq!(player.jump_multiplier, 1.0);

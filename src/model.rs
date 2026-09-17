@@ -1314,6 +1314,15 @@ fn torch_model() -> &'static AnimatedModel {
         m
     })
 }
+fn beehive_model() -> &'static AnimatedModel {
+    static MODEL: std::sync::OnceLock<AnimatedModel> = std::sync::OnceLock::new();
+    MODEL.get_or_init(|| load_glb(include_bytes!("../models/beehive.glb")))
+}
+pub fn beehive_mesh(positions: &[glam::Vec3]) -> crate::voxel::mesher::MeshData {
+    let mut mesh = crate::voxel::mesher::MeshData { vertices: vec![], indices: vec![] };
+    for &pos in positions { push_model(&mut mesh.vertices, &mut mesh.indices, beehive_model(), crate::creature::CreatureKind::Sheep, "", 0., pos, 0.); }
+    mesh
+}
 /// Supplied torch's looping flame animation, cached at 16 frames per cycle.
 pub fn torch_mesh(time: f32) -> &'static crate::voxel::mesher::MeshData {
     static FRAMES: std::sync::OnceLock<Vec<crate::voxel::mesher::MeshData>> =
@@ -1460,6 +1469,7 @@ mod tests {
                 Clip::Attack,
                 Clip::Work,
                 Clip::Jump,
+                Clip::Hello,
                 Clip::Dance,
                 Clip::Angry,
             ] {
@@ -1513,7 +1523,7 @@ mod tests {
                     }
                     positions.push(matrices[grip].transform_point3(Vec3::ZERO));
                 }
-                if matches!(animation, Clip::Work | Clip::Attack | Clip::Dance) {
+                if matches!(animation, Clip::Work | Clip::Attack | Clip::Hello | Clip::Dance) {
                     assert!(
                         positions[0].distance(positions[1]) > 0.01,
                         "hand must move during {animation:?}"

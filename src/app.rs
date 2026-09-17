@@ -325,6 +325,13 @@ const MESH_BUDGET_PER_FRAME: usize = 2;
 const CHUNK_GENERATION_BUDGET: Duration = Duration::from_millis(2);
 const CHUNK_MESH_BUDGET: Duration = Duration::from_millis(3);
 const REACH: f32 = 6.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InputMode {
+    Gameplay,
+    Ui,
+    TextInput,
+}
 const CREATURE_COUNT: usize = 9;
 
 struct HostNet {
@@ -368,6 +375,13 @@ enum GenerationState {
         pending: PendingGeneration,
         is_retry: bool,
     },
+}
+
+struct PendingProposalApproval {
+    peer: Peer,
+    proposal: crate::rule_sharing::Proposal,
+    module: Module,
+    account_key: String,
 }
 
 #[repr(C)]
@@ -705,6 +719,7 @@ pub struct App {
     generation: GenerationState,
     proposal_inbox: crate::rule_sharing::Inbox,
     proposal_waiting: Option<Instant>,
+    pending_proposal_approval: Option<PendingProposalApproval>,
     next_rule_id: u32,
     last_generated_index: Option<usize>,
 
@@ -732,6 +747,9 @@ pub struct App {
     held_mesh: DynamicMesh,
     /// Host-owned mining progress and cooldowns, shared by local and remote interactions.
     interaction_states: HashMap<PlayerId, crate::equipment::Mining>,
+    harvest_cooldowns: HashMap<u32, Instant>,
+    destroyed_hives: std::collections::HashSet<u64>,
+    harvest_fx: crate::harvest_fx::Effects,
     recovery_timers: HashMap<PlayerId, f32>,
     npcs: Vec<crate::npc::Npc>,
     npc_distribution: crate::npc::Distribution,
@@ -761,6 +779,7 @@ pub struct App {
     mining_target: Option<(i32, i32, i32)>,
     mining_hits: u32,
     cursor_grabbed: bool,
+    input_mode: InputMode,
 
     last_frame: Instant,
     title_timer: f32,
@@ -1048,7 +1067,13 @@ impl App {
         } else {
             &mut self.player.crafting
         };
-        let result = if let crate::automation::Action::Release { cell, item } = &action {
+        let spell_item_valid = match &action {
+            crate::automation::Action::Deposit { item, .. } | crate::automation::Action::Withdraw { item, .. } | crate::automation::Action::Release { item, .. } if item.starts_with("spell:") => item.strip_prefix("spell:").and_then(|id| id.parse::<u64>().ok()).and_then(|id| self.scripting.spellbook.get(id)).is_some_and(|spell| spell.ready()),
+            _ => true,
+        };
+        let result = if !spell_item_valid {
+            Err("That spell card is unknown or not validated by the host".into())
+        } else if let crate::automation::Action::Release { cell, item } = &action {
             crate::automation::release(
                 &self.world,
                 &mut self.creatures,
@@ -1850,6 +1875,7 @@ impl App {
             generation: GenerationState::Idle,
             proposal_inbox: crate::rule_sharing::Inbox::default(),
             proposal_waiting: None,
+            pending_proposal_approval: None,
             next_rule_id: 0,
             last_generated_index: None,
             ui,
@@ -1868,6 +1894,9 @@ impl App {
             entity_mesh,
             held_mesh,
             interaction_states: HashMap::new(),
+            harvest_cooldowns: HashMap::new(),
+            destroyed_hives: Default::default(),
+            harvest_fx: Default::default(),
             recovery_timers: HashMap::new(),
             npcs: crafting_save
                 .npcs
@@ -1899,6 +1928,7 @@ impl App {
             mining_target: None,
             mining_hits: 0,
             cursor_grabbed: false,
+            input_mode: InputMode::Gameplay,
             last_frame: Instant::now(),
             title_timer: 0.0,
             frame_count: 0,
@@ -1910,9 +1940,15 @@ impl App {
             app.scripting
                 .spellbook
                 .sync_hotbar(&mut app.player.crafting);
+            // Migrate older saves: every validated spell remembered by the
+            // host starts with one physical card in the host inventory.
+            for spell in app.scripting.spellbook.spells.iter().filter(|s| s.ready()) {
+                let _ = app.player.crafting.add_spell_card(spell.id);
+            }
             let book = crate::spell_network::guest_book(&app.scripting.spellbook);
             for account in app.guest_accounts.values_mut() {
                 book.sync_hotbar(account);
+                account.spell_cards.retain(|id| app.scripting.spellbook.get(*id).map_or(false, |s| s.ready()));
             }
         } else {
             app.player.crafting.known_spells.clear();
@@ -1936,6 +1972,7 @@ impl App {
 
     fn grab_cursor(&mut self, grab: bool) {
         self.cursor_grabbed = grab;
+        self.input_mode = if grab { InputMode::Gameplay } else { InputMode::Ui };
         if grab {
             if self
                 .window
@@ -2209,8 +2246,7 @@ impl App {
     fn sync_settings_input(&mut self) {
         self.input.release_all();
         self.input.end_frame();
-        self.grab_cursor(
-            !self.ui.spellbook.open
+        let gameplay = !self.ui.spellbook.open
                 && !self.ui.map.open
                 && !self.ui.inventory_open
                 && !self.ui.settings.open
@@ -2219,8 +2255,15 @@ impl App {
                 && !self.crafting_ui.open
                 && !self.quit_dialog_open
                 && !self.ui.automation.open
-                && !self.ui.journal.open,
-        );
+                && !self.ui.journal.open;
+        if gameplay {
+            self.grab_cursor(true);
+        } else if self.console_open || self.chat_open {
+            self.grab_cursor(false);
+            self.input_mode = InputMode::TextInput;
+        } else {
+            self.grab_cursor(false);
+        }
     }
 
     fn toggle_console(&mut self) {
@@ -2250,7 +2293,7 @@ impl App {
         self.console_attachment = self.capture_enchantment_target();
         self.console_open = true;
         self.input.release_all();
-        self.grab_cursor(false);
+        self.sync_settings_input();
     }
 
     fn close_console(&mut self) {
@@ -2261,7 +2304,7 @@ impl App {
     fn open_chat(&mut self) {
         self.chat_open = true;
         self.input.release_all();
-        self.grab_cursor(false);
+        self.sync_settings_input();
     }
 
     fn close_chat(&mut self) {
@@ -2518,6 +2561,7 @@ impl App {
         let elapsed = (now - self.last_frame).as_secs_f32();
         let dt = elapsed.min(0.1);
         self.last_frame = now;
+        self.harvest_fx.update(dt);
         self.update_adventure(dt);
         self.update_npcs(dt);
         #[cfg(feature = "dev-playtest")]
@@ -2557,12 +2601,13 @@ impl App {
         self.use_animation = (self.use_animation - dt).max(0.0);
         let machine_input = self.ui.automation.tools_suspended();
         if self.cursor_grabbed {
-            if let Some(hit) = raycast(
+                if let Some(hit) = raycast(
                 &self.world,
                 self.camera.eye_position(),
                 self.camera.forward(),
                 REACH,
-            ) {
+                ) {
+                if self.input.left_clicked { if let Some(hive) = self.aimed_hive_hint() { self.destroy_hive(None, hive); self.input.left_clicked = false; } }
                 if self.input.left_clicked || self.input.right_clicked {
                     if let Some((kind, rotation, packed)) = self.ui.automation.build {
                         self.submit_automation(crate::automation::Action::Place {
@@ -2618,6 +2663,16 @@ impl App {
             use crate::equipment::{Action, Entry, Intent};
             let entry = self.player.crafting.hotbar.entry();
             if self.input.left_clicked || self.input.right_clicked {
+                if self.input.left_clicked && entry.is_none() {
+                    if let Some(hive) = self.aimed_hive_hint() {
+                        match &mut self.net {
+                            NetRole::Host(_) => self.destroy_hive(None, hive),
+                            NetRole::Joined(client) => { client.reliable.send(&client.socket, client.server_addr, ReliableMsg::DestroyHive { pos: hive.to_array() }); }
+                        }
+                        self.input.left_clicked = false;
+                        return;
+                    }
+                }
                 if let Some(Entry::Spell(id)) = entry {
                     if self.input.left_clicked {
                         self.cast_remembered_spell(id);
@@ -2676,6 +2731,18 @@ impl App {
         // and placing (right click) -- see world_api/schema.yaml's
         // `on_interact`. Only reports the event; a rule decides what, if
         // anything, happens.
+        if self.cursor_grabbed && self.player.health > 0. && self.input.interact_clicked {
+            if let Some(target) = self.aimed_hive_hint() {
+                match &mut self.net { NetRole::Host(_) => self.harvest_hive(None, target), NetRole::Joined(client) => { client.reliable.send(&client.socket, client.server_addr, ReliableMsg::HarvestHive { pos: target.to_array() }); } }
+                self.input.interact_clicked = false;
+            } else if let Some(target) = self.aimed_harvest_hint() {
+                match &mut self.net {
+                    NetRole::Host(_) => self.harvest_animal(None, target),
+                    NetRole::Joined(client) => { client.reliable.send(&client.socket, client.server_addr, ReliableMsg::HarvestAnimal { pos: target.to_array() }); }
+                }
+                self.input.interact_clicked = false;
+            }
+        }
         if self.cursor_grabbed && self.player.health > 0. && self.input.interact_clicked {
             if let Some(book) = self.aimed_book() {
                 if let NetRole::Joined(client) = &mut self.net {
@@ -2869,7 +2936,7 @@ impl App {
                 self.apply_poison_ticks();
             }
 
-            self.update_oxygen(dt);
+            self.update_survival(dt);
 
             // Creature sound events (steps/attacks queued every tick inside
             // `creatures.update` above; deaths queued during the Lua tick
@@ -2931,13 +2998,18 @@ impl App {
                         let rev = account.revision;
                         let acquired = self.loot.collect(&self.world, p.pos, account);
                         changed |= rev != account.revision;
-                        if rev != account.revision {
-                            host.reliable.send(
-                                &host.socket,
-                                *peer,
-                                ReliableMsg::LootCollected(acquired),
-                            );
-                        }
+                            if rev != account.revision {
+                                host.reliable.send(
+                                    &host.socket,
+                                    *peer,
+                                    ReliableMsg::LootCollected(acquired),
+                                );
+                                host.reliable.send(
+                                    &host.socket,
+                                    *peer,
+                                    ReliableMsg::CraftState { account: account.clone(), feedback: Some("Collected chest contents".into()) },
+                                );
+                            }
                     }
                 }
             }
@@ -2977,6 +3049,15 @@ impl App {
                 .creatures(&visible_creatures, &self.world, self.weather.current, dt);
         let mut mesh =
             crate::creature::mesh_for_snapshot_wet(&visible_creatures, &self.models, &creature_wet);
+        let hives = crate::beehive::nearby(&self.world, self.player.position).into_iter().filter(|p| !self.destroyed_hives.contains(&crate::beehive::key(*p))).collect::<Vec<_>>();
+        let visible_hives: Vec<_> = hives.iter().copied().filter(|p| {
+            let cell = chunk_of(*p);
+            crate::visibility::within_terrain_range(cell, center, RENDER_RADIUS)
+                && self.chunk_meshes.contains_key(&cell)
+        }).collect();
+        mesh.extend(crate::model::beehive_mesh(&visible_hives));
+        mesh.extend(crate::beehive::particles(&visible_hives, self.water_time));
+        mesh.extend(self.harvest_fx.mesh());
         self.prop_cache.retain(&self.world.automation);
         for d in self.world.automation.devices.values() {
             let cell = chunk_of(crate::automation::center(d.cell));
@@ -3204,12 +3285,18 @@ impl App {
             NetRole::Host(host) => host.socket.lobby_code(),
             NetRole::Joined(client) => client.socket.lobby_code(),
         };
+        let proposal_review_owned = self.pending_proposal_approval.as_ref().map(|p| {
+            (p.proposal.nickname.clone(), p.proposal.prompt.clone(), p.module.name.clone())
+        });
         let settings_was_open = self.ui.settings.open;
         let spellbook_was_open = self.ui.spellbook.open;
         let map_was_open = self.ui.map.open;
         let automation_was_open = self.ui.automation.open;
         self.update_enchantment_view();
         self.update_spell_hud();
+        let proposal_review = proposal_review_owned.as_ref().map(|(requester, prompt, summary)| {
+            (requester.as_str(), prompt.as_str(), summary.as_str())
+        });
         let (full_output, requests) = self.ui.draw(
             &self.window,
             self.console_open,
@@ -3232,6 +3319,7 @@ impl App {
             &self.creatures,
             &crafting_players,
             lobby_code.as_deref(),
+            proposal_review,
         );
         self.pending_egui_output = Some(full_output);
         if spellbook_was_open != self.ui.spellbook.open {
@@ -3259,6 +3347,7 @@ impl App {
                     });
                 match result {
                     Ok(id) => {
+                        let _ = self.player.crafting.add_spell_card(id);
                         self.publish_spell_catalog();
                         self.ui.spellbook.selected = Some(id);
                         self.ui.spellbook.open = true;
@@ -3294,6 +3383,9 @@ impl App {
         }
         if let Some(block) = requests.eat_food {
             self.submit_eat(block);
+        }
+        if let Some(item) = requests.eat_harvest {
+            self.submit_eat_harvest(item);
         }
         if requests.close_journal {
             self.sync_settings_input();
@@ -3391,6 +3483,16 @@ impl App {
                 self.prompt_input.clear();
                 self.start_generation(prompt);
             }
+        }
+        if requests.cancel_generation && !matches!(self.generation, GenerationState::Idle) {
+            self.generation = GenerationState::Idle;
+            self.generation_original_prompt = None;
+            self.notify_important("Spell generation cancelled.".into());
+        }
+        if requests.approve_proposal {
+            self.resolve_proposal_approval(true);
+        } else if requests.reject_proposal {
+            self.resolve_proposal_approval(false);
         }
 
         self.maintain_hotbars();
@@ -3678,6 +3780,9 @@ impl App {
         let NetRole::Host(host) = &self.net else {
             return;
         };
+        if self.pending_proposal_approval.is_some() {
+            return;
+        }
         self.proposal_inbox
             .retain_peers(|peer| host.clients.contains_key(peer));
         let Some((peer, result)) = self.proposal_inbox.poll() else {
@@ -3706,33 +3811,17 @@ impl App {
             let name = self.make_rule_name(&proposal.prompt);
             let module = Module::load(
                 name.clone(),
-                proposal.prompt,
+                proposal.prompt.clone(),
                 world_api_validate::tag_with_api_version(&proposal.source),
             )?;
-            let charge = !module.is_instant;
             let key = connected_account.ok_or("Submitting account unavailable")?;
-            let mut charged = self
-                .guest_accounts
-                .get(&key)
-                .cloned()
-                .ok_or("Submitting account unavailable")?;
-            if charge {
-                charged.spend_mana(
-                    self.crafting_registry
-                        .mana_charge(crate::crafting::RULE_MANA),
-                )?;
-            }
-            let index = self.scripting.add_generated(module)?;
-            if charge {
-                self.guest_accounts.insert(key, charged);
-                self.sync_guest_mana();
-            }
-            self.next_rule_id += 1;
-            self.last_generated_index = Some(index);
-            Ok(format!(
-                "'{}' from {} is ready for host review. Nothing has been activated.",
-                name, proposal.nickname
-            ))
+            self.pending_proposal_approval = Some(PendingProposalApproval {
+                peer,
+                proposal,
+                module,
+                account_key: key,
+            });
+            Ok(format!("'{}' from {} is waiting for host approval.", name, self.pending_proposal_approval.as_ref().unwrap().proposal.nickname))
         });
         let accepted = result.is_ok();
         // Lua error strings are untrusted too; keep feedback within a network packet/UI row.
@@ -3756,6 +3845,41 @@ impl App {
         } else {
             self.notify_important(format!("Guest proposal rejected: {message}"));
         }
+    }
+
+    fn resolve_proposal_approval(&mut self, approve: bool) {
+        let Some(pending) = self.pending_proposal_approval.take() else { return; };
+        let peer = pending.peer;
+        let message = if !approve {
+            "Host rejected the guest rule proposal.".to_string()
+        } else {
+            let charge = !pending.module.is_instant;
+            let mut charged = self.guest_accounts.get(&pending.account_key).cloned();
+            if charge {
+                let Some(ref mut account) = charged else {
+                    return self.notify_important("Proposal account is no longer connected.".into());
+                };
+                if let Err(error) = account.spend_mana(self.crafting_registry.mana_charge(crate::crafting::RULE_MANA)) {
+                    return self.notify_important(format!("Proposal rejected: {error}"));
+                }
+            }
+            let name = pending.module.name.clone();
+            let index = match self.scripting.add_generated(pending.module) {
+                Ok(index) => index,
+                Err(error) => return self.notify_important(format!("Proposal rejected: {error}")),
+            };
+            if let Some(account) = charged {
+                self.guest_accounts.insert(pending.account_key, account);
+                self.sync_guest_mana();
+            }
+            self.next_rule_id += 1;
+            self.last_generated_index = Some(index);
+            format!("Host approved '{name}'. Review it in Rules before activating it.")
+        };
+        if let NetRole::Host(host) = &mut self.net {
+            host.reliable.send(&host.socket, peer, ReliableMsg::RuleProposalResult { accepted: approve, message: message.clone() });
+        }
+        self.notify_all_important(message);
     }
 
     /// Picks a short, meaningful name for a newly generated rule (e.g.
@@ -4277,7 +4401,7 @@ impl App {
     /// discrete multi-second timer (unlike `apply_poison_ticks`) so the HUD
     /// bar moves smoothly instead of in visible steps. Pure engine state,
     /// like poison -- no Lua callback fires for any of this.
-    fn update_oxygen(&mut self, dt: f32) {
+    fn update_survival(&mut self, dt: f32) {
         let host_submerged = is_in_water(&self.world, self.player.position);
         if host_submerged {
             self.player.drain_oxygen(
@@ -4291,6 +4415,51 @@ impl App {
         } else {
             self.player.regenerate_oxygen(OXYGEN_REGEN_PER_SEC * dt);
         }
+
+        // Hunger is intentionally gentle: a full meter lasts about 25 minutes.
+        self.player.satiety = (self.player.satiety - dt * (100.0 / 1500.0)).max(0.0);
+        let hungry = self.player.satiety <= 35.0;
+        let starving = self.player.satiety <= 8.0;
+        if starving {
+            self.player.statuses.apply(crate::status_effects::Kind::Starving, 0.3, 1.0, 0.0, "hunger");
+            self.player.statuses.remove(crate::status_effects::Kind::Hungry);
+        } else if hungry {
+            self.player.statuses.apply(crate::status_effects::Kind::Hungry, 0.3, 1.0, 0.0, "hunger");
+            self.player.statuses.remove(crate::status_effects::Kind::Starving);
+        } else {
+            self.player.statuses.remove(crate::status_effects::Kind::Hungry);
+            self.player.statuses.remove(crate::status_effects::Kind::Starving);
+        }
+        if starving && self.player.health > 0.0 {
+            self.player.damage((1.0 / 18.0) * dt);
+        }
+        if starving && !self.player.poisoned && (self.player.satiety + dt * (100.0 / 1500.0)) > 8.0 {
+            self.notify_important("You are starving. Eat food to recover.".into());
+        } else if hungry && !starving && (self.player.satiety + dt * (100.0 / 1500.0)) > 35.0 {
+            self.notify_important("You are getting hungry.".into());
+        }
+
+        // Rain affects only exposed players. Roofs stop accumulation; a nearby
+        // campfire dries the player faster and suppresses the mild damage.
+        let mut roofs = crate::shelter::Roofs::default();
+        let exposed = self.weather.current.has_rain_particles()
+            && !roofs.covered(&self.world, self.player.position + Vec3::Y * 1.6);
+        let by_fire = self
+            .campfires
+            .values()
+            .flatten()
+            .any(|p| p.distance(self.player.position) < 5.0);
+        if exposed {
+            self.player.statuses.apply(crate::status_effects::Kind::Wet, 0.3, 1.0, 0.0, "rain");
+            self.player.wetness = (self.player.wetness + dt * 0.08).min(1.0);
+            if !by_fire {
+                self.player.damage((if self.weather.current == crate::weather::Weather::Storm { 0.018 } else { 0.008 }) * self.player.wetness * dt);
+            }
+        } else {
+            self.player.statuses.remove(crate::status_effects::Kind::Wet);
+            self.player.wetness = (self.player.wetness - dt * if by_fire { 0.25 } else { 0.035 }).max(0.0);
+        }
+        let _ = self.player.statuses.tick(dt);
 
         let NetRole::Host(host) = &mut self.net else {
             return;
@@ -4310,6 +4479,19 @@ impl App {
                 }
             } else {
                 rp.oxygen = (rp.oxygen + OXYGEN_REGEN_PER_SEC * dt).min(MAX_OXYGEN);
+            }
+            rp.satiety = (rp.satiety - dt * (100.0 / 1500.0)).max(0.0);
+            if rp.satiety <= 8.0 {
+                rp.health = (rp.health - (1.0 / 18.0) * dt).max(0.0);
+            }
+            let mut roofs = crate::shelter::Roofs::default();
+            let exposed = self.weather.current.has_rain_particles()
+                && !roofs.covered(&self.world, rp.pos + Vec3::Y * 1.6);
+            if exposed {
+                rp.wetness = (rp.wetness + dt * 0.08).min(1.0);
+                rp.health = (rp.health - 0.008 * rp.wetness * dt).max(0.0);
+            } else {
+                rp.wetness = (rp.wetness - dt * 0.035).max(0.0);
             }
         }
     }
@@ -4491,6 +4673,16 @@ impl App {
             self.cast_remembered_spell(id);
             return;
         }
+        if let Action::Transfer(id, target) = action {
+            if matches!(self.net, NetRole::Host(_)) {
+                self.transfer_spell_card(None, id, target);
+            } else if let NetRole::Joined(client) = &mut self.net {
+                client.reliable.send(&client.socket, client.server_addr,
+                    ReliableMsg::TransferSpellCard { spell_id: id, target });
+                self.ui.spellbook.feedback = "Card transfer sent to host for validation.".into();
+            }
+            return;
+        }
         if !matches!(self.net, NetRole::Host(_)) {
             return;
         }
@@ -4529,11 +4721,14 @@ impl App {
                 .update(id, name, target)
                 .map(|()| "Spell updated. Save the world with F5.".to_string()),
             Action::Duplicate(id) => self.scripting.spellbook.duplicate(id).map(|new_id| {
+                let _ = self.player.crafting.add_spell_card(new_id);
                 self.ui.spellbook.selected = Some(new_id);
                 "Spell duplicated. Save the world with F5.".into()
             }),
             Action::Delete(id) => self.scripting.spellbook.delete(id).map(|()| {
                 self.scripting.spell_cooldowns.remove(&id);
+                self.player.crafting.spell_cards.retain(|&card| card != id);
+                for account in self.guest_accounts.values_mut() { account.spell_cards.retain(|&card| card != id); }
                 self.ui.spellbook.selected = None;
                 "Spell deleted. Its previously cast effects remain in the world.".into()
             }),
@@ -4541,6 +4736,7 @@ impl App {
                 self.cast_remembered_spell(id);
                 return;
             }
+            Action::Transfer(_, _) => unreachable!(),
         };
         self.ui.spellbook.feedback = result.unwrap_or_else(|error| error);
         self.publish_spell_catalog();
@@ -4903,6 +5099,10 @@ impl App {
                     }
                     ReliableMsg::Hotbar(hotbar) => self.handle_remote_hotbar(from, hotbar),
                     ReliableMsg::CastSpell(request) => self.handle_guest_spell(from, request),
+                    ReliableMsg::TransferSpellCard { spell_id, target } => self.transfer_spell_card(Some(from), spell_id, target),
+                    ReliableMsg::HarvestAnimal { pos } => self.harvest_animal(Some(from), Vec3::from_array(pos)),
+                    ReliableMsg::HarvestHive { pos } => self.harvest_hive(Some(from), Vec3::from_array(pos)),
+                    ReliableMsg::DestroyHive { pos } => self.destroy_hive(Some(from), Vec3::from_array(pos)),
                     ReliableMsg::ItemAction(intent) => self.perform_item_action(Some(from), intent),
                     ReliableMsg::AutomationAction(action) => {
                         self.perform_automation(Some(from), action)
@@ -4911,6 +5111,7 @@ impl App {
                     ReliableMsg::EatFood { block, revision } => {
                         self.perform_eat(Some(from), block, revision)
                     }
+                    ReliableMsg::EatHarvest { item, revision } => self.perform_eat_harvest(Some(from), item, revision),
                     ReliableMsg::QuestAction(action) => {
                         self.perform_quest_action(Some(from), action)
                     }
@@ -5100,6 +5301,8 @@ impl App {
                         self.player.velocity = Vec3::ZERO;
                         self.player.health = MAX_HEALTH;
                         self.player.oxygen = MAX_OXYGEN;
+                        self.player.satiety = crate::player::MAX_SATIETY;
+                        self.player.wetness = 0.0;
                         self.player.poisoned = false;
                         self.player.speed_multiplier = 1.;
                         self.player.jump_multiplier = 1.;

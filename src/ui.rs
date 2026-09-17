@@ -72,6 +72,7 @@ pub struct UiRequests {
     pub attach_rule: Option<usize>,
     pub detach_rule: Option<usize>,
     pub eat_food: Option<crate::voxel::BlockType>,
+    pub eat_harvest: Option<String>,
     pub camp_action: Option<crate::adventure::Action>,
     pub quest_action: Option<crate::quests::Action>,
     pub close_journal: bool,
@@ -84,6 +85,9 @@ pub struct UiRequests {
     /// Set when the player clicks "Run" on an instant spell (`Module::is_instant`).
     pub run_index: Option<usize>,
     pub submit_prompt: Option<String>,
+    pub cancel_generation: bool,
+    pub approve_proposal: bool,
+    pub reject_proposal: bool,
     pub confirm_quit: bool,
     pub cancel_quit: bool,
     /// Inventory assignment; highlighting/searching never changes the active item.
@@ -237,6 +241,7 @@ impl Ui {
         creatures: &crate::creature::Creatures,
         players: &[glam::Vec3],
         lobby_code: Option<&str>,
+        proposal_review: Option<(&str, &str, &str)>,
     ) -> (egui::FullOutput, UiRequests) {
         let raw_input = self.state.take_egui_input(window);
         let mut requests = UiRequests::default();
@@ -244,6 +249,22 @@ impl Ui {
         let mut open_settings = false;
 
         let full_output = self.ctx.run(raw_input, |ctx| {
+            if let Some((requester, prompt, summary)) = proposal_review {
+                egui::Window::new("Guest rule approval")
+                    .collapsible(false)
+                    .resizable(true)
+                    .default_width(460.0)
+                    .show(ctx, |ui| {
+                        ui.strong(format!("Request from {requester}"));
+                        ui.label(format!("Prompt: {prompt}"));
+                        ui.label(format!("Validated rule: {summary}"));
+                        ui.small("Validation passed. Nothing runs until approved.");
+                        ui.horizontal(|ui| {
+                            if ui.button("Approve").clicked() { requests.approve_proposal = true; }
+                            if ui.button("Reject").clicked() { requests.reject_proposal = true; }
+                        });
+                    });
+            }
             let age=self.pickup_started.elapsed().as_secs_f32();
             if !self.pickup_rows.is_empty() && age<4.0 {
                 let enter=(age/0.2).clamp(0.0,1.0);
@@ -564,6 +585,9 @@ impl Ui {
                             }
                             if let Some(status) = generation_status {
                                 ui.label(status);
+                                if ui.button("Cancel generation").clicked() {
+                                    requests.cancel_generation = true;
+                                }
                             }
                         } else {
                             ui.label("Guest prompting is disabled by the host.");
@@ -679,7 +703,7 @@ pub(crate) fn status_hud(ctx: &egui::Context, player: &Player, fps: f32) {
             ui.label(format!(
                 "{fps:.0} FPS | I: Inventory | C: Craft | M: Map | F10: Settings"
             ));
-            ui.label("J: Field journal · Gestures: , Dance | . Angry | / Jump");
+                                    ui.label("J: Field journal · Gestures: , Hello | . Dance | / Angry");
             ui.label("B: Automation · F: Configure device");
         });
 
@@ -706,6 +730,27 @@ pub(crate) fn status_hud(ctx: &egui::Context, player: &Player, fps: f32) {
                 egui::Color32::from_rgb(100, 200, 100)
             };
             ui.colored_label(health_color, format!("Health: {:.0}/100", player.health));
+            if player.satiety <= 35.0 {
+                let hunger_color = if player.satiety <= 8.0 {
+                    egui::Color32::from_rgb(220, 90, 90)
+                } else {
+                    egui::Color32::from_rgb(230, 190, 90)
+                };
+                ui.colored_label(
+                    hunger_color,
+                    if player.satiety <= 8.0 {
+                        "STARVING".to_string()
+                    } else {
+                        "HUNGRY".to_string()
+                    },
+                );
+            }
+            if player.wetness > 0.05 {
+                ui.colored_label(
+                    egui::Color32::from_rgb(120, 190, 230),
+                    format!("Wet: {:.0}%", player.wetness * 100.0),
+                );
+            }
             if player.poisoned {
                 ui.colored_label(egui::Color32::from_rgb(140, 210, 100), "POISONED");
             }

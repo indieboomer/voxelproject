@@ -150,6 +150,7 @@ impl Panel {
                 choices.extend(crate::voxel::COLLECTIBLE_BLOCKS.iter().map(|b|format!("resource:{}",b.id())));
                 choices.extend(crate::equipment::Gear::available().map(|g|format!("item:{}",g.id())));
                 choices.extend(account.production_goods.keys().cloned());choices.extend(d.items.keys().cloned());choices.extend(d.output.keys().cloned());
+                choices.extend(account.spell_cards.iter().map(|id| format!("spell:{id}")));
                 choices.sort();choices.dedup();
                 egui::ComboBox::from_label("Transfer matter").selected_text(&self.item).show_ui(ui,|ui|{for item in choices {ui.selectable_value(&mut self.item,item.clone(),item);}});
                 ui.horizontal(|ui| {

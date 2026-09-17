@@ -55,7 +55,7 @@ impl Progress {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Action {
     Rest {
         camp: Cell,
@@ -68,11 +68,12 @@ pub enum Action {
         amount: u32,
         revision: u64,
     },
+    CookHarvest { camp: Cell, item: String, amount: u32, revision: u64 },
 }
 impl Action {
-    pub fn camp(self) -> Cell {
+    pub fn camp(&self) -> Cell {
         match self {
-            Self::Rest { camp } | Self::Claim { camp } | Self::Cook { camp, .. } => camp,
+            Self::Rest { camp } | Self::Claim { camp } | Self::Cook { camp, .. } | Self::CookHarvest { camp, .. } => *camp,
         }
     }
 }
@@ -212,6 +213,11 @@ pub fn transact(
             }
             crate::food::cook(&mut next, amount)?;
             format!("Cooked {amount} meat. Eat it in inventory [I] to restore health.")
+        }
+        Action::CookHarvest { item, amount, revision, .. } => {
+            if revision != account.revision { return Err("Inventory changed; try cooking again".into()); }
+            if item == "pumpkin" { crate::food::cook_pumpkin(&mut next, amount)?; } else { crate::food::cook_harvest(&mut next, &item, amount)?; }
+            format!("Cooked {amount} {item}.")
         }
         Action::Rest { .. } => {
             next.adventure.home =
@@ -511,7 +517,7 @@ mod tests {
             amount: 64,
             revision: rev,
         };
-        transact(&w, &mut a, p, 50., false, action).unwrap();
+        transact(&w, &mut a, p, 50., false, action.clone()).unwrap();
         assert_eq!(count(&a, BlockType::Meat), 0);
         assert_eq!(count(&a, BlockType::CookedMeat), 64);
         assert_eq!(a.mana, 0);

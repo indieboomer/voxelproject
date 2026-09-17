@@ -1,19 +1,34 @@
 Phase 0 — Immediate polish and usability fixes
 These changes are small or currently interfere with normal play. They should be completed before expanding the survival mechanics.
-0.1 Reduce flower-field size
+Implementation status (2026-09-17)
+
+Completed: 0.1 flower patch sizing and 0.2 gesture bindings. Core versions of
+2.5 hunger and 2.6 rain exposure are implemented. Water reflection/Fresnel tuning and the Steam
+hosting fallback are also complete, although they were added outside this list.
+
+Partial: food uses a small hard-coded healing/satiety table; campfires cook meat
+but lack a complete fuel lifecycle; guest spell proposals are validated and can
+be auto-accepted but have no host review inbox; spell casting is synchronized,
+and saved spell cards now persist in accounts and transfer through host validation.
+
+Open work is ordered by risk: stabilize input/targeting, finish host approval and
+spell ownership, replace food and poison special cases with shared resources and
+status effects, then expand campfires/cooking and renewable harvesting.
+
+0.1 Reduce flower-field size — implemented
 Make flower patches significantly smaller.
 Preserve both mixed-color patches and nearly uniform clusters.
 Add configurable minimum and maximum patch radius.
 Prevent large flower fields from dominating entire terrain regions.
 
-0.2 Change gesture key bindings
+0.2 Change gesture key bindings — implemented
 Use:
 , — Hello
 . — Dance
 / — Angry
 Verify that these bindings work consistently for both the host and connected peers.
 
-0.3 Fix mouse cursor and camera-control states
+0.3 Fix mouse cursor and camera-control states [partial: explicit modes now track gameplay/UI/text input; full topmost-layer routing remains]
 Introduce an explicit input-mode state machine:
 Gameplay Mode: cursor captured, mouse controls the camera.
 UI Mode: cursor visible and free, camera movement disabled.
@@ -25,7 +40,7 @@ Closing the last UI panel restores camera control.
 Escape closes the topmost UI layer before opening the pause menu.
 The cursor state must never depend on which UI element was clicked last.
 Switching between inventory, spellbook, crafting, and gameplay must not leave the game in a mixed state.
-0.4 Improve block targeting
+0.4 Improve block targeting [partial: placement reach tightened; bridge/pose coverage remains]
 Separate interaction range from targeting logic.
 Limit the maximum build and mining distance.
 Prefer the closest valid surface intersected by the crosshair ray.
@@ -36,7 +51,7 @@ avoid selecting distant blocks through the intended placement area.
 Display a clear outline of the block being mined and a preview of the block being placed.
 Run tests from standing, crouching, jumping, swimming, and looking sharply downward.
 
-0.5 Show spell-generation progress
+0.5 Show spell-generation progress [partial: named status and cancel now exist; spinner/multi-stage validation open]
 Spell creation may involve long LLM processing, so the UI must clearly represent its state.
 Suggested stages:
 Generating the spell
@@ -50,7 +65,7 @@ Show a spinner or progress animation immediately.
 Let the player cancel generation.
 Prevent duplicate submissions.
 If exact percentage progress is unavailable, show named stages rather than fake percentages.
-0.6 Improve spell-card artwork
+0.6 Improve spell-card artwork [partial: structured metadata/procedural art exists; favorites/unique art open]
 The current images repeat too often and communicate too little.
 Generate card visuals from structured spell metadata, not only from spell names.
 Visually distinguish:
@@ -66,7 +81,7 @@ Reserve unique generated illustrations for important or player-favorited spells.
 
 Phase 1 — Repair and complete the multiplayer spell system
 This is the highest-priority functional area because spell creation is the project’s defining feature.
-1.1 Investigate current host/peer spell ownership
+1.1 Investigate current host/peer spell ownership [partial: flow is documented in code; ownership split remains]
 Document the complete flow:
 The current defect appears to be:
 the peer receives a message saying that host approval is required;
@@ -79,7 +94,7 @@ which machine owns the generated script;
 which machine stores player spell collections;
 how spell IDs are synchronized;
 whether host approval is currently a placeholder rather than a complete flow.
-1.2 Add a real host-approval interface
+1.2 Add a real host-approval interface [partial: validated proposal inbox with Approve/Reject now exists; policy modes and full detail fields open]
 When a peer creates a spell, the host should receive a panel containing:
 requesting player;
 original prompt;
@@ -97,7 +112,7 @@ approve every valid spell automatically;
 require approval for world rules and attachable spells;
 require approval for every player-created spell;
 disable peer spell creation.
-1.3 Save personal spell collections on each client
+1.3 Save personal spell collections on each client [partial: host guest accounts persist; client collections open]
 Separate three concepts:
 Spell Definition: behavior, parameters, cost, and validation data.
 Player Spell Item: ownership, custom name, icon, hotbar assignment, and trade state.
@@ -110,7 +125,7 @@ spells unsupported by the server version;
 duplicate spell IDs;
 host rejection;
 modified or unsafe client data.
-1.4 Represent saved spells as tradable items
+1.4 Represent saved spells as tradable items [implemented: persistent spell-card IDs, chest deposit/withdraw/pickup, host-validated transfers, and client account sync]
 A spell should be saved as an inventory item—possibly a scroll, rune, tablet, or spell card.
 Required operations:
 add it to inventory;
@@ -133,7 +148,7 @@ For the first implementation, transferring a single physical spell item is the c
 
 Phase 2 — Unified survival and resource framework
 Build the shared data model first. Cooking, hunger, poisonous plants, rain damage, fuel, and harvesting should all use it.
-2.1 Extend resource definitions
+2.1 Extend resource definitions [partial: shared food/fuel metadata foundation added; save-backed resource registry open]
 Resources should support optional properties such as:
 edible
 raw_health_change
@@ -156,7 +171,7 @@ non-edible but cookable ingredients;
 wood and coal as fuels;
 seeds and later farming.
 Avoid hard-coding special cases such as “meat restores health” or “mushrooms poison the player.”
-2.2 Add a general status-effect system
+2.2 Add a general status-effect system [partial: reusable timed effect container now drives hunger and wetness; UI icons, remote replication, and poison migration open]
 Create reusable timed effects:
 hungry;
 starving;
@@ -174,7 +189,7 @@ UI icon and message;
 source;
 removal conditions.
 This will let rain, hunger, poison, spells, and equipment use the same underlying system.
-2.3 Expand campfire interaction
+2.3 Expand campfire interaction [partial: meat cooking exists; fuel lifecycle open]
 Allow the player to:
 light the campfire;
 extinguish it;
@@ -190,7 +205,7 @@ input slot;
 output slot;
 visible cooking and fuel progress.
 The campfire state and inventory must be server-authoritative and synchronized for all players. However, campfire with campkeeper NPC next to it should never go off - NPC is supposed to bethe one taking care of the campfire
-2.4 Expand cooking
+2.4 Expand cooking [partial: meat plus egg, milk, and honey paths; generalized resource recipes open]
 Support meat, plants, mushrooms, and later recipes.
 First iteration:
 one input resource;
@@ -220,7 +235,7 @@ Edible or medicinal
 Effect may be reduced or changed
 
 Later, this can grow into multi-ingredient recipes without replacing the basic resource-processing system.
-2.5 Add hunger as a light survival pressure
+2.5 Add hunger as a light survival pressure [partial: core loop exists; difficulty tuning open]
 Avoid making hunger a constantly draining meter that dominates gameplay.
 Recommended model:
 a hidden satiety value decreases slowly;
@@ -230,7 +245,7 @@ starvation causes slow periodic health loss;
 eating restores satiety according to the food resource;
 difficulty settings control hunger speed or disable it entirely.
 The UI should communicate state without requiring permanent meter watching.
-2.6 Give rain a gameplay effect
+2.6 Give rain a gameplay effect [partial: exposure/wetness/damage exists; day/night and clothing modifiers open]
 Rain should affect exposed players only.
 Required shelter test:
 cast upward checks or use a sky-visibility query;
@@ -243,7 +258,7 @@ entering shelter stops accumulation;
 a lit campfire removes wetness faster;
 appropriate clothing can later reduce or eliminate the effect.
 Keep damage mild. Rain should encourage shelter-building, not interrupt exploration every few minutes.
-2.7 Add renewable animal harvesting
+2.7 Add renewable animal harvesting [partial: sheep wool, chicken eggs, cow milk, and wild hive honey with long cooldowns; hive model, bee particles, sound, and destructive stings implemented; sheared visuals open]
 Interacting with a sheep using F should yield wool at intervals.
 Generalize this as a renewable-resource component:
 resource type;

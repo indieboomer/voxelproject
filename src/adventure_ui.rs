@@ -66,6 +66,13 @@ impl Journal {
                         if ui.add_enabled(player.health>0. && batch>0,egui::Button::new("Cook 1 meat")).clicked(){request=Some(Action::Cook{camp,amount:1,revision:account.revision});}
                         if ui.add_enabled(player.health>0. && batch>1,egui::Button::new(format!("Cook batch ({batch})"))).clicked(){request=Some(Action::Cook{camp,amount:batch,revision:account.revision});}
                     });
+                    for (raw, cooked) in [("harvest:egg", "harvest:cooked_egg"), ("harvest:milk", "harvest:cooked_milk"), ("harvest:honey", "harvest:cooked_honey")] {
+                        let count = account.production_goods.get(raw).copied().unwrap_or(0);
+                        let ready = count.min(crate::food::MAX_COOK_BATCH);
+                        if count > 0 { ui.horizontal(|ui| { ui.label(format!("{raw}: {count} → {cooked}")); if ui.add_enabled(player.health > 0., egui::Button::new(format!("Cook {ready}"))).clicked() { request = Some(Action::CookHarvest { camp, item: raw.into(), amount: ready, revision: account.revision }); } }); }
+                    }
+                    let pumpkin = adventure::count(account, crate::voxel::BlockType::Pumpkin);
+                    if pumpkin > 0 { let batch = pumpkin.min(crate::food::MAX_COOK_BATCH); ui.horizontal(|ui| { ui.label(format!("Pumpkin: {pumpkin}")); if ui.button(format!("Cook {batch}" )).clicked() { request = Some(Action::CookHarvest { camp, item: "pumpkin".into(), amount: batch, revision: account.revision }); } }); }
                     ui.separator();
                 }
                 ui.label(RichText::new(format!("{} / 3 contracts · {}",account.adventure.stage,account.adventure.title())).strong());

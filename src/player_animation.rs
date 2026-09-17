@@ -10,6 +10,7 @@ pub enum Clip {
     Attack,
     Work,
     Jump,
+    Hello,
     Dance,
     Angry,
 }
@@ -23,6 +24,7 @@ impl Clip {
             Self::Attack => "attack",
             Self::Work => "work",
             Self::Jump => "jump",
+            Self::Hello => "hello",
             Self::Dance => "dance",
             Self::Angry => "angry",
         }
@@ -32,6 +34,7 @@ impl Clip {
         match self {
             Self::Attack => Some(0.9),
             Self::Work | Self::Jump => Some(1.2),
+            Self::Hello => Some(1.5),
             Self::Dance => Some(3.2),
             Self::Angry => Some(2.0),
             _ => None,
@@ -57,7 +60,7 @@ impl Animation {
     pub fn advance(&mut self, dt: f32, speed: f32, grounded: bool) {
         self.time += dt.clamp(0.0, 0.1);
         let moving = speed > 0.2;
-        let gesture = matches!(self.clip, Clip::Dance | Clip::Angry);
+        let gesture = matches!(self.clip, Clip::Hello | Clip::Dance | Clip::Angry);
         let active = self
             .clip
             .duration()

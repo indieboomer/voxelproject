@@ -537,6 +537,8 @@ pub fn element_id(index: usize) -> &'static str {
     ][index.min(4)]
 }
 pub fn valid_item(id: &str) -> bool {
+    if id.strip_prefix("harvest:").is_some_and(|v| matches!(v, "wool" | "egg" | "milk" | "honey" | "cooked_egg" | "cooked_milk" | "cooked_honey" | "cooked_pumpkin")) { return true; }
+    if id.strip_prefix("spell:").is_some_and(|v| v.parse::<u64>().is_ok_and(|n| n > 0)) { return true; }
     if (0..5).any(|i| element_id(i) == id) {
         return true;
     }
@@ -955,10 +957,15 @@ fn account_slot<'a>(account: &'a mut Account, id: &str) -> Result<&'a mut u32, S
     Err("Unknown matter".into())
 }
 pub fn account_count(account: &Account, id: &str) -> u32 {
+    if let Some(id) = id.strip_prefix("spell:").and_then(|v| v.parse::<u64>().ok()) { return u32::from(account.has_spell_card(id)); }
     let mut copy = account.clone();
     account_slot(&mut copy, id).map(|v| *v).unwrap_or(0)
 }
 fn account_take(account: &mut Account, id: &str, n: u32) -> Result<(), String> {
+    if let Some(id) = id.strip_prefix("spell:").and_then(|v| v.parse::<u64>().ok()) {
+        if n != 1 { return Err("Spell cards transfer one at a time".into()); }
+        return account.remove_spell_card(id);
+    }
     let v = account_slot(account, id)?;
     *v = v
         .checked_sub(n)
@@ -966,6 +973,10 @@ fn account_take(account: &mut Account, id: &str, n: u32) -> Result<(), String> {
     Ok(())
 }
 pub(crate) fn account_add(account: &mut Account, id: &str, n: u32) -> Result<(), String> {
+    if let Some(id) = id.strip_prefix("spell:").and_then(|v| v.parse::<u64>().ok()) {
+        if n != 1 { return Err("Spell cards transfer one at a time".into()); }
+        return account.add_spell_card(id);
+    }
     let v = account_slot(account, id)?;
     *v = v.checked_add(n).ok_or("Inventory full")?;
     Ok(())
