@@ -21,6 +21,10 @@ make_package.bat -VerifyOnly
 Options can be combined. `-NoAI` makes a smaller client package; it can host
 ordinary sessions but needs a separate local inference server for rule generation.
 `-RuntimeDirectory "D:\AI\llm-runtime"` overrides the source runtime folder.
+By default, packaging uses `llm-runtime/`; if that folder does not contain the
+model, it also checks the older `steam/` runtime layout. Keep the model at
+`<runtime folder>/models/qwen2.5-coder-7b-instruct-q4_k_m.gguf`. If you only need
+a joinable game client and do not have the model, use `make_package.bat -NoAI`.
 `-CrtDirectory "...\x64\Microsoft.VC145.CRT"` overrides automatic Visual Studio
 redistributable discovery. Full packaging expects exactly
 `models/qwen2.5-coder-7b-instruct-q4_k_m.gguf` within the runtime folder, matching

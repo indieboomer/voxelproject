@@ -103,7 +103,9 @@ impl App {
                 &mut self.world,
                 Some(adventure::cell(self.player.position)),
             );
-            self.player.crafting.adventure.home = adventure::clear_feet(&self.world,adventure::cell(home)).then_some(adventure::cell(home));
+            self.player.crafting.adventure.home =
+                adventure::clear_feet(&self.world, adventure::cell(home))
+                    .then_some(adventure::cell(home));
             self.player.crafting.revision = self.player.crafting.revision.saturating_add(1);
         }
         if fresh {
@@ -129,7 +131,10 @@ impl App {
     }
 
     pub(super) fn update_adventure(&mut self, dt: f32) {
-        self.ui.journal.camp_has_keeper = self.ui.journal.camp
+        self.ui.journal.camp_has_keeper = self
+            .ui
+            .journal
+            .camp
             .is_some_and(|camp| adventure::guide_position(&self.world, camp).is_some());
         self.ui.journal.tick(self.player.health, dt);
         if !matches!(self.net, NetRole::Host(_)) {
@@ -292,17 +297,27 @@ impl App {
         if !self.cursor_grabbed || self.player.health <= 0. {
             return;
         }
-        if let Some(book)=self.aimed_book() {
-            self.ui.journal.hint=Some(format!("F - Read {} (4 recipes)",crate::gear_catalog::BOOK_NAMES[book.kind as usize]));return;
+        if let Some(book) = self.aimed_book() {
+            self.ui.journal.hint = Some(format!(
+                "F - Read {} (4 recipes)",
+                crate::gear_catalog::BOOK_NAMES[book.kind as usize]
+            ));
+            return;
         }
-        if let Some(npc)=self.aimed_npc() {
-            self.ui.journal.hint=Some(format!("F · Talk to {}",crate::quests::NAMES[npc as usize]));return;
+        if let Some(npc) = self.aimed_npc() {
+            self.ui.journal.hint = Some(format!(
+                "F · Talk to {}",
+                crate::quests::NAMES[npc as usize]
+            ));
+            return;
         }
         if let Some(camp) = self.aimed_camp() {
-            self.ui.journal.hint = Some(if adventure::guide_position(&self.world, camp).is_some() { format!(
-                "F · Talk to {} / rest at camp",
-                adventure::guide_name(camp)
-            ) } else { "F · Cook / rest at camp".into() });
+            self.ui.journal.hint =
+                Some(if adventure::guide_position(&self.world, camp).is_some() {
+                    format!("F · Talk to {} / rest at camp", adventure::guide_name(camp))
+                } else {
+                    "F · Cook / rest at camp".into()
+                });
             return;
         }
         let eye = self.camera.eye_position();

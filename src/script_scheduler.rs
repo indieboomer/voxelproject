@@ -21,20 +21,40 @@ mod tests {
     #[test]
     fn paid_cast_tracks_its_own_success_and_busy_queue() {
         let mut host = ScriptHost::new();
-        host.modules.push(rule("function on_cast(api,e) if e.player_id==7 then error('failed') end end"));
+        host.modules.push(rule(
+            "function on_cast(api,e) if e.player_id==7 then error('failed') end end",
+        ));
         let world = World::new(1);
         let mut creatures = Creatures::new();
         let mut weather = WeatherState::new(1);
         let mut time = 0.0;
         assert!(host.can_cast_immediately());
-        let out = host.run_cast(0,&world,&mut creatures,&[],&mut time,&mut weather,0,[0;COLLECTIBLE_BLOCKS.len()]);
+        let out = host.run_cast(
+            0,
+            &world,
+            &mut creatures,
+            &[],
+            &mut time,
+            &mut weather,
+            0,
+            [0; COLLECTIBLE_BLOCKS.len()],
+        );
         assert!(out.crashes.is_empty());
-        assert!(host.cast_succeeded(0,0));
-        let out = host.run_cast(0,&world,&mut creatures,&[],&mut time,&mut weather,7,[0;COLLECTIBLE_BLOCKS.len()]);
+        assert!(host.cast_succeeded(0, 0));
+        let out = host.run_cast(
+            0,
+            &world,
+            &mut creatures,
+            &[],
+            &mut time,
+            &mut weather,
+            7,
+            [0; COLLECTIBLE_BLOCKS.len()],
+        );
         assert!(!out.crashes.is_empty());
-        assert!(!host.cast_succeeded(0,7));
-        assert!(!host.cast_succeeded(0,0));
-        host.enqueue_cast(0,0);
+        assert!(!host.cast_succeeded(0, 7));
+        assert!(!host.cast_succeeded(0, 0));
+        host.enqueue_cast(0, 0);
         assert!(!host.can_cast_immediately());
     }
 
@@ -374,14 +394,24 @@ impl ScriptHost {
             self.scheduler.enqueue(module, Event::Cast(caster));
         }
     }
-    pub fn can_cast_immediately(&self) -> bool { self.scheduler.pending == 0 }
-    pub(super) fn enqueue_targeted_cast(&mut self, index: usize, caster: PlayerId, context: crate::spell_target::TargetContext) {
+    pub fn can_cast_immediately(&self) -> bool {
+        self.scheduler.pending == 0
+    }
+    pub(super) fn enqueue_targeted_cast(
+        &mut self,
+        index: usize,
+        caster: PlayerId,
+        context: crate::spell_target::TargetContext,
+    ) {
         if let Some(module) = self.modules.get(index) {
-            self.scheduler.enqueue(module, Event::TargetedCast(caster, context));
+            self.scheduler
+                .enqueue(module, Event::TargetedCast(caster, context));
         }
     }
     pub fn cast_succeeded(&self, index: usize, caster: PlayerId) -> bool {
-        self.modules.get(index).is_some_and(|m|self.last_cast_success==Some((m.runtime_id,caster)))
+        self.modules
+            .get(index)
+            .is_some_and(|m| self.last_cast_success == Some((m.runtime_id, caster)))
     }
 
     pub(super) fn dispatch(&mut self, input: &mut TickInput) -> (Vec<String>, Vec<String>) {
@@ -431,7 +461,7 @@ impl ScriptHost {
             match result {
                 Ok(()) => {
                     if let Event::Cast(caster) | Event::TargetedCast(caster, _) = event {
-                        self.last_cast_success = Some((module.runtime_id,caster));
+                        self.last_cast_success = Some((module.runtime_id, caster));
                         module.error = None;
                     }
                 }

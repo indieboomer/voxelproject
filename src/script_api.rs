@@ -48,11 +48,19 @@ pub(super) fn call(lua: &Lua, tx: &CallbackTransaction, event: Callback) -> mlua
         match event {
             Callback::Cast(player_id) => table.set("player_id", player_id)?,
             Callback::TargetedCast(player_id, context) => {
-                static NEXT_CAST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-                table.set("cast_id", NEXT_CAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed))?;
+                static NEXT_CAST_ID: std::sync::atomic::AtomicU64 =
+                    std::sync::atomic::AtomicU64::new(1);
+                table.set(
+                    "cast_id",
+                    NEXT_CAST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                )?;
                 table.set("player_id", player_id)?;
-                for (name, value) in [("origin", context.origin), ("facing", context.facing),
-                    ("hit_position", context.hit_position), ("hit_normal", context.hit_normal)] {
+                for (name, value) in [
+                    ("origin", context.origin),
+                    ("facing", context.facing),
+                    ("hit_position", context.hit_position),
+                    ("hit_normal", context.hit_normal),
+                ] {
                     let vector = lua.create_table()?;
                     vector.set("x", value.x)?;
                     vector.set("y", value.y)?;
@@ -65,9 +73,14 @@ pub(super) fn call(lua: &Lua, tx: &CallbackTransaction, event: Callback) -> mlua
                         target.set("kind", "creature")?;
                         target.set("id", id)?;
                     }
-                    crate::spell_target::Target::Block { position: (x,y,z), material } => {
+                    crate::spell_target::Target::Block {
+                        position: (x, y, z),
+                        material,
+                    } => {
                         target.set("kind", "block")?;
-                        target.set("x", x)?; target.set("y", y)?; target.set("z", z)?;
+                        target.set("x", x)?;
+                        target.set("y", y)?;
+                        target.set("z", z)?;
                         target.set("material", material.id())?;
                     }
                 }
@@ -119,33 +132,65 @@ fn populate_api<'lua, 'scope>(
     let time_of_day = *tx.time.borrow();
     let night = is_night(time_of_day);
     let weather_name = tx.weather.borrow().current.name();
-    super::environment::populate(lua,scope,api,tx,block_budget,spawn_budget)?;
-    super::world_edit::populate(lua,scope,api,tx,block_budget)?;
-    super::inventory::populate(lua,scope,api,tx)?;
-    super::automation_api::populate(lua,scope,api,tx,block_budget)?;
-    api.set("get_rule_target",scope.create_function(move |lua,()| {
-        let Some(binding)=&tx.attachment else{return Ok(None);};
-        let t=lua.create_table()?;
-        t.set("creation_id",binding.id)?;t.set("creator_id",binding.creator)?;
-        t.set("world_id",binding.target.world_id.as_str())?;t.set("world_revision",binding.target.world_revision)?;
-        match binding.target.object {
-            crate::enchantment::Object::Creature{id,species}=>{
-                let c=tx.creatures.borrow();let Some(c)=c.snapshot.iter().find(|c|c.0==id&&c.1==species) else{return Ok(None);};
-                t.set("kind","creature")?;t.set("id",id)?;t.set("species",creature_kind_name(species))?;
-                t.set("x",c.2[0])?;t.set("y",c.2[1])?;t.set("z",c.2[2])?;
+    super::environment::populate(lua, scope, api, tx, block_budget, spawn_budget)?;
+    super::world_edit::populate(lua, scope, api, tx, block_budget)?;
+    super::inventory::populate(lua, scope, api, tx)?;
+    super::automation_api::populate(lua, scope, api, tx, block_budget)?;
+    api.set(
+        "get_rule_target",
+        scope.create_function(move |lua, ()| {
+            let Some(binding) = &tx.attachment else {
+                return Ok(None);
+            };
+            let t = lua.create_table()?;
+            t.set("creation_id", binding.id)?;
+            t.set("creator_id", binding.creator)?;
+            t.set("world_id", binding.target.world_id.as_str())?;
+            t.set("world_revision", binding.target.world_revision)?;
+            match binding.target.object {
+                crate::enchantment::Object::Creature { id, species } => {
+                    let c = tx.creatures.borrow();
+                    let Some(c) = c.snapshot.iter().find(|c| c.0 == id && c.1 == species) else {
+                        return Ok(None);
+                    };
+                    t.set("kind", "creature")?;
+                    t.set("id", id)?;
+                    t.set("species", creature_kind_name(species))?;
+                    t.set("x", c.2[0])?;
+                    t.set("y", c.2[1])?;
+                    t.set("z", c.2[2])?;
+                }
+                crate::enchantment::Object::Block { cell, material, .. } => {
+                    if tx.get_block(cell.0, cell.1, cell.2) != material {
+                        return Ok(None);
+                    }
+                    t.set("kind", "block")?;
+                    t.set("material", material.id())?;
+                    t.set("x", cell.0)?;
+                    t.set("y", cell.1)?;
+                    t.set("z", cell.2)?;
+                }
+                crate::enchantment::Object::Device { id, cell, kind } => {
+                    if !tx
+                        .automation
+                        .borrow()
+                        .devices
+                        .get(&cell)
+                        .is_some_and(|d| d.persistent_id == id)
+                    {
+                        return Ok(None);
+                    }
+                    t.set("kind", "device")?;
+                    t.set("id", id)?;
+                    t.set("device_type", kind.id())?;
+                    t.set("x", cell.0)?;
+                    t.set("y", cell.1)?;
+                    t.set("z", cell.2)?;
+                }
             }
-            crate::enchantment::Object::Block{cell,material,..}=>{
-                if tx.get_block(cell.0,cell.1,cell.2)!=material {return Ok(None);}
-                t.set("kind","block")?;t.set("material",material.id())?;t.set("x",cell.0)?;t.set("y",cell.1)?;t.set("z",cell.2)?;
-            }
-            crate::enchantment::Object::Device{id,cell,kind}=>{
-                if !tx.automation.borrow().devices.get(&cell).is_some_and(|d|d.persistent_id==id) {return Ok(None);}
-                t.set("kind","device")?;t.set("id",id)?;t.set("device_type",kind.id())?;
-                t.set("x",cell.0)?;t.set("y",cell.1)?;t.set("z",cell.2)?;
-            }
-        }
-        Ok(Some(t))
-    })?)?;
+            Ok(Some(t))
+        })?,
+    )?;
     api.set("time_of_day", time_of_day)?;
     api.set("is_night", night)?;
     api.set("weather", weather_name)?;
@@ -178,7 +223,7 @@ fn populate_api<'lua, 'scope>(
                 c.set("z", pos[2])?;
                 c.set("health", *health)?;
                 c.set("max_health", *max_health)?;
-                super::environment::creature_fields(&c,tx,*kind,*pos)?;
+                super::environment::creature_fields(&c, tx, *kind, *pos)?;
                 t.set(i + 1, c)?;
             }
             Ok(t)
@@ -216,7 +261,7 @@ fn populate_api<'lua, 'scope>(
                     e.set("z", pos[2])?;
                     e.set("health", *health)?;
                     e.set("max_health", *max_health)?;
-                    super::environment::creature_fields(&e,tx,*k,*pos)?;
+                    super::environment::creature_fields(&e, tx, *k, *pos)?;
                     count += 1;
                     t.set(count, e)?;
                 }
@@ -251,7 +296,7 @@ fn populate_api<'lua, 'scope>(
             e.set("z", pos[2])?;
             e.set("health", *health)?;
             e.set("max_health", *max_health)?;
-            super::environment::creature_fields(&e,tx,*k,*pos)?;
+            super::environment::creature_fields(&e, tx, *k, *pos)?;
             e.set("distance", dist)?;
             Ok(Some(e))
         })?,
@@ -298,97 +343,193 @@ fn populate_api<'lua, 'scope>(
         })?,
     )?;
 
-    api.set("protect_player", scope.create_function(move |_, (player_id, kind): (PlayerId, String)| {
-        if tx.policy_owner.is_none() { return Err(mlua::Error::RuntimeError("protect_player requires on_tick".into())); }
-        let Some(species) = creature_kind_filter(&kind) else { return Ok(false); };
-        if !tx.players().iter().any(|p| p.id == player_id) { return Ok(false); }
-        let policy = crate::creature::AttackPolicy::ProtectPlayer(player_id, species);
-        let mut policies = tx.attack_policies.borrow_mut();
-        if !policies.contains(&policy) { policies.push(policy); }
-        Ok(true)
-    })?)?;
-    api.set("suppress_creature_attacks", scope.create_function(move |_, id: u32| {
-        if tx.policy_owner.is_none() { return Err(mlua::Error::RuntimeError("suppress_creature_attacks requires on_tick".into())); }
-        if creatures_cell.borrow().behavior(id).is_none() { return Ok(false); }
-        let policy = crate::creature::AttackPolicy::SuppressCreature(id);
-        let mut policies = tx.attack_policies.borrow_mut();
-        if !policies.contains(&policy) { policies.push(policy); }
-        Ok(true)
-    })?)?;
+    api.set(
+        "protect_player",
+        scope.create_function(move |_, (player_id, kind): (PlayerId, String)| {
+            if tx.policy_owner.is_none() {
+                return Err(mlua::Error::RuntimeError(
+                    "protect_player requires on_tick".into(),
+                ));
+            }
+            let Some(species) = creature_kind_filter(&kind) else {
+                return Ok(false);
+            };
+            if !tx.players().iter().any(|p| p.id == player_id) {
+                return Ok(false);
+            }
+            let policy = crate::creature::AttackPolicy::ProtectPlayer(player_id, species);
+            let mut policies = tx.attack_policies.borrow_mut();
+            if !policies.contains(&policy) {
+                policies.push(policy);
+            }
+            Ok(true)
+        })?,
+    )?;
+    api.set(
+        "suppress_creature_attacks",
+        scope.create_function(move |_, id: u32| {
+            if tx.policy_owner.is_none() {
+                return Err(mlua::Error::RuntimeError(
+                    "suppress_creature_attacks requires on_tick".into(),
+                ));
+            }
+            if creatures_cell.borrow().behavior(id).is_none() {
+                return Ok(false);
+            }
+            let policy = crate::creature::AttackPolicy::SuppressCreature(id);
+            let mut policies = tx.attack_policies.borrow_mut();
+            if !policies.contains(&policy) {
+                policies.push(policy);
+            }
+            Ok(true)
+        })?,
+    )?;
 
-    api.set("get_behavior", scope.create_function(move |lua, id: u32| {
-        use crate::creature::{BehaviorMode, BehaviorTarget};
-        let Some(state) = creatures_cell.borrow().behavior(id) else { return Ok(None); };
-        let t = lua.create_table()?;
-        t.set("aggressive", state.aggressive)?;
-        t.set("mode", match state.mode { BehaviorMode::Auto => "auto", BehaviorMode::Chase => "chase", BehaviorMode::Attack => "attack", BehaviorMode::Ignore => "ignore" })?;
-        if let Some(target) = state.target {
-            let (kind, id) = match target { BehaviorTarget::Player(id) => ("player", id), BehaviorTarget::Creature(id) => ("creature", id) };
-            t.set("target_type", kind)?; t.set("target_id", id)?;
-        }
-        Ok(Some(t))
-    })?)?;
-    api.set("set_aggressive", scope.create_function(move |_, (id, aggressive): (u32, bool)| {
-        use crate::creature::BehaviorMode;
-        let mut creatures = creatures_cell.borrow_mut();
-        let Some(mut state) = creatures.behavior(id) else { return Ok(false); };
-        state.aggressive = aggressive;
-        state.mode = BehaviorMode::Auto;
-        state.target = None;
-        Ok(creatures.set_behavior(id, state))
-    })?)?;
-    for (name, mode) in [("attack", crate::creature::BehaviorMode::Attack),
-        ("chase_target", crate::creature::BehaviorMode::Chase), ("ignore", crate::creature::BehaviorMode::Ignore)] {
-        api.set(name, scope.create_function(move |_, id: u32| {
+    api.set(
+        "get_behavior",
+        scope.create_function(move |lua, id: u32| {
+            use crate::creature::{BehaviorMode, BehaviorTarget};
+            let Some(state) = creatures_cell.borrow().behavior(id) else {
+                return Ok(None);
+            };
+            let t = lua.create_table()?;
+            t.set("aggressive", state.aggressive)?;
+            t.set(
+                "mode",
+                match state.mode {
+                    BehaviorMode::Auto => "auto",
+                    BehaviorMode::Chase => "chase",
+                    BehaviorMode::Attack => "attack",
+                    BehaviorMode::Ignore => "ignore",
+                },
+            )?;
+            if let Some(target) = state.target {
+                let (kind, id) = match target {
+                    BehaviorTarget::Player(id) => ("player", id),
+                    BehaviorTarget::Creature(id) => ("creature", id),
+                };
+                t.set("target_type", kind)?;
+                t.set("target_id", id)?;
+            }
+            Ok(Some(t))
+        })?,
+    )?;
+    api.set(
+        "set_aggressive",
+        scope.create_function(move |_, (id, aggressive): (u32, bool)| {
             use crate::creature::BehaviorMode;
             let mut creatures = creatures_cell.borrow_mut();
-            let Some(mut state) = creatures.behavior(id) else { return Ok(false); };
-            if mode != BehaviorMode::Ignore && state.target.is_none() { return Ok(false); }
-            state.mode = mode;
-            if mode == BehaviorMode::Ignore { state.target = None; state.aggressive = false; }
-            if mode == BehaviorMode::Attack { state.aggressive = true; }
+            let Some(mut state) = creatures.behavior(id) else {
+                return Ok(false);
+            };
+            state.aggressive = aggressive;
+            state.mode = BehaviorMode::Auto;
+            state.target = None;
             Ok(creatures.set_behavior(id, state))
-        })?)?;
+        })?,
+    )?;
+    for (name, mode) in [
+        ("attack", crate::creature::BehaviorMode::Attack),
+        ("chase_target", crate::creature::BehaviorMode::Chase),
+        ("ignore", crate::creature::BehaviorMode::Ignore),
+    ] {
+        api.set(
+            name,
+            scope.create_function(move |_, id: u32| {
+                use crate::creature::BehaviorMode;
+                let mut creatures = creatures_cell.borrow_mut();
+                let Some(mut state) = creatures.behavior(id) else {
+                    return Ok(false);
+                };
+                if mode != BehaviorMode::Ignore && state.target.is_none() {
+                    return Ok(false);
+                }
+                state.mode = mode;
+                if mode == BehaviorMode::Ignore {
+                    state.target = None;
+                    state.aggressive = false;
+                }
+                if mode == BehaviorMode::Attack {
+                    state.aggressive = true;
+                }
+                Ok(creatures.set_behavior(id, state))
+            })?,
+        )?;
     }
-    api.set("set_target", scope.create_function(move |_, (id, kind, target_id): (u32, String, u32)| {
-        use crate::creature::BehaviorTarget;
-        let mut creatures = creatures_cell.borrow_mut();
-        let Some(mut state) = creatures.behavior(id) else { return Ok(false); };
-        let target = match kind.as_str() {
-            "creature" if id != target_id && creatures.behavior(target_id).is_some() => BehaviorTarget::Creature(target_id),
-            "player" if tx.players().iter().any(|p| p.id == target_id) => BehaviorTarget::Player(target_id),
-            _ => return Ok(false),
-        };
-        state.target = Some(target);
-        Ok(creatures.set_behavior(id, state))
-    })?)?;
-    api.set("select_target", scope.create_function(move |_, (id, kind, radius): (u32, String, f32)| {
-        use crate::creature::BehaviorTarget;
-        let mut creatures = creatures_cell.borrow_mut();
-        let Some(mut state) = creatures.behavior(id) else { return Ok(None); };
-        let origin = Vec3::from_array(creatures.snapshot.iter().find(|c| c.0 == id).unwrap().2);
-        let radius = radius.clamp(0.0, MAX_FIND_RADIUS);
-        let mut candidates = Vec::new();
-        if kind == "player" {
-            for p in tx.players() { candidates.push((p.id, p.pos)); }
-        } else {
-            let Some(filter) = creature_kind_filter(&kind) else { return Ok(None); };
-            for c in &creatures.snapshot {
-                if c.0 != id && c.1 == filter { candidates.push((c.0, Vec3::from_array(c.2))); }
+    api.set(
+        "set_target",
+        scope.create_function(move |_, (id, kind, target_id): (u32, String, u32)| {
+            use crate::creature::BehaviorTarget;
+            let mut creatures = creatures_cell.borrow_mut();
+            let Some(mut state) = creatures.behavior(id) else {
+                return Ok(false);
+            };
+            let target = match kind.as_str() {
+                "creature" if id != target_id && creatures.behavior(target_id).is_some() => {
+                    BehaviorTarget::Creature(target_id)
+                }
+                "player" if tx.players().iter().any(|p| p.id == target_id) => {
+                    BehaviorTarget::Player(target_id)
+                }
+                _ => return Ok(false),
+            };
+            state.target = Some(target);
+            Ok(creatures.set_behavior(id, state))
+        })?,
+    )?;
+    api.set(
+        "select_target",
+        scope.create_function(move |_, (id, kind, radius): (u32, String, f32)| {
+            use crate::creature::BehaviorTarget;
+            let mut creatures = creatures_cell.borrow_mut();
+            let Some(mut state) = creatures.behavior(id) else {
+                return Ok(None);
+            };
+            let origin = Vec3::from_array(creatures.snapshot.iter().find(|c| c.0 == id).unwrap().2);
+            let radius = radius.clamp(0.0, MAX_FIND_RADIUS);
+            let mut candidates = Vec::new();
+            if kind == "player" {
+                for p in tx.players() {
+                    candidates.push((p.id, p.pos));
+                }
+            } else {
+                let Some(filter) = creature_kind_filter(&kind) else {
+                    return Ok(None);
+                };
+                for c in &creatures.snapshot {
+                    if c.0 != id && c.1 == filter {
+                        candidates.push((c.0, Vec3::from_array(c.2)));
+                    }
+                }
             }
-        }
-        let chosen = candidates.into_iter().map(|(id, pos)| (id, origin.distance(pos)))
-            .filter(|c| c.1 <= radius).min_by(|a,b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0))).map(|c| c.0);
-        state.target = chosen.map(|id| if kind == "player" { BehaviorTarget::Player(id) } else { BehaviorTarget::Creature(id) });
-        creatures.set_behavior(id, state);
-        Ok(chosen)
-    })?)?;
-    api.set("die", scope.create_function(move |_, id: u32| {
-        if let Some(event) = creatures_cell.borrow_mut().destroy(id) {
-            death_events_cell.borrow_mut().push(event);
-            Ok(true)
-        } else { Ok(false) }
-    })?)?;
+            let chosen = candidates
+                .into_iter()
+                .map(|(id, pos)| (id, origin.distance(pos)))
+                .filter(|c| c.1 <= radius)
+                .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)))
+                .map(|c| c.0);
+            state.target = chosen.map(|id| {
+                if kind == "player" {
+                    BehaviorTarget::Player(id)
+                } else {
+                    BehaviorTarget::Creature(id)
+                }
+            });
+            creatures.set_behavior(id, state);
+            Ok(chosen)
+        })?,
+    )?;
+    api.set(
+        "die",
+        scope.create_function(move |_, id: u32| {
+            if let Some(event) = creatures_cell.borrow_mut().destroy(id) {
+                death_events_cell.borrow_mut().push(event);
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        })?,
+    )?;
 
     api.set(
         "damage",
@@ -420,13 +561,18 @@ fn populate_api<'lua, 'scope>(
             let kind = parse_creature_kind(&kind);
             let seed = spawn_seed.get();
             spawn_seed.set(seed.wrapping_add(0x9E37_79B9_7F4A_7C15));
-            if kind==CreatureKind::Fish {
-                let pos=Vec3::new(x,y,z);
-                return Ok(if super::environment::fish_clear(tx,pos) {creatures_cell.borrow_mut().spawn(kind,pos,seed)}else{None});
+            if kind == CreatureKind::Fish {
+                let pos = Vec3::new(x, y, z);
+                return Ok(if super::environment::fish_clear(tx, pos) {
+                    creatures_cell.borrow_mut().spawn(kind, pos, seed)
+                } else {
+                    None
+                });
             }
-            let id = creatures_cell
-                .borrow_mut()
-                .spawn_in_world(world, kind, Vec3::new(x, y, z), seed);
+            let id =
+                creatures_cell
+                    .borrow_mut()
+                    .spawn_in_world(world, kind, Vec3::new(x, y, z), seed);
             Ok(id)
         })?,
     )?;
@@ -447,15 +593,22 @@ fn populate_api<'lua, 'scope>(
             spawn_seed.set(seed.wrapping_add(0x9E37_79B9_7F4A_7C15));
             let (dx, dz) = random_offset_in_disk(seed, radius);
             if kind == CreatureKind::Fish {
-                let Some(pos) = Creatures::fish_spawn_near(world, target.pos, radius, seed) else { return Ok(None); };
-                return Ok(creatures_cell.borrow_mut().spawn_in_world(world, kind, pos, seed));
+                let Some(pos) = Creatures::fish_spawn_near(world, target.pos, radius, seed) else {
+                    return Ok(None);
+                };
+                return Ok(creatures_cell
+                    .borrow_mut()
+                    .spawn_in_world(world, kind, pos, seed));
             }
             let sx = target.pos.x + dx;
             let sz = target.pos.z + dz;
             let sy = world.terrain_height(sx.floor() as i32, sz.floor() as i32) as f32 + 1.0;
-            let id = creatures_cell
-                .borrow_mut()
-                .spawn_in_world(world, kind, Vec3::new(sx, sy, sz), seed);
+            let id = creatures_cell.borrow_mut().spawn_in_world(
+                world,
+                kind,
+                Vec3::new(sx, sy, sz),
+                seed,
+            );
             Ok(id)
         })?,
     )?;
@@ -475,7 +628,9 @@ fn populate_api<'lua, 'scope>(
                 // "wood" is a category alias matching any tree species
                 // (oak/spruce/birch/cherry), since rules like rain_mud.lua
                 // search for "a tree" generically rather than one species.
-                let Some(filter) = super::world_edit::BlockFilter::parse(&kind) else { return Ok(t); };
+                let Some(filter) = super::world_edit::BlockFilter::parse(&kind) else {
+                    return Ok(t);
+                };
                 let radius = radius.clamp(0.0, MAX_FIND_RADIUS);
                 let r = radius.ceil() as i32;
                 let radius_sq = radius * radius;
@@ -510,7 +665,9 @@ fn populate_api<'lua, 'scope>(
     api.set(
         "replace_block",
         scope.create_function(move |_, (x, y, z, kind): (i32, i32, i32, String)| {
-            if tx.automation.borrow().device_at((x,y,z)).is_some() {return Ok(false);}
+            if tx.automation.borrow().device_at((x, y, z)).is_some() {
+                return Ok(false);
+            }
             if !(0..crate::voxel::chunk::CHUNK_Y).contains(&y) {
                 return Ok(false);
             }
@@ -596,7 +753,11 @@ fn populate_api<'lua, 'scope>(
         "give_item",
         scope.create_function(
             move |_, (player_id, kind, amount): (PlayerId, String, u32)| {
-                if let Some(g)=super::inventory::gear(&kind) {return Ok(super::inventory::equipment_change(tx,player_id,g,amount,false));}
+                if let Some(g) = super::inventory::gear(&kind) {
+                    return Ok(super::inventory::equipment_change(
+                        tx, player_id, g, amount, false,
+                    ));
+                }
                 if !tx.players().iter().any(|p| p.id == player_id) {
                     return Ok(false);
                 }
@@ -626,7 +787,11 @@ fn populate_api<'lua, 'scope>(
         "take_item",
         scope.create_function(
             move |_, (player_id, kind, amount): (PlayerId, String, u32)| {
-                if let Some(g)=super::inventory::gear(&kind) {return Ok(super::inventory::equipment_change(tx,player_id,g,amount,true));}
+                if let Some(g) = super::inventory::gear(&kind) {
+                    return Ok(super::inventory::equipment_change(
+                        tx, player_id, g, amount, true,
+                    ));
+                }
                 // The transaction includes prior accepted give/take
                 // commands, so two removals cannot spend the same funds.
                 // All inventories come from authoritative account snapshots.
@@ -639,7 +804,10 @@ fn populate_api<'lua, 'scope>(
                 let Some(i) = COLLECTIBLE_BLOCKS.iter().position(|&b| b == block) else {
                     return Ok(false);
                 };
-                if tx.resource_count(player_id, i).map_or(true, |count| count < amount) {
+                if tx
+                    .resource_count(player_id, i)
+                    .map_or(true, |count| count < amount)
+                {
                     return Ok(false);
                 }
                 player_effects_cell
@@ -670,23 +838,45 @@ fn populate_api<'lua, 'scope>(
         })?,
     )?;
 
-    api.set("get_inventory", scope.create_function(move |lua, player_id: PlayerId| {
-        if tx.resource_count(player_id, 0).is_none() { return Ok(None); }
-        let inventory = lua.create_table()?;
-        for (i, block) in COLLECTIBLE_BLOCKS.iter().enumerate() {
-            inventory.set(block.id(), tx.resource_count(player_id, i).unwrap())?;
-        }
-        Ok(Some(inventory))
-    })?)?;
+    api.set(
+        "get_inventory",
+        scope.create_function(move |lua, player_id: PlayerId| {
+            if tx.resource_count(player_id, 0).is_none() {
+                return Ok(None);
+            }
+            let inventory = lua.create_table()?;
+            for (i, block) in COLLECTIBLE_BLOCKS.iter().enumerate() {
+                inventory.set(block.id(), tx.resource_count(player_id, i).unwrap())?;
+            }
+            Ok(Some(inventory))
+        })?,
+    )?;
     for name in ["has_resource", "has_item"] {
-        api.set(name, scope.create_function(move |_, (player_id, kind, amount): (PlayerId, String, Option<u32>)| {
-            let amount = amount.unwrap_or(1);
-            if amount == 0 { return Ok(None); }
-            if name=="has_item" {if let Some(g)=super::inventory::gear(&kind) {return Ok(tx.inventory(player_id).map(|a|a.gear[g as usize]>=amount));}}
-            let Some(block) = BlockType::from_name(&kind) else { return Ok(None); };
-            let Some(i) = COLLECTIBLE_BLOCKS.iter().position(|b| *b == block) else { return Ok(None); };
-            Ok(tx.resource_count(player_id, i).map(|count| count >= amount))
-        })?)?;
+        api.set(
+            name,
+            scope.create_function(
+                move |_, (player_id, kind, amount): (PlayerId, String, Option<u32>)| {
+                    let amount = amount.unwrap_or(1);
+                    if amount == 0 {
+                        return Ok(None);
+                    }
+                    if name == "has_item" {
+                        if let Some(g) = super::inventory::gear(&kind) {
+                            return Ok(tx
+                                .inventory(player_id)
+                                .map(|a| a.gear[g as usize] >= amount));
+                        }
+                    }
+                    let Some(block) = BlockType::from_name(&kind) else {
+                        return Ok(None);
+                    };
+                    let Some(i) = COLLECTIBLE_BLOCKS.iter().position(|b| *b == block) else {
+                        return Ok(None);
+                    };
+                    Ok(tx.resource_count(player_id, i).map(|count| count >= amount))
+                },
+            )?,
+        )?;
     }
 
     api.set(

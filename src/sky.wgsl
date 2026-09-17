@@ -10,6 +10,7 @@ struct CameraUniform {
     inv_view_proj: mat4x4<f32>,
     camera_pos: vec4<f32>,
     fog_color: vec4<f32>,
+    // rgb = sky color, w = smoothed base cloud fullness (0 sunny, 1 otherwise).
     zenith_color: vec4<f32>,
     // xyz = normalized sun direction, w = raw sun_height (sin of the sun's
     // angle above the horizon -- see daynight.rs's SkyLighting.sun_height)
@@ -109,10 +110,12 @@ fn voxel_clouds(dir: vec3<f32>, coverage: f32) -> vec2<f32> {
     var next = (select(origin-cell,cell+1.0-origin,dir>=vec3<f32>(0.0)))*delta;
     var shade = 0.72;
     var travel = 0.0;
+    // A 0.71 threshold retains about 30% of the old sunny cloud footprint.
+    // Restore the original 0.58 threshold for other weather; overcast is unchanged.
+    let threshold = mix(0.71, 0.58, camera.zenith_color.w)-coverage*0.24;
     for (var i=0; i<48; i=i+1) {
         if cell.y >= 23.0 { break; }
         let density = cloud_density(cell.xz*0.19);
-        let threshold = 0.58-coverage*0.24;
         let thickness = 1.0+floor(clamp((density-threshold)*10.0,0.0,2.0));
         if cell.y>=20.0 && cell.y<20.0+thickness && density>threshold {
             let fade = (1.0-smoothstep(1100.0,1800.0,start+travel*8.0))*smoothstep(0.035,0.12,dir.y);

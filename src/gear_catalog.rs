@@ -188,7 +188,16 @@ pub const DEFINITIONS: [Definition; 17] = [
         4,
         [0.85, 0.80, 1.0]
     ),
-    item!("Torch", "Left-hand light: burns forever, leaving your tool hand free. Equip in inventory [I].", 0, 2, 2, Resin, 1, [1.0,0.70,0.18]),
+    item!(
+        "Torch",
+        "Left-hand light: burns forever, leaving your tool hand free. Equip in inventory [I].",
+        0,
+        2,
+        2,
+        Resin,
+        1,
+        [1.0, 0.70, 0.18]
+    ),
 ];
 pub const BOOK_NAMES: [&str; 4] = [
     "The Greenhand's Almanac",
@@ -203,12 +212,16 @@ impl Gear {
         &DEFINITIONS[(self as usize).saturating_sub(4)]
     }
     pub fn book(self) -> Option<u8> {
-        if self==Self::Torch {return Some(3);}
+        if self == Self::Torch {
+            return Some(3);
+        }
         (self as usize >= 4).then(|| (self as u8 - 4) / 4)
     }
     pub fn known(self, account: &Account) -> bool {
-        self.enabled() && self.book()
-            .is_none_or(|b| account.adventure.recipe_books & (1 << b) != 0)
+        self.enabled()
+            && self
+                .book()
+                .is_none_or(|b| account.adventure.recipe_books & (1 << b) != 0)
     }
     pub fn path(self) -> usize {
         self.book().map_or(0, |b| b as usize + 1)
@@ -226,7 +239,9 @@ impl Gear {
         self.name().to_lowercase().replace(' ', "_")
     }
     pub fn ingredients(self, salvage: bool) -> Vec<(BlockType, u32)> {
-        let Ok((iron, wood, _)) = crate::crafting::gear_formula(self, salvage) else {return vec![];};
+        let Ok((iron, wood, _)) = crate::crafting::gear_formula(self, salvage) else {
+            return vec![];
+        };
         let mut result = vec![(BlockType::Iron, iron), (BlockType::OakWood, wood)];
         if self.book().is_some() {
             let (b, n) = self.definition().extra;
@@ -244,7 +259,9 @@ impl Gear {
     }
     /// Reach, damage, cooldown in ms, mana. All attacks use terrain occlusion.
     pub fn weapon(self) -> Option<(f32, f32, u64, u32)> {
-        if !self.enabled() {return None;}
+        if !self.enabled() {
+            return None;
+        }
         Some(match self {
             Self::Sword => (3.2, 12., 350, 0),
             Self::Bow => (20., 9., 700, 1),
@@ -346,7 +363,7 @@ mod tests {
         let r = crate::crafting::Registry::parse(include_str!("../data/crafting.json")).unwrap();
         let world = crate::voxel::World::new(1);
         let mut creatures = crate::creature::Creatures::new();
-        for g in Gear::available().filter(|g|g.book().is_some()) {
+        for g in Gear::available().filter(|g| g.book().is_some()) {
             let mut a = Account::default();
             a.mana = 100;
             a.resources.fill(50);

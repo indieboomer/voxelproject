@@ -57,19 +57,31 @@ impl Ai {
     pub fn from_configuration() -> Result<Self, String> {
         // Read each time an AI session starts, including edits made after launch.
         let settings = crate::settings::Settings::load(std::path::Path::new("settings.json"))?;
-        Self::from_sources(&settings.aiapi,
+        Self::from_sources(
+            &settings.aiapi,
             std::env::var("OPENAI_API_KEY").ok().as_deref(),
-            std::env::var("OPENAI_PLAYTEST_MODEL").ok().as_deref())
+            std::env::var("OPENAI_PLAYTEST_MODEL").ok().as_deref(),
+        )
     }
 
-    fn from_sources(local: &crate::settings::AiApi, env_key: Option<&str>, env_model: Option<&str>) -> Result<Self, String> {
+    fn from_sources(
+        local: &crate::settings::AiApi,
+        env_key: Option<&str>,
+        env_model: Option<&str>,
+    ) -> Result<Self, String> {
         fn choose(local: &str, environment: Option<&str>) -> String {
-            if local.trim().is_empty() { environment.unwrap_or("").trim().to_string() }
-            else { local.trim().to_string() }
+            if local.trim().is_empty() {
+                environment.unwrap_or("").trim().to_string()
+            } else {
+                local.trim().to_string()
+            }
         }
         let key = choose(&local.api_key, env_key);
         if key.is_empty() {
-            return Err("Set aiapi.OPENAI_API_KEY in settings.json or OPENAI_API_KEY in the environment".into());
+            return Err(
+                "Set aiapi.OPENAI_API_KEY in settings.json or OPENAI_API_KEY in the environment"
+                    .into(),
+            );
         }
         if key.trim().is_empty() || !key.is_ascii() || key.contains(char::is_whitespace) {
             return Err("Invalid OPENAI_API_KEY configuration".into());
@@ -146,7 +158,10 @@ impl Ai {
             return Some(controller.task.activity().into());
         }
         if self.pending.is_some() {
-            return Some(format!("Waiting for AI response ({}s)", self.pending_since.elapsed().as_secs()));
+            return Some(format!(
+                "Waiting for AI response ({}s)",
+                self.pending_since.elapsed().as_secs()
+            ));
         }
         None
     }
@@ -613,12 +628,26 @@ fn fetch(key: &str, body: Value, count: usize) -> Result<Reply, String> {
 }
 fn provider_error(code: u16, bytes: &[u8], key: &str) -> String {
     let body: Value = serde_json::from_slice(bytes).unwrap_or(Value::Null);
-    let message = body["error"]["message"].as_str().unwrap_or("No error details returned");
+    let message = body["error"]["message"]
+        .as_str()
+        .unwrap_or("No error details returned");
     // Authentication errors can contain a full or partially masked key.
-    let sanitized = if key.is_empty() { message.to_string() } else { message.replace(key, "[redacted]") };
-    let sanitized = sanitized.split_whitespace().map(|word| {
-        if word.contains("sk-") { "[redacted]" } else { word }
-    }).collect::<Vec<_>>().join(" ");
+    let sanitized = if key.is_empty() {
+        message.to_string()
+    } else {
+        message.replace(key, "[redacted]")
+    };
+    let sanitized = sanitized
+        .split_whitespace()
+        .map(|word| {
+            if word.contains("sk-") {
+                "[redacted]"
+            } else {
+                word
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
     let detail: String = sanitized.chars().take(500).collect();
     format!("OpenAI request failed (HTTP {code}): {detail}")
 }
@@ -656,16 +685,23 @@ mod tests {
     #[ignore = "makes one paid OpenAI request using local settings/environment credentials"]
     fn live_openai_decision_request() {
         let ai = super::Ai::from_configuration().unwrap_or_else(|error| panic!("{error}"));
-        let body = super::request(&ai.model,
-            r#"{"goal":"Connectivity test: choose wait","commands":[{"choice":0,"command":"wait"}]}"#, 1);
+        let body = super::request(
+            &ai.model,
+            r#"{"goal":"Connectivity test: choose wait","commands":[{"choice":0,"command":"wait"}]}"#,
+            1,
+        );
         let reply = super::fetch(&ai.key, body, 1).unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(reply.decision.choice, 0);
-        println!("Live OpenAI structured decision succeeded; {} total tokens", reply.tokens);
+        println!(
+            "Live OpenAI structured decision succeeded; {} total tokens",
+            reply.tokens
+        );
     }
 
     #[test]
     fn provider_errors_preserve_diagnosis_but_redact_credentials() {
-        let bytes = br#"{"error":{"message":"Incorrect API key: sk-secret and sk-masked***value"}}"#;
+        let bytes =
+            br#"{"error":{"message":"Incorrect API key: sk-secret and sk-masked***value"}}"#;
         let error = super::provider_error(401, bytes, "sk-secret");
         assert!(error.contains("HTTP 401"));
         assert!(error.contains("Incorrect API key"));
@@ -673,17 +709,41 @@ mod tests {
     }
     #[test]
     fn local_credentials_override_environment_without_entering_artifacts() {
-        let local = crate::settings::AiApi { api_key: "local-test-secret".into(), model: "local-model".into() };
-        let ai = super::Ai::from_sources(&local, Some("environment-secret"), Some("environment-model")).unwrap();
+        let local = crate::settings::AiApi {
+            api_key: "local-test-secret".into(),
+            model: "local-model".into(),
+        };
+        let ai = super::Ai::from_sources(
+            &local,
+            Some("environment-secret"),
+            Some("environment-model"),
+        )
+        .unwrap();
         assert_eq!(ai.key, "local-test-secret");
         assert_eq!(ai.model, "local-model");
         assert!(!ai.config().to_string().contains("local-test-secret"));
         assert!(!ai.usage().to_string().contains("local-test-secret"));
-        let ai = super::Ai::from_sources(&Default::default(), Some("environment-secret"), Some("environment-model")).unwrap();
+        let ai = super::Ai::from_sources(
+            &Default::default(),
+            Some("environment-secret"),
+            Some("environment-model"),
+        )
+        .unwrap();
         assert_eq!(ai.model, "environment-model");
-        let partial = crate::settings::AiApi { api_key: "local-test-secret".into(), model: String::new() };
-        assert_eq!(super::Ai::from_sources(&partial, None, Some("environment-model")).unwrap().model, "environment-model");
-        let invalid = crate::settings::AiApi { api_key: "secret with whitespace".into(), model: "test-model".into() };
+        let partial = crate::settings::AiApi {
+            api_key: "local-test-secret".into(),
+            model: String::new(),
+        };
+        assert_eq!(
+            super::Ai::from_sources(&partial, None, Some("environment-model"))
+                .unwrap()
+                .model,
+            "environment-model"
+        );
+        let invalid = crate::settings::AiApi {
+            api_key: "secret with whitespace".into(),
+            model: "test-model".into(),
+        };
         let error = super::Ai::from_sources(&invalid, None, None).err().unwrap();
         assert!(!error.contains("secret with whitespace"));
     }

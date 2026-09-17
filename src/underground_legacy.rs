@@ -1,7 +1,7 @@
 //! Seeded underground landmarks. Terrain is pure; rewards are initialized once by the host.
 use crate::voxel::noise::column_rand;
 use crate::voxel::{
-    chunk::{Chunk, CHUNK_X, TERRAIN_HEIGHT as CHUNK_Y, CHUNK_Z},
+    chunk::{Chunk, CHUNK_X, CHUNK_Z, TERRAIN_HEIGHT as CHUNK_Y},
     BlockType, World,
 };
 
@@ -168,7 +168,11 @@ pub fn discover(world: &mut World, creatures: &mut crate::creature::Creatures) {
                 && world.get_block(s.x + dx, s.floor + 2, s.z) == BlockType::Air
             {
                 creatures.spawn_one(
-                    if dx == 0 { crate::creature::CreatureKind::SkeletonSorcerer } else { crate::creature::CreatureKind::Skeleton },
+                    if dx == 0 {
+                        crate::creature::CreatureKind::SkeletonSorcerer
+                    } else {
+                        crate::creature::CreatureKind::Skeleton
+                    },
                     pos,
                     (world.seed ^ (s.x as u32) ^ (dx as u32)) as u64,
                 );

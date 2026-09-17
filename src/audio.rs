@@ -21,7 +21,7 @@
 use std::io::Cursor;
 
 use glam::Vec3;
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, SpatialSink, Source};
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source, SpatialSink};
 
 use crate::creature::CreatureKind;
 use crate::daynight::is_night;
@@ -74,7 +74,9 @@ fn attack_sound(kind: CreatureKind) -> Option<&'static [u8]> {
         CreatureKind::Zombie => Some(ZOMBIE_GROWL),
         CreatureKind::Skeleton | CreatureKind::SkeletonSorcerer => Some(SKELETON),
         CreatureKind::DragonGreen | CreatureKind::DragonRed => Some(DRAGON_ATTACK),
-        CreatureKind::Sheep | CreatureKind::Chicken | CreatureKind::Cow | CreatureKind::Fish => None,
+        CreatureKind::Sheep | CreatureKind::Chicken | CreatureKind::Cow | CreatureKind::Fish => {
+            None
+        }
     }
 }
 
@@ -91,13 +93,17 @@ fn ambient_sound(kind: CreatureKind) -> Option<&'static [u8]> {
 
 fn flying_dragon_positions(entries: &[([f32; 3], u8, f32, u8, f32)], listener: Vec3) -> Vec<Vec3> {
     use crate::creature::AnimClip;
-    entries.iter().filter_map(|&(pos, kind, _, clip, _)| {
-        let pos = Vec3::from_array(pos);
-        (CreatureKind::from_u8(kind & 0x0f).is_dragon()
-            && matches!(AnimClip::from_u8(clip), AnimClip::Fly | AnimClip::AttackFly)
-            && pos.is_finite() && pos.distance_squared(listener) <= 128.0 * 128.0)
-            .then_some(pos)
-    }).collect()
+    entries
+        .iter()
+        .filter_map(|&(pos, kind, _, clip, _)| {
+            let pos = Vec3::from_array(pos);
+            (CreatureKind::from_u8(kind & 0x0f).is_dragon()
+                && matches!(AnimClip::from_u8(clip), AnimClip::Fly | AnimClip::AttackFly)
+                && pos.is_finite()
+                && pos.distance_squared(listener) <= 128.0 * 128.0)
+                .then_some(pos)
+        })
+        .collect()
 }
 
 /// Which looping ambience track (if any) should be playing right now --
@@ -228,7 +234,11 @@ pub struct AudioEngine {
     waterfall_sinks: Vec<SpatialSink>,
     campfire_sinks: Vec<SpatialSink>,
     torch_sinks: Vec<SpatialSink>,
-    aura_sinks: Vec<(crate::automation::Cell, crate::automation::Kind, SpatialSink)>,
+    aura_sinks: Vec<(
+        crate::automation::Cell,
+        crate::automation::Kind,
+        SpatialSink,
+    )>,
     /// Kept alive for as long as the engine exists -- dropping it stops
     /// all playback. Never read otherwise, hence the leading underscore.
     _stream: Option<OutputStream>,
@@ -270,7 +280,8 @@ impl AudioEngine {
             Ok((stream, handle)) => Self {
                 flight_sinks: Vec::new(),
                 waterfall_sinks: Vec::new(),
-                campfire_sinks: Vec::new(), torch_sinks: Vec::new(),
+                campfire_sinks: Vec::new(),
+                torch_sinks: Vec::new(),
                 aura_sinks: Vec::new(),
                 _stream: Some(stream),
                 handle: Some(handle),
@@ -290,7 +301,8 @@ impl AudioEngine {
                 Self {
                     flight_sinks: Vec::new(),
                     waterfall_sinks: Vec::new(),
-                    campfire_sinks: Vec::new(), torch_sinks: Vec::new(),
+                    campfire_sinks: Vec::new(),
+                    torch_sinks: Vec::new(),
                     aura_sinks: Vec::new(),
                     _stream: None,
                     handle: None,
@@ -337,7 +349,11 @@ impl AudioEngine {
     /// unaffected by the uniform scale -- it only depends on the *ratio*
     /// between the two ears' distances to the emitter, which a uniform
     /// scale preserves.
-    fn spatial_positions(&self, emitter_pos: Vec3, reference_distance: f32) -> ([f32; 3], [f32; 3], [f32; 3]) {
+    fn spatial_positions(
+        &self,
+        emitter_pos: Vec3,
+        reference_distance: f32,
+    ) -> ([f32; 3], [f32; 3], [f32; 3]) {
         let scale = 1.0 / reference_distance.max(0.01);
         let emitter = ((emitter_pos - self.listener_pos) * scale).to_array();
         let ear_offset = self.listener_right * (EAR_HALF_SEPARATION * scale);
@@ -349,8 +365,12 @@ impl AudioEngine {
     /// if decoding somehow fails -- a bad sound should never crash the game.
     fn play(&self, bytes: &'static [u8], volume: f32, pitch: f32) {
         let Some(handle) = &self.handle else { return };
-        let Ok(decoder) = Decoder::new(Cursor::new(bytes)) else { return };
-        let Ok(sink) = Sink::try_new(handle) else { return };
+        let Ok(decoder) = Decoder::new(Cursor::new(bytes)) else {
+            return;
+        };
+        let Ok(sink) = Sink::try_new(handle) else {
+            return;
+        };
         sink.set_volume(volume.max(0.0));
         sink.set_speed(pitch.max(0.05));
         sink.append(decoder);
@@ -360,7 +380,13 @@ impl AudioEngine {
     /// `play`, but with small random pitch/volume variance so repeated
     /// plays of the same clip (footsteps in particular) don't sound
     /// identically robotic every time.
-    fn play_varied(&mut self, bytes: &'static [u8], base_volume: f32, pitch_spread: f32, volume_spread: f32) {
+    fn play_varied(
+        &mut self,
+        bytes: &'static [u8],
+        base_volume: f32,
+        pitch_spread: f32,
+        volume_spread: f32,
+    ) {
         let pitch = self.rng.jitter(pitch_spread);
         let volume = base_volume * self.rng.jitter(volume_spread);
         self.play(bytes, volume, pitch);
@@ -380,9 +406,14 @@ impl AudioEngine {
         reference_distance: f32,
     ) {
         let Some(handle) = &self.handle else { return };
-        let Ok(decoder) = Decoder::new(Cursor::new(bytes)) else { return };
-        let (emitter, left_ear, right_ear) = self.spatial_positions(emitter_pos, reference_distance);
-        let Ok(sink) = SpatialSink::try_new(handle, emitter, left_ear, right_ear) else { return };
+        let Ok(decoder) = Decoder::new(Cursor::new(bytes)) else {
+            return;
+        };
+        let (emitter, left_ear, right_ear) =
+            self.spatial_positions(emitter_pos, reference_distance);
+        let Ok(sink) = SpatialSink::try_new(handle, emitter, left_ear, right_ear) else {
+            return;
+        };
         let pitch = self.rng.jitter(pitch_spread);
         let volume = base_volume * self.rng.jitter(volume_spread);
         sink.set_volume(volume.max(0.0));
@@ -395,25 +426,32 @@ impl AudioEngine {
     /// (not just repeating one) on top of the usual pitch/volume jitter.
     /// Centered/non-spatial: it originates at the listener itself.
     pub fn play_player_step(&mut self) {
-        let bytes = if self.rng.next_f32() < 0.5 { HUMAN_STEP } else { HUMAN_STEP_2 };
+        let bytes = if self.rng.next_f32() < 0.5 {
+            HUMAN_STEP
+        } else {
+            HUMAN_STEP_2
+        };
         self.play_varied(bytes, 0.45, 0.08, 0.18);
     }
 
     pub fn play_loot(&mut self) {
-        self.play_varied(LOOT,0.55,0.0,0.0);
+        self.play_varied(LOOT, 0.55, 0.0, 0.0);
     }
     pub fn play_lore_book(&mut self) {
-        self.play_varied(include_bytes!("../sounds/lore_book.mp3"),0.55,0.0,0.0);
+        self.play_varied(include_bytes!("../sounds/lore_book.mp3"), 0.55, 0.0, 0.0);
     }
-    pub fn play_machine(&mut self,pos:Vec3,cue:crate::machine_feedback::Cue) {
+    pub fn play_machine(&mut self, pos: Vec3, cue: crate::machine_feedback::Cue) {
         use crate::machine_feedback::Cue;
-        let (bytes,volume)=match cue {
-            Cue::Transfer=>(MACHINE_TRANSFER,0.16),Cue::Changed=>(MACHINE_CHANGED,0.25),
-            Cue::Blocked=>(MACHINE_BLOCKED,0.22),Cue::Built=>(MACHINE_BUILT,0.3),
-            Cue::Removed=>(MACHINE_REMOVED,0.25),Cue::Produced=>(MACHINE_PRODUCED,0.38),
-            Cue::DarkAltar | Cue::Shrine=>return,
+        let (bytes, volume) = match cue {
+            Cue::Transfer => (MACHINE_TRANSFER, 0.16),
+            Cue::Changed => (MACHINE_CHANGED, 0.25),
+            Cue::Blocked => (MACHINE_BLOCKED, 0.22),
+            Cue::Built => (MACHINE_BUILT, 0.3),
+            Cue::Removed => (MACHINE_REMOVED, 0.25),
+            Cue::Produced => (MACHINE_PRODUCED, 0.38),
+            Cue::DarkAltar | Cue::Shrine => return,
         };
-        self.play_spatial(bytes,volume,0.06,0.08,pos,3.0);
+        self.play_spatial(bytes, volume, 0.06, 0.08, pos, 3.0);
     }
 
     /// One creature footstep at `pos`, any kind -- a single generic clip
@@ -431,8 +469,16 @@ impl AudioEngine {
     /// typical aggro radius.
     pub fn play_creature_attack(&mut self, kind: CreatureKind, pos: Vec3) {
         if let Some(bytes) = attack_sound(kind) {
-            let pitch_spread = if kind == CreatureKind::Zombie { ZOMBIE_PITCH_SPREAD } else { 0.05 };
-            let reference = if kind.is_dragon() { 24.0 } else { ATTACK_REFERENCE_DISTANCE };
+            let pitch_spread = if kind == CreatureKind::Zombie {
+                ZOMBIE_PITCH_SPREAD
+            } else {
+                0.05
+            };
+            let reference = if kind.is_dragon() {
+                24.0
+            } else {
+                ATTACK_REFERENCE_DISTANCE
+            };
             self.play_spatial(bytes, 0.6, pitch_spread, 0.1, pos, reference);
         }
     }
@@ -444,13 +490,23 @@ impl AudioEngine {
         self.flight_sinks.truncate(positions.len());
         let Some(handle) = &self.handle else { return };
         while self.flight_sinks.len() < positions.len() {
-            let Ok(decoder) = Decoder::new(Cursor::new(DRAGON_FLY)) else { break };
-            let Ok(sink) = SpatialSink::try_new(handle, [0.0; 3], [-0.1, 0.0, 0.0], [0.1, 0.0, 0.0]) else { break };
+            let Ok(decoder) = Decoder::new(Cursor::new(DRAGON_FLY)) else {
+                break;
+            };
+            let Ok(sink) =
+                SpatialSink::try_new(handle, [0.0; 3], [-0.1, 0.0, 0.0], [0.1, 0.0, 0.0])
+            else {
+                break;
+            };
             sink.set_volume(0.0);
             sink.append(decoder.repeat_infinite());
             self.flight_sinks.push(sink);
         }
-        for (index, pos) in positions.into_iter().enumerate().take(self.flight_sinks.len()) {
+        for (index, pos) in positions
+            .into_iter()
+            .enumerate()
+            .take(self.flight_sinks.len())
+        {
             let (emitter, left, right) = self.spatial_positions(pos, 24.0);
             let sink = &self.flight_sinks[index];
             sink.set_emitter_position(emitter);
@@ -466,99 +522,181 @@ impl AudioEngine {
         let mut positions: Vec<Vec3> = Vec::new();
         for fall in falls {
             let pos = fall.sound_position();
-            if pos.distance_squared(self.listener_pos) < 48.0*48.0
-                && positions.iter().all(|p|p.distance_squared(pos)>8.0*8.0) {
+            if pos.distance_squared(self.listener_pos) < 48.0 * 48.0
+                && positions
+                    .iter()
+                    .all(|p| p.distance_squared(pos) > 8.0 * 8.0)
+            {
                 positions.push(pos);
-                if positions.len()==2 {break;}
+                if positions.len() == 2 {
+                    break;
+                }
             }
         }
         self.waterfall_sinks.truncate(positions.len());
-        let Some(handle) = &self.handle else {return};
-        while self.waterfall_sinks.len()<positions.len() {
-            let Ok(decoder)=Decoder::new(Cursor::new(WATERFALL)) else {break};
-            let Ok(sink)=SpatialSink::try_new(handle,[0.0;3],[-0.1,0.0,0.0],[0.1,0.0,0.0]) else {break};
+        let Some(handle) = &self.handle else { return };
+        while self.waterfall_sinks.len() < positions.len() {
+            let Ok(decoder) = Decoder::new(Cursor::new(WATERFALL)) else {
+                break;
+            };
+            let Ok(sink) =
+                SpatialSink::try_new(handle, [0.0; 3], [-0.1, 0.0, 0.0], [0.1, 0.0, 0.0])
+            else {
+                break;
+            };
             sink.set_volume(0.0);
             sink.append(decoder.repeat_infinite());
             self.waterfall_sinks.push(sink);
         }
-        for (i,pos) in positions.into_iter().enumerate().take(self.waterfall_sinks.len()) {
-            let (emitter,left,right)=self.spatial_positions(pos,12.0);
-            let sink=&self.waterfall_sinks[i];
+        for (i, pos) in positions
+            .into_iter()
+            .enumerate()
+            .take(self.waterfall_sinks.len())
+        {
+            let (emitter, left, right) = self.spatial_positions(pos, 12.0);
+            let sink = &self.waterfall_sinks[i];
             sink.set_emitter_position(emitter);
             sink.set_left_ear_position(left);
             sink.set_right_ear_position(right);
-            let fade=((48.0-pos.distance(self.listener_pos))/16.0).clamp(0.0,1.0);
-            sink.set_volume(0.5*fade*fade);
+            let fade = ((48.0 - pos.distance(self.listener_pos)) / 16.0).clamp(0.0, 1.0);
+            sink.set_volume(0.5 * fade * fade);
         }
     }
 
     /// Reuse two quiet spatial loops; fade to silence before leaving earshot.
-    pub fn update_campfires(&mut self, fires:&[Vec3]) {
-        let mut positions:Vec<_>=fires.iter().copied().filter(|p|p.distance_squared(self.listener_pos)<24.0*24.0).collect();
-        positions.sort_by(|a,b|a.distance_squared(self.listener_pos).total_cmp(&b.distance_squared(self.listener_pos)));
+    pub fn update_campfires(&mut self, fires: &[Vec3]) {
+        let mut positions: Vec<_> = fires
+            .iter()
+            .copied()
+            .filter(|p| p.distance_squared(self.listener_pos) < 24.0 * 24.0)
+            .collect();
+        positions.sort_by(|a, b| {
+            a.distance_squared(self.listener_pos)
+                .total_cmp(&b.distance_squared(self.listener_pos))
+        });
         positions.truncate(2);
         self.campfire_sinks.truncate(positions.len());
-        let Some(handle)=&self.handle else {return};
-        while self.campfire_sinks.len()<positions.len() {
-            let Ok(decoder)=Decoder::new(Cursor::new(CAMPFIRE)) else {break};
-            let Ok(sink)=SpatialSink::try_new(handle,[0.0;3],[-0.1,0.0,0.0],[0.1,0.0,0.0]) else {break};
-            sink.set_volume(0.0);sink.append(decoder.repeat_infinite());
+        let Some(handle) = &self.handle else { return };
+        while self.campfire_sinks.len() < positions.len() {
+            let Ok(decoder) = Decoder::new(Cursor::new(CAMPFIRE)) else {
+                break;
+            };
+            let Ok(sink) =
+                SpatialSink::try_new(handle, [0.0; 3], [-0.1, 0.0, 0.0], [0.1, 0.0, 0.0])
+            else {
+                break;
+            };
+            sink.set_volume(0.0);
+            sink.append(decoder.repeat_infinite());
             self.campfire_sinks.push(sink);
         }
-        for (i,pos) in positions.into_iter().enumerate().take(self.campfire_sinks.len()) {
-            let (emitter,left,right)=self.spatial_positions(pos,5.0);
-            let sink=&self.campfire_sinks[i];
-            sink.set_emitter_position(emitter);sink.set_left_ear_position(left);sink.set_right_ear_position(right);
-            let fade=((24.0-pos.distance(self.listener_pos))/8.0).clamp(0.0,1.0);
-            sink.set_volume(0.45*fade*fade);
+        for (i, pos) in positions
+            .into_iter()
+            .enumerate()
+            .take(self.campfire_sinks.len())
+        {
+            let (emitter, left, right) = self.spatial_positions(pos, 5.0);
+            let sink = &self.campfire_sinks[i];
+            sink.set_emitter_position(emitter);
+            sink.set_left_ear_position(left);
+            sink.set_right_ear_position(right);
+            let fade = ((24.0 - pos.distance(self.listener_pos)) / 8.0).clamp(0.0, 1.0);
+            sink.set_volume(0.45 * fade * fade);
         }
     }
 
-    pub fn update_torches(&mut self, fires:&[Vec3]) {
-        let mut positions:Vec<_>=fires.iter().copied().filter(|p|p.distance_squared(self.listener_pos)<12.0*12.0).collect();
-        positions.sort_by(|a,b|a.distance_squared(self.listener_pos).total_cmp(&b.distance_squared(self.listener_pos)));
+    pub fn update_torches(&mut self, fires: &[Vec3]) {
+        let mut positions: Vec<_> = fires
+            .iter()
+            .copied()
+            .filter(|p| p.distance_squared(self.listener_pos) < 12.0 * 12.0)
+            .collect();
+        positions.sort_by(|a, b| {
+            a.distance_squared(self.listener_pos)
+                .total_cmp(&b.distance_squared(self.listener_pos))
+        });
         positions.truncate(4);
         self.torch_sinks.truncate(positions.len());
-        let Some(handle)=&self.handle else {return};
-        while self.torch_sinks.len()<positions.len() {
-            let Ok(decoder)=Decoder::new(Cursor::new(CAMPFIRE)) else {break};
-            let Ok(sink)=SpatialSink::try_new(handle,[0.0;3],[-0.1,0.0,0.0],[0.1,0.0,0.0]) else {break};
-            sink.set_volume(0.0);sink.append(decoder.repeat_infinite());
+        let Some(handle) = &self.handle else { return };
+        while self.torch_sinks.len() < positions.len() {
+            let Ok(decoder) = Decoder::new(Cursor::new(CAMPFIRE)) else {
+                break;
+            };
+            let Ok(sink) =
+                SpatialSink::try_new(handle, [0.0; 3], [-0.1, 0.0, 0.0], [0.1, 0.0, 0.0])
+            else {
+                break;
+            };
+            sink.set_volume(0.0);
+            sink.append(decoder.repeat_infinite());
             self.torch_sinks.push(sink);
         }
-        for (i,pos) in positions.into_iter().enumerate().take(self.torch_sinks.len()) {
-            let (emitter,left,right)=self.spatial_positions(pos,5.0);
-            let sink=&self.torch_sinks[i];
-            sink.set_emitter_position(emitter);sink.set_left_ear_position(left);sink.set_right_ear_position(right);
-            let fade=((12.0-pos.distance(self.listener_pos))/8.0).clamp(0.0,1.0);
-            sink.set_volume(0.28*fade*fade);
+        for (i, pos) in positions
+            .into_iter()
+            .enumerate()
+            .take(self.torch_sinks.len())
+        {
+            let (emitter, left, right) = self.spatial_positions(pos, 5.0);
+            let sink = &self.torch_sinks[i];
+            sink.set_emitter_position(emitter);
+            sink.set_left_ear_position(left);
+            sink.set_right_ear_position(right);
+            let fade = ((12.0 - pos.distance(self.listener_pos)) / 8.0).clamp(0.0, 1.0);
+            sink.set_volume(0.28 * fade * fade);
         }
     }
 
     /// Working loops are bounded, spatialized, and stopped when power is lost.
     pub fn update_auras(&mut self, state: &crate::automation::State) {
         use crate::automation::{center, Activity, Kind};
-        let mut nearby:Vec<_>=state.devices.values().filter(|d|
-            matches!(d.kind,Kind::DarkAltar|Kind::Shrine) && d.config.enabled
-            && d.activity==Activity::Working && center(d.cell).distance_squared(self.listener_pos)<24.0*24.0).collect();
-        nearby.sort_by(|a,b|center(a.cell).distance_squared(self.listener_pos).total_cmp(&center(b.cell).distance_squared(self.listener_pos)));
+        let mut nearby: Vec<_> = state
+            .devices
+            .values()
+            .filter(|d| {
+                matches!(d.kind, Kind::DarkAltar | Kind::Shrine)
+                    && d.config.enabled
+                    && d.activity == Activity::Working
+                    && center(d.cell).distance_squared(self.listener_pos) < 24.0 * 24.0
+            })
+            .collect();
+        nearby.sort_by(|a, b| {
+            center(a.cell)
+                .distance_squared(self.listener_pos)
+                .total_cmp(&center(b.cell).distance_squared(self.listener_pos))
+        });
         nearby.truncate(4);
-        self.aura_sinks.retain(|(p,k,_)|nearby.iter().any(|d|d.cell==*p && d.kind==*k));
-        let Some(handle)=&self.handle else{return};
+        self.aura_sinks
+            .retain(|(p, k, _)| nearby.iter().any(|d| d.cell == *p && d.kind == *k));
+        let Some(handle) = &self.handle else { return };
         for d in nearby {
-            if self.aura_sinks.iter().any(|(p,_,_)|*p==d.cell) {continue;}
-            let bytes:&[u8]=if d.kind==Kind::DarkAltar {include_bytes!("../sounds/dark_altar.mp3")} else {include_bytes!("../sounds/shrine.mp3")};
-            let Ok(decoder)=Decoder::new(Cursor::new(bytes)) else {continue};
-            let Ok(sink)=SpatialSink::try_new(handle,[0.0;3],[-0.1,0.0,0.0],[0.1,0.0,0.0]) else {continue};
-            sink.set_volume(0.0);sink.append(decoder.repeat_infinite());
-            self.aura_sinks.push((d.cell,d.kind,sink));
+            if self.aura_sinks.iter().any(|(p, _, _)| *p == d.cell) {
+                continue;
+            }
+            let bytes: &[u8] = if d.kind == Kind::DarkAltar {
+                include_bytes!("../sounds/dark_altar.mp3")
+            } else {
+                include_bytes!("../sounds/shrine.mp3")
+            };
+            let Ok(decoder) = Decoder::new(Cursor::new(bytes)) else {
+                continue;
+            };
+            let Ok(sink) =
+                SpatialSink::try_new(handle, [0.0; 3], [-0.1, 0.0, 0.0], [0.1, 0.0, 0.0])
+            else {
+                continue;
+            };
+            sink.set_volume(0.0);
+            sink.append(decoder.repeat_infinite());
+            self.aura_sinks.push((d.cell, d.kind, sink));
         }
-        for (p,_,sink) in &self.aura_sinks {
-            let pos=center(*p);
-            let (emitter,left,right)=self.spatial_positions(pos,3.0);
-            sink.set_emitter_position(emitter);sink.set_left_ear_position(left);sink.set_right_ear_position(right);
-            let fade=((24.0-pos.distance(self.listener_pos))/8.0).clamp(0.0,1.0);
-            sink.set_volume(0.25*fade*fade);
+        for (p, _, sink) in &self.aura_sinks {
+            let pos = center(*p);
+            let (emitter, left, right) = self.spatial_positions(pos, 3.0);
+            sink.set_emitter_position(emitter);
+            sink.set_left_ear_position(left);
+            sink.set_right_ear_position(right);
+            let fade = ((24.0 - pos.distance(self.listener_pos)) / 8.0).clamp(0.0, 1.0);
+            sink.set_volume(0.25 * fade * fade);
         }
     }
 
@@ -573,15 +711,33 @@ impl AudioEngine {
     /// Any creature's death at `pos` -- one generic clip regardless of
     /// kind. Spatialized, same carry as an attack.
     pub fn play_creature_death(&mut self, pos: Vec3) {
-        self.play_spatial(CREATURE_DEATH, 0.55, 0.05, 0.1, pos, DEATH_REFERENCE_DISTANCE);
+        self.play_spatial(
+            CREATURE_DEATH,
+            0.55,
+            0.05,
+            0.1,
+            pos,
+            DEATH_REFERENCE_DISTANCE,
+        );
     }
 
     /// A cow, sheep or zombie's ambient vocalization at `pos`. A no-op for any other
     /// kind. Spatialized.
     pub fn play_creature_ambient(&mut self, kind: CreatureKind, pos: Vec3) {
         if let Some(bytes) = ambient_sound(kind) {
-            let pitch_spread = if kind == CreatureKind::Zombie { ZOMBIE_PITCH_SPREAD } else { 0.08 };
-            self.play_spatial(bytes, 0.4, pitch_spread, 0.15, pos, AMBIENT_CALL_REFERENCE_DISTANCE);
+            let pitch_spread = if kind == CreatureKind::Zombie {
+                ZOMBIE_PITCH_SPREAD
+            } else {
+                0.08
+            };
+            self.play_spatial(
+                bytes,
+                0.4,
+                pitch_spread,
+                0.15,
+                pos,
+                AMBIENT_CALL_REFERENCE_DISTANCE,
+            );
         }
     }
 
@@ -686,8 +842,8 @@ mod tests {
 
     #[test]
     fn loot_recording_decodes_with_audible_samples() {
-        let decoder=Decoder::new(Cursor::new(LOOT)).expect("loot recording must decode");
-        assert!(decoder.into_iter().any(|sample|sample!=0));
+        let decoder = Decoder::new(Cursor::new(LOOT)).expect("loot recording must decode");
+        assert!(decoder.into_iter().any(|sample| sample != 0));
     }
     #[test]
     fn new_creature_recordings_decode_and_are_assigned_to_the_correct_kinds() {
@@ -700,7 +856,10 @@ mod tests {
         }
         for bytes in [ZOMBIE_GROWL, SKELETON, DRAGON_ATTACK, DRAGON_FLY] {
             let decoder = Decoder::new(Cursor::new(bytes)).expect("bundled sound must decode");
-            assert!(decoder.into_iter().any(|sample| sample != 0), "recording must contain audible samples");
+            assert!(
+                decoder.into_iter().any(|sample| sample != 0),
+                "recording must contain audible samples"
+            );
         }
         let mut rng = Rng(42);
         let pitches: Vec<_> = (0..64).map(|_| rng.jitter(ZOMBIE_PITCH_SPREAD)).collect();
@@ -709,9 +868,18 @@ mod tests {
     }
     #[test]
     fn machine_recordings_decode_and_have_audible_samples() {
-        for bytes in [MACHINE_TRANSFER,MACHINE_CHANGED,MACHINE_BLOCKED,MACHINE_BUILT,MACHINE_REMOVED,MACHINE_PRODUCED,include_bytes!("../sounds/dark_altar.mp3").as_slice(),include_bytes!("../sounds/shrine.mp3").as_slice()] {
-            let decoder=Decoder::new(Cursor::new(bytes)).expect("machine MP3 must decode");
-            assert!(decoder.into_iter().any(|sample|sample!=0));
+        for bytes in [
+            MACHINE_TRANSFER,
+            MACHINE_CHANGED,
+            MACHINE_BLOCKED,
+            MACHINE_BUILT,
+            MACHINE_REMOVED,
+            MACHINE_PRODUCED,
+            include_bytes!("../sounds/dark_altar.mp3").as_slice(),
+            include_bytes!("../sounds/shrine.mp3").as_slice(),
+        ] {
+            let decoder = Decoder::new(Cursor::new(bytes)).expect("machine MP3 must decode");
+            assert!(decoder.into_iter().any(|sample| sample != 0));
         }
     }
 
@@ -719,11 +887,41 @@ mod tests {
     fn flight_audio_tracks_airborne_dragons_and_stops_for_grounded_or_removed_ones() {
         use crate::creature::AnimClip;
         let mut entries = vec![
-            ([1.0, 10.0, 0.0], CreatureKind::DragonGreen.to_u8(), 0.0, AnimClip::Fly.to_u8(), 0.0),
-            ([2.0, 10.0, 0.0], CreatureKind::DragonRed.to_u8(), 0.0, AnimClip::AttackFly.to_u8(), 0.0),
-            ([3.0, 0.0, 0.0], CreatureKind::DragonRed.to_u8(), 0.0, AnimClip::AttackWalk.to_u8(), 0.0),
-            ([4.0, 0.0, 0.0], CreatureKind::Zombie.to_u8(), 0.0, AnimClip::Walk.to_u8(), 0.0),
-            ([500.0, 0.0, 0.0], CreatureKind::DragonGreen.to_u8(), 0.0, AnimClip::Fly.to_u8(), 0.0),
+            (
+                [1.0, 10.0, 0.0],
+                CreatureKind::DragonGreen.to_u8(),
+                0.0,
+                AnimClip::Fly.to_u8(),
+                0.0,
+            ),
+            (
+                [2.0, 10.0, 0.0],
+                CreatureKind::DragonRed.to_u8(),
+                0.0,
+                AnimClip::AttackFly.to_u8(),
+                0.0,
+            ),
+            (
+                [3.0, 0.0, 0.0],
+                CreatureKind::DragonRed.to_u8(),
+                0.0,
+                AnimClip::AttackWalk.to_u8(),
+                0.0,
+            ),
+            (
+                [4.0, 0.0, 0.0],
+                CreatureKind::Zombie.to_u8(),
+                0.0,
+                AnimClip::Walk.to_u8(),
+                0.0,
+            ),
+            (
+                [500.0, 0.0, 0.0],
+                CreatureKind::DragonGreen.to_u8(),
+                0.0,
+                AnimClip::Fly.to_u8(),
+                0.0,
+            ),
         ];
         assert_eq!(flying_dragon_positions(&entries, Vec3::ZERO).len(), 2);
         entries[0].3 = AnimClip::Walk.to_u8();
@@ -741,10 +939,20 @@ mod tests {
             CreatureKind::Goblin,
             CreatureKind::Sunscorch,
         ] {
-            assert!(attack_sound(kind).is_some(), "expected a hostile kind to have an attack sound");
+            assert!(
+                attack_sound(kind).is_some(),
+                "expected a hostile kind to have an attack sound"
+            );
         }
-        for kind in [CreatureKind::Sheep, CreatureKind::Chicken, CreatureKind::Cow] {
-            assert!(attack_sound(kind).is_none(), "a passive kind should have no attack sound");
+        for kind in [
+            CreatureKind::Sheep,
+            CreatureKind::Chicken,
+            CreatureKind::Cow,
+        ] {
+            assert!(
+                attack_sound(kind).is_none(),
+                "a passive kind should have no attack sound"
+            );
         }
     }
 
@@ -761,7 +969,10 @@ mod tests {
             CreatureKind::Goblin,
             CreatureKind::Sunscorch,
         ] {
-            assert!(ambient_sound(kind).is_none(), "this kind has no ambient call sound");
+            assert!(
+                ambient_sound(kind).is_none(),
+                "this kind has no ambient call sound"
+            );
         }
     }
 
@@ -776,14 +987,30 @@ mod tests {
 
     #[test]
     fn sunny_is_silent_by_day_and_clear_night_by_night() {
-        assert_eq!(ambient_track_for(Weather::Sunny, 0.25), AmbientTrack::Silence, "noon");
-        assert_eq!(ambient_track_for(Weather::Sunny, 0.75), AmbientTrack::ClearNight, "midnight");
+        assert_eq!(
+            ambient_track_for(Weather::Sunny, 0.25),
+            AmbientTrack::Silence,
+            "noon"
+        );
+        assert_eq!(
+            ambient_track_for(Weather::Sunny, 0.75),
+            AmbientTrack::ClearNight,
+            "midnight"
+        );
     }
 
     #[test]
     fn windy_is_silent_by_day_and_generic_night_by_night() {
-        assert_eq!(ambient_track_for(Weather::Windy, 0.25), AmbientTrack::Silence, "noon");
-        assert_eq!(ambient_track_for(Weather::Windy, 0.75), AmbientTrack::Night, "midnight");
+        assert_eq!(
+            ambient_track_for(Weather::Windy, 0.25),
+            AmbientTrack::Silence,
+            "noon"
+        );
+        assert_eq!(
+            ambient_track_for(Weather::Windy, 0.75),
+            AmbientTrack::Night,
+            "midnight"
+        );
     }
 
     #[test]
@@ -804,7 +1031,8 @@ mod tests {
         AudioEngine {
             flight_sinks: Vec::new(),
             waterfall_sinks: Vec::new(),
-            campfire_sinks: Vec::new(), torch_sinks: Vec::new(),
+            campfire_sinks: Vec::new(),
+            torch_sinks: Vec::new(),
             aura_sinks: Vec::new(),
             _stream: None,
             handle: None,
@@ -823,9 +1051,16 @@ mod tests {
 
     #[test]
     fn waterfall_clip_decodes_and_silent_output_handles_source_removal() {
-        assert!(Decoder::new(Cursor::new(WATERFALL)).unwrap().next().is_some());
-        let mut engine=silent_engine();
-        let fall=crate::water::Waterfall {lip:Vec3::new(1.0,8.0,0.0),bottom:1.0,direction:Vec3::X};
+        assert!(Decoder::new(Cursor::new(WATERFALL))
+            .unwrap()
+            .next()
+            .is_some());
+        let mut engine = silent_engine();
+        let fall = crate::water::Waterfall {
+            lip: Vec3::new(1.0, 8.0, 0.0),
+            bottom: 1.0,
+            direction: Vec3::X,
+        };
         engine.update_waterfalls(&[fall]);
         engine.update_waterfalls(&[]);
         assert!(engine.waterfall_sinks.is_empty());
@@ -833,13 +1068,17 @@ mod tests {
 
     #[test]
     fn campfire_clip_decodes_and_outputless_loops_handle_removal_and_distance() {
-        assert!(Decoder::new(Cursor::new(CAMPFIRE)).unwrap().next().is_some());
-        let mut engine=silent_engine();
-        engine.update_campfires(&[Vec3::X,Vec3::Z]);
+        assert!(Decoder::new(Cursor::new(CAMPFIRE))
+            .unwrap()
+            .next()
+            .is_some());
+        let mut engine = silent_engine();
+        engine.update_campfires(&[Vec3::X, Vec3::Z]);
         engine.update_campfires(&[Vec3::splat(100.0)]);
         engine.update_campfires(&[]);
         assert!(engine.campfire_sinks.is_empty());
-        engine.update_torches(&[Vec3::ZERO]);engine.update_torches(&[]);
+        engine.update_torches(&[Vec3::ZERO]);
+        engine.update_torches(&[]);
         assert!(engine.torch_sinks.is_empty());
     }
 
@@ -856,7 +1095,13 @@ mod tests {
         engine.play_creature_death(Vec3::new(3.0, 0.0, 3.0));
         engine.play_creature_ambient(CreatureKind::Cow, Vec3::new(-4.0, 0.0, 1.0));
         engine.play_creature_ambient(CreatureKind::Zombie, Vec3::ZERO);
-        engine.update_creature_flight(&[([5.0, 10.0, 0.0], CreatureKind::DragonRed.to_u8(), 0.0, crate::creature::AnimClip::Fly.to_u8(), 0.0)]);
+        engine.update_creature_flight(&[(
+            [5.0, 10.0, 0.0],
+            CreatureKind::DragonRed.to_u8(),
+            0.0,
+            crate::creature::AnimClip::Fly.to_u8(),
+            0.0,
+        )]);
         engine.update_creature_flight(&[]);
         assert!(engine.flight_sinks.is_empty());
         engine.play_lightning();
@@ -892,7 +1137,10 @@ mod tests {
         let mut rng = Rng(12345);
         for _ in 0..1000 {
             let j = rng.jitter(0.2);
-            assert!((0.8..=1.2).contains(&j), "jitter {j} escaped its [0.8, 1.2] spread");
+            assert!(
+                (0.8..=1.2).contains(&j),
+                "jitter {j} escaped its [0.8, 1.2] spread"
+            );
         }
     }
 
@@ -903,9 +1151,12 @@ mod tests {
         // Straight down the listener's forward axis (Z here, since "right"
         // is X) -- equidistant from both ears, so panning should be exactly
         // centered regardless of the (well within reference_distance) range.
-        let (_, left_ear, right_ear) = engine.spatial_positions(Vec3::new(0.0, 0.0, 2.0), STEP_REFERENCE_DISTANCE);
-        let left_dist = Vec3::from_array(left_ear).distance(Vec3::new(0.0, 0.0, 2.0) / STEP_REFERENCE_DISTANCE);
-        let right_dist = Vec3::from_array(right_ear).distance(Vec3::new(0.0, 0.0, 2.0) / STEP_REFERENCE_DISTANCE);
+        let (_, left_ear, right_ear) =
+            engine.spatial_positions(Vec3::new(0.0, 0.0, 2.0), STEP_REFERENCE_DISTANCE);
+        let left_dist =
+            Vec3::from_array(left_ear).distance(Vec3::new(0.0, 0.0, 2.0) / STEP_REFERENCE_DISTANCE);
+        let right_dist = Vec3::from_array(right_ear)
+            .distance(Vec3::new(0.0, 0.0, 2.0) / STEP_REFERENCE_DISTANCE);
         assert!(
             (left_dist - right_dist).abs() < 1e-5,
             "a dead-ahead source should be equidistant from both ears: left={left_dist} right={right_dist}"
@@ -917,7 +1168,8 @@ mod tests {
         let mut engine = silent_engine();
         engine.update_listener(Vec3::ZERO, Vec3::X);
         let emitter = Vec3::new(4.0, 0.0, 0.0); // straight along "right"
-        let (scaled_emitter, left_ear, right_ear) = engine.spatial_positions(emitter, STEP_REFERENCE_DISTANCE);
+        let (scaled_emitter, left_ear, right_ear) =
+            engine.spatial_positions(emitter, STEP_REFERENCE_DISTANCE);
         let scaled_emitter = Vec3::from_array(scaled_emitter);
         let left_dist = Vec3::from_array(left_ear).distance(scaled_emitter);
         let right_dist = Vec3::from_array(right_ear).distance(scaled_emitter);
@@ -950,7 +1202,10 @@ mod tests {
     fn a_source_at_the_reference_distance_scales_to_unit_distance() {
         let mut engine = silent_engine();
         engine.update_listener(Vec3::ZERO, Vec3::X);
-        let (emitter, ..) = engine.spatial_positions(Vec3::new(0.0, 0.0, ATTACK_REFERENCE_DISTANCE), ATTACK_REFERENCE_DISTANCE);
+        let (emitter, ..) = engine.spatial_positions(
+            Vec3::new(0.0, 0.0, ATTACK_REFERENCE_DISTANCE),
+            ATTACK_REFERENCE_DISTANCE,
+        );
         assert!(
             (Vec3::from_array(emitter).length() - 1.0).abs() < 1e-4,
             "a source exactly at the reference distance should scale to length 1.0, got {:?}",

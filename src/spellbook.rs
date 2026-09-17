@@ -52,6 +52,8 @@ pub struct Spell {
     pub revision: u32,
     pub name: String,
     pub description: String,
+    #[serde(default)]
+    pub flavor_quote: String,
     pub author: String,
     pub original_prompt: String,
     pub source: String,
@@ -62,10 +64,18 @@ pub struct Spell {
     pub cooldown_seconds: f32,
     pub range: f32,
     pub icon: u8,
+    /// Lossless procedural image source; older worlds migrate on revalidation.
+    #[serde(default)]
+    pub artwork: Option<crate::spell_art::Recipe>,
     #[serde(default)]
     pub validation: Validation,
 }
 impl Spell {
+    pub fn artwork(&self) -> crate::spell_art::Recipe {
+        self.artwork.filter(|r| r.supported()).unwrap_or_else(|| {
+            crate::spell_art::Recipe::from_source(&self.source, &self.description)
+        })
+    }
     pub fn ready(&self) -> bool {
         matches!(self.validation, Validation::Ready { .. })
     }
@@ -93,20 +103,26 @@ impl Default for Spellbook {
 impl Spellbook {
     /// Refresh derived ownership and remove bindings to deleted definitions.
     pub fn sync_hotbar(&self, account: &mut crate::crafting::Account) {
-        let ready: Vec<_> = self.spells.iter().filter(|s|s.ready()).map(|s|s.id).collect();
-        let mut changed = ready != account.known_spells;
+        let ready: Vec<_> = self
+            .spells
+            .iter()
+            .filter(|s| s.ready())
+            .map(|s| s.id)
+            .collect();
+        let changed = ready != account.known_spells;
         account.known_spells = ready;
-        for slot in &mut account.hotbar.slots {
-            if matches!(*slot, Some(crate::equipment::Entry::Spell(id)) if self.get(id).is_none()) {
-                *slot=None;
-                account.hotbar.revision=account.hotbar.revision.saturating_add(1);
-                changed=true;
-            }
+        if changed {
+            account.revision = account.revision.saturating_add(1);
         }
-        if changed {account.revision=account.revision.saturating_add(1);}
+        account.prune_hotbar();
     }
     pub fn get(&self, id: SpellId) -> Option<&Spell> {
         self.spells.iter().find(|s| s.id == id)
+    }
+    /// The same source/prompt identity used by Remember survives renames and saves.
+    pub fn delete_for_module(&mut self, module: &Module) {
+        self.spells
+            .retain(|s| s.source != module.source || s.original_prompt != module.prompt);
     }
 
     pub fn remember(&mut self, module: &Module, author: &str) -> Result<SpellId, String> {
@@ -144,6 +160,8 @@ impl Spellbook {
             _ => TargetRequirement::Optional,
         };
         let spell = Spell {
+            flavor_quote: crate::spell_flavor::from_source(&module.source),
+            artwork: Some(module.artwork),
             allow_guests: false,
             id: 0,
             revision: 1,
@@ -200,6 +218,36 @@ impl Spellbook {
         self.insert(spell)
     }
 
+    pub fn set_flavor_quote(
+        &mut self,
+        id: SpellId,
+        revision: u32,
+        quote: &str,
+    ) -> Result<(), String> {
+        if self.format_version != 1 {
+            return Err("Unsupported Spellbook format".into());
+        }
+        let spell = self
+            .spells
+            .iter_mut()
+            .find(|s| s.id == id)
+            .ok_or("Spell no longer exists")?;
+        if spell.revision != revision {
+            return Err("Spell changed while its quote was being written; try again.".into());
+        }
+        let quote = crate::spell_flavor::clean(quote);
+        if quote.is_empty() {
+            return Err("The local model returned an empty quote; try again.".into());
+        }
+        let revision = spell
+            .revision
+            .checked_add(1)
+            .ok_or("Spell revision exhausted")?;
+        spell.flavor_quote = quote;
+        spell.revision = revision;
+        Ok(())
+    }
+
     pub fn update(
         &mut self,
         id: SpellId,
@@ -245,6 +293,18 @@ impl Spellbook {
     }
 
     pub fn revalidate(&mut self) {
+        for spell in &mut self.spells {
+            spell.flavor_quote = if spell.flavor_quote.is_empty() {
+                crate::spell_flavor::from_source(&spell.source)
+            } else {
+                crate::spell_flavor::clean(&spell.flavor_quote)
+            };
+        }
+        for spell in &mut self.spells {
+            if spell.artwork.is_none() {
+                spell.artwork = Some(spell.artwork());
+            }
+        }
         let mut counts = std::collections::HashMap::new();
         for spell in &self.spells {
             *counts.entry(spell.id).or_insert(0usize) += 1;
@@ -333,6 +393,31 @@ fn validate_definition(spell: &Spell) -> Result<Module, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn flavor_edits_preserve_gameplay_duplicate_and_reject_stale_jobs() {
+        let mut book = Spellbook::default();
+        let id = book.remember(&module(), "Host").unwrap();
+        let source = book.get(id).unwrap().source.clone();
+        book.set_flavor_quote(id, 1, "The smallest light remembers how to mend the dark.")
+            .unwrap();
+        assert!(book.set_flavor_quote(id, 1, "Stale result").is_err());
+        let copy = book.duplicate(id).unwrap();
+        assert_eq!(
+            book.get(copy).unwrap().flavor_quote,
+            book.get(id).unwrap().flavor_quote
+        );
+        assert_eq!(book.get(id).unwrap().source, source);
+        assert!(book.get(id).unwrap().ready());
+        let mut restored: Spellbook =
+            serde_json::from_str(&serde_json::to_string(&book).unwrap()).unwrap();
+        restored.revalidate();
+        assert_eq!(
+            restored.get(id).unwrap().flavor_quote,
+            book.get(id).unwrap().flavor_quote
+        );
+        book.delete(id).unwrap();
+        assert!(book.set_flavor_quote(id, 2, "Late result").is_err());
+    }
     fn module() -> Module {
         Module::load(
             "Heal".into(),
@@ -344,42 +429,56 @@ mod tests {
     #[test]
     fn hotbar_bindings_survive_reload_and_rename_but_not_deletion() {
         use crate::equipment::Entry;
-        let mut book=Spellbook::default();
-        let id=book.remember(&module(),"Host").unwrap();
-        let mut account=crate::crafting::Account::default();
+        let mut book = Spellbook::default();
+        let id = book.remember(&module(), "Host").unwrap();
+        let mut account = crate::crafting::Account::default();
         book.sync_hotbar(&mut account);
         account.hotbar.select(8);
         account.hotbar.assign(Some(Entry::Spell(id)));
-        let saved=serde_json::to_vec(&(book,account)).unwrap();
-        let (mut book,mut account):(Spellbook,crate::crafting::Account)=serde_json::from_slice(&saved).unwrap();
-        book.revalidate();book.sync_hotbar(&mut account);
-        assert_eq!(account.hotbar.entry(),Some(Entry::Spell(id)));
-        assert_eq!(Entry::Spell(id).count(&account),1);
-        book.update(id,"New name".into(),TargetRequirement::Creature).unwrap();
+        let saved = serde_json::to_vec(&(book, account)).unwrap();
+        let (mut book, mut account): (Spellbook, crate::crafting::Account) =
+            serde_json::from_slice(&saved).unwrap();
+        book.revalidate();
         book.sync_hotbar(&mut account);
-        assert_eq!(crate::equipment_ui::entry_name(account.hotbar.entry().unwrap(),&book),"New name");
-        book.spells[0].validation=Validation::Review {reason:"Invalid API".into()};
+        assert_eq!(account.hotbar.entry(), Some(Entry::Spell(id)));
+        assert_eq!(Entry::Spell(id).count(&account), 1);
+        book.update(id, "New name".into(), TargetRequirement::Creature)
+            .unwrap();
         book.sync_hotbar(&mut account);
-        assert_eq!(Entry::Spell(id).count(&account),0);
-        assert_eq!(account.hotbar.entry(),Some(Entry::Spell(id)));
-        let revision=account.hotbar.revision;
-        book.delete(id).unwrap();book.sync_hotbar(&mut account);
-        assert_eq!(account.hotbar.entry(),None);
-        assert!(account.hotbar.revision>revision);
+        assert_eq!(
+            crate::equipment_ui::entry_name(account.hotbar.entry().unwrap(), &book),
+            "New name"
+        );
+        book.spells[0].validation = Validation::Review {
+            reason: "Invalid API".into(),
+        };
+        book.sync_hotbar(&mut account);
+        assert_eq!(Entry::Spell(id).count(&account), 0);
+        assert_eq!(account.hotbar.entry(), None);
+        let revision = account.hotbar.revision;
+        book.delete(id).unwrap();
+        book.sync_hotbar(&mut account);
+        assert_eq!(account.hotbar.entry(), None);
+        assert_eq!(account.hotbar.revision, revision);
     }
     #[test]
     fn spell_assignment_requires_authoritative_ownership() {
-        use crate::equipment::{Entry,accept_hotbar};
-        let mut book=Spellbook::default();
-        let id=book.remember(&module(),"Host").unwrap();
-        let mut host=crate::crafting::Account::default();
+        use crate::equipment::{accept_hotbar, Entry};
+        let mut book = Spellbook::default();
+        let id = book.remember(&module(), "Host").unwrap();
+        let mut host = crate::crafting::Account::default();
         book.sync_hotbar(&mut host);
-        let mut proposed=host.hotbar.clone();proposed.assign(Some(Entry::Spell(id)));
-        let mut guest=crate::crafting::Account::default();
-        assert!(accept_hotbar(&mut guest,&proposed).is_err());
-        assert!(accept_hotbar(&mut host,&proposed).is_ok());
-        assert!(!crate::equipment::can_mine(host.hotbar.entry(),crate::voxel::BlockType::Stone,&host));
-        assert_eq!(Entry::Spell(id).resource(),None);
+        let mut proposed = host.hotbar.clone();
+        proposed.assign(Some(Entry::Spell(id)));
+        let mut guest = crate::crafting::Account::default();
+        assert!(accept_hotbar(&mut guest, &proposed).is_err());
+        assert!(accept_hotbar(&mut host, &proposed).is_ok());
+        assert!(!crate::equipment::can_mine(
+            host.hotbar.entry(),
+            crate::voxel::BlockType::Stone,
+            &host
+        ));
+        assert_eq!(Entry::Spell(id).resource(), None);
     }
     #[test]
     fn spellbook_ids_survive_rename_duplicate_delete_and_reload() {

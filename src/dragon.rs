@@ -68,21 +68,31 @@ fn candidate(world: &World, region: (i32, i32)) -> Option<(CreatureKind, Vec3, u
     }
     let cx = (region.0 as f32 + 0.5) * REGION_SIZE;
     let cz = (region.1 as f32 + 0.5) * REGION_SIZE;
-    let mut peak = (world.terrain_height(cx as i32, cz as i32), cx as i32, cz as i32);
+    let mut peak = (
+        world.terrain_height(cx as i32, cz as i32),
+        cx as i32,
+        cz as i32,
+    );
     for dx in (-64..=64).step_by(8) {
         for dz in (-64..=64).step_by(8) {
             let x = cx as i32 + dx;
             let z = cz as i32 + dz;
             let h = world.terrain_height(x, z);
-            if h > peak.0 { peak = (h, x, z); }
+            if h > peak.0 {
+                peak = (h, x, z);
+            }
         }
     }
     let coarse = peak;
-    for x in coarse.1-7..=coarse.1+7 {
-        for z in coarse.2-7..=coarse.2+7 {
-            if (x-cx as i32).abs() > 64 || (z-cz as i32).abs() > 64 { continue; }
-            let h = world.terrain_height(x,z);
-            if h > peak.0 { peak = (h,x,z); }
+    for x in coarse.1 - 7..=coarse.1 + 7 {
+        for z in coarse.2 - 7..=coarse.2 + 7 {
+            if (x - cx as i32).abs() > 64 || (z - cz as i32).abs() > 64 {
+                continue;
+            }
+            let h = world.terrain_height(x, z);
+            if h > peak.0 {
+                peak = (h, x, z);
+            }
         }
     }
     let (ground, x, z) = peak;
@@ -94,14 +104,20 @@ fn candidate(world: &World, region: (i32, i32)) -> Option<(CreatureKind, Vec3, u
     } else {
         CreatureKind::DragonRed
     };
-    Some((kind, Vec3::new(x as f32, ground as f32 + 1.0, z as f32), seed))
+    Some((
+        kind,
+        Vec3::new(x as f32, ground as f32 + 1.0, z as f32),
+        seed,
+    ))
 }
 
 impl Creatures {
     /// Called only by the host as players explore. No dragon belongs to the
     /// ordinary starter scatter. Marked regions stay consumed even after death.
     pub fn discover_dragons(&mut self, world: &World, players: &[(PlayerId, Vec3)]) {
-        if !self.has_population_room() || self.ecs.query::<&Dragon>().iter().count() >= 8 { return; }
+        if !self.has_population_room() || self.ecs.query::<&Dragon>().iter().count() >= 8 {
+            return;
+        }
         for &(_, player) in players {
             if !player.is_finite() || player.abs().max_element() > 1_000_000.0 {
                 continue;
@@ -116,8 +132,11 @@ impl Creatures {
                     if self.dragon_regions.contains(&cell) {
                         continue;
                     }
-                    let Some((kind, mut home, seed)) = *self.dragon_candidates.entry(cell)
-                        .or_insert_with(|| candidate(world, cell)) else {
+                    let Some((kind, mut home, seed)) = *self
+                        .dragon_candidates
+                        .entry(cell)
+                        .or_insert_with(|| candidate(world, cell))
+                    else {
                         self.dragon_regions.insert(cell);
                         continue;
                     };
@@ -141,7 +160,11 @@ impl Creatures {
                         continue;
                     }
                     home.y = surface(world, home, 6.0);
-                    if !self.has_population_room() || self.ecs.query::<&Dragon>().iter().count() >= 8 { return; }
+                    if !self.has_population_room()
+                        || self.ecs.query::<&Dragon>().iter().count() >= 8
+                    {
+                        return;
+                    }
                     self.spawn_one(kind, home, seed);
                     self.dragon_regions.insert(cell);
                 }
@@ -288,8 +311,14 @@ pub(super) fn update(
         if dragon.phase == Phase::Land {
             dragon.home
         } else {
-            target.map(|(_, p)| p).or(scripted).unwrap_or(
-                if dragon.phase == Phase::Ground { dragon.home } else { patrol })
+            target
+                .map(|(_, p)| p)
+                .or(scripted)
+                .unwrap_or(if dragon.phase == Phase::Ground {
+                    dragon.home
+                } else {
+                    patrol
+                })
         },
     );
     let distance = horizontal_distance(pos.0, goal);
@@ -514,22 +543,31 @@ mod tests {
     #[test]
     fn homes_choose_high_ground_and_respect_color_exclusions() {
         let mut world = World::new(71);
-        world.generation.creatures.insert("dragon_red".into(),0);
-        world.generation.creatures.insert("dragon_green".into(),200);
+        world.generation.creatures.insert("dragon_red".into(), 0);
+        world
+            .generation
+            .creatures
+            .insert("dragon_green".into(), 200);
         let mut count = 0;
-        for rx in -2..=2 { for rz in -2..=2 {
-            let Some((kind, home, _)) = candidate(&world,(rx,rz)) else { continue; };
-            assert_eq!(kind,CreatureKind::DragonGreen);
-            let cx = rx*256+128;
-            let cz = rz*256+128;
-            for dx in (-64..=64).step_by(8) { for dz in (-64..=64).step_by(8) {
-                assert!(home.y >= world.terrain_height(cx+dx,cz+dz) as f32+1.0);
-            }}
-            count += 1;
-        }}
+        for rx in -2..=2 {
+            for rz in -2..=2 {
+                let Some((kind, home, _)) = candidate(&world, (rx, rz)) else {
+                    continue;
+                };
+                assert_eq!(kind, CreatureKind::DragonGreen);
+                let cx = rx * 256 + 128;
+                let cz = rz * 256 + 128;
+                for dx in (-64..=64).step_by(8) {
+                    for dz in (-64..=64).step_by(8) {
+                        assert!(home.y >= world.terrain_height(cx + dx, cz + dz) as f32 + 1.0);
+                    }
+                }
+                count += 1;
+            }
+        }
         assert!(count > 0);
-        world.generation.creatures.insert("dragon_green".into(),0);
-        assert!(candidate(&world,(0,0)).is_none());
+        world.generation.creatures.insert("dragon_green".into(), 0);
+        assert!(candidate(&world, (0, 0)).is_none());
     }
 
     #[test]
@@ -547,8 +585,11 @@ mod tests {
         let residents = creatures.snapshot_with_ids();
         assert!(!residents.is_empty());
         for (i, a) in residents.iter().enumerate() {
-            for b in &residents[i+1..] {
-                assert!(horizontal_distance(Vec3::from_array(a.2), Vec3::from_array(b.2)) >= MIN_HOME_SPACING);
+            for b in &residents[i + 1..] {
+                assert!(
+                    horizontal_distance(Vec3::from_array(a.2), Vec3::from_array(b.2))
+                        >= MIN_HOME_SPACING
+                );
             }
             creatures.destroy(a.0);
         }

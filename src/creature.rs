@@ -86,7 +86,13 @@ impl CreatureKind {
     }
 
     /// Includes the rig's animated standing pose, verified against the player mesh.
-    pub fn model_scale(self) -> f32 { if self.is_dragon() { 1.25 } else { 1.0 } }
+    pub fn model_scale(self) -> f32 {
+        if self.is_dragon() {
+            1.25
+        } else {
+            1.0
+        }
+    }
 
     fn speed(self) -> f32 {
         match self {
@@ -256,7 +262,10 @@ impl CreatureKind {
     /// `AmbientCall` timer is left at `f32::INFINITY` at spawn and never
     /// fires; see `Creatures::spawn_with_rng`/`update`.
     fn has_ambient_call(self) -> bool {
-        matches!(self, CreatureKind::Cow | CreatureKind::Sheep | CreatureKind::Zombie)
+        matches!(
+            self,
+            CreatureKind::Cow | CreatureKind::Sheep | CreatureKind::Zombie
+        )
     }
 
     pub fn to_u8(self) -> u8 {
@@ -333,13 +342,25 @@ fn pick_starter_kind(rng: &mut SimpleRng) -> CreatureKind {
 }
 
 fn pick_world_kind(rng: &mut SimpleRng, world: &World) -> Option<CreatureKind> {
-    let weight = |kind: CreatureKind, base: u32| base * world.generation.abundance(crate::worldgen::CREATURE_SPECIES[kind.to_u8() as usize]) as u32;
-    let total: u32 = STARTER_KIND_WEIGHTS.iter().map(|&(k, w)| weight(k, w)).sum();
-    if total == 0 { return None; }
+    let weight = |kind: CreatureKind, base: u32| {
+        base * world
+            .generation
+            .abundance(crate::worldgen::CREATURE_SPECIES[kind.to_u8() as usize])
+            as u32
+    };
+    let total: u32 = STARTER_KIND_WEIGHTS
+        .iter()
+        .map(|&(k, w)| weight(k, w))
+        .sum();
+    if total == 0 {
+        return None;
+    }
     let mut roll = (rng.next_f32() * total as f32) as u32;
     for &(kind, base) in STARTER_KIND_WEIGHTS {
         let w = weight(kind, base);
-        if roll < w { return Some(kind); }
+        if roll < w {
+            return Some(kind);
+        }
         roll -= w;
     }
     None
@@ -618,9 +639,17 @@ pub struct CreatureAudioEvents {
 pub type SavedCreature = (u32, u8, [f32; 3], f32, f32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum BehaviorMode { Auto, Chase, Attack, Ignore }
+pub enum BehaviorMode {
+    Auto,
+    Chase,
+    Attack,
+    Ignore,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum BehaviorTarget { Creature(u32), Player(u32) }
+pub enum BehaviorTarget {
+    Creature(u32),
+    Player(u32),
+}
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CreatureBehavior {
     pub aggressive: bool,
@@ -629,7 +658,11 @@ pub struct CreatureBehavior {
 }
 impl CreatureBehavior {
     fn natural(kind: CreatureKind) -> Self {
-        Self { aggressive: kind.is_hostile(), mode: BehaviorMode::Auto, target: None }
+        Self {
+            aggressive: kind.is_hostile(),
+            mode: BehaviorMode::Auto,
+            target: None,
+        }
     }
 }
 
@@ -644,7 +677,7 @@ pub struct Creatures {
     pub(crate) wildlife: std::collections::BTreeMap<u32, Option<(i32, i32)>>,
     population_timer: f32,
     population_sequence: u64,
-    start_protection: std::collections::BTreeMap<PlayerId,f32>,
+    start_protection: std::collections::BTreeMap<PlayerId, f32>,
     fish_regions: std::collections::BTreeSet<(i32, i32)>,
     fish_scan_timer: f32,
     fish_scan_cursor: usize,
@@ -656,7 +689,7 @@ pub struct Creatures {
     pub behaviors: std::collections::BTreeMap<u32, CreatureBehavior>,
     pub combat_deaths: Vec<DeathEvent>,
     pub attack_policies: std::collections::BTreeMap<(u64, u64), Vec<AttackPolicy>>,
-    pub magic_statuses: std::collections::BTreeMap<u32,magic::Status>,
+    pub magic_statuses: std::collections::BTreeMap<u32, magic::Status>,
 }
 
 #[path = "wildlife.rs"]
@@ -666,7 +699,7 @@ mod wildlife;
 /// mutation occurs until commit, so discarded drafts also preserve AI,
 /// animation, entity IDs, and the spawn sequence without cloning the ECS.
 pub(crate) struct CreatureDraft {
-    pub magic_statuses: std::collections::BTreeMap<u32,magic::Status>,
+    pub magic_statuses: std::collections::BTreeMap<u32, magic::Status>,
     dragon_homes: Vec<Vec3>,
     pub snapshot: Vec<(u32, u8, [f32; 3], f32, f32)>,
     next_id: u32,
@@ -675,8 +708,8 @@ pub(crate) struct CreatureDraft {
 }
 
 enum CreatureCommand {
-    Status(u32,magic::Status),
-    Move(u32,Vec3),
+    Status(u32, magic::Status),
+    Move(u32, Vec3),
     Spawn(u32, CreatureKind, Vec3, u64),
     Chase(u32, Vec3),
     Behavior(u32, CreatureBehavior),
@@ -686,22 +719,48 @@ enum CreatureCommand {
 }
 
 impl CreatureDraft {
-    pub fn spawn_in_world(&mut self, world: &World, kind: CreatureKind, pos: Vec3, seed: u64) -> Option<u32> {
-        if kind == CreatureKind::Fish && !fish::spawn_clear(world, pos) { return None; }
+    pub fn spawn_in_world(
+        &mut self,
+        world: &World,
+        kind: CreatureKind,
+        pos: Vec3,
+        seed: u64,
+    ) -> Option<u32> {
+        if kind == CreatureKind::Fish && !fish::spawn_clear(world, pos) {
+            return None;
+        }
         self.spawn(kind, pos, seed)
     }
     pub fn new(creatures: &Creatures) -> Self {
         let mut snapshot = creatures.snapshot_with_ids();
         snapshot.sort_by_key(|entry| entry.0);
-        let dragon_homes = creatures.ecs.query::<&dragon::Dragon>().iter().map(|(_, d)| d.home).collect();
-        Self { snapshot, next_id: creatures.next_id, commands: Vec::new(), behaviors: creatures.behaviors.clone(), dragon_homes, magic_statuses:creatures.magic_statuses.clone() }
+        let dragon_homes = creatures
+            .ecs
+            .query::<&dragon::Dragon>()
+            .iter()
+            .map(|(_, d)| d.home)
+            .collect();
+        Self {
+            snapshot,
+            next_id: creatures.next_id,
+            commands: Vec::new(),
+            behaviors: creatures.behaviors.clone(),
+            dragon_homes,
+            magic_statuses: creatures.magic_statuses.clone(),
+        }
     }
 
     pub fn spawn(&mut self, kind: CreatureKind, pos: Vec3, seed: u64) -> Option<u32> {
         if kind.is_dragon() {
-            if !pos.is_finite() || pos.abs().max_element() > 1_000_000.0 { return None; }
+            if !pos.is_finite() || pos.abs().max_element() > 1_000_000.0 {
+                return None;
+            }
             // Includes earlier spawns in this callback: a generated rule cannot create a pack.
-            if self.dragon_homes.iter().any(|&home| dragon::horizontal_distance(home, pos) < dragon::MIN_HOME_SPACING) {
+            if self
+                .dragon_homes
+                .iter()
+                .any(|&home| dragon::horizontal_distance(home, pos) < dragon::MIN_HOME_SPACING)
+            {
                 return None;
             }
         }
@@ -710,10 +769,19 @@ impl CreatureDraft {
         }
         let id = self.next_id;
         self.next_id = id.checked_add(1)?;
-        if kind.is_dragon() { self.dragon_homes.push(pos); }
-        self.snapshot.push((id, kind.to_u8(), pos.to_array(), kind.max_health(), kind.max_health()));
+        if kind.is_dragon() {
+            self.dragon_homes.push(pos);
+        }
+        self.snapshot.push((
+            id,
+            kind.to_u8(),
+            pos.to_array(),
+            kind.max_health(),
+            kind.max_health(),
+        ));
         self.behaviors.insert(id, CreatureBehavior::natural(kind));
-        self.commands.push(CreatureCommand::Spawn(id, kind, pos, seed));
+        self.commands
+            .push(CreatureCommand::Spawn(id, kind, pos, seed));
         Some(id)
     }
 
@@ -722,7 +790,9 @@ impl CreatureDraft {
         self.behaviors.get(&id).copied()
     }
     pub fn set_behavior(&mut self, id: u32, state: CreatureBehavior) -> bool {
-        if self.behavior(id).is_none() { return false; }
+        if self.behavior(id).is_none() {
+            return false;
+        }
         self.behaviors.insert(id, state);
         self.commands.push(CreatureCommand::Behavior(id, state));
         true
@@ -737,8 +807,12 @@ impl CreatureDraft {
     }
 
     pub fn heal(&mut self, id: u32, amount: f32) -> bool {
-        let Some(entry) = self.snapshot.iter_mut().find(|c| c.0 == id) else { return false; };
-        if amount < 0.0 || !amount.is_finite() { return false; }
+        let Some(entry) = self.snapshot.iter_mut().find(|c| c.0 == id) else {
+            return false;
+        };
+        if amount < 0.0 || !amount.is_finite() {
+            return false;
+        }
         entry.3 = (entry.3 + amount).min(entry.4);
         self.commands.push(CreatureCommand::Heal(id, amount));
         true
@@ -750,7 +824,10 @@ impl CreatureDraft {
         self.commands.push(CreatureCommand::Damage(id, amount));
         if self.snapshot[index].3 <= 0.0 {
             let (_, kind, pos, ..) = self.snapshot.remove(index);
-            Some(DeathEvent { kind: CreatureKind::from_u8(kind), pos: Vec3::from_array(pos) })
+            Some(DeathEvent {
+                kind: CreatureKind::from_u8(kind),
+                pos: Vec3::from_array(pos),
+            })
         } else {
             None
         }
@@ -760,15 +837,24 @@ impl CreatureDraft {
         let index = self.snapshot.iter().position(|entry| entry.0 == id)?;
         let (_, kind, pos, ..) = self.snapshot.remove(index);
         self.commands.push(CreatureCommand::Destroy(id));
-        Some(DeathEvent { kind: CreatureKind::from_u8(kind), pos: Vec3::from_array(pos) })
+        Some(DeathEvent {
+            kind: CreatureKind::from_u8(kind),
+            pos: Vec3::from_array(pos),
+        })
     }
 
     pub fn commit(self, creatures: &mut Creatures) {
         for command in self.commands {
             match command {
-                CreatureCommand::Status(id,status)=>{creatures.magic_statuses.insert(id,status);}
-                CreatureCommand::Move(id,destination)=>{
-                    for (_, (cid,pos)) in creatures.ecs.query_mut::<(&CreatureId,&mut Pos)>() {if cid.0==id {pos.0=destination;}}
+                CreatureCommand::Status(id, status) => {
+                    creatures.magic_statuses.insert(id, status);
+                }
+                CreatureCommand::Move(id, destination) => {
+                    for (_, (cid, pos)) in creatures.ecs.query_mut::<(&CreatureId, &mut Pos)>() {
+                        if cid.0 == id {
+                            pos.0 = destination;
+                        }
+                    }
                 }
                 CreatureCommand::Spawn(id, kind, pos, seed) => {
                     let actual = creatures.spawn_one(kind, pos, seed);
@@ -776,29 +862,54 @@ impl CreatureDraft {
                 }
                 CreatureCommand::Behavior(id, state) => {
                     let previous = creatures.behaviors.insert(id, state);
-                    let changed = previous.map_or(true, |old| old.mode != state.mode || old.aggressive != state.aggressive);
+                    let changed = previous.map_or(true, |old| {
+                        old.mode != state.mode || old.aggressive != state.aggressive
+                    });
                     if matches!(state.mode, BehaviorMode::Ignore | BehaviorMode::Auto) {
-                        for (_, (cid, wander, animation)) in creatures.ecs.query_mut::<(&CreatureId, &mut Wander, &mut AttackAnimTimer)>() {
-                            if cid.0 == id && (changed || wander.hunting) { wander.hunting = false; wander.timer = 0.0; animation.0 = 0.0; }
+                        for (_, (cid, wander, animation)) in
+                            creatures
+                                .ecs
+                                .query_mut::<(&CreatureId, &mut Wander, &mut AttackAnimTimer)>()
+                        {
+                            if cid.0 == id && (changed || wander.hunting) {
+                                wander.hunting = false;
+                                wander.timer = 0.0;
+                                animation.0 = 0.0;
+                            }
                         }
                     }
                 }
-                CreatureCommand::Chase(id, target) => { creatures.set_chase_target(id, target); }
-                CreatureCommand::Damage(id, amount) => { creatures.damage(id, amount); }
+                CreatureCommand::Chase(id, target) => {
+                    creatures.set_chase_target(id, target);
+                }
+                CreatureCommand::Damage(id, amount) => {
+                    creatures.damage(id, amount);
+                }
                 CreatureCommand::Heal(id, amount) => {
-                    for (_, (cid, health, kind)) in creatures.ecs.query_mut::<(&CreatureId, &mut Health, &Kind)>() {
-                        if cid.0 == id { health.0 = (health.0 + amount).min(kind.0.max_health()); }
+                    for (_, (cid, health, kind)) in creatures
+                        .ecs
+                        .query_mut::<(&CreatureId, &mut Health, &Kind)>()
+                    {
+                        if cid.0 == id {
+                            health.0 = (health.0 + amount).min(kind.0.max_health());
+                        }
                     }
                 }
-                CreatureCommand::Destroy(id) => { creatures.destroy(id); }
+                CreatureCommand::Destroy(id) => {
+                    creatures.destroy(id);
+                }
             }
         }
     }
 }
 
 impl Creatures {
-    pub fn next_identity(&self)->u32 {self.next_id}
-    pub fn reserve_identities(&mut self,next:u32) {self.next_id=self.next_id.max(next);}
+    pub fn next_identity(&self) -> u32 {
+        self.next_id
+    }
+    pub fn reserve_identities(&mut self, next: u32) {
+        self.next_id = self.next_id.max(next);
+    }
     pub fn new() -> Self {
         Self {
             start_protection: Default::default(),
@@ -831,11 +942,18 @@ impl Creatures {
     pub fn spawn_around(&mut self, world: &World, center: Vec3, count: usize, seed: u32) {
         let mut rng = SimpleRng::new(seed as u64 ^ 0xC0FFEE);
         for i in 0..count {
-            let Some(kind) = pick_world_kind(&mut rng, world) else { break; };
+            let Some(kind) = pick_world_kind(&mut rng, world) else {
+                break;
+            };
             let spot = if kind.is_hostile() {
-                (0..12).find_map(|_|find_land_spot(world,&mut rng,center.x,center.z,72.0)
-                    .filter(|&(x,z)|(x-center.x).powi(2)+(z-center.z).powi(2)>=48.0*48.0))
-            } else {find_land_spot(world,&mut rng,center.x,center.z,24.0)};
+                (0..12).find_map(|_| {
+                    find_land_spot(world, &mut rng, center.x, center.z, 72.0).filter(|&(x, z)| {
+                        (x - center.x).powi(2) + (z - center.z).powi(2) >= 48.0 * 48.0
+                    })
+                })
+            } else {
+                find_land_spot(world, &mut rng, center.x, center.z, 24.0)
+            };
             if let Some((x, z)) = spot {
                 let y = world.terrain_height(x.floor() as i32, z.floor() as i32) as f32 + 1.0;
                 let id = self.spawn_with_rng(
@@ -856,7 +974,8 @@ impl Creatures {
         // a kind with no ambient sound gets `INFINITY` and never fires (see
         // `AmbientCall`'s doc comment).
         let ambient_call = AmbientCall(if kind.has_ambient_call() {
-            AMBIENT_CALL_INTERVAL_MIN + rng.next_f32() * (AMBIENT_CALL_INTERVAL_MAX - AMBIENT_CALL_INTERVAL_MIN)
+            AMBIENT_CALL_INTERVAL_MIN
+                + rng.next_f32() * (AMBIENT_CALL_INTERVAL_MAX - AMBIENT_CALL_INTERVAL_MIN)
         } else {
             f32::INFINITY
         });
@@ -887,10 +1006,14 @@ impl Creatures {
             rng,
         ));
         if kind.is_dragon() {
-            self.ecs.insert_one(entity, dragon::Dragon::new(pos, rng_seed)).unwrap();
+            self.ecs
+                .insert_one(entity, dragon::Dragon::new(pos, rng_seed))
+                .unwrap();
         }
         if kind == CreatureKind::Fish {
-            self.ecs.insert_one(entity, fish::Fish::new(pos, &mut SimpleRng::new(rng_seed))).unwrap();
+            self.ecs
+                .insert_one(entity, fish::Fish::new(pos, &mut SimpleRng::new(rng_seed)))
+                .unwrap();
         }
         id
     }
@@ -933,13 +1056,20 @@ impl Creatures {
     /// same `PlayerEffect::Health` path `api.damage_player` uses.
     /// Host-owned entry grace, independent of Lua attack policies. New guests
     /// receive the full interval even when the host has already used theirs.
-    pub fn update_start_protection(&mut self,dt:f32,players:&[(PlayerId,Vec3)]) {
-        self.start_protection.retain(|id,_|players.iter().any(|p|p.0==*id));
-        let elapsed=if dt.is_finite(){dt.max(0.0)}else{0.0};
-        for remaining in self.start_protection.values_mut() {*remaining=(*remaining-elapsed).max(0.0);}
-        for &(id,_) in players {self.start_protection.entry(id).or_insert(60.0);}
+    pub fn update_start_protection(&mut self, dt: f32, players: &[(PlayerId, Vec3)]) {
+        self.start_protection
+            .retain(|id, _| players.iter().any(|p| p.0 == *id));
+        let elapsed = if dt.is_finite() { dt.max(0.0) } else { 0.0 };
+        for remaining in self.start_protection.values_mut() {
+            *remaining = (*remaining - elapsed).max(0.0);
+        }
+        for &(id, _) in players {
+            self.start_protection.entry(id).or_insert(60.0);
+        }
     }
-    pub fn protect_recovery(&mut self,id:PlayerId) { self.start_protection.insert(id,10.0); }
+    pub fn protect_recovery(&mut self, id: PlayerId) {
+        self.start_protection.insert(id, 10.0);
+    }
 
     pub fn update(
         &mut self,
@@ -949,9 +1079,12 @@ impl Creatures {
     ) -> Vec<(PlayerId, f32)> {
         let collision_players = player_targets;
         // Filter natural aggro and explicit Lua player targets together.
-        let eligible_players:Vec<_>=player_targets.iter().copied()
-            .filter(|(id,_)|!self.start_protection.get(id).is_some_and(|t|*t>0.0)).collect();
-        let player_targets=eligible_players.as_slice();
+        let eligible_players: Vec<_> = player_targets
+            .iter()
+            .copied()
+            .filter(|(id, _)| !self.start_protection.get(id).is_some_and(|t| *t > 0.0))
+            .collect();
+        let player_targets = eligible_players.as_slice();
         let mut attacks = Vec::new();
         let mut stranded_fish = Vec::new();
         // Collected locally and merged into `self.pending_audio` after the
@@ -963,32 +1096,55 @@ impl Creatures {
         let mut attack_sound_events = Vec::new();
         let mut ambient_events = Vec::new();
 
-        for (_, (pos, wander, kind, rng, facing, cooldown, atk_anim, anim, chase, steps, ambient_call, cid, dragon, fish)) in
-            self.ecs.query_mut::<(
-                &mut Pos,
-                &mut Wander,
-                &Kind,
-                &mut SimpleRng,
-                &mut Facing,
-                &mut AttackCooldown,
-                &mut AttackAnimTimer,
-                &mut AnimState,
-                &mut ChaseState,
-                &mut Steps,
-                &mut AmbientCall,
-                &CreatureId,
-                Option<&mut dragon::Dragon>,
-                Option<&mut fish::Fish>,
-            )>()
-        {
-            let rate=self.magic_statuses.get(&cid.0).map_or(1.,|s|s.rate());
-            if rate==0. {continue;}
-            let dt=dt*rate;
+        for (
+            _,
+            (
+                pos,
+                wander,
+                kind,
+                rng,
+                facing,
+                cooldown,
+                atk_anim,
+                anim,
+                chase,
+                steps,
+                ambient_call,
+                cid,
+                dragon,
+                fish,
+            ),
+        ) in self.ecs.query_mut::<(
+            &mut Pos,
+            &mut Wander,
+            &Kind,
+            &mut SimpleRng,
+            &mut Facing,
+            &mut AttackCooldown,
+            &mut AttackAnimTimer,
+            &mut AnimState,
+            &mut ChaseState,
+            &mut Steps,
+            &mut AmbientCall,
+            &CreatureId,
+            Option<&mut dragon::Dragon>,
+            Option<&mut fish::Fish>,
+        )>() {
+            let rate = self.magic_statuses.get(&cid.0).map_or(1., |s| s.rate());
+            if rate == 0. {
+                continue;
+            }
+            let dt = dt * rate;
             if let Some(fish) = fish {
                 let state = self.behaviors.get(&cid.0).unwrap();
                 let target = state.target.and_then(|target| match target {
-                    BehaviorTarget::Creature(id) => targets.iter().find(|c| c.0 == id).map(|c| Vec3::from_array(c.2)),
-                    BehaviorTarget::Player(id) => player_targets.iter().find(|p| p.0 == id).map(|p| p.1),
+                    BehaviorTarget::Creature(id) => targets
+                        .iter()
+                        .find(|c| c.0 == id)
+                        .map(|c| Vec3::from_array(c.2)),
+                    BehaviorTarget::Player(id) => {
+                        player_targets.iter().find(|p| p.0 == id).map(|p| p.1)
+                    }
                 });
                 if !fish::update(world, dt, fish, pos, facing, anim, wander, rng, target) {
                     stranded_fish.push(cid.0);
@@ -1010,17 +1166,35 @@ impl Creatures {
             }
 
             let state = self.behaviors.get_mut(&cid.0).unwrap();
-            let detection_range = if kind.0.is_hostile() { kind.0.aggro_radius() } else { 16.0 };
-            let attack_range = if kind.0.is_hostile() { kind.0.attack_range() } else { 1.5 };
+            let detection_range = if kind.0.is_hostile() {
+                kind.0.aggro_radius()
+            } else {
+                16.0
+            };
+            let attack_range = if kind.0.is_hostile() {
+                kind.0.attack_range()
+            } else {
+                1.5
+            };
             let explicit = state.target.and_then(|target| match target {
-                BehaviorTarget::Creature(id) => targets.iter().find(|c| c.0 == id && id != cid.0)
+                BehaviorTarget::Creature(id) => targets
+                    .iter()
+                    .find(|c| c.0 == id && id != cid.0)
                     .map(|c| (target, Vec3::from_array(c.2))),
-                BehaviorTarget::Player(id) => player_targets.iter().find(|p| p.0 == id).map(|p| (target, p.1)),
+                BehaviorTarget::Player(id) => player_targets
+                    .iter()
+                    .find(|p| p.0 == id)
+                    .map(|p| (target, p.1)),
             });
-            let entry_protected=matches!(state.target,Some(BehaviorTarget::Player(id)) if self.start_protection.get(&id).is_some_and(|t|*t>0.0));
-            if state.target.is_some() && explicit.is_none() && !entry_protected { state.target = None; }
-            let mut aggro = if state.mode == BehaviorMode::Auto && state.aggressive
-                && !wander.hunting && chase.giveup_cooldown <= 0.0 {
+            let entry_protected = matches!(state.target,Some(BehaviorTarget::Player(id)) if self.start_protection.get(&id).is_some_and(|t|*t>0.0));
+            if state.target.is_some() && explicit.is_none() && !entry_protected {
+                state.target = None;
+            }
+            let mut aggro = if state.mode == BehaviorMode::Auto
+                && state.aggressive
+                && !wander.hunting
+                && chase.giveup_cooldown <= 0.0
+            {
                 player_targets
                     .iter()
                     .map(|&(id, p)| (BehaviorTarget::Player(id), p, pos.0.distance(p)))
@@ -1055,17 +1229,38 @@ impl Creatures {
                 wander.timer = 0.0;
             }
             if let Some(dragon) = dragon {
-                let protected = self.attack_policies.values().flatten().any(|policy| match *policy {
-                    AttackPolicy::SuppressCreature(id) => id == cid.0,
-                    AttackPolicy::ProtectPlayer(id, species) => aggro.is_some_and(|(target, _, _)| target == BehaviorTarget::Player(id)) && kind.0.to_u8() == species,
-                });
-                let result = dragon::update(world, dt, dragon, pos, facing, anim, cooldown,
-                    atk_anim, wander, kind.0, aggro.map(|(id, p, _)| (id, p)),
-                    !protected && state.mode != BehaviorMode::Chase);
+                let protected =
+                    self.attack_policies
+                        .values()
+                        .flatten()
+                        .any(|policy| match *policy {
+                            AttackPolicy::SuppressCreature(id) => id == cid.0,
+                            AttackPolicy::ProtectPlayer(id, species) => {
+                                aggro.is_some_and(|(target, _, _)| {
+                                    target == BehaviorTarget::Player(id)
+                                }) && kind.0.to_u8() == species
+                            }
+                        });
+                let result = dragon::update(
+                    world,
+                    dt,
+                    dragon,
+                    pos,
+                    facing,
+                    anim,
+                    cooldown,
+                    atk_anim,
+                    wander,
+                    kind.0,
+                    aggro.map(|(id, p, _)| (id, p)),
+                    !protected && state.mode != BehaviorMode::Chase,
+                );
                 if let Some(target) = result.attack {
                     match target {
                         BehaviorTarget::Player(id) => attacks.push((id, kind.0.attack_damage())),
-                        BehaviorTarget::Creature(id) => creature_hits.push((id, kind.0.attack_damage())),
+                        BehaviorTarget::Creature(id) => {
+                            creature_hits.push((id, kind.0.attack_damage()))
+                        }
                     }
                     attack_sound_events.push((kind.0, pos.0));
                 }
@@ -1093,35 +1288,58 @@ impl Creatures {
                 let horiz_dist = to_target.length();
                 let target_radius = match player_id {
                     BehaviorTarget::Player(_) => 0.3,
-                    BehaviorTarget::Creature(id) => targets.iter().find(|c|c.0==id)
-                        .map(|c|collision::body(CreatureKind::from_u8(c.1)).0).unwrap_or(0.3),
+                    BehaviorTarget::Creature(id) => targets
+                        .iter()
+                        .find(|c| c.0 == id)
+                        .map(|c| collision::body(CreatureKind::from_u8(c.1)).0)
+                        .unwrap_or(0.3),
                 };
                 let contact = collision::body(kind.0).0 + target_radius + 0.15;
                 if horiz_dist > contact {
                     let dir = to_target / horiz_dist;
-                    let step = (kind.0.aggro_speed() * dt).min(horiz_dist-contact);
-                    pos.0 = collision::ground_move(world, pos.0, dir*step, kind.0);
+                    let step = (kind.0.aggro_speed() * dt).min(horiz_dist - contact);
+                    pos.0 = collision::ground_move(world, pos.0, dir * step, kind.0);
                     facing.0 = turn_toward(facing.0, dir.z.atan2(dir.x), TURN_RATE * dt);
                     moving = true;
                     fast = true;
                     moved = step;
                 }
-                let protected = self.attack_policies.values().flatten().any(|policy| match *policy {
-                    AttackPolicy::SuppressCreature(id) => id == cid.0,
-                    AttackPolicy::ProtectPlayer(id, species) => player_id == BehaviorTarget::Player(id) && kind.0.to_u8() == species,
-                });
+                let protected =
+                    self.attack_policies
+                        .values()
+                        .flatten()
+                        .any(|policy| match *policy {
+                            AttackPolicy::SuppressCreature(id) => id == cid.0,
+                            AttackPolicy::ProtectPlayer(id, species) => {
+                                player_id == BehaviorTarget::Player(id) && kind.0.to_u8() == species
+                            }
+                        });
                 let strike_from = pos.0 + Vec3::Y * collision::body(kind.0).1.min(1.0);
                 let strike_delta = player_pos + Vec3::Y * 0.8 - strike_from;
-                let unobstructed = crate::raycast::raycast(world, strike_from,
-                    strike_delta.normalize_or_zero(), strike_delta.length()).is_none();
-                if !protected && state.mode != BehaviorMode::Chase && dist <= attack_range.max(contact+0.1) && cooldown.0 <= 0.0 && unobstructed {
+                let unobstructed = crate::raycast::raycast(
+                    world,
+                    strike_from,
+                    strike_delta.normalize_or_zero(),
+                    strike_delta.length(),
+                )
+                .is_none();
+                if !protected
+                    && state.mode != BehaviorMode::Chase
+                    && dist <= attack_range.max(contact + 0.1)
+                    && cooldown.0 <= 0.0
+                    && unobstructed
+                {
                     let damage = kind.0.attack_damage().max(2.0);
                     match player_id {
                         BehaviorTarget::Player(id) => attacks.push((id, damage)),
                         BehaviorTarget::Creature(id) => creature_hits.push((id, damage)),
                     }
                     attack_sound_events.push((kind.0, pos.0));
-                    cooldown.0 = if kind.0.is_hostile() { kind.0.attack_cooldown() } else { 2.0 };
+                    cooldown.0 = if kind.0.is_hostile() {
+                        kind.0.attack_cooldown()
+                    } else {
+                        2.0
+                    };
                     atk_anim.0 = ATTACK_ANIM_DURATION.min(kind.0.attack_cooldown());
                 }
                 // Force an immediate retarget (see the `timer <= 0.0` check
@@ -1147,13 +1365,20 @@ impl Creatures {
                 if dist > 0.15 {
                     let dir = to_target / dist;
                     let speed = kind.0.speed()
-                        * if wander.hunting && !matches!(kind.0, CreatureKind::Zombie | CreatureKind::Skeleton | CreatureKind::SkeletonSorcerer) {
+                        * if wander.hunting
+                            && !matches!(
+                                kind.0,
+                                CreatureKind::Zombie
+                                    | CreatureKind::Skeleton
+                                    | CreatureKind::SkeletonSorcerer
+                            )
+                        {
                             HUNT_SPEED_MULTIPLIER
                         } else {
                             1.0
                         };
                     let step = (speed * dt).min(dist);
-                    pos.0 = collision::ground_move(world, pos.0, dir*step, kind.0);
+                    pos.0 = collision::ground_move(world, pos.0, dir * step, kind.0);
                     facing.0 = turn_toward(facing.0, dir.z.atan2(dir.x), TURN_RATE * dt);
                     moving = true;
                     fast = wander.hunting;
@@ -1192,16 +1417,20 @@ impl Creatures {
             }
         }
 
-        self.magic_statuses.retain(|id,status| {
+        self.magic_statuses.retain(|id, status| {
             status.tick(dt);
-            status.active() && targets.iter().any(|c|c.0==*id)
+            status.active() && targets.iter().any(|c| c.0 == *id)
         });
         self.separate_bodies(world, collision_players);
         for (id, amount) in creature_hits {
-            if let Some(death) = self.damage(id, amount) { self.combat_deaths.push(death); }
+            if let Some(death) = self.damage(id, amount) {
+                self.combat_deaths.push(death);
+            }
         }
         self.pending_audio.attacks.extend(attack_sound_events);
-        for id in stranded_fish { self.destroy(id); }
+        for id in stranded_fish {
+            self.destroy(id);
+        }
         self.pending_audio.steps.extend(step_events);
         self.pending_audio.ambient_calls.extend(ambient_events);
 
@@ -1221,8 +1450,10 @@ impl Creatures {
     pub fn build_mesh(&self, models: &Models) -> MeshData {
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
-        for (_, (id, pos, kind, facing, anim)) in
-            self.ecs.query::<(&CreatureId, &Pos, &Kind, &Facing, &AnimState)>().iter()
+        for (_, (id, pos, kind, facing, anim)) in self
+            .ecs
+            .query::<(&CreatureId, &Pos, &Kind, &Facing, &AnimState)>()
+            .iter()
         {
             push_model(
                 &mut vertices,
@@ -1244,14 +1475,30 @@ impl Creatures {
     }
 
     /// Shared creature targeting for equipment and reviewed spells.
-    pub fn aimed_body(&self, world: &World, eye: Vec3, dir: Vec3, reach: f32) -> Option<(u32, f32)> {
+    pub fn aimed_body(
+        &self,
+        world: &World,
+        eye: Vec3,
+        dir: Vec3,
+        reach: f32,
+    ) -> Option<(u32, f32)> {
         let mut best = None;
         let mut distance = reach;
-        for (_, (id, kind, pos, facing)) in self.ecs.query::<(&CreatureId, &Kind, &Pos, &Facing)>().iter() {
+        for (_, (id, kind, pos, facing)) in self
+            .ecs
+            .query::<(&CreatureId, &Kind, &Pos, &Facing)>()
+            .iter()
+        {
             let hit = if kind.0.is_dragon() {
                 dragon::body_hit(eye - pos.0, dir, facing.0, reach)
             } else {
-                let center = pos.0 + Vec3::Y * if kind.0 == CreatureKind::Fish { 0.0 } else { 0.65 };
+                let center = pos.0
+                    + Vec3::Y
+                        * if kind.0 == CreatureKind::Fish {
+                            0.0
+                        } else {
+                            0.65
+                        };
                 let t = (center - eye).dot(dir);
                 (t >= 0.0 && (eye + dir * t).distance(center) < 0.8).then_some(t)
             };
@@ -1278,9 +1525,12 @@ impl Creatures {
                     pos.0.to_array(),
                     // Low nibble is species; high nibble is visual variant.
                     // Stable IDs preserve appearance across save/reload.
-                    kind.0.to_u8() | if matches!(kind.0, CreatureKind::Zombie | CreatureKind::Skeleton) {
-                        ((id.0 % 4) as u8) << 4
-                    } else { 0 },
+                    kind.0.to_u8()
+                        | if matches!(kind.0, CreatureKind::Zombie | CreatureKind::Skeleton) {
+                            ((id.0 % 4) as u8) << 4
+                        } else {
+                            0
+                        },
                     facing.0,
                     anim.clip.to_u8(),
                     anim.time,
@@ -1425,13 +1675,17 @@ impl Creatures {
 /// don't run creature AI locally.
 #[cfg(test)]
 pub fn mesh_for_snapshot(entries: &[([f32; 3], u8, f32, u8, f32)], models: &Models) -> MeshData {
-    mesh_for_snapshot_wet(entries,models,&[])
+    mesh_for_snapshot_wet(entries, models, &[])
 }
-pub fn mesh_for_snapshot_wet(entries: &[([f32; 3], u8, f32, u8, f32)], models: &Models,wet:&[f32]) -> MeshData {
+pub fn mesh_for_snapshot_wet(
+    entries: &[([f32; 3], u8, f32, u8, f32)],
+    models: &Models,
+    wet: &[f32],
+) -> MeshData {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
-    for (i,&(pos, kind, facing, clip, time)) in entries.iter().enumerate() {
-        let first=vertices.len();
+    for (i, &(pos, kind, facing, clip, time)) in entries.iter().enumerate() {
+        let first = vertices.len();
         let variant = kind >> 4;
         let kind = CreatureKind::from_u8(kind & 0x0f);
         push_model(
@@ -1444,7 +1698,7 @@ pub fn mesh_for_snapshot_wet(entries: &[([f32; 3], u8, f32, u8, f32)], models: &
             Vec3::from_array(pos),
             facing,
         );
-        crate::wetness::apply(&mut vertices[first..],wet.get(i).copied().unwrap_or(0.));
+        crate::wetness::apply(&mut vertices[first..], wet.get(i).copied().unwrap_or(0.));
     }
     MeshData { vertices, indices }
 }
@@ -1485,60 +1739,79 @@ mod tests {
 
     #[test]
     fn starter_hostiles_keep_outside_the_player_start_area() {
-        let mut world=World::new(42);
-        world.generation.shape=crate::worldgen::Shape::Flat;
-        let center=Vec3::new(-30.0,26.0,17.0);
-        for seed in [7,42,2026] {
-            let mut creatures=Creatures::new();
-            creatures.spawn_around(&world,center,100,seed);
-            let snapshot=creatures.snapshot_with_ids();
-            assert!(snapshot.iter().any(|c|CreatureKind::from_u8(c.1).is_hostile()));
-            for (_,kind,pos,_,_) in snapshot {
-                let d=Vec3::new(pos[0]-center.x,0.0,pos[2]-center.z).length();
-                if CreatureKind::from_u8(kind).is_hostile() {assert!(d>=48.0 && d<=72.01);}
-                else {assert!(d<=24.01);}
+        let mut world = World::new(42);
+        world.generation.shape = crate::worldgen::Shape::Flat;
+        let center = Vec3::new(-30.0, 26.0, 17.0);
+        for seed in [7, 42, 2026] {
+            let mut creatures = Creatures::new();
+            creatures.spawn_around(&world, center, 100, seed);
+            let snapshot = creatures.snapshot_with_ids();
+            assert!(snapshot
+                .iter()
+                .any(|c| CreatureKind::from_u8(c.1).is_hostile()));
+            for (_, kind, pos, _, _) in snapshot {
+                let d = Vec3::new(pos[0] - center.x, 0.0, pos[2] - center.z).length();
+                if CreatureKind::from_u8(kind).is_hostile() {
+                    assert!(d >= 48.0 && d <= 72.01);
+                } else {
+                    assert!(d <= 24.01);
+                }
             }
         }
     }
 
     #[test]
     fn entry_grace_blocks_all_creature_player_attacks_including_explicit_targets() {
-        let world=World::new(42);
-        let pos=Vec3::new(0.0,30.0,0.0);
-        for kind in [CreatureKind::Wolf,CreatureKind::Zombie,CreatureKind::Skeleton,
-            CreatureKind::StoneGolem,CreatureKind::DragonGreen,CreatureKind::DragonRed,CreatureKind::Sheep] {
-            let mut creatures=Creatures::new();
-            let id=creatures.spawn_one(kind,pos,1);
-            creatures.behaviors.get_mut(&id).unwrap().mode=BehaviorMode::Attack;
-            creatures.behaviors.get_mut(&id).unwrap().target=Some(BehaviorTarget::Player(7));
-            let players=[(0,pos+Vec3::X),(7,pos+Vec3::Z)];
-            creatures.update_start_protection(0.0,&players);
-            assert!(creatures.update(&world,0.01,&players).is_empty());
-            assert_ne!(creatures.anim_clip_of(id),Some(AnimClip::Attack));
-            assert_eq!(creatures.behaviors[&id].target,Some(BehaviorTarget::Player(7)));
+        let world = World::new(42);
+        let pos = Vec3::new(0.0, 30.0, 0.0);
+        for kind in [
+            CreatureKind::Wolf,
+            CreatureKind::Zombie,
+            CreatureKind::Skeleton,
+            CreatureKind::StoneGolem,
+            CreatureKind::DragonGreen,
+            CreatureKind::DragonRed,
+            CreatureKind::Sheep,
+        ] {
+            let mut creatures = Creatures::new();
+            let id = creatures.spawn_one(kind, pos, 1);
+            creatures.behaviors.get_mut(&id).unwrap().mode = BehaviorMode::Attack;
+            creatures.behaviors.get_mut(&id).unwrap().target = Some(BehaviorTarget::Player(7));
+            let players = [(0, pos + Vec3::X), (7, pos + Vec3::Z)];
+            creatures.update_start_protection(0.0, &players);
+            assert!(creatures.update(&world, 0.01, &players).is_empty());
+            assert_ne!(creatures.anim_clip_of(id), Some(AnimClip::Attack));
+            assert_eq!(
+                creatures.behaviors[&id].target,
+                Some(BehaviorTarget::Player(7))
+            );
         }
     }
 
     #[test]
     fn entry_grace_expires_without_resetting_and_late_guests_get_their_own_interval() {
-        let world=World::new(42);let pos=Vec3::new(0.0,30.0,0.0);
-        let mut creatures=Creatures::new();
-        let host=[(0,pos+Vec3::X)];
-        creatures.update_start_protection(0.0,&host);
-        creatures.update_start_protection(59.0,&host);
-        assert_eq!(creatures.start_protection[&0],1.0);
-        let both=[host[0],(7,pos+Vec3::Z)];
-        creatures.update_start_protection(1.0,&both);
-        assert_eq!(creatures.start_protection[&0],0.0);
-        assert_eq!(creatures.start_protection[&7],60.0);
-        creatures.spawn_one(CreatureKind::Zombie,pos,1);
-        assert_eq!(creatures.update(&world,0.01,&both),vec![(0,CreatureKind::Zombie.attack_damage())]);
-        creatures.update_start_protection(1.0,&both);
-        assert_eq!(creatures.start_protection[&0],0.0);
-        assert_eq!(creatures.start_protection[&7],59.0);
-        creatures.update_start_protection(1.0,&host);
-        creatures.update_start_protection(1.0,&both);
-        assert_eq!(creatures.start_protection[&7],60.0);
+        let world = World::new(42);
+        let pos = Vec3::new(0.0, 30.0, 0.0);
+        let mut creatures = Creatures::new();
+        let host = [(0, pos + Vec3::X)];
+        creatures.update_start_protection(0.0, &host);
+        creatures.update_start_protection(59.0, &host);
+        assert_eq!(creatures.start_protection[&0], 1.0);
+        let both = [host[0], (7, pos + Vec3::Z)];
+        creatures.update_start_protection(1.0, &both);
+        assert_eq!(creatures.start_protection[&0], 0.0);
+        assert_eq!(creatures.start_protection[&7], 60.0);
+        creatures.spawn_one(CreatureKind::Zombie, pos, 1);
+        assert_eq!(
+            creatures.update(&world, 0.01, &both),
+            vec![(0, CreatureKind::Zombie.attack_damage())]
+        );
+        creatures.update_start_protection(1.0, &both);
+        assert_eq!(creatures.start_protection[&0], 0.0);
+        assert_eq!(creatures.start_protection[&7], 59.0);
+        creatures.update_start_protection(1.0, &host);
+        creatures.update_start_protection(1.0, &both);
+        assert_eq!(creatures.start_protection[&7], 60.0);
     }
 
     #[test]
@@ -1549,7 +1822,12 @@ mod tests {
         let mut calls = Vec::new();
         for tick in 0..900 {
             creatures.update(&world, 0.1, &[]);
-            if creatures.take_audio_events().ambient_calls.iter().any(|(kind, _)| *kind == CreatureKind::Zombie) {
+            if creatures
+                .take_audio_events()
+                .ambient_calls
+                .iter()
+                .any(|(kind, _)| *kind == CreatureKind::Zombie)
+            {
                 calls.push(tick);
             }
         }
@@ -1563,12 +1841,18 @@ mod tests {
     fn undead_walk_during_natural_and_scripted_chases_and_attack_in_melee() {
         let world = World::new(1);
         let spawn = Vec3::new(0.0, world.terrain_height(0, 0) as f32 + 1.0, 0.0);
-        for kind in [CreatureKind::Zombie, CreatureKind::Skeleton, CreatureKind::SkeletonSorcerer] {
+        for kind in [
+            CreatureKind::Zombie,
+            CreatureKind::Skeleton,
+            CreatureKind::SkeletonSorcerer,
+        ] {
             for scripted in [false, true] {
                 let mut creatures = Creatures::new();
                 let id = creatures.spawn_one(kind, spawn, 1);
                 let target = spawn + Vec3::X * 6.0;
-                if scripted { creatures.set_chase_target(id, target); }
+                if scripted {
+                    creatures.set_chase_target(id, target);
+                }
                 creatures.update(&world, 0.1, &[(5, target)]);
                 let after = Vec3::from_array(creatures.snapshot_with_ids()[0].2);
                 assert!((after.x - spawn.x - kind.speed() * 0.1).abs() < 0.0001);
@@ -1577,7 +1861,10 @@ mod tests {
             let mut creatures = Creatures::new();
             let id = creatures.spawn_one(kind, spawn, 1);
             let target = spawn + Vec3::X;
-            assert_eq!(creatures.update(&world, 0.01, &[(5, target)]), vec![(5, kind.attack_damage())]);
+            assert_eq!(
+                creatures.update(&world, 0.01, &[(5, target)]),
+                vec![(5, kind.attack_damage())]
+            );
             assert_eq!(creatures.anim_clip_of(id), Some(AnimClip::Attack));
             assert!(creatures.update(&world, 0.01, &[(5, target)]).is_empty());
         }
@@ -1587,7 +1874,11 @@ mod tests {
     fn undead_variants_survive_save_restore_and_render_identically_on_clients() {
         let models = Models::load();
         let mut creatures = Creatures::new();
-        for kind in [CreatureKind::Zombie, CreatureKind::Skeleton, CreatureKind::SkeletonSorcerer] {
+        for kind in [
+            CreatureKind::Zombie,
+            CreatureKind::Skeleton,
+            CreatureKind::SkeletonSorcerer,
+        ] {
             for i in 0..4 {
                 creatures.spawn_one(kind, Vec3::new(i as f32 * 3.0, 5.0, 0.0), i);
             }
@@ -1601,11 +1892,16 @@ mod tests {
         loaded.sort_by_key(|entry| (entry.1, entry.0[0].to_bits()));
         assert_eq!(original, loaded);
         assert_eq!(original.len(), 12);
-        assert!(loaded.iter().any(|entry| CreatureKind::from_u8(entry.1 & 0x0f) == CreatureKind::SkeletonSorcerer));
+        assert!(loaded
+            .iter()
+            .any(|entry| CreatureKind::from_u8(entry.1 & 0x0f) == CreatureKind::SkeletonSorcerer));
         let host = restored.build_mesh(&models);
         let client = mesh_for_snapshot(&restored.snapshot(), &models);
         assert_eq!(host.indices, client.indices);
-        assert_eq!(bytemuck::cast_slice::<_, u8>(&host.vertices), bytemuck::cast_slice::<_, u8>(&client.vertices));
+        assert_eq!(
+            bytemuck::cast_slice::<_, u8>(&host.vertices),
+            bytemuck::cast_slice::<_, u8>(&client.vertices)
+        );
         for layer in 17..=24 {
             assert!(client.vertices.iter().any(|v| v.tex_layer == layer as f32));
         }
@@ -1671,7 +1967,9 @@ mod tests {
             creatures.update(&world, 1.0 / 60.0, &[]);
         }
 
-        let facing = creatures.facing_of(id).expect("creature should still exist");
+        let facing = creatures
+            .facing_of(id)
+            .expect("creature should still exist");
         assert!(
             (facing - FRAC_PI_2).abs() < 0.05,
             "expected the creature to have turned to face +Z (facing ~= {FRAC_PI_2}), got {facing}"
@@ -1958,7 +2256,10 @@ mod tests {
                 _ => {}
             }
         }
-        assert!(saw_walk, "expected the wandering sheep to walk at some point");
+        assert!(
+            saw_walk,
+            "expected the wandering sheep to walk at some point"
+        );
     }
 
     #[test]
@@ -2239,7 +2540,10 @@ mod tests {
         let run_and_check_for_attacks = |creatures: &mut Creatures, seconds: f32| -> bool {
             let mut attacked = false;
             for _ in 0..((seconds / dt) as usize) {
-                if !creatures.update(&world, dt, &[(player_id, player_pos)]).is_empty() {
+                if !creatures
+                    .update(&world, dt, &[(player_id, player_pos)])
+                    .is_empty()
+                {
                     attacked = true;
                 }
             }
@@ -2276,7 +2580,10 @@ mod tests {
         let run_and_check_for_attacks = |creatures: &mut Creatures, seconds: f32| -> bool {
             let mut attacked = false;
             for _ in 0..((seconds / dt) as usize) {
-                if !creatures.update(&world, dt, &[(player_id, player_pos)]).is_empty() {
+                if !creatures
+                    .update(&world, dt, &[(player_id, player_pos)])
+                    .is_empty()
+                {
                     attacked = true;
                 }
             }
@@ -2313,12 +2620,16 @@ mod tests {
         let ticks = ((WOLF_CHASE_GIVEUP_SECS.max(GOBLIN_CHASE_GIVEUP_SECS) + 3.0) / dt) as usize;
         let mut hit_count = 0;
         for _ in 0..ticks {
-            if !creatures.update(&world, dt, &[(player_id, player_pos)]).is_empty() {
+            if !creatures
+                .update(&world, dt, &[(player_id, player_pos)])
+                .is_empty()
+            {
                 hit_count += 1;
             }
         }
-        let expected_min_hits =
-            ((WOLF_CHASE_GIVEUP_SECS.max(GOBLIN_CHASE_GIVEUP_SECS) + 3.0) / STONE_GOLEM_ATTACK_COOLDOWN) as i32 - 2;
+        let expected_min_hits = ((WOLF_CHASE_GIVEUP_SECS.max(GOBLIN_CHASE_GIVEUP_SECS) + 3.0)
+            / STONE_GOLEM_ATTACK_COOLDOWN) as i32
+            - 2;
         assert!(
             hit_count as i32 >= expected_min_hits,
             "expected a golem to keep attacking on its normal cooldown throughout, with no give-up \
@@ -2431,12 +2742,16 @@ mod tests {
         let ticks = ((WOLF_CHASE_GIVEUP_SECS.max(GOBLIN_CHASE_GIVEUP_SECS) + 3.0) / dt) as usize;
         let mut hit_count = 0;
         for _ in 0..ticks {
-            if !creatures.update(&world, dt, &[(player_id, player_pos)]).is_empty() {
+            if !creatures
+                .update(&world, dt, &[(player_id, player_pos)])
+                .is_empty()
+            {
                 hit_count += 1;
             }
         }
-        let expected_min_hits =
-            ((WOLF_CHASE_GIVEUP_SECS.max(GOBLIN_CHASE_GIVEUP_SECS) + 3.0) / SUNSCORCH_ATTACK_COOLDOWN) as i32 - 2;
+        let expected_min_hits = ((WOLF_CHASE_GIVEUP_SECS.max(GOBLIN_CHASE_GIVEUP_SECS) + 3.0)
+            / SUNSCORCH_ATTACK_COOLDOWN) as i32
+            - 2;
         assert!(
             hit_count as i32 >= expected_min_hits,
             "expected a sunscorch to keep attacking on its normal cooldown throughout, with no \
@@ -2461,7 +2776,9 @@ mod tests {
         let mut counts: std::collections::HashMap<u8, u32> = std::collections::HashMap::new();
         const DRAWS: u32 = 200_000;
         for _ in 0..DRAWS {
-            *counts.entry(pick_starter_kind(&mut rng).to_u8()).or_insert(0) += 1;
+            *counts
+                .entry(pick_starter_kind(&mut rng).to_u8())
+                .or_insert(0) += 1;
         }
 
         let total_weight: u32 = STARTER_KIND_WEIGHTS.iter().map(|&(_, w)| w).sum();
@@ -2487,14 +2804,22 @@ mod tests {
         for (_, kind, ..) in creatures.snapshot_with_ids() {
             *counts.entry(kind).or_insert(0) += 1;
         }
-        let neutral: u32 = [CreatureKind::Sheep, CreatureKind::Chicken, CreatureKind::Cow]
-            .iter()
-            .map(|k| *counts.get(&k.to_u8()).unwrap_or(&0))
-            .sum();
-        let common_hostile: u32 = [CreatureKind::Wolf, CreatureKind::Stinger, CreatureKind::Goblin]
-            .iter()
-            .map(|k| *counts.get(&k.to_u8()).unwrap_or(&0))
-            .sum();
+        let neutral: u32 = [
+            CreatureKind::Sheep,
+            CreatureKind::Chicken,
+            CreatureKind::Cow,
+        ]
+        .iter()
+        .map(|k| *counts.get(&k.to_u8()).unwrap_or(&0))
+        .sum();
+        let common_hostile: u32 = [
+            CreatureKind::Wolf,
+            CreatureKind::Stinger,
+            CreatureKind::Goblin,
+        ]
+        .iter()
+        .map(|k| *counts.get(&k.to_u8()).unwrap_or(&0))
+        .sum();
         let rare_hostile: u32 = [CreatureKind::StoneGolem, CreatureKind::Sunscorch]
             .iter()
             .map(|k| *counts.get(&k.to_u8()).unwrap_or(&0))
@@ -2508,7 +2833,10 @@ mod tests {
             common_hostile > rare_hostile,
             "expected the common hostile kinds ({common_hostile}) to outnumber the rare ones ({rare_hostile})"
         );
-        assert!(rare_hostile > 0, "expected at least one rare hostile kind to appear over 3000 spawns");
+        assert!(
+            rare_hostile > 0,
+            "expected at least one rare hostile kind to appear over 3000 spawns"
+        );
     }
 
     #[test]
@@ -2525,12 +2853,19 @@ mod tests {
         for _ in 0..600 {
             creatures.update(&world, 1.0 / 60.0, &[]);
             let events = creatures.take_audio_events();
-            if events.steps.iter().any(|&(kind, _)| kind == CreatureKind::Sheep) {
+            if events
+                .steps
+                .iter()
+                .any(|&(kind, _)| kind == CreatureKind::Sheep)
+            {
                 saw_step = true;
                 break;
             }
         }
-        assert!(saw_step, "expected a moving creature to eventually queue a footstep audio event");
+        assert!(
+            saw_step,
+            "expected a moving creature to eventually queue a footstep audio event"
+        );
     }
 
     #[test]
@@ -2579,9 +2914,18 @@ mod tests {
         creatures.update(&world, 1.0 / 60.0, &[(5, player_pos)]);
         let events = creatures.take_audio_events();
 
-        assert_eq!(events.attacks.len(), 1, "expected exactly one attack-sound event: {:?}", events.attacks);
+        assert_eq!(
+            events.attacks.len(),
+            1,
+            "expected exactly one attack-sound event: {:?}",
+            events.attacks
+        );
         let (kind, pos) = events.attacks[0];
-        assert_eq!(kind, CreatureKind::Wolf, "a landed wolf attack should queue a Wolf attack-sound event");
+        assert_eq!(
+            kind,
+            CreatureKind::Wolf,
+            "a landed wolf attack should queue a Wolf attack-sound event"
+        );
         assert!(
             pos.distance(wolf_pos) < 0.5,
             "the attack sound's position should be roughly where the wolf actually is: {pos:?} vs {wolf_pos:?}"
@@ -2597,12 +2941,18 @@ mod tests {
         let id = creatures.spawn_one(CreatureKind::Sheep, spawn, 1);
 
         let event = creatures.damage(id, 1000.0);
-        assert!(event.is_some(), "expected lethal damage to actually kill the sheep");
+        assert!(
+            event.is_some(),
+            "expected lethal damage to actually kill the sheep"
+        );
 
         let events = creatures.take_audio_events();
         assert_eq!(events.deaths.len(), 1);
         assert_eq!(events.deaths[0].0, CreatureKind::Sheep);
-        assert_eq!(events.deaths[0].1, spawn, "the death sound's position should be where the sheep died");
+        assert_eq!(
+            events.deaths[0].1, spawn,
+            "the death sound's position should be where the sheep died"
+        );
     }
 
     #[test]
@@ -2614,7 +2964,10 @@ mod tests {
 
         creatures.damage(id, 1.0);
         let events = creatures.take_audio_events();
-        assert!(events.deaths.is_empty(), "surviving damage shouldn't queue a death sound");
+        assert!(
+            events.deaths.is_empty(),
+            "surviving damage shouldn't queue a death sound"
+        );
     }
 
     #[test]
@@ -2642,7 +2995,10 @@ mod tests {
         assert_eq!(first.deaths.len(), 1);
         assert_eq!(first.deaths[0].0, CreatureKind::Sheep);
         let second = creatures.take_audio_events();
-        assert!(second.deaths.is_empty(), "a drained event must not reappear on the next take_audio_events call");
+        assert!(
+            second.deaths.is_empty(),
+            "a drained event must not reappear on the next take_audio_events call"
+        );
     }
 
     #[test]
@@ -2659,13 +3015,23 @@ mod tests {
             creatures.update(&world, 1.0 / 60.0, &[]);
             let events = creatures.take_audio_events();
             assert!(
-                !events.ambient_calls.iter().any(|&(kind, _)| kind == CreatureKind::Goblin),
+                !events
+                    .ambient_calls
+                    .iter()
+                    .any(|&(kind, _)| kind == CreatureKind::Goblin),
                 "a goblin has no ambient sound and should never queue an ambient_call event"
             );
-            if events.ambient_calls.iter().any(|&(kind, _)| kind == CreatureKind::Cow) {
+            if events
+                .ambient_calls
+                .iter()
+                .any(|&(kind, _)| kind == CreatureKind::Cow)
+            {
                 saw_cow_call = true;
             }
         }
-        assert!(saw_cow_call, "expected a cow to eventually queue an ambient_call event within 30s");
+        assert!(
+            saw_cow_call,
+            "expected a cow to eventually queue an ambient_call event within 30s"
+        );
     }
 }

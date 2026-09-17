@@ -22,10 +22,10 @@ pub const AGENT_ID: u32 = u32::MAX - 1;
 pub mod ai;
 #[path = "playtest_controller.rs"]
 pub mod controller;
-#[path = "playtest_objectives.rs"]
-pub mod objectives;
 #[path = "playtest_evidence.rs"]
 pub mod evidence;
+#[path = "playtest_objectives.rs"]
+pub mod objectives;
 #[path = "playtest_replay.rs"]
 pub mod replay;
 
@@ -113,7 +113,7 @@ pub struct Observation {
     pub inspected_device: Option<DeviceView>,
     pub recipes: Vec<crafting::Recipe>,
     pub gear_recipes: Vec<(equipment::Gear, (u32, u32, u32))>,
-    pub gear_materials: Vec<(equipment::Gear, Vec<(BlockType,u32)>)>,
+    pub gear_materials: Vec<(equipment::Gear, Vec<(BlockType, u32)>)>,
     pub compositions: Vec<crafting::ObjectComposition>,
     pub mana_costs: [u32; 5],
     pub mana_free: bool,
@@ -260,13 +260,15 @@ impl Actor {
                 .into_iter()
                 .filter_map(|g| crafting::gear_formula(g, false).ok().map(|r| (g, r)))
                 .collect(),
-            gear_materials: equipment::Gear::available().map(|g|(g,g.ingredients(false))).collect(),
+            gear_materials: equipment::Gear::available()
+                .map(|g| (g, g.ingredients(false)))
+                .collect(),
             compositions: context.registry.compositions.clone(),
             mana_costs: context.registry.mana_costs,
             mana_free: context.registry.mana_free,
             interactions: vec![
-                "move", "look", "interact", "collect", "equip", "mine", "place", "craft", "attack", "device",
-                "wait",
+                "move", "look", "interact", "collect", "equip", "mine", "place", "craft", "attack",
+                "device", "wait",
             ],
             recent_events: self.recent.iter().cloned().collect(),
             previous_action: self.recent.back().cloned(),
@@ -413,7 +415,9 @@ impl Actor {
                         &intent,
                         now,
                     )?;
-                    if intent.item==Some(equipment::Entry::Gear(equipment::Gear::LifeStaff)){self.player.heal(15.);}
+                    if intent.item == Some(equipment::Entry::Gear(equipment::Gear::LifeStaff)) {
+                        self.player.heal(15.);
+                    }
                 }
                 Action::Interact { target } => {
                     let hit = crate::raycast::raycast(
@@ -455,22 +459,40 @@ impl Actor {
         })();
         // Observe the transaction before physics and periodic mana regeneration.
         effects.findings = evidence::transaction(
-            self.tick + 1, action, &before, &self.player.crafting,
-            result.is_err(), &effects, context.registry,
+            self.tick + 1,
+            action,
+            &before,
+            &self.player.crafting,
+            result.is_err(),
+            &effects,
+            context.registry,
         );
-        effects.findings.extend(evidence::support(self.tick + 1, context.world, &effects));
+        effects
+            .findings
+            .extend(evidence::support(self.tick + 1, context.world, &effects));
         let right = forward.cross(Vec3::Y);
         self.player
             .update(context.world, &input, forward, right, STEP);
         if !self.player.position.is_finite() || !self.player.velocity.is_finite() {
-            effects.findings.push(evidence::Finding::new(self.tick + 1,
-                "finite_movement", "Player position and velocity must remain finite",
-                format!("Position {:?} -> {:?}, velocity {:?}", position_before,
-                    self.player.position, self.player.velocity)));
+            effects.findings.push(evidence::Finding::new(
+                self.tick + 1,
+                "finite_movement",
+                "Player position and velocity must remain finite",
+                format!(
+                    "Position {:?} -> {:?}, velocity {:?}",
+                    position_before, self.player.position, self.player.velocity
+                ),
+            ));
         } else if !embedded_before && evidence::embedded(context.world, self.player.position) {
-            effects.findings.push(evidence::Finding::new(self.tick + 1,
-                "terrain_collision", "Movement from clear space must not enter solid terrain",
-                format!("Position {:?} -> {:?}", position_before, self.player.position)));
+            effects.findings.push(evidence::Finding::new(
+                self.tick + 1,
+                "terrain_collision",
+                "Movement from clear space must not enter solid terrain",
+                format!(
+                    "Position {:?} -> {:?}",
+                    position_before, self.player.position
+                ),
+            ));
         }
         let feet = self.player.position;
         if context.world.get_block(
@@ -479,8 +501,11 @@ impl Actor {
             feet.z.floor() as i32,
         ) == BlockType::Water
         {
-            self.player
-                .drain_oxygen(crate::player::OXYGEN_DRAIN_PER_SEC * STEP * crate::gear_catalog::oxygen_factor(&self.player.crafting));
+            self.player.drain_oxygen(
+                crate::player::OXYGEN_DRAIN_PER_SEC
+                    * STEP
+                    * crate::gear_catalog::oxygen_factor(&self.player.crafting),
+            );
             if self.player.oxygen <= 0.0 {
                 self.player
                     .damage(crate::player::DROWNING_DAMAGE_PER_SEC * STEP);
@@ -833,9 +858,14 @@ impl Session {
             Action::Wait => "Waiting",
         };
         if !matches!(action, Action::Wait) {
-            self.last_activity = Some((self.actor.tick, if outcome.status == Status::Rejected {
-                "Action rejected / reconsidering"
-            } else { activity }));
+            self.last_activity = Some((
+                self.actor.tick,
+                if outcome.status == Status::Rejected {
+                    "Action rejected / reconsidering"
+                } else {
+                    activity
+                },
+            ));
         }
         self.findings.extend(effects.findings.iter().cloned());
         self.objective.record(
@@ -931,9 +961,15 @@ impl Session {
     }
 
     pub fn report(&self, reason: &str) -> Result<(), String> {
-        let reproduction = if self.findings.is_empty() { serde_json::json!({"status":"not_attempted","reason":"No invariant finding"}) }
-            else { replay::replay(&self.directory).unwrap_or_else(|error| serde_json::json!({"status":"uncertain","error":error})) };
-        let reproduced = reproduction.get("findings_reproduced").and_then(serde_json::Value::as_array)
+        let reproduction = if self.findings.is_empty() {
+            serde_json::json!({"status":"not_attempted","reason":"No invariant finding"})
+        } else {
+            replay::replay(&self.directory)
+                .unwrap_or_else(|error| serde_json::json!({"status":"uncertain","error":error}))
+        };
+        let reproduced = reproduction
+            .get("findings_reproduced")
+            .and_then(serde_json::Value::as_array)
             .is_some_and(|findings| !findings.is_empty());
         let report = serde_json::json!({"schema":2,"scenario":self.scenario,"objective":self.objective,"completed":self.script.crafted,"reason":reason,
             "ai_usage":self.ai.as_ref().map(ai::Ai::usage),
@@ -1052,9 +1088,18 @@ impl Session {
 
     pub fn overhead_status(&self) -> String {
         if let Some(reason) = &self.script.finished {
-            if self.script.crafted { return "Task completed".into(); }
+            if self.script.crafted {
+                return "Task completed".into();
+            }
             let text: String = reason.chars().take(64).collect();
-            return format!("Stopped: {text}{}", if reason.chars().count() > 64 { "…" } else { "" });
+            return format!(
+                "Stopped: {text}{}",
+                if reason.chars().count() > 64 {
+                    "…"
+                } else {
+                    ""
+                }
+            );
         }
         if let Some(status) = self.ai.as_ref().and_then(ai::Ai::overhead_status) {
             return status;
@@ -1064,9 +1109,16 @@ impl Session {
         }
         // Keep brief actions readable between control ticks, without delaying AI state changes.
         if let Some((tick, activity)) = self.last_activity {
-            if self.actor.tick.saturating_sub(tick) <= 10 { return activity.into(); }
+            if self.actor.tick.saturating_sub(tick) <= 10 {
+                return activity.into();
+            }
         }
-        if self.actor.tick == 0 { "Starting playtest" } else { "Waiting / observing" }.into()
+        if self.actor.tick == 0 {
+            "Starting playtest"
+        } else {
+            "Waiting / observing"
+        }
+        .into()
     }
 
     pub fn external_event(&mut self, event: &str) {

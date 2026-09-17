@@ -99,21 +99,33 @@ impl Feedback {
             return Vec::new();
         }
         self.time = (self.time + dt) % 3600.0;
-        self.active_props = state.devices.iter().filter(|(p,d)| d.kind.sustained()
-            && d.config.enabled && d.activity==Activity::Working
-            && center(**p).distance_squared(listener)<32.0*32.0)
-            .map(|(&p,d)|(p,d.kind)).collect();
+        self.active_props = state
+            .devices
+            .iter()
+            .filter(|(p, d)| {
+                d.kind.sustained()
+                    && d.config.enabled
+                    && d.activity == Activity::Working
+                    && center(**p).distance_squared(listener) < 32.0 * 32.0
+            })
+            .map(|(&p, d)| (p, d.kind))
+            .collect();
         self.smelter_heat.retain(|p, heat| {
             *heat -= dt;
-            *heat > 0.0 && state.devices.get(p).is_some_and(|d|
-                d.kind == Kind::Smelter && d.config.enabled)
+            *heat > 0.0
+                && state
+                    .devices
+                    .get(p)
+                    .is_some_and(|d| d.kind == Kind::Smelter && d.config.enabled)
                 && center(*p).distance_squared(listener) <= 24.0 * 24.0
         });
         for (&p, d) in &state.devices {
             // Instant production can already be Idle after ejecting its output.
-            let produced = self.previous.get(&p).is_some_and(|old|
-                old.kind == Kind::Smelter && old.events[0] != d.feedback_events[0]);
-            if d.kind == Kind::Smelter && d.config.enabled
+            let produced = self.previous.get(&p).is_some_and(|old| {
+                old.kind == Kind::Smelter && old.events[0] != d.feedback_events[0]
+            });
+            if d.kind == Kind::Smelter
+                && d.config.enabled
                 && (produced || d.activity == Activity::Working)
                 && center(p).distance_squared(listener) <= 24.0 * 24.0
             {
@@ -126,7 +138,10 @@ impl Feedback {
                 None => Some(Cue::Built),
                 Some(old) if old.kind != d.kind => Some(Cue::Built),
                 Some(old) if old.events[0] != d.feedback_events[0] => Some(match d.kind {
-                    Kind::DarkAltar => Cue::DarkAltar, Kind::Shrine => Cue::Shrine, _ => Cue::Produced }),
+                    Kind::DarkAltar => Cue::DarkAltar,
+                    Kind::Shrine => Cue::Shrine,
+                    _ => Cue::Produced,
+                }),
                 Some(old)
                     if old.revision != d.config_revision
                         || old.events[2] != d.feedback_events[2] =>
@@ -175,16 +190,20 @@ impl Feedback {
         });
         let mut sounds = Vec::new();
         for (p, cue) in changes {
-            let important = matches!(cue, Cue::Produced | Cue::DarkAltar | Cue::Shrine | Cue::Built | Cue::Removed)
-                || (matches!(cue,Cue::Changed|Cue::Blocked) && self.pulses.get(&p).is_none_or(|pulse|pulse.cue!=cue));
+            let important = matches!(
+                cue,
+                Cue::Produced | Cue::DarkAltar | Cue::Shrine | Cue::Built | Cue::Removed
+            ) || (matches!(cue, Cue::Changed | Cue::Blocked)
+                && self.pulses.get(&p).is_none_or(|pulse| pulse.cue != cue));
             if self.cooldowns.contains_key(&p) && !important {
                 continue;
             }
             // At most one brief pulse per device; activity cannot accumulate particles.
             self.pulses.insert(p, Pulse { cue, age: 0.0 });
             self.cooldowns.insert(p, 0.7);
-            if !matches!(cue,Cue::DarkAltar|Cue::Shrine)
-                && self.pending_sound.is_none_or(|(_, waiting)| cue > waiting) {
+            if !matches!(cue, Cue::DarkAltar | Cue::Shrine)
+                && self.pending_sound.is_none_or(|(_, waiting)| cue > waiting)
+            {
                 self.pending_sound = Some((p, cue));
             }
         }
@@ -228,27 +247,51 @@ impl Feedback {
             let phase = cell.0 as f32 * 0.37 + cell.2 as f32 * 0.61;
             for i in 0..5 {
                 let age = (self.time * 0.65 + i as f32 / 5.0 + phase).rem_euclid(1.0);
-                let pos = center(cell) + Vec3::new(
-                    age * 0.35 + (phase + age * 5.0).sin() * age * 0.09,
-                    0.52 + age * 1.65, age * 0.15);
+                let pos = center(cell)
+                    + Vec3::new(
+                        age * 0.35 + (phase + age * 5.0).sin() * age * 0.09,
+                        0.52 + age * 1.65,
+                        age * 0.15,
+                    );
                 let size = (0.07 + age * 0.13) * (1.0 - age).sqrt() * heat.min(1.0);
                 let shade = 0.025 + age * 0.025;
-                push_cuboid(&mut mesh.vertices, &mut mesh.indices,
-                    pos - Vec3::splat(size), pos + Vec3::splat(size),
-                    [shade; 3], white_uv());
+                push_cuboid(
+                    &mut mesh.vertices,
+                    &mut mesh.indices,
+                    pos - Vec3::splat(size),
+                    pos + Vec3::splat(size),
+                    [shade; 3],
+                    white_uv(),
+                );
             }
         }
         for (&cell, &kind) in &self.active_props {
-            if kind==Kind::Lantern {continue;}
+            if kind == Kind::Lantern {
+                continue;
+            }
             for i in 0..8 {
-                let age=(self.time*0.5+i as f32/8.0).fract();
-                let angle=self.time*0.7+i as f32*2.4;
-                let pos=center(cell)+Vec3::new(angle.cos()*0.32,0.8+age*1.2,angle.sin()*0.32);
-                let size=Vec3::splat(0.065*(1.0-age));
-                let color=if kind==Kind::DarkAltar {[0.045,0.008,0.075]} else {[0.35,0.85,0.65]};
-                let start=mesh.vertices.len();
-                push_cuboid(&mut mesh.vertices,&mut mesh.indices,pos-size,pos+size,color,white_uv());
-                for v in &mut mesh.vertices[start..] {v.emission=if kind==Kind::Shrine {0.5} else {0.05};}
+                let age = (self.time * 0.5 + i as f32 / 8.0).fract();
+                let angle = self.time * 0.7 + i as f32 * 2.4;
+                let pos = center(cell)
+                    + Vec3::new(angle.cos() * 0.32, 0.8 + age * 1.2, angle.sin() * 0.32);
+                let size = Vec3::splat(0.065 * (1.0 - age));
+                let color = if kind == Kind::DarkAltar {
+                    [0.045, 0.008, 0.075]
+                } else {
+                    [0.35, 0.85, 0.65]
+                };
+                let start = mesh.vertices.len();
+                push_cuboid(
+                    &mut mesh.vertices,
+                    &mut mesh.indices,
+                    pos - size,
+                    pos + size,
+                    color,
+                    white_uv(),
+                );
+                for v in &mut mesh.vertices[start..] {
+                    v.emission = if kind == Kind::Shrine { 0.5 } else { 0.05 };
+                }
             }
         }
         for (&cell, p) in &self.pulses {
@@ -290,17 +333,31 @@ impl Feedback {
     }
     /// Share the existing four warm point lights with campfires, nearest first.
     pub fn lights(&self, campfires: &[Vec3], eye: Vec3) -> [[f32; 4]; 4] {
-        if self.smelter_heat.is_empty() && !self.active_props.values().any(|k|*k==Kind::Lantern) {
+        if self.smelter_heat.is_empty() && !self.active_props.values().any(|k| *k == Kind::Lantern)
+        {
             return crate::campfire::lights(campfires, eye);
         }
-        let mut lights: Vec<_> = campfires.iter().map(|p| (*p + Vec3::Y * 0.7, 8.0))
-            .chain(self.smelter_heat.iter().map(|(&cell, &heat)|
-                (center(cell), 2.8 * self.fire_strength(cell, heat))))
+        let mut lights: Vec<_> = campfires
+            .iter()
+            .map(|p| (*p + Vec3::Y * 0.7, 8.0))
+            .chain(
+                self.smelter_heat
+                    .iter()
+                    .map(|(&cell, &heat)| (center(cell), 2.8 * self.fire_strength(cell, heat))),
+            )
             // Negative radius marks a steady cool light in the existing light buffer.
-            .chain(self.active_props.iter().filter(|(_,k)|**k==Kind::Lantern)
-                .map(|(&cell,_)|(center(cell)+Vec3::Y*1.95,-8.0)))
-            .filter(|(p, _)| p.distance_squared(eye) < 32.0 * 32.0).collect();
-        lights.sort_by(|a,b| a.0.distance_squared(eye).total_cmp(&b.0.distance_squared(eye)));
+            .chain(
+                self.active_props
+                    .iter()
+                    .filter(|(_, k)| **k == Kind::Lantern)
+                    .map(|(&cell, _)| (center(cell) + Vec3::Y * 1.95, -8.0)),
+            )
+            .filter(|(p, _)| p.distance_squared(eye) < 32.0 * 32.0)
+            .collect();
+        lights.sort_by(|a, b| {
+            a.0.distance_squared(eye)
+                .total_cmp(&b.0.distance_squared(eye))
+        });
         let mut result = [[0.0; 4]; 4];
         for (out, (pos, radius)) in result.iter_mut().zip(lights) {
             *out = pos.extend(radius).to_array();
@@ -314,18 +371,30 @@ mod tests {
     use super::*;
     #[test]
     fn powered_lantern_is_cool_and_aura_particles_stop_with_power() {
-        let p=(0,30,0);let mut s=State::default();let mut f=Feedback::default();
-        s.devices.insert(p,Device::new(Kind::Lantern,p,0));
-        s.devices.insert((2,30,0),Device::new(Kind::DarkAltar,(2,30,0),0));
+        let p = (0, 30, 0);
+        let mut s = State::default();
+        let mut f = Feedback::default();
+        s.devices.insert(p, Device::new(Kind::Lantern, p, 0));
+        s.devices
+            .insert((2, 30, 0), Device::new(Kind::DarkAltar, (2, 30, 0), 0));
         f.synchronize(&s);
-        for d in s.devices.values_mut() {d.activity=Activity::Working;}
-        f.update(&s,0.1,center(p));
-        let light=f.lights(&[],center(p))[0];assert_eq!(light,[0.5,32.45,0.5,-8.0]);
-        let particles=f.particles();assert!(!particles.vertices.is_empty());
-        assert!(particles.vertices.iter().all(|v|v.color[0]<0.1 && v.color[2]>v.color[0]));
-        for d in s.devices.values_mut() {d.activity=Activity::InsufficientMana;}
-        f.update(&s,0.1,center(p));
-        assert_eq!(f.lights(&[],center(p)),[[0.0;4];4]);
+        for d in s.devices.values_mut() {
+            d.activity = Activity::Working;
+        }
+        f.update(&s, 0.1, center(p));
+        let light = f.lights(&[], center(p))[0];
+        assert_eq!(light, [0.5, 32.45, 0.5, -8.0]);
+        let particles = f.particles();
+        assert!(!particles.vertices.is_empty());
+        assert!(particles
+            .vertices
+            .iter()
+            .all(|v| v.color[0] < 0.1 && v.color[2] > v.color[0]));
+        for d in s.devices.values_mut() {
+            d.activity = Activity::InsufficientMana;
+        }
+        f.update(&s, 0.1, center(p));
+        assert_eq!(f.lights(&[], center(p)), [[0.0; 4]; 4]);
         assert!(f.particles().vertices.is_empty());
     }
     #[test]
@@ -348,11 +417,15 @@ mod tests {
         assert!(!smoke.vertices.is_empty());
         assert!(smoke.vertices.iter().all(|v| v.emission == 0.0
             && v.color.iter().all(|c| *c < 0.06)
-            && v.position.iter().all(|c| c.is_finite()) && v.position[1] > 30.9));
+            && v.position.iter().all(|c| c.is_finite())
+            && v.position[1] > 30.9));
         assert!(f.lights(&[], center(p))[0][3] > 0.0);
         let mut prop = crate::automation_mesh::device(&s.devices[&p], 0.0, None, &s);
         f.decorate(p, &mut prop);
-        assert!(prop.vertices.iter().any(|v| v.color == [0.95, 0.25, 0.045] && v.emission > 0.0));
+        assert!(prop
+            .vertices
+            .iter()
+            .any(|v| v.color == [0.95, 0.25, 0.045] && v.emission > 0.0));
         f.update(&s, 0.7, center(p));
         assert!(f.particles().vertices.is_empty());
         assert_eq!(f.lights(&[], center(p)), [[0.0; 4]; 4]);
@@ -367,7 +440,9 @@ mod tests {
         s.devices.get_mut(&p).unwrap().activity = Activity::Working;
         f.update(&s, 0.1, center(p));
         let count = f.particles().vertices.len();
-        for _ in 0..50 { f.update(&s, 0.1, center(p)); }
+        for _ in 0..50 {
+            f.update(&s, 0.1, center(p));
+        }
         assert_eq!(f.particles().vertices.len(), count);
         let camps = vec![center(p) + Vec3::X * 10.0; 8];
         let lights = f.lights(&camps, center(p));
@@ -385,14 +460,19 @@ mod tests {
     }
     #[test]
     fn blocked_state_overrides_transfer_pulse_and_sound_waits_for_rate_limit() {
-        let p=(0,30,0);let mut s=State::default();s.devices.insert(p,Device::new(Kind::Workshop,p,0));
-        let mut f=Feedback::default();f.synchronize(&s);
+        let p = (0, 30, 0);
+        let mut s = State::default();
+        s.devices.insert(p, Device::new(Kind::Workshop, p, 0));
+        let mut f = Feedback::default();
+        f.synchronize(&s);
         s.devices.get_mut(&p).unwrap().feedback(1);
-        assert_eq!(f.update(&s,0.1,center(p)),vec![(p,Cue::Transfer)]);
-        let d=s.devices.get_mut(&p).unwrap();d.activity=Activity::BlockedOutput;d.feedback(2);
-        assert!(f.update(&s,0.1,center(p)).is_empty());
-        assert_eq!(f.pulses[&p].cue,Cue::Blocked);
-        assert_eq!(f.update(&s,0.2,center(p)),vec![(p,Cue::Blocked)]);
+        assert_eq!(f.update(&s, 0.1, center(p)), vec![(p, Cue::Transfer)]);
+        let d = s.devices.get_mut(&p).unwrap();
+        d.activity = Activity::BlockedOutput;
+        d.feedback(2);
+        assert!(f.update(&s, 0.1, center(p)).is_empty());
+        assert_eq!(f.pulses[&p].cue, Cue::Blocked);
+        assert_eq!(f.update(&s, 0.2, center(p)), vec![(p, Cue::Blocked)]);
     }
     #[test]
     fn baseline_duplicates_net_zero_transfer_and_production_are_handled() {

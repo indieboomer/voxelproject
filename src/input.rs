@@ -28,19 +28,21 @@ mod tests {
     #[test]
     fn gesture_keys_are_edges_and_clear_with_gameplay_input() {
         let mut input = Input::new();
-        for (key,clip) in [(KeyCode::Comma,crate::player_animation::Clip::Dance),
-            (KeyCode::Period,crate::player_animation::Clip::Angry),
-            (KeyCode::Slash,crate::player_animation::Clip::Jump)] {
-            input.key_event(key,ElementState::Pressed);
-            assert_eq!(input.gesture,Some(clip));
+        for (key, clip) in [
+            (KeyCode::Comma, crate::player_animation::Clip::Dance),
+            (KeyCode::Period, crate::player_animation::Clip::Angry),
+            (KeyCode::Slash, crate::player_animation::Clip::Jump),
+        ] {
+            input.key_event(key, ElementState::Pressed);
+            assert_eq!(input.gesture, Some(clip));
             input.end_frame();
-            input.key_event(key,ElementState::Pressed);
-            assert_eq!(input.gesture,None);
-            input.key_event(key,ElementState::Released);
-            input.key_event(key,ElementState::Pressed);
-            assert_eq!(input.gesture,Some(clip));
+            input.key_event(key, ElementState::Pressed);
+            assert_eq!(input.gesture, None);
+            input.key_event(key, ElementState::Released);
+            input.key_event(key, ElementState::Pressed);
+            assert_eq!(input.gesture, Some(clip));
             input.release_all();
-            assert_eq!(input.gesture,None);
+            assert_eq!(input.gesture, None);
         }
     }
 }

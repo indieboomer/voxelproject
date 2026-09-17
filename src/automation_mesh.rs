@@ -1,8 +1,6 @@
 //! Cheap replaceable workshop props. Geometry stays within each kind's occupied height.
 use crate::automation::*;
-use crate::voxel::{
-    mesher::{push_cuboid, MeshData},
-};
+use crate::voxel::mesher::{push_cuboid, MeshData};
 use glam::{Mat3, Vec3};
 fn cube(mesh: &mut MeshData, a: [f32; 3], b: [f32; 3], color: [f32; 3]) {
     push_cuboid(
@@ -11,7 +9,10 @@ fn cube(mesh: &mut MeshData, a: [f32; 3], b: [f32; 3], color: [f32; 3]) {
         Vec3::from_array(a),
         Vec3::from_array(b),
         color,
-        crate::voxel::atlas::uv_rect(crate::voxel::atlas::tile_for(crate::voxel::BlockType::Cobblestone, 0)),
+        crate::voxel::atlas::uv_rect(crate::voxel::atlas::tile_for(
+            crate::voxel::BlockType::Cobblestone,
+            0,
+        )),
     );
 }
 fn ring(mesh: &mut MeshData, y: f32, r: f32, color: [f32; 3], angle: f32) {
@@ -40,38 +41,61 @@ pub fn device(d: &Device, time: f32, preview: Option<bool>, state: &State) -> Me
     cube(&mut mesh, [0.08, 0.02, 0.08], [0.92, 0.14, 0.92], wood);
     match d.kind {
         Kind::Lantern => {
-            let iron=[0.065,0.085,0.11];
-            cube(&mut mesh,[0.18,0.05,0.18],[0.82,0.24,0.82],iron);
-            cube(&mut mesh,[0.35,0.24,0.35],[0.65,0.46,0.65],iron);
-            cube(&mut mesh,[0.45,0.46,0.45],[0.55,2.15,0.55],iron);
-            for y in [0.5,1.9,2.12] {ring(&mut mesh,y,0.11,iron,0.0);}
-            cube(&mut mesh,[0.21,2.13,0.21],[0.79,2.22,0.79],iron);
-            let first=mesh.vertices.len();
-            cube(&mut mesh,[0.3,2.25,0.3],[0.7,2.69,0.7],[0.7,0.86,1.0]);
-            if d.config.enabled && d.activity==Activity::Working {
-                for v in &mut mesh.vertices[first..] {v.emission=0.85;}
+            let iron = [0.065, 0.085, 0.11];
+            cube(&mut mesh, [0.18, 0.05, 0.18], [0.82, 0.24, 0.82], iron);
+            cube(&mut mesh, [0.35, 0.24, 0.35], [0.65, 0.46, 0.65], iron);
+            cube(&mut mesh, [0.45, 0.46, 0.45], [0.55, 2.15, 0.55], iron);
+            for y in [0.5, 1.9, 2.12] {
+                ring(&mut mesh, y, 0.11, iron, 0.0);
             }
-            for x in [0.25,0.7] {for z in [0.25,0.7] {
-                cube(&mut mesh,[x,2.21,z],[x+0.05,2.72,z+0.05],iron);
-            }}
-            cube(&mut mesh,[0.17,2.72,0.17],[0.83,2.8,0.83],iron);
-            cube(&mut mesh,[0.27,2.8,0.27],[0.73,2.87,0.73],iron);
-            cube(&mut mesh,[0.38,2.87,0.38],[0.62,2.93,0.62],iron);
-            cube(&mut mesh,[0.47,2.93,0.47],[0.53,2.99,0.53],iron);
+            cube(&mut mesh, [0.21, 2.13, 0.21], [0.79, 2.22, 0.79], iron);
+            let first = mesh.vertices.len();
+            cube(
+                &mut mesh,
+                [0.3, 2.25, 0.3],
+                [0.7, 2.69, 0.7],
+                [0.7, 0.86, 1.0],
+            );
+            if d.config.enabled && d.activity == Activity::Working {
+                for v in &mut mesh.vertices[first..] {
+                    v.emission = 0.85;
+                }
+            }
+            for x in [0.25, 0.7] {
+                for z in [0.25, 0.7] {
+                    cube(&mut mesh, [x, 2.21, z], [x + 0.05, 2.72, z + 0.05], iron);
+                }
+            }
+            cube(&mut mesh, [0.17, 2.72, 0.17], [0.83, 2.8, 0.83], iron);
+            cube(&mut mesh, [0.27, 2.8, 0.27], [0.73, 2.87, 0.73], iron);
+            cube(&mut mesh, [0.38, 2.87, 0.38], [0.62, 2.93, 0.62], iron);
+            cube(&mut mesh, [0.47, 2.93, 0.47], [0.53, 2.99, 0.53], iron);
         }
         Kind::DarkAltar | Kind::Shrine => {
-            let dark=d.kind==Kind::DarkAltar;
-            let rock=if dark {[0.09,0.055,0.13]} else {[0.7,0.72,0.67]};
-            let accent=if dark {[0.19,0.025,0.32]} else {[0.4,0.9,0.7]};
-            cube(&mut mesh,[0.06,0.08,0.06],[0.94,0.3,0.94],rock);
-            cube(&mut mesh,[0.2,0.3,0.2],[0.8,1.12,0.8],rock);
-            cube(&mut mesh,[0.06,1.12,0.06],[0.94,1.3,0.94],rock);
-            for x in [0.12,0.76] {cube(&mut mesh,[x,1.3,0.4],[x+0.12,1.92,0.6],rock);}
-            let first=mesh.vertices.len();
-            ring(&mut mesh,1.32,0.29,accent,0.0);
-            cube(&mut mesh,[0.39,1.45,0.39],[0.61,1.8,0.61],accent);
-            if d.config.enabled && d.activity==Activity::Working {
-                for v in &mut mesh.vertices[first..] {v.emission=0.45;}
+            let dark = d.kind == Kind::DarkAltar;
+            let rock = if dark {
+                [0.09, 0.055, 0.13]
+            } else {
+                [0.7, 0.72, 0.67]
+            };
+            let accent = if dark {
+                [0.19, 0.025, 0.32]
+            } else {
+                [0.4, 0.9, 0.7]
+            };
+            cube(&mut mesh, [0.06, 0.08, 0.06], [0.94, 0.3, 0.94], rock);
+            cube(&mut mesh, [0.2, 0.3, 0.2], [0.8, 1.12, 0.8], rock);
+            cube(&mut mesh, [0.06, 1.12, 0.06], [0.94, 1.3, 0.94], rock);
+            for x in [0.12, 0.76] {
+                cube(&mut mesh, [x, 1.3, 0.4], [x + 0.12, 1.92, 0.6], rock);
+            }
+            let first = mesh.vertices.len();
+            ring(&mut mesh, 1.32, 0.29, accent, 0.0);
+            cube(&mut mesh, [0.39, 1.45, 0.39], [0.61, 1.8, 0.61], accent);
+            if d.config.enabled && d.activity == Activity::Working {
+                for v in &mut mesh.vertices[first..] {
+                    v.emission = 0.45;
+                }
             }
         }
         Kind::Collector => {
@@ -98,19 +122,41 @@ pub fn device(d: &Device, time: f32, preview: Option<bool>, state: &State) -> Me
             }
         }
         Kind::Chest => {
-            let chest=crate::model::chest_mesh();
-            mesh.vertices=chest.vertices.clone(); mesh.indices=chest.indices.clone();
+            let chest = crate::model::chest_mesh();
+            mesh.vertices = chest.vertices.clone();
+            mesh.indices = chest.indices.clone();
         }
         Kind::Smelter => {
-            cube(&mut mesh,[0.15,0.14,0.15],[0.85,0.68,0.85],stone);
-            cube(&mut mesh,[0.25,0.68,0.27],[0.75,0.79,0.73],ceramic);
-            cube(&mut mesh,[0.36,0.79,0.36],[0.64,0.96,0.64],stone);
-            cube(&mut mesh,[0.39,0.94,0.39],[0.61,0.97,0.61],[0.08,0.06,0.05]);
-            cube(&mut mesh,[0.25,0.24,0.12],[0.75,0.57,0.16],[0.07,0.045,0.03]);
-            let first=mesh.vertices.len();
-            cube(&mut mesh,[0.31,0.27,0.10],[0.69,0.36,0.13],[0.95,0.25,0.045]);
-            if d.config.enabled && d.activity==Activity::Working {for v in &mut mesh.vertices[first..] {v.emission=0.3;}}
-            for x in [0.32,0.47,0.62] {cube(&mut mesh,[x,0.22,0.09],[x+0.025,0.59,0.12],stone);}
+            cube(&mut mesh, [0.15, 0.14, 0.15], [0.85, 0.68, 0.85], stone);
+            cube(&mut mesh, [0.25, 0.68, 0.27], [0.75, 0.79, 0.73], ceramic);
+            cube(&mut mesh, [0.36, 0.79, 0.36], [0.64, 0.96, 0.64], stone);
+            cube(
+                &mut mesh,
+                [0.39, 0.94, 0.39],
+                [0.61, 0.97, 0.61],
+                [0.08, 0.06, 0.05],
+            );
+            cube(
+                &mut mesh,
+                [0.25, 0.24, 0.12],
+                [0.75, 0.57, 0.16],
+                [0.07, 0.045, 0.03],
+            );
+            let first = mesh.vertices.len();
+            cube(
+                &mut mesh,
+                [0.31, 0.27, 0.10],
+                [0.69, 0.36, 0.13],
+                [0.95, 0.25, 0.045],
+            );
+            if d.config.enabled && d.activity == Activity::Working {
+                for v in &mut mesh.vertices[first..] {
+                    v.emission = 0.3;
+                }
+            }
+            for x in [0.32, 0.47, 0.62] {
+                cube(&mut mesh, [x, 0.22, 0.09], [x + 0.025, 0.59, 0.12], stone);
+            }
         }
         Kind::Workshop => {
             for x in [0.15, 0.77] {
@@ -158,7 +204,11 @@ pub fn device(d: &Device, time: f32, preview: Option<bool>, state: &State) -> Me
         .to_array();
         v.normal = (rotation * Vec3::from_array(v.normal)).to_array();
     }
-    for (face, net, dir) in d.ports(balance()).into_iter().filter(|_|d.kind!=Kind::Chest) {
+    for (face, net, dir) in d
+        .ports(balance())
+        .into_iter()
+        .filter(|_| d.kind != Kind::Chest)
+    {
         let delta = face.delta();
         let normal = Vec3::new(delta.0 as f32, delta.1 as f32, delta.2 as f32);
         let mut anchor = Vec3::splat(0.5) + normal * 0.44;
@@ -255,15 +305,17 @@ pub fn device(d: &Device, time: f32, preview: Option<bool>, state: &State) -> Me
             [0.95, 0.2, 0.15]
         };
         for level in 0..d.kind.height() {
-        let first=mesh.vertices.len();
-        for a in [0.01, 0.97] {
-            for z in [0.01, 0.97] {
-                cube(&mut mesh, [a, 0.01, z], [a + 0.02, 0.99, z + 0.02], c);
-                cube(&mut mesh, [0.01, a, z], [0.99, a + 0.02, z + 0.02], c);
-                cube(&mut mesh, [a, z, 0.01], [a + 0.02, z + 0.02, 0.99], c);
+            let first = mesh.vertices.len();
+            for a in [0.01, 0.97] {
+                for z in [0.01, 0.97] {
+                    cube(&mut mesh, [a, 0.01, z], [a + 0.02, 0.99, z + 0.02], c);
+                    cube(&mut mesh, [0.01, a, z], [0.99, a + 0.02, z + 0.02], c);
+                    cube(&mut mesh, [a, z, 0.01], [a + 0.02, z + 0.02, 0.99], c);
+                }
             }
-        }
-        for v in &mut mesh.vertices[first..] {v.position[1]+=level as f32;}
+            for v in &mut mesh.vertices[first..] {
+                v.position[1] += level as f32;
+            }
         }
     }
     let origin = Vec3::new(d.cell.0 as f32, d.cell.1 as f32, d.cell.2 as f32);
@@ -289,8 +341,15 @@ mod tests {
                     for v in m.vertices {
                         assert!(
                             v.position
-                                .into_iter().enumerate()
-                                .all(|(axis,x)| x.is_finite() && x >= -0.00001 && x <= if axis==1 {kind.height() as f32+0.00001} else {1.00001}),
+                                .into_iter()
+                                .enumerate()
+                                .all(|(axis, x)| x.is_finite()
+                                    && x >= -0.00001
+                                    && x <= if axis == 1 {
+                                        kind.height() as f32 + 0.00001
+                                    } else {
+                                        1.00001
+                                    }),
                             "{kind:?} {rotation}: {:?}",
                             v.position
                         );

@@ -8,15 +8,31 @@ pub const INSTANT_MANA: u32 = 5;
 pub const RULE_MANA: u32 = 20;
 pub const MANA_REGEN_CAP: u32 = 100;
 /// (iron, oak wood, mana); salvage never exceeds construction inputs.
-pub fn gear_formula(gear: crate::equipment::Gear, salvage: bool) -> Result<(u32,u32,u32), String> {
-    if !gear.enabled() {return Err("Bows are temporarily unavailable".into());}
+pub fn gear_formula(
+    gear: crate::equipment::Gear,
+    salvage: bool,
+) -> Result<(u32, u32, u32), String> {
+    if !gear.enabled() {
+        return Err("Bows are temporarily unavailable".into());
+    }
     use crate::equipment::Gear::*;
-    match (gear,salvage) {
-        (Sword,false)=>Ok((2,1,4)), (Sword,true)=>Ok((1,1,2)),
-        (Axe,false)=>Ok((3,2,4)), (Axe,true)=>Ok((2,1,2)),
-        (Pickaxe,false)=>Ok((3,2,6)), (Pickaxe,true)=>Ok((2,1,3)),
-        (Bow,false)=>Ok((1,4,6)), (Bow,true)=>Ok((0,2,3)),
-        (g,salvage)=>{let d=g.definition();Ok(if salvage {(d.iron/2,d.wood/2,(d.mana/2).max(1))}else{(d.iron,d.wood,d.mana)})},
+    match (gear, salvage) {
+        (Sword, false) => Ok((2, 1, 4)),
+        (Sword, true) => Ok((1, 1, 2)),
+        (Axe, false) => Ok((3, 2, 4)),
+        (Axe, true) => Ok((2, 1, 2)),
+        (Pickaxe, false) => Ok((3, 2, 6)),
+        (Pickaxe, true) => Ok((2, 1, 3)),
+        (Bow, false) => Ok((1, 4, 6)),
+        (Bow, true) => Ok((0, 2, 3)),
+        (g, salvage) => {
+            let d = g.definition();
+            Ok(if salvage {
+                (d.iron / 2, d.wood / 2, (d.mana / 2).max(1))
+            } else {
+                (d.iron, d.wood, d.mana)
+            })
+        }
     }
 }
 
@@ -92,9 +108,9 @@ pub struct Account {
     pub torch_equipped: bool,
     pub adventure: crate::adventure::Progress,
     pub packed_devices: Vec<crate::automation::Device>,
-    pub production_goods: std::collections::BTreeMap<String,u32>,
-    #[serde(with="crate::gear_catalog::counts")]
-    pub gear: [u32;21],
+    pub production_goods: std::collections::BTreeMap<String, u32>,
+    #[serde(with = "crate::gear_catalog::counts")]
+    pub gear: [u32; 21],
     pub hotbar: crate::equipment::Hotbar,
     pub elements: Composition,
     pub mana: u32,
@@ -159,15 +175,32 @@ mod resource_counts {
     }
 }
 impl Account {
+    pub fn prune_hotbar(&mut self) -> bool {
+        let mut hotbar = self.hotbar.clone();
+        if !hotbar.prune_unavailable(self) {
+            return false;
+        }
+        self.hotbar = hotbar;
+        self.revision = self.revision.saturating_add(1);
+        true
+    }
     pub fn spend_mana(&mut self, cost: u32) -> Result<(), String> {
-        let mana = self.mana.checked_sub(cost).ok_or_else(||format!("Requires {cost} mana (available: {})",self.mana))?;
-        let revision = self.revision.checked_add(1).ok_or("Revision limit reached")?;
+        let mana = self
+            .mana
+            .checked_sub(cost)
+            .ok_or_else(|| format!("Requires {cost} mana (available: {})", self.mana))?;
+        let revision = self
+            .revision
+            .checked_add(1)
+            .ok_or("Revision limit reached")?;
         self.mana = mana;
         self.revision = revision;
         Ok(())
     }
     pub fn regenerate_mana(&mut self) -> bool {
-        if self.mana >= MANA_REGEN_CAP || self.revision == u64::MAX { return false; }
+        if self.mana >= MANA_REGEN_CAP || self.revision == u64::MAX {
+            return false;
+        }
         self.mana += 1;
         self.revision += 1;
         true
@@ -258,13 +291,14 @@ fn resource_index(id: &str) -> Option<usize> {
 impl Registry {
     pub fn load() -> Result<Self, String> {
         // Embedded fallback keeps packaged builds independent of the working directory.
-        let text = match std::fs::read_to_string(crate::runtime_paths::resource("data/crafting.json")) {
-            Ok(s) => s,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                include_str!("../data/crafting.json").into()
-            }
-            Err(e) => return Err(format!("Cannot read crafting registry: {e}")),
-        };
+        let text =
+            match std::fs::read_to_string(crate::runtime_paths::resource("data/crafting.json")) {
+                Ok(s) => s,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    include_str!("../data/crafting.json").into()
+                }
+                Err(e) => return Err(format!("Cannot read crafting registry: {e}")),
+            };
         Self::parse(&text)
     }
     pub fn parse(text: &str) -> Result<Self, String> {
@@ -370,24 +404,49 @@ impl Registry {
         }
     }
     pub fn mana_charge(&self, cost: u32) -> u32 {
-        if self.mana_free { 0 } else { cost }
+        if self.mana_free {
+            0
+        } else {
+            cost
+        }
     }
     // Run on a private account; the caller commits only after output preparation succeeds.
-    pub(crate) fn prepare(&self, account: &mut Account, action: &Action) -> Result<Option<Output>, String> {
+    pub(crate) fn prepare(
+        &self,
+        account: &mut Account,
+        action: &Action,
+    ) -> Result<Option<Output>, String> {
         match action {
             Action::EquipTorch(equip) => {
-                if *equip && account.gear[crate::equipment::Gear::Torch as usize]==0 {return Err("Craft a torch first".into());}
-                account.torch_equipped=*equip;
+                if *equip && account.gear[crate::equipment::Gear::Torch as usize] == 0 {
+                    return Err("Craft a torch first".into());
+                }
+                account.torch_equipped = *equip;
                 Ok(None)
             }
             Action::BindSheep => {
-                let recipe=self.recipes.iter().find(|r|r.output.kind==ObjectKind::Creature && r.output.id=="sheep").ok_or("Sheep recipe missing")?;
-                let mut formula=[None;5];
-                for (i,s) in recipe.inputs.iter().enumerate() {formula[i]=Some(*s);}
+                let recipe = self
+                    .recipes
+                    .iter()
+                    .find(|r| r.output.kind == ObjectKind::Creature && r.output.id == "sheep")
+                    .ok_or("Sheep recipe missing")?;
+                let mut formula = [None; 5];
+                for (i, s) in recipe.inputs.iter().enumerate() {
+                    formula[i] = Some(*s);
+                }
                 account.consume_elements(totals(&recipe.inputs)?)?;
-                account.mana=account.mana.checked_sub(self.mana_cost(&formula)).ok_or("Insufficient mana")?;
-                let n=account.production_goods.entry("creature:sheep".into()).or_default();
-                *n=n.checked_add(1).filter(|n|*n<=1_000_000).ok_or("Inventory full")?;
+                account.mana = account
+                    .mana
+                    .checked_sub(self.mana_cost(&formula))
+                    .ok_or("Insufficient mana")?;
+                let n = account
+                    .production_goods
+                    .entry("creature:sheep".into())
+                    .or_default();
+                *n = n
+                    .checked_add(1)
+                    .filter(|n| *n <= 1_000_000)
+                    .ok_or("Inventory full")?;
                 Ok(None)
             }
             Action::Craft(slots) => {
@@ -436,23 +495,45 @@ impl Registry {
                     .checked_sub(*amount)
                     .ok_or("Insufficient resources")?;
                 account.add_elements(comp)?;
-                account.mana = account.mana.checked_sub(self.mana_charge(*amount)).ok_or("Insufficient mana for decomposition")?;
+                account.mana = account
+                    .mana
+                    .checked_sub(self.mana_charge(*amount))
+                    .ok_or("Insufficient mana for decomposition")?;
                 Ok(None)
             }
             Action::CraftGear(gear) | Action::SalvageGear(gear) => {
-                if !gear.enabled() {return Err("Bows are temporarily unavailable".into());}
-                let salvage = matches!(action,Action::SalvageGear(_));
-                if !salvage && !gear.known(account) {return Err(format!("Discover {} to learn this recipe",crate::gear_catalog::BOOK_NAMES[gear.book().unwrap() as usize]));}
-                let (_,_,mana) = gear_formula(*gear,salvage)?;
-                account.mana = account.mana.checked_sub(self.mana_charge(mana)).ok_or("Insufficient mana")?;
+                if !gear.enabled() {
+                    return Err("Bows are temporarily unavailable".into());
+                }
+                let salvage = matches!(action, Action::SalvageGear(_));
+                if !salvage && !gear.known(account) {
+                    return Err(format!(
+                        "Discover {} to learn this recipe",
+                        crate::gear_catalog::BOOK_NAMES[gear.book().unwrap() as usize]
+                    ));
+                }
+                let (_, _, mana) = gear_formula(*gear, salvage)?;
+                account.mana = account
+                    .mana
+                    .checked_sub(self.mana_charge(mana))
+                    .ok_or("Insufficient mana")?;
                 let count = &mut account.gear[*gear as usize];
-                *count = if salvage {count.checked_sub(1).ok_or("Item not owned")?}
-                    else {count.checked_add(1).ok_or("Item inventory full")?};
-                for (block,amount) in gear.ingredients(salvage) {
-                    let id=block.id();
-                    let count = &mut account.resources[resource_index(id).ok_or("Unknown material")?];
-                    *count = if salvage {count.checked_add(amount).ok_or("Inventory full")?}
-                        else {count.checked_sub(amount).ok_or_else(||format!("Requires {amount} {id}"))?};
+                *count = if salvage {
+                    count.checked_sub(1).ok_or("Item not owned")?
+                } else {
+                    count.checked_add(1).ok_or("Item inventory full")?
+                };
+                for (block, amount) in gear.ingredients(salvage) {
+                    let id = block.id();
+                    let count =
+                        &mut account.resources[resource_index(id).ok_or("Unknown material")?];
+                    *count = if salvage {
+                        count.checked_add(amount).ok_or("Inventory full")?
+                    } else {
+                        count
+                            .checked_sub(amount)
+                            .ok_or_else(|| format!("Requires {amount} {id}"))?
+                    };
                 }
                 Ok(None)
             }
@@ -476,7 +557,14 @@ impl Registry {
             draft.commit(creatures);
         }
         *account = next;
-        if let Action::EquipTorch(equipped)=action {return Ok(if *equipped {"Torch equipped in left hand"}else{"Torch put away"}.into());}
+        if let Action::EquipTorch(equipped) = action {
+            return Ok(if *equipped {
+                "Torch equipped in left hand"
+            } else {
+                "Torch put away"
+            }
+            .into());
+        }
         Ok(output.map_or_else(
             || "Conversion complete".into(),
             |o| format!("Created {} x{}", o.id, o.quantity),
@@ -498,10 +586,21 @@ impl Registry {
         }
         let mut next = account.clone();
         let output = self.prepare(&mut next, action)?;
-        if output.as_ref().is_some_and(|o|o.kind==ObjectKind::Resource && o.id=="stone") {next.adventure.quests.record(2,1);}
-        if matches!(action,Action::CraftGear(crate::equipment::Gear::Sword)) {next.adventure.quests.record(7,1);}
-        if matches!(action,Action::BindSheep) {next.adventure.quests.record(19,1);}
-        if matches!(action, Action::CraftGear(crate::equipment::Gear::Sword)) && next.adventure.stage == 2 {
+        if output
+            .as_ref()
+            .is_some_and(|o| o.kind == ObjectKind::Resource && o.id == "stone")
+        {
+            next.adventure.quests.record(2, 1);
+        }
+        if matches!(action, Action::CraftGear(crate::equipment::Gear::Sword)) {
+            next.adventure.quests.record(7, 1);
+        }
+        if matches!(action, Action::BindSheep) {
+            next.adventure.quests.record(19, 1);
+        }
+        if matches!(action, Action::CraftGear(crate::equipment::Gear::Sword))
+            && next.adventure.stage == 2
+        {
             next.adventure.crafted_tool = true;
         }
         let mut draft = None;
@@ -514,15 +613,13 @@ impl Registry {
                     let pos = if kind == CreatureKind::Fish {
                         Creatures::fish_spawn_near(world, position, 8.0, account.revision)
                             .ok_or("Fish need a nearby pool with three water blocks in every horizontal direction")?
-                    } else { spawn_position(world, creatures, position, &occupied).ok_or(
+                    } else {
+                        spawn_position(world, creatures, position, &occupied).ok_or(
                         "Invalid spawn location: clear a nearby 3 x 3 x 3 space on solid ground",
-                    )? };
-                    d.spawn_in_world(
-                        world, kind,
-                        pos,
-                        account.revision,
-                    )
-                    .ok_or("Creature limit reached")?;
+                    )?
+                    };
+                    d.spawn_in_world(world, kind, pos, account.revision)
+                        .ok_or("Creature limit reached")?;
                     occupied.push(pos);
                 }
                 draft = Some(d);
@@ -580,7 +677,10 @@ pub(crate) fn spawn_position(
     for (dx, dz) in [(4, 0), (-4, 0), (0, 4), (0, -4), (4, 4), (-4, -4)] {
         let x = position.x.floor() as i32 + dx;
         let z = position.z.floor() as i32 + dz;
-        for y in ((position.y as i32 - 4).max(1)..=(position.y as i32 + 4).min(crate::voxel::chunk::CHUNK_Y-4)).rev() {
+        for y in ((position.y as i32 - 4).max(1)
+            ..=(position.y as i32 + 4).min(crate::voxel::chunk::CHUNK_Y - 4))
+            .rev()
+        {
             let pos = Vec3::new(x as f32 + 0.5, y as f32, z as f32 + 0.5);
             if players.iter().any(|p| p.distance(pos) < 3.0)
                 || occupied
@@ -624,19 +724,46 @@ mod tests {
     }
     #[test]
     fn mana_free_actions_keep_material_costs_and_restore_normal_charges() {
-        let mut r=registry();assert!(!r.mana_free);r.mana_free=true;
-        let mut a=rich();a.mana=0;a.resources.fill(20);
-        let actions=[Action::Craft(formula(&[(Element::Earth,1),(Element::Water,1)])),
-            Action::Extract{block:BlockType::Stone,amount:1},Action::CraftGear(crate::equipment::Gear::Axe),Action::SalvageGear(crate::equipment::Gear::Axe)];
-        for action in &actions {let before=a.clone();r.prepare(&mut a,action).unwrap();assert_eq!(a.mana,0);assert_ne!(a,before);}
-        let mut empty=Account::default();
-        assert!(r.prepare(&mut empty,&actions[0]).is_err());
-        assert_eq!(r.mana_charge(INSTANT_MANA),0);assert_eq!(r.mana_charge(RULE_MANA),0);
-        let packet=crate::net::Packet::Reliable{id:1,msg:crate::net::ReliableMsg::CraftRegistry(r.clone())};
-        let crate::net::Packet::Reliable{msg:crate::net::ReliableMsg::CraftRegistry(received),..}=crate::net::decode(&crate::net::encode(&packet)).unwrap() else {panic!("registry packet")};
+        let mut r = registry();
+        assert!(!r.mana_free);
+        r.mana_free = true;
+        let mut a = rich();
+        a.mana = 0;
+        a.resources.fill(20);
+        let actions = [
+            Action::Craft(formula(&[(Element::Earth, 1), (Element::Water, 1)])),
+            Action::Extract {
+                block: BlockType::Stone,
+                amount: 1,
+            },
+            Action::CraftGear(crate::equipment::Gear::Axe),
+            Action::SalvageGear(crate::equipment::Gear::Axe),
+        ];
+        for action in &actions {
+            let before = a.clone();
+            r.prepare(&mut a, action).unwrap();
+            assert_eq!(a.mana, 0);
+            assert_ne!(a, before);
+        }
+        let mut empty = Account::default();
+        assert!(r.prepare(&mut empty, &actions[0]).is_err());
+        assert_eq!(r.mana_charge(INSTANT_MANA), 0);
+        assert_eq!(r.mana_charge(RULE_MANA), 0);
+        let packet = crate::net::Packet::Reliable {
+            id: 1,
+            msg: crate::net::ReliableMsg::CraftRegistry(r.clone()),
+        };
+        let crate::net::Packet::Reliable {
+            msg: crate::net::ReliableMsg::CraftRegistry(received),
+            ..
+        } = crate::net::decode(&crate::net::encode(&packet)).unwrap()
+        else {
+            panic!("registry packet")
+        };
         assert!(received.mana_free);
-        r.mana_free=false;assert_eq!(r.mana_charge(INSTANT_MANA),INSTANT_MANA);
-        assert!(r.prepare(&mut a,&actions[0]).is_err());
+        r.mana_free = false;
+        assert_eq!(r.mana_charge(INSTANT_MANA), INSTANT_MANA);
+        assert!(r.prepare(&mut a, &actions[0]).is_err());
     }
     fn formula(pairs: &[(Element, i64)]) -> Formula {
         let mut slots = [None; 5];
@@ -838,26 +965,100 @@ mod tests {
     }
     #[test]
     fn expanded_recipes_create_their_outputs_and_fish_refund_on_dry_land() {
-        let reg=registry();let world=flat_world();
-        for id in ["chicken","cow","wolf","stinger","goblin","zombie","skeleton","fish","crystal","oak_wood","stone_batch","bricks_batch"] {
-            let recipe=reg.recipes.iter().find(|r|r.id==id).unwrap();
-            let mut slots=[None;5];for (i,s) in recipe.inputs.iter().enumerate(){slots[i]=Some(*s);}
-            let mut account=rich();let before=account.clone();let mut creatures=Creatures::new();
-            let result=execute(&reg,&mut account,Action::Craft(slots),&world,&mut creatures);
-            if id=="fish" {assert!(result.is_err());assert_eq!(account,before);assert!(creatures.snapshot().is_empty());continue;}
+        let reg = registry();
+        let world = flat_world();
+        for id in [
+            "chicken",
+            "cow",
+            "wolf",
+            "stinger",
+            "goblin",
+            "zombie",
+            "skeleton",
+            "fish",
+            "crystal",
+            "oak_wood",
+            "stone_batch",
+            "bricks_batch",
+        ] {
+            let recipe = reg.recipes.iter().find(|r| r.id == id).unwrap();
+            let mut slots = [None; 5];
+            for (i, s) in recipe.inputs.iter().enumerate() {
+                slots[i] = Some(*s);
+            }
+            let mut account = rich();
+            let before = account.clone();
+            let mut creatures = Creatures::new();
+            let result = execute(
+                &reg,
+                &mut account,
+                Action::Craft(slots),
+                &world,
+                &mut creatures,
+            );
+            if id == "fish" {
+                assert!(result.is_err());
+                assert_eq!(account, before);
+                assert!(creatures.snapshot().is_empty());
+                continue;
+            }
             result.unwrap();
-            if recipe.output.kind==ObjectKind::Creature {assert_eq!(creatures.snapshot_with_ids()[0].1,creature_kind(id).unwrap().to_u8());}
-            else {let index=resource_index(&recipe.output.id).unwrap();assert_eq!(account.resources[index],before.resources[index]+recipe.output.quantity);}
+            if recipe.output.kind == ObjectKind::Creature {
+                assert_eq!(
+                    creatures.snapshot_with_ids()[0].1,
+                    creature_kind(id).unwrap().to_u8()
+                );
+            } else {
+                let index = resource_index(&recipe.output.id).unwrap();
+                assert_eq!(
+                    account.resources[index],
+                    before.resources[index] + recipe.output.quantity
+                );
+            }
         }
-        let mut pool=flat_world();for x in -12..13 {for z in -12..13 {for y in 10..13 {pool.set_block(x,y,z,BlockType::Water);}}}
-        let mut fish_account=rich();let mut fish_creatures=Creatures::new();
-        execute(&reg,&mut fish_account,Action::Craft(formula(&[(Element::Water,2),(Element::Life,1)])),&pool,&mut fish_creatures).unwrap();
-        assert_eq!(fish_creatures.snapshot_with_ids()[0].1,CreatureKind::Fish.to_u8());
-        let mut account=rich();account.resources.fill(10);account.adventure.stage=2;
-        let mut creatures=Creatures::new();
-        execute(&reg,&mut account,Action::CraftGear(crate::equipment::Gear::Axe),&world,&mut creatures).unwrap();
+        let mut pool = flat_world();
+        for x in -12..13 {
+            for z in -12..13 {
+                for y in 10..13 {
+                    pool.set_block(x, y, z, BlockType::Water);
+                }
+            }
+        }
+        let mut fish_account = rich();
+        let mut fish_creatures = Creatures::new();
+        execute(
+            &reg,
+            &mut fish_account,
+            Action::Craft(formula(&[(Element::Water, 2), (Element::Life, 1)])),
+            &pool,
+            &mut fish_creatures,
+        )
+        .unwrap();
+        assert_eq!(
+            fish_creatures.snapshot_with_ids()[0].1,
+            CreatureKind::Fish.to_u8()
+        );
+        let mut account = rich();
+        account.resources.fill(10);
+        account.adventure.stage = 2;
+        let mut creatures = Creatures::new();
+        execute(
+            &reg,
+            &mut account,
+            Action::CraftGear(crate::equipment::Gear::Axe),
+            &world,
+            &mut creatures,
+        )
+        .unwrap();
         assert!(!account.adventure.crafted_tool);
-        execute(&reg,&mut account,Action::CraftGear(crate::equipment::Gear::Sword),&world,&mut creatures).unwrap();
+        execute(
+            &reg,
+            &mut account,
+            Action::CraftGear(crate::equipment::Gear::Sword),
+            &world,
+            &mut creatures,
+        )
+        .unwrap();
         assert!(account.adventure.crafted_tool);
     }
     #[test]
@@ -983,41 +1184,84 @@ mod tests {
         let mut creatures = Creatures::new();
         for gear in crate::equipment::Gear::available() {
             let mut a = rich();
-            a.adventure.recipe_books=15;
+            a.adventure.recipe_books = 15;
             a.resources.fill(20);
             let iron = resource_index("iron").unwrap();
             let wood = resource_index("oak_wood").unwrap();
-            a.resources[iron]=10;a.resources[wood]=10;
+            a.resources[iron] = 10;
+            a.resources[wood] = 10;
             let before = a.clone();
-            execute(&r,&mut a,Action::CraftGear(gear),&world,&mut creatures).unwrap();
-            assert_eq!(a.gear[gear as usize],before.gear[gear as usize]+1);
-            execute(&r,&mut a,Action::SalvageGear(gear),&world,&mut creatures).unwrap();
-            assert_eq!(a.gear,before.gear);
-            assert!(a.resources[iron]<=before.resources[iron]);
-            if gear.ingredients(false).iter().any(|(b,n)|*b==BlockType::Iron && *n>0) {assert!(a.resources[iron]<before.resources[iron]);}
-            assert!(a.resources[wood]<=before.resources[wood]);
-            assert_eq!(a.mana,before.mana-gear_formula(gear,false).unwrap().2-gear_formula(gear,true).unwrap().2);
-            for action in [Action::CraftGear(gear),Action::SalvageGear(gear),Action::Extract{block:BlockType::Stone,amount:1}] {
-                a.mana=0;let before=a.clone();
-                assert!(execute(&r,&mut a,action,&world,&mut creatures).is_err());
-                assert_eq!(a,before);
+            execute(&r, &mut a, Action::CraftGear(gear), &world, &mut creatures).unwrap();
+            assert_eq!(a.gear[gear as usize], before.gear[gear as usize] + 1);
+            execute(
+                &r,
+                &mut a,
+                Action::SalvageGear(gear),
+                &world,
+                &mut creatures,
+            )
+            .unwrap();
+            assert_eq!(a.gear, before.gear);
+            assert!(a.resources[iron] <= before.resources[iron]);
+            if gear
+                .ingredients(false)
+                .iter()
+                .any(|(b, n)| *b == BlockType::Iron && *n > 0)
+            {
+                assert!(a.resources[iron] < before.resources[iron]);
             }
-            a.mana=100;a.resources[iron]=u32::MAX;
-            let before=a.clone();
-            assert!(execute(&r,&mut a,Action::SalvageGear(gear),&world,&mut creatures).is_err());
-            assert_eq!(a,before);
+            assert!(a.resources[wood] <= before.resources[wood]);
+            assert_eq!(
+                a.mana,
+                before.mana
+                    - gear_formula(gear, false).unwrap().2
+                    - gear_formula(gear, true).unwrap().2
+            );
+            for action in [
+                Action::CraftGear(gear),
+                Action::SalvageGear(gear),
+                Action::Extract {
+                    block: BlockType::Stone,
+                    amount: 1,
+                },
+            ] {
+                a.mana = 0;
+                let before = a.clone();
+                assert!(execute(&r, &mut a, action, &world, &mut creatures).is_err());
+                assert_eq!(a, before);
+            }
+            a.mana = 100;
+            a.resources[iron] = u32::MAX;
+            let before = a.clone();
+            assert!(execute(
+                &r,
+                &mut a,
+                Action::SalvageGear(gear),
+                &world,
+                &mut creatures
+            )
+            .is_err());
+            assert_eq!(a, before);
         }
     }
     #[test]
     fn mana_recovery_and_charges_preserve_inventory() {
-        let mut a=Account::default();
-        let before=a.clone();
-        assert!(a.spend_mana(INSTANT_MANA).is_err());assert_eq!(a,before);
-        for _ in 0..120 {a.regenerate_mana();}
-        assert_eq!(a.mana,MANA_REGEN_CAP);
-        a.spend_mana(RULE_MANA).unwrap();a.spend_mana(INSTANT_MANA).unwrap();
-        assert_eq!(a.mana,75);assert_eq!(a.resources,before.resources);assert_eq!(a.gear,before.gear);
-        a.mana=200;assert!(!a.regenerate_mana());assert_eq!(a.mana,200);
+        let mut a = Account::default();
+        let before = a.clone();
+        assert!(a.spend_mana(INSTANT_MANA).is_err());
+        assert_eq!(a, before);
+        for _ in 0..120 {
+            a.regenerate_mana();
+        }
+        assert_eq!(a.mana, MANA_REGEN_CAP);
+        a.spend_mana(RULE_MANA).unwrap();
+        a.spend_mana(INSTANT_MANA).unwrap();
+        assert_eq!(a.mana, 75);
+        assert_eq!(a.resources, before.resources);
+        assert_eq!(a.gear, before.gear);
+        a.mana = 200;
+        assert!(!a.regenerate_mana());
+        assert_eq!(a.mana, 200);
     }
     #[test]
     fn network_requests_cannot_choose_balances_and_replays_cannot_purchase_twice() {
@@ -1228,17 +1472,22 @@ mod resource_balance_tests {
                 .unwrap();
         assert_eq!(previous.resources[71], 72);
         assert!(previous.resources[72..].iter().all(|n| *n == 0));
-        let before_crystals: Account = serde_json::from_value(
-            serde_json::json!({"resources":(1..=82).collect::<Vec<u32>>()}),
-        ).unwrap();
-        assert_eq!(before_crystals.resources[..82], (1..=82).collect::<Vec<u32>>());
+        let before_crystals: Account =
+            serde_json::from_value(serde_json::json!({"resources":(1..=82).collect::<Vec<u32>>()}))
+                .unwrap();
+        assert_eq!(
+            before_crystals.resources[..82],
+            (1..=82).collect::<Vec<u32>>()
+        );
         assert_eq!(COLLECTIBLE_BLOCKS[82], BlockType::Crystal);
         assert_eq!(before_crystals.resources[82], 0);
         assert_eq!(BlockType::Fern as u8, 76);
-        let before_snow: Account=serde_json::from_value(serde_json::json!({"resources":(1..=83).collect::<Vec<u32>>()})).unwrap();
-        assert_eq!(before_snow.resources[..83],(1..=83).collect::<Vec<u32>>());
-        assert_eq!(COLLECTIBLE_BLOCKS[83],BlockType::Snow);
-        assert_eq!(before_snow.resources[83],0);
+        let before_snow: Account =
+            serde_json::from_value(serde_json::json!({"resources":(1..=83).collect::<Vec<u32>>()}))
+                .unwrap();
+        assert_eq!(before_snow.resources[..83], (1..=83).collect::<Vec<u32>>());
+        assert_eq!(COLLECTIBLE_BLOCKS[83], BlockType::Snow);
+        assert_eq!(before_snow.resources[83], 0);
         let mut expanded = account;
         expanded.resources[COLLECTIBLE_BLOCKS.len() - 1] = 55;
         let bytes = bincode::serialize(&expanded).unwrap();

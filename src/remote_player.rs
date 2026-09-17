@@ -21,7 +21,9 @@ impl ChatBubble {
 }
 
 /// Host-selected combination. Model/hat indices are zero-based; None is bareheaded.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct Appearance {
     pub model: u8,
     pub hat: Option<u8>,
@@ -30,10 +32,13 @@ pub struct Appearance {
 impl Appearance {
     pub fn choose(seed: u32, used: impl IntoIterator<Item = Self>) -> Self {
         let used: Vec<_> = used.into_iter().collect();
-        let available: Vec<_> = (0..20).map(|i| Self {
-            model: i / 5,
-            hat: if i % 5 == 0 { None } else { Some(i % 5 - 1) },
-        }).filter(|a| !used.contains(a)).collect();
+        let available: Vec<_> = (0..20)
+            .map(|i| Self {
+                model: i / 5,
+                hat: if i % 5 == 0 { None } else { Some(i % 5 - 1) },
+            })
+            .filter(|a| !used.contains(a))
+            .collect();
         assert!(!available.is_empty(), "all player appearances occupied");
         available[seed as usize % available.len()]
     }
@@ -78,7 +83,9 @@ pub struct RemotePlayer {
 
 impl RemotePlayer {
     pub fn receive_animation(&mut self, animation: crate::player_animation::Animation) {
-        if self.animation.accept(animation) { self.animation_received = Instant::now(); }
+        if self.animation.accept(animation) {
+            self.animation_received = Instant::now();
+        }
     }
     /// Constructs a fresh entry with the same defaults `Player::new` uses --
     /// full health, unpoisoned, 1.0 multipliers, full oxygen -- so a newly
@@ -89,13 +96,14 @@ impl RemotePlayer {
             appearance: Appearance::default(),
             animation: Default::default(),
             animation_received: Instant::now(),
-            held:None, torch_lit:false,
+            held: None,
+            torch_lit: false,
             pos,
             yaw,
             carrying_crystal,
             last_seen: Instant::now(),
             velocity: Vec3::ZERO,
-            display_name:nickname.clone(),
+            display_name: nickname.clone(),
             nickname,
             health: crate::player::MAX_HEALTH,
             poisoned: false,
@@ -109,10 +117,19 @@ impl RemotePlayer {
 /// Builds a mesh for every tracked remote player except `exclude` (the
 /// local player, if it appears in the same map).
 #[cfg(feature = "dev-playtest")]
-pub fn build_mesh(players: &HashMap<PlayerId, RemotePlayer>, exclude: PlayerId, models: &crate::model::Models) -> MeshData {
-    build_mesh_wet(players,exclude,models,|_,_|0.)
+pub fn build_mesh(
+    players: &HashMap<PlayerId, RemotePlayer>,
+    exclude: PlayerId,
+    models: &crate::model::Models,
+) -> MeshData {
+    build_mesh_wet(players, exclude, models, |_, _| 0.)
 }
-pub fn build_mesh_wet(players: &HashMap<PlayerId, RemotePlayer>, exclude: PlayerId, models: &crate::model::Models,mut wet:impl FnMut(PlayerId,Vec3)->f32) -> MeshData {
+pub fn build_mesh_wet(
+    players: &HashMap<PlayerId, RemotePlayer>,
+    exclude: PlayerId,
+    models: &crate::model::Models,
+    mut wet: impl FnMut(PlayerId, Vec3) -> f32,
+) -> MeshData {
     let mut vertices: Vec<Vertex> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
 
@@ -122,15 +139,31 @@ pub fn build_mesh_wet(players: &HashMap<PlayerId, RemotePlayer>, exclude: Player
             continue;
         }
         let feet = rp.pos;
-        let first=vertices.len();
-        models.push_player_animated(&mut vertices, &mut indices, rp.appearance, feet, rp.yaw,
-            rp.animation.clip, rp.animation.time + rp.animation_received.elapsed().as_secs_f32().min(0.25), rp.held);
+        let first = vertices.len();
+        models.push_player_animated(
+            &mut vertices,
+            &mut indices,
+            rp.appearance,
+            feet,
+            rp.yaw,
+            rp.animation.clip,
+            rp.animation.time + rp.animation_received.elapsed().as_secs_f32().min(0.25),
+            rp.held,
+        );
         if rp.torch_lit {
-            let forward=Vec3::new(rp.yaw.cos(),0.,rp.yaw.sin());let right=forward.cross(Vec3::Y);
-            let torch=crate::torch::mesh(feet+Vec3::Y*0.9-right*0.4+forward*0.25,glam::Mat3::IDENTITY,0.7,rp.animation.time+rp.animation_received.elapsed().as_secs_f32());
-            let base=vertices.len() as u32;vertices.extend(torch.vertices);indices.extend(torch.indices.into_iter().map(|i|i+base));
+            let forward = Vec3::new(rp.yaw.cos(), 0., rp.yaw.sin());
+            let right = forward.cross(Vec3::Y);
+            let torch = crate::torch::mesh(
+                feet + Vec3::Y * 0.9 - right * 0.4 + forward * 0.25,
+                glam::Mat3::IDENTITY,
+                0.7,
+                rp.animation.time + rp.animation_received.elapsed().as_secs_f32(),
+            );
+            let base = vertices.len() as u32;
+            vertices.extend(torch.vertices);
+            indices.extend(torch.indices.into_iter().map(|i| i + base));
         }
-        crate::wetness::apply(&mut vertices[first..],wet(id,feet));
+        crate::wetness::apply(&mut vertices[first..], wet(id, feet));
         // Small floating marker above crystal carriers, so "sheep hunt
         // players carrying a crystal" is something you can actually see
         // happening, not just trust the log for.
@@ -157,13 +190,19 @@ mod tests {
     #[test]
     fn chat_bubble_fades_expires_and_new_messages_restart_the_timer() {
         let now = Instant::now();
-        let mut bubble = ChatBubble { text:"hello".into(), started:now };
-        assert_eq!(bubble.opacity(now+std::time::Duration::from_secs(3)),1.0);
-        let fading = now+std::time::Duration::from_millis(3625);
-        assert!((bubble.opacity(fading)-0.5).abs()<0.001);
-        assert_eq!(bubble.opacity(now+std::time::Duration::from_secs(4)),0.0);
-        bubble = ChatBubble { text:"another message".into(), started:fading };
-        assert_eq!(bubble.opacity(fading),1.0);
+        let mut bubble = ChatBubble {
+            text: "hello".into(),
+            started: now,
+        };
+        assert_eq!(bubble.opacity(now + std::time::Duration::from_secs(3)), 1.0);
+        let fading = now + std::time::Duration::from_millis(3625);
+        assert!((bubble.opacity(fading) - 0.5).abs() < 0.001);
+        assert_eq!(bubble.opacity(now + std::time::Duration::from_secs(4)), 0.0);
+        bubble = ChatBubble {
+            text: "another message".into(),
+            started: fading,
+        };
+        assert_eq!(bubble.opacity(fading), 1.0);
     }
 
     #[test]

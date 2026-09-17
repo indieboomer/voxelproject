@@ -69,10 +69,15 @@ fn trace(from: Vec3, to: Vec3, blocked: impl Fn(glam::IVec3) -> bool) -> bool {
 // freshly mined opening. Test inset face centres only when the central ray fails.
 // Never light a solid cell: this also avoids tracing thousands of rays into rock.
 fn visible_cell(from: Vec3, center: Vec3, blocked: impl Fn(glam::IVec3) -> bool) -> bool {
-    if blocked(center.floor().as_ivec3()) { return false; }
-    if trace(from, center, &blocked) { return true; }
+    if blocked(center.floor().as_ivec3()) {
+        return false;
+    }
+    if trace(from, center, &blocked) {
+        return true;
+    }
     [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z]
-        .into_iter().any(|axis| trace(from, center + axis * 0.45, &blocked))
+        .into_iter()
+        .any(|axis| trace(from, center + axis * 0.45, &blocked))
 }
 fn cache_key(world: &World, pos: Vec3, radius: f32) -> ([i32; 3], u32, u64) {
     let quantized = (pos * 4.).floor().as_ivec3().to_array();
@@ -82,7 +87,11 @@ fn cache_key(world: &World, pos: Vec3, radius: f32) -> ([i32; 3], u32, u64) {
     (cx, cz).hash(&mut hash);
     for z in cz - 1..=cz + 1 {
         for x in cx - 1..=cx + 1 {
-            world.chunks.get(&(x, z)).map(|c| c.revision).hash(&mut hash);
+            world
+                .chunks
+                .get(&(x, z))
+                .map(|c| c.revision)
+                .hash(&mut hash);
         }
     }
     for d in world.automation.devices.values() {
@@ -279,11 +288,23 @@ mod tests {
         w.set_block(16, 2, 3, BlockType::Air);
         assert_ne!(cache_key(&w, light, -106.), key);
         let blocked = |p: glam::IVec3| w.get_block(p.x, p.y, p.z).is_opaque();
-        assert!(!trace(light, target, blocked), "centre is hidden by the opening's edge");
-        assert!(visible_cell(light, target, blocked), "exposed recess must light without movement");
-        for y in 0..6 { for z in 0..6 { w.set_block(15, y, z, BlockType::Stone); } }
-        assert!(!visible_cell(light, target, |p| w.get_block(p.x, p.y, p.z).is_opaque()),
-            "a complete wall must still block the torch");
+        assert!(
+            !trace(light, target, blocked),
+            "centre is hidden by the opening's edge"
+        );
+        assert!(
+            visible_cell(light, target, blocked),
+            "exposed recess must light without movement"
+        );
+        for y in 0..6 {
+            for z in 0..6 {
+                w.set_block(15, y, z, BlockType::Stone);
+            }
+        }
+        assert!(
+            !visible_cell(light, target, |p| w.get_block(p.x, p.y, p.z).is_opaque()),
+            "a complete wall must still block the torch"
+        );
     }
     #[test]
     fn light_rays_stop_at_walls_and_follow_open_doorways() {

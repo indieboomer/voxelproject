@@ -55,3 +55,24 @@ decoding. To render a generated waterfall without launching a window, set
 The preview writes `target/render-*.png`. Seed 42 has an example near x=-1006,
 z=215. GPU timings in this fixture include the waterfall particles but exclude
 audio, simulation, and readback.
+
+## Water reflections
+
+Upward water faces use animated world-space normals, a darker blue-green body,
+and Schlick Fresnel (2% normal-incidence reflectance). A screen-space resolve
+reflects visible banks, trees, structures, and creatures using the current frame's
+color and depth. It adds one color target (about 8 MiB at 1080p) and one fullscreen
+pass, with no second terrain render, history buffer, or ray-tracing requirement.
+Only marked water pixels trace: up to 40 steps over 96 blocks, with five-step
+intersection refinement. Edge and distance fades fall back to the sky reflection.
+Low-contrast world-space variation prevents the Fresnel response from forming
+large repeating patches across broad lakes.
+Underwater views skip tracing; targets are rebuilt when the window resizes.
+
+This technique cannot reflect offscreen or hidden objects. Water remains opaque;
+refraction and underwater transmission are not implemented. River foam still
+moves downstream while reflection normals use continuous waves across all water.
+The GPU preview timings include the reflection resolve.
+For a low-angle pool with two reflected pillars, set `VOXEL_REFLECTION_PREVIEW=1`
+and run the same GPU preview test (leave `VOXEL_WATER_PREVIEW` unset).
+Set `VOXEL_PREVIEW_1080=1` to exercise the resolve at 1920x1080.

@@ -47,7 +47,7 @@ use crate::voxel::mesher::Vertex;
 struct Primitive {
     absorption: f32,
     emission: f32,
-    colors: Vec<[f32;3]>,
+    colors: Vec<[f32; 3]>,
     uvs: Vec<[f32; 2]>,
     positions: Vec<Vec3>,
     normals: Vec<Vec3>,
@@ -157,21 +157,38 @@ pub struct Models {
 }
 
 impl Models {
-    pub fn push_npc(&self,vertices:&mut Vec<Vertex>,indices:&mut Vec<u32>,npc:&crate::npc::Npc) {
-        if let Some(model)=self.npcs.get(npc.kind as usize) {
-            push_model(vertices,indices,model,CreatureKind::Sheep,if npc.walking {"walk"} else {"idle"},npc.phase,Vec3::from_array(npc.position),npc.facing);
+    pub fn push_npc(
+        &self,
+        vertices: &mut Vec<Vertex>,
+        indices: &mut Vec<u32>,
+        npc: &crate::npc::Npc,
+    ) {
+        if let Some(model) = self.npcs.get(npc.kind as usize) {
+            push_model(
+                vertices,
+                indices,
+                model,
+                CreatureKind::Sheep,
+                if npc.walking { "walk" } else { "idle" },
+                npc.phase,
+                Vec3::from_array(npc.position),
+                npc.facing,
+            );
         }
     }
     pub fn load() -> Self {
         Self {
-            npcs: load_variants([
-                include_bytes!("../models/npc/sage/sage.glb"),
-                include_bytes!("../models/npc/elf_ranger/elf_ranger.glb"),
-                include_bytes!("../models/npc/warrior/warrior.glb"),
-                include_bytes!("../models/npc/merchant/merchant.glb"),
-                include_bytes!("../models/npc/fire_sorceress/fire_sorceress.glb"),
-                include_bytes!("../models/npc/necromancer/necromancer.glb"),
-            ],29),
+            npcs: load_variants(
+                [
+                    include_bytes!("../models/npc/sage/sage.glb"),
+                    include_bytes!("../models/npc/elf_ranger/elf_ranger.glb"),
+                    include_bytes!("../models/npc/warrior/warrior.glb"),
+                    include_bytes!("../models/npc/merchant/merchant.glb"),
+                    include_bytes!("../models/npc/fire_sorceress/fire_sorceress.glb"),
+                    include_bytes!("../models/npc/necromancer/necromancer.glb"),
+                ],
+                29,
+            ),
             players: [
                 load_glb(include_bytes!("../models/player/player1.glb")),
                 load_glb(include_bytes!("../models/player/player2.glb")),
@@ -192,23 +209,35 @@ impl Models {
             cow: load_glb(include_bytes!("../models/cow.glb")),
             goblin: load_glb(include_bytes!("../models/goblin.glb")),
             sunscorch: load_glb(include_bytes!("../models/sunscorch.glb")),
-            zombies: load_variants([
-                include_bytes!("../models/zombie_01.glb"),
-                include_bytes!("../models/zombie_02.glb"),
-                include_bytes!("../models/zombie_03.glb"),
-                include_bytes!("../models/zombie_04.glb"),
-            ], 17),
-            skeletons: load_variants([
-                include_bytes!("../models/skeleton_01.glb"),
-                include_bytes!("../models/skeleton_02.glb"),
-                include_bytes!("../models/skeleton_03.glb"),
-                include_bytes!("../models/skeleton_04.glb"),
-            ], 21),
-            dragons: load_variants([
-                include_bytes!("../models/dragon_green.glb"),
-                include_bytes!("../models/dragon_red.glb"),
-            ], 25),
-            skeleton_sorcerer: load_variants([include_bytes!("../models/skeleton_sorcerer.glb")], 37),
+            zombies: load_variants(
+                [
+                    include_bytes!("../models/zombie_01.glb"),
+                    include_bytes!("../models/zombie_02.glb"),
+                    include_bytes!("../models/zombie_03.glb"),
+                    include_bytes!("../models/zombie_04.glb"),
+                ],
+                17,
+            ),
+            skeletons: load_variants(
+                [
+                    include_bytes!("../models/skeleton_01.glb"),
+                    include_bytes!("../models/skeleton_02.glb"),
+                    include_bytes!("../models/skeleton_03.glb"),
+                    include_bytes!("../models/skeleton_04.glb"),
+                ],
+                21,
+            ),
+            dragons: load_variants(
+                [
+                    include_bytes!("../models/dragon_green.glb"),
+                    include_bytes!("../models/dragon_red.glb"),
+                ],
+                25,
+            ),
+            skeleton_sorcerer: load_variants(
+                [include_bytes!("../models/skeleton_sorcerer.glb")],
+                37,
+            ),
             fish: load_variants([include_bytes!("../models/fish.glb")], 27),
         }
     }
@@ -267,9 +296,12 @@ impl Models {
             self.dragons[1].texture.as_ref(),
             self.fish[0].texture.as_ref(),
             chest_model().texture.as_ref(),
-            self.npcs[0].texture.as_ref(),self.npcs[1].texture.as_ref(),
-            self.npcs[2].texture.as_ref(),self.npcs[3].texture.as_ref(),
-            self.npcs[4].texture.as_ref(),self.npcs[5].texture.as_ref(),
+            self.npcs[0].texture.as_ref(),
+            self.npcs[1].texture.as_ref(),
+            self.npcs[2].texture.as_ref(),
+            self.npcs[3].texture.as_ref(),
+            self.npcs[4].texture.as_ref(),
+            self.npcs[5].texture.as_ref(),
             lore_book_model().texture.as_ref(),
             torch_model().texture.as_ref(),
             self.skeleton_sorcerer[0].texture.as_ref(),
@@ -446,13 +478,17 @@ fn read_quat(v: Option<&Value>) -> Quat {
     }
 }
 
-fn material_absorption(json:&Value,idx:Option<usize>)->f32 {
-    let Some(mat)=idx.and_then(|i|json["materials"].get(i)) else {return 0.65;};
-    if let Some(value)=mat["extras"]["wetAbsorption"].as_f64() {return (value as f32).clamp(0.,1.);}
-    let pbr=&mat["pbrMetallicRoughness"];
-    let metal=pbr["metallicFactor"].as_f64().unwrap_or(0.) as f32;
-    let rough=pbr["roughnessFactor"].as_f64().unwrap_or(0.8) as f32;
-    (0.15+rough.clamp(0.,1.)*0.65)*(1.-metal.clamp(0.,1.)*0.9)
+fn material_absorption(json: &Value, idx: Option<usize>) -> f32 {
+    let Some(mat) = idx.and_then(|i| json["materials"].get(i)) else {
+        return 0.65;
+    };
+    if let Some(value) = mat["extras"]["wetAbsorption"].as_f64() {
+        return (value as f32).clamp(0., 1.);
+    }
+    let pbr = &mat["pbrMetallicRoughness"];
+    let metal = pbr["metallicFactor"].as_f64().unwrap_or(0.) as f32;
+    let rough = pbr["roughnessFactor"].as_f64().unwrap_or(0.8) as f32;
+    (0.15 + rough.clamp(0., 1.) * 0.65) * (1. - metal.clamp(0., 1.) * 0.9)
 }
 
 fn material_color(json: &Value, idx: Option<usize>) -> [f32; 3] {
@@ -476,7 +512,11 @@ fn material_color(json: &Value, idx: Option<usize>) -> [f32; 3] {
 /// Decodes a material's `baseColorTexture`, if it has one -- every bundled
 /// skinned model's image is embedded directly in the GLB's binary chunk via
 /// a `bufferView` (no external URIs), so this never touches the filesystem.
-fn material_base_color_image(json: &Value, bin: &[u8], material_idx: Option<usize>) -> Option<image::RgbaImage> {
+fn material_base_color_image(
+    json: &Value,
+    bin: &[u8],
+    material_idx: Option<usize>,
+) -> Option<image::RgbaImage> {
     let mat = material_idx.and_then(|i| json["materials"].get(i))?;
     let tex_idx = mat
         .get("pbrMetallicRoughness")?
@@ -510,7 +550,12 @@ fn load_glb(bytes: &[u8]) -> AnimatedModel {
         let children: Vec<usize> = n
             .get("children")
             .and_then(Value::as_array)
-            .map(|arr| arr.iter().filter_map(|v| v.as_u64()).map(|v| v as usize).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_u64())
+                    .map(|v| v as usize)
+                    .collect()
+            })
             .unwrap_or_default();
 
         // A node with a "skin" is a skinned model's one mesh-holding node --
@@ -552,18 +597,43 @@ fn load_glb(bytes: &[u8]) -> AnimatedModel {
                     for tri in indices.chunks_exact_mut(3) {
                         tri.swap(1, 2);
                     }
-                    let material_idx = prim.get("material").and_then(Value::as_u64).map(|v| v as usize);
+                    let material_idx = prim
+                        .get("material")
+                        .and_then(Value::as_u64)
+                        .map(|v| v as usize);
                     mesh.push(Primitive {
-                        absorption: material_absorption(&json,material_idx),
-                        emission: json["materials"][material_idx.unwrap_or(usize::MAX)]["emissiveFactor"].as_array().map_or(0.,|v|v.iter().filter_map(Value::as_f64).fold(0f64,f64::max) as f32),
-                        colors: attrs.get("COLOR_0").and_then(Value::as_u64).map(|idx| {
-                            let components=if json["accessors"][idx as usize]["type"]=="VEC4" {4} else {3};
-                            accessor_floats(&json,bin,idx as usize,components).chunks_exact(components)
-                                .map(|c|[c[0],c[1],c[2]]).collect()
-                        }).unwrap_or_default(),
-                        uvs: attrs.get("TEXCOORD_0").and_then(Value::as_u64)
-                            .map(|idx| accessor_floats(&json, bin, idx as usize, 2)
-                                .chunks_exact(2).map(|uv| [uv[0], uv[1]]).collect())
+                        absorption: material_absorption(&json, material_idx),
+                        emission: json["materials"][material_idx.unwrap_or(usize::MAX)]
+                            ["emissiveFactor"]
+                            .as_array()
+                            .map_or(0., |v| {
+                                v.iter().filter_map(Value::as_f64).fold(0f64, f64::max) as f32
+                            }),
+                        colors: attrs
+                            .get("COLOR_0")
+                            .and_then(Value::as_u64)
+                            .map(|idx| {
+                                let components =
+                                    if json["accessors"][idx as usize]["type"] == "VEC4" {
+                                        4
+                                    } else {
+                                        3
+                                    };
+                                accessor_floats(&json, bin, idx as usize, components)
+                                    .chunks_exact(components)
+                                    .map(|c| [c[0], c[1], c[2]])
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                        uvs: attrs
+                            .get("TEXCOORD_0")
+                            .and_then(Value::as_u64)
+                            .map(|idx| {
+                                accessor_floats(&json, bin, idx as usize, 2)
+                                    .chunks_exact(2)
+                                    .map(|uv| [uv[0], uv[1]])
+                                    .collect()
+                            })
                             .unwrap_or_default(),
                         positions,
                         normals,
@@ -644,72 +714,98 @@ fn load_glb(bytes: &[u8]) -> AnimatedModel {
                     _ => {}
                 }
             }
-            animations.insert(name, AnimationClip { duration, nodes: per_node });
+            animations.insert(
+                name,
+                AnimationClip {
+                    duration,
+                    nodes: per_node,
+                },
+            );
         }
     }
 
     // A skinned model has exactly one skin, referenced by exactly one node
     // (its mesh-holding node) -- see this module's doc comment.
-    let skin_and_texture = json["skins"].as_array().and_then(|skins| skins.first()).map(|skin_json| {
-        let joints: Vec<usize> = skin_json["joints"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_u64().unwrap() as usize)
-            .collect();
-        let inverse_bind = accessor_mat4s(&json, bin, skin_json["inverseBindMatrices"].as_u64().unwrap() as usize);
+    let skin_and_texture = json["skins"]
+        .as_array()
+        .and_then(|skins| skins.first())
+        .map(|skin_json| {
+            let joints: Vec<usize> = skin_json["joints"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_u64().unwrap() as usize)
+                .collect();
+            let inverse_bind = accessor_mat4s(
+                &json,
+                bin,
+                skin_json["inverseBindMatrices"].as_u64().unwrap() as usize,
+            );
 
-        let mesh_node = nodes_json
-            .iter()
-            .find(|n| n.get("skin").and_then(Value::as_u64) == Some(0))
-            .expect("a model with a skin should have exactly one node referencing it");
-        let mesh_idx = mesh_node["mesh"].as_u64().unwrap() as usize;
-        let prim = &meshes_json[mesh_idx]["primitives"][0];
-        let attrs = &prim["attributes"];
+            let mesh_node = nodes_json
+                .iter()
+                .find(|n| n.get("skin").and_then(Value::as_u64) == Some(0))
+                .expect("a model with a skin should have exactly one node referencing it");
+            let mesh_idx = mesh_node["mesh"].as_u64().unwrap() as usize;
+            let prim = &meshes_json[mesh_idx]["primitives"][0];
+            let attrs = &prim["attributes"];
 
-        let positions: Vec<Vec3> = accessor_floats(&json, bin, attrs["POSITION"].as_u64().unwrap() as usize, 3)
-            .chunks_exact(3)
-            .map(|c| Vec3::new(c[0], c[1], c[2]))
-            .collect();
-        let normals: Vec<Vec3> = accessor_floats(&json, bin, attrs["NORMAL"].as_u64().unwrap() as usize, 3)
-            .chunks_exact(3)
-            .map(|c| Vec3::new(c[0], c[1], c[2]))
-            .collect();
-        let uvs: Vec<[f32; 2]> = accessor_floats(&json, bin, attrs["TEXCOORD_0"].as_u64().unwrap() as usize, 2)
+            let positions: Vec<Vec3> =
+                accessor_floats(&json, bin, attrs["POSITION"].as_u64().unwrap() as usize, 3)
+                    .chunks_exact(3)
+                    .map(|c| Vec3::new(c[0], c[1], c[2]))
+                    .collect();
+            let normals: Vec<Vec3> =
+                accessor_floats(&json, bin, attrs["NORMAL"].as_u64().unwrap() as usize, 3)
+                    .chunks_exact(3)
+                    .map(|c| Vec3::new(c[0], c[1], c[2]))
+                    .collect();
+            let uvs: Vec<[f32; 2]> = accessor_floats(
+                &json,
+                bin,
+                attrs["TEXCOORD_0"].as_u64().unwrap() as usize,
+                2,
+            )
             .chunks_exact(2)
             .map(|c| [c[0], c[1]])
             .collect();
-        let joint_indices = accessor_u16_vec4(&json, bin, attrs["JOINTS_0"].as_u64().unwrap() as usize);
-        let joint_weights: Vec<[f32; 4]> = accessor_floats(&json, bin, attrs["WEIGHTS_0"].as_u64().unwrap() as usize, 4)
-            .chunks_exact(4)
-            .map(|c| [c[0], c[1], c[2], c[3]])
-            .collect();
+            let joint_indices =
+                accessor_u16_vec4(&json, bin, attrs["JOINTS_0"].as_u64().unwrap() as usize);
+            let joint_weights: Vec<[f32; 4]> =
+                accessor_floats(&json, bin, attrs["WEIGHTS_0"].as_u64().unwrap() as usize, 4)
+                    .chunks_exact(4)
+                    .map(|c| [c[0], c[1], c[2], c[3]])
+                    .collect();
 
-        let mut mesh_indices = accessor_indices(&json, bin, prim["indices"].as_u64().unwrap() as usize);
-        // Same CCW (glTF-standard) -> CW (this engine) winding flip as the
-        // rigid path above.
-        for tri in mesh_indices.chunks_exact_mut(3) {
-            tri.swap(1, 2);
-        }
+            let mut mesh_indices =
+                accessor_indices(&json, bin, prim["indices"].as_u64().unwrap() as usize);
+            // Same CCW (glTF-standard) -> CW (this engine) winding flip as the
+            // rigid path above.
+            for tri in mesh_indices.chunks_exact_mut(3) {
+                tri.swap(1, 2);
+            }
 
-        let material_idx = prim.get("material").and_then(Value::as_u64).map(|v| v as usize);
-        let texture = material_base_color_image(&json, bin, material_idx);
+            let material_idx = prim
+                .get("material")
+                .and_then(Value::as_u64)
+                .map(|v| v as usize);
+            let texture = material_base_color_image(&json, bin, material_idx);
 
-        let skin = Skin {
-            joints,
-            inverse_bind,
-            mesh: SkinnedMesh {
-                absorption: material_absorption(&json,material_idx),
-                positions,
-                normals,
-                joint_indices,
-                joint_weights,
-                uvs,
-                indices: mesh_indices,
-            },
-        };
-        (skin, texture)
-    });
+            let skin = Skin {
+                joints,
+                inverse_bind,
+                mesh: SkinnedMesh {
+                    absorption: material_absorption(&json, material_idx),
+                    positions,
+                    normals,
+                    joint_indices,
+                    joint_weights,
+                    uvs,
+                    indices: mesh_indices,
+                },
+            };
+            (skin, texture)
+        });
     let (skin, texture) = match skin_and_texture {
         Some((skin, texture)) => (Some(skin), texture),
         None => (None, None),
@@ -717,58 +813,129 @@ fn load_glb(bytes: &[u8]) -> AnimatedModel {
 
     let texture = texture.or_else(|| material_base_color_image(&json, bin, Some(0)));
     let hat_socket = nodes_json.iter().position(|n| n["name"] == "hat_socket");
-    let right_grip = nodes_json.iter().position(|n| n["name"] == "grip_R")
+    let right_grip = nodes_json
+        .iter()
+        .position(|n| n["name"] == "grip_R")
         .or_else(|| nodes_json.iter().position(|n| n["name"] == "hand_R"));
-    AnimatedModel { nodes, roots, animations, skin, texture, hat_socket, right_grip, texture_layer: None }
+    AnimatedModel {
+        nodes,
+        roots,
+        animations,
+        skin,
+        texture,
+        hat_socket,
+        right_grip,
+        texture_layer: None,
+    }
 }
 
 impl Models {
     /// Player assets are authored in meters, facing +Z, with a named hat socket.
     #[cfg(test)]
-    pub fn push_player(&self, vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>,
-        appearance: crate::remote_player::Appearance, origin: Vec3, yaw: f32,
-        speed: f32, time: f32) {
+    pub fn push_player(
+        &self,
+        vertices: &mut Vec<Vertex>,
+        indices: &mut Vec<u32>,
+        appearance: crate::remote_player::Appearance,
+        origin: Vec3,
+        yaw: f32,
+        speed: f32,
+        time: f32,
+    ) {
         use crate::player_animation::Clip;
-        self.push_player_animated(vertices,indices,appearance,origin,yaw,
-            if speed > 5.0 { Clip::Run } else if speed > 0.2 { Clip::Walk } else { Clip::Idle }, time,None);
+        self.push_player_animated(
+            vertices,
+            indices,
+            appearance,
+            origin,
+            yaw,
+            if speed > 5.0 {
+                Clip::Run
+            } else if speed > 0.2 {
+                Clip::Walk
+            } else {
+                Clip::Idle
+            },
+            time,
+            None,
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn push_player_animated(&self, vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>,
-        appearance: crate::remote_player::Appearance, origin: Vec3, yaw: f32,
-        animation: crate::player_animation::Clip, time: f32, held: Option<crate::equipment::Entry>) {
+    pub fn push_player_animated(
+        &self,
+        vertices: &mut Vec<Vertex>,
+        indices: &mut Vec<u32>,
+        appearance: crate::remote_player::Appearance,
+        origin: Vec3,
+        yaw: f32,
+        animation: crate::player_animation::Clip,
+        time: f32,
+        held: Option<crate::equipment::Entry>,
+    ) {
         let model_index = usize::from(appearance.model).min(3);
         let model = &self.players[model_index];
         let clip = model.animations.get(animation.name());
-        let t = clip.filter(|c| c.duration > 0.0).map_or(0.0, |c|
-            if animation.duration().is_some() { time.clamp(0.0,c.duration) }
-            else { time.rem_euclid(c.duration) });
+        let t = clip.filter(|c| c.duration > 0.0).map_or(0.0, |c| {
+            if animation.duration().is_some() {
+                time.clamp(0.0, c.duration)
+            } else {
+                time.rem_euclid(c.duration)
+            }
+        });
         let matrices = compute_world_matrices(model, clip, t);
         let (s, c) = yaw.sin_cos();
         let rotate = |x: f32, z: f32| (x * s + z * c, -x * c + z * s);
         if let Some((entry, grip)) = held.zip(model.right_grip) {
             // Use the exact same animated pose and yaw as the skinned hand.
-            let rotation = Mat3::from_rotation_y(std::f32::consts::FRAC_PI_2-yaw);
+            let rotation = Mat3::from_rotation_y(std::f32::consts::FRAC_PI_2 - yaw);
             let socket = matrices[grip];
             let basis = rotation * Mat3::from_mat4(socket);
             let grip_pos = origin + rotation * socket.transform_point3(Vec3::ZERO);
             let scale = 0.55;
             // Mesh handles are authored along +Y with their grip above the origin.
-            let grip_height = if matches!(entry,crate::equipment::Entry::Resource(_)) { 0.48 } else { 0.22 };
-            let item = crate::held_item::mesh(Some(entry),grip_pos-basis*Vec3::Y*grip_height*scale,basis,scale);
+            let grip_height = if matches!(entry, crate::equipment::Entry::Resource(_)) {
+                0.48
+            } else {
+                0.22
+            };
+            let item = crate::held_item::mesh(
+                Some(entry),
+                grip_pos - basis * Vec3::Y * grip_height * scale,
+                basis,
+                scale,
+            );
             let base = vertices.len() as u32;
             vertices.extend(item.vertices);
-            indices.extend(item.indices.into_iter().map(|i|i+base));
+            indices.extend(item.indices.into_iter().map(|i| i + base));
         }
         if let Some(skin) = &model.skin {
-            emit_skinned_mesh(skin, &matrices, vertices, indices, origin, &rotate, 9.0 + model_index as f32);
+            emit_skinned_mesh(
+                skin,
+                &matrices,
+                vertices,
+                indices,
+                origin,
+                &rotate,
+                9.0 + model_index as f32,
+            );
         }
         if let Some((hat_index, socket)) = appearance.hat.filter(|&h| h < 4).zip(model.hat_socket) {
             let hat = &self.hats[hat_index as usize];
-            let hat_matrices: Vec<_> = compute_world_matrices(hat, None, 0.0).into_iter()
-                .map(|m| matrices[socket] * m).collect();
+            let hat_matrices: Vec<_> = compute_world_matrices(hat, None, 0.0)
+                .into_iter()
+                .map(|m| matrices[socket] * m)
+                .collect();
             let start = vertices.len();
-            emit_rigid_parts(hat, &hat_matrices, vertices, indices, origin, &rotate, white_uv());
+            emit_rigid_parts(
+                hat,
+                &hat_matrices,
+                vertices,
+                indices,
+                origin,
+                &rotate,
+                white_uv(),
+            );
             let uvs = hat.nodes.iter().flat_map(|n| &n.mesh).flat_map(|p| &p.uvs);
             for (vertex, uv) in vertices[start..].iter_mut().zip(uvs) {
                 vertex.uv = *uv;
@@ -802,7 +969,12 @@ fn sample<T: Copy>(times: &[f32], values: &[T], t: f32, lerp: impl Fn(T, T, f32)
     lerp(values[i], values[i + 1], alpha)
 }
 
-fn local_trs(node: &ModelNode, clip: Option<&AnimationClip>, node_idx: usize, t: f32) -> (Vec3, Quat, Vec3) {
+fn local_trs(
+    node: &ModelNode,
+    clip: Option<&AnimationClip>,
+    node_idx: usize,
+    t: f32,
+) -> (Vec3, Quat, Vec3) {
     let Some(anim) = clip.and_then(|c| c.nodes.get(&node_idx)) else {
         return (node.translation, node.rotation, node.scale);
     };
@@ -865,11 +1037,23 @@ fn anti_zfight_nudge_amount(node_idx: usize) -> f32 {
 /// and skinned-mesh emission (a joint's world matrix is exactly the same
 /// kind of node world matrix -- a skin's joints are just nodes in this same
 /// hierarchy).
-fn compute_world_matrices(model: &AnimatedModel, clip: Option<&AnimationClip>, t: f32) -> Vec<Mat4> {
-    fn visit(model: &AnimatedModel, clip: Option<&AnimationClip>, t: f32, node_idx: usize, parent_world: Mat4, out: &mut [Mat4]) {
+fn compute_world_matrices(
+    model: &AnimatedModel,
+    clip: Option<&AnimationClip>,
+    t: f32,
+) -> Vec<Mat4> {
+    fn visit(
+        model: &AnimatedModel,
+        clip: Option<&AnimationClip>,
+        t: f32,
+        node_idx: usize,
+        parent_world: Mat4,
+        out: &mut [Mat4],
+    ) {
         let node = &model.nodes[node_idx];
         let (translation, rotation, scale) = local_trs(node, clip, node_idx, t);
-        let world = parent_world * Mat4::from_scale_rotation_translation(scale, rotation, translation);
+        let world =
+            parent_world * Mat4::from_scale_rotation_translation(scale, rotation, translation);
         out[node_idx] = world;
         for &child in &node.children {
             visit(model, clip, t, child, world, out);
@@ -913,15 +1097,23 @@ fn emit_rigid_parts(
                 let (nx, nz) = yaw_rotate(world_normal.x, world_normal.z);
                 vertices.push(Vertex {
                     position: [origin.x + wx, origin.y + world_pos.y, origin.z + wz],
-                    color: (Vec3::from_array(prim.color)*Vec3::from_array(prim.colors.get(i).copied().unwrap_or([1.0;3]))).to_array(),
+                    color: (Vec3::from_array(prim.color)
+                        * Vec3::from_array(prim.colors.get(i).copied().unwrap_or([1.0; 3])))
+                    .to_array(),
                     normal: [nx, world_normal.y, nz],
-                    uv: if model.texture_layer.is_some() {prim.uvs.get(i).copied().unwrap_or([0.0;2])} else {[uv[0], uv[1]]},
+                    uv: if model.texture_layer.is_some() {
+                        prim.uvs.get(i).copied().unwrap_or([0.0; 2])
+                    } else {
+                        [uv[0], uv[1]]
+                    },
                     ao: 1.0,
                     reflectivity: 0.0,
                     emission: prim.emission,
                     wind: 0.0,
                     tex_layer: model.texture_layer.unwrap_or(0.0),
-                glimmer: 0.0, skylight:1.0, wet:[prim.absorption,0.],
+                    glimmer: 0.0,
+                    skylight: 1.0,
+                    wet: [prim.absorption, 0.],
                 });
             }
             for &idx in &prim.indices {
@@ -981,7 +1173,9 @@ fn emit_skinned_mesh(
             emission: 0.0,
             wind: 0.0,
             tex_layer,
-            glimmer: 0.0, skylight:1.0, wet:[mesh.absorption,0.],
+            glimmer: 0.0,
+            skylight: 1.0,
+            wet: [mesh.absorption, 0.],
         });
     }
     for &idx in &mesh.indices {
@@ -1024,101 +1218,200 @@ pub fn push_model(
     let uv = white_uv();
 
     let world_matrices = compute_world_matrices(model, clip, t);
-    emit_rigid_parts(model, &world_matrices, vertices, indices, origin, &yaw_rotate, uv);
+    emit_rigid_parts(
+        model,
+        &world_matrices,
+        vertices,
+        indices,
+        origin,
+        &yaw_rotate,
+        uv,
+    );
     if let Some(skin) = &model.skin {
         // See `shader.wgsl`'s `fs_main` and `voxel::mesher::Vertex::tex_layer`
         // -- 0.0 is reserved for "sample the terrain atlas", so a real
         // creature layer is offset by one.
         let tex_layer = model.texture_layer.unwrap_or(kind.to_u8() as f32 + 1.0);
-        emit_skinned_mesh(skin, &world_matrices, vertices, indices, origin, &yaw_rotate, tex_layer);
+        emit_skinned_mesh(
+            skin,
+            &world_matrices,
+            vertices,
+            indices,
+            origin,
+            &yaw_rotate,
+            tex_layer,
+        );
     }
     let scale = kind.model_scale();
     if scale != 1.0 {
         for vertex in &mut vertices[first_vertex..] {
-            vertex.position = (origin + (Vec3::from_array(vertex.position) - origin) * scale).to_array();
+            vertex.position =
+                (origin + (Vec3::from_array(vertex.position) - origin) * scale).to_array();
         }
     }
 }
 
 fn chest_model() -> &'static AnimatedModel {
     static MODEL: std::sync::OnceLock<AnimatedModel> = std::sync::OnceLock::new();
-    MODEL.get_or_init(|| {let mut model=load_glb(include_bytes!("../models/chest.glb"));model.texture_layer=Some(28.0);model})
+    MODEL.get_or_init(|| {
+        let mut model = load_glb(include_bytes!("../models/chest.glb"));
+        model.texture_layer = Some(28.0);
+        model
+    })
 }
 
 /// Bundled chest, normalized without distortion into one occupied voxel.
 pub fn chest_mesh() -> &'static crate::voxel::mesher::MeshData {
     static MESH: std::sync::OnceLock<crate::voxel::mesher::MeshData> = std::sync::OnceLock::new();
     MESH.get_or_init(|| {
-        let model=chest_model();
-        let mut mesh=crate::voxel::mesher::MeshData {vertices:Vec::new(),indices:Vec::new()};
-        let matrices=compute_world_matrices(&model,None,0.0);
-        emit_rigid_parts(&model,&matrices,&mut mesh.vertices,&mut mesh.indices,Vec3::ZERO,&|x,z|(x,z),white_uv());
-        let mut lo=Vec3::splat(f32::INFINITY); let mut hi=Vec3::splat(f32::NEG_INFINITY);
-        for v in &mesh.vertices {let p=Vec3::from_array(v.position);lo=lo.min(p);hi=hi.max(p);}
-        let scale=0.9/(hi-lo).max_element().max(0.001);
-        let origin=Vec3::new((lo.x+hi.x)*0.5,lo.y,(lo.z+hi.z)*0.5);
-        for v in &mut mesh.vertices {v.position=((Vec3::from_array(v.position)-origin)*scale+Vec3::new(0.5,0.02,0.5)).to_array();}
+        let model = chest_model();
+        let mut mesh = crate::voxel::mesher::MeshData {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+        };
+        let matrices = compute_world_matrices(&model, None, 0.0);
+        emit_rigid_parts(
+            &model,
+            &matrices,
+            &mut mesh.vertices,
+            &mut mesh.indices,
+            Vec3::ZERO,
+            &|x, z| (x, z),
+            white_uv(),
+        );
+        let mut lo = Vec3::splat(f32::INFINITY);
+        let mut hi = Vec3::splat(f32::NEG_INFINITY);
+        for v in &mesh.vertices {
+            let p = Vec3::from_array(v.position);
+            lo = lo.min(p);
+            hi = hi.max(p);
+        }
+        let scale = 0.9 / (hi - lo).max_element().max(0.001);
+        let origin = Vec3::new((lo.x + hi.x) * 0.5, lo.y, (lo.z + hi.z) * 0.5);
+        for v in &mut mesh.vertices {
+            v.position = ((Vec3::from_array(v.position) - origin) * scale
+                + Vec3::new(0.5, 0.02, 0.5))
+            .to_array();
+        }
         mesh
     })
 }
 
 /// Cache the static bag geometry once; instances only translate these vertices.
 fn lore_book_model() -> &'static AnimatedModel {
-    static MODEL:std::sync::OnceLock<AnimatedModel>=std::sync::OnceLock::new();
-    MODEL.get_or_init(|| {let mut model=load_glb(include_bytes!("../models/lore_book.glb"));model.texture_layer=Some(35.0);model})
+    static MODEL: std::sync::OnceLock<AnimatedModel> = std::sync::OnceLock::new();
+    MODEL.get_or_init(|| {
+        let mut model = load_glb(include_bytes!("../models/lore_book.glb"));
+        model.texture_layer = Some(35.0);
+        model
+    })
 }
 fn torch_model() -> &'static AnimatedModel {
-    static MODEL:std::sync::OnceLock<AnimatedModel>=std::sync::OnceLock::new();
-    MODEL.get_or_init(|| {let mut m=load_glb(include_bytes!("../models/torch.glb"));m.texture_layer=Some(36.);m})
+    static MODEL: std::sync::OnceLock<AnimatedModel> = std::sync::OnceLock::new();
+    MODEL.get_or_init(|| {
+        let mut m = load_glb(include_bytes!("../models/torch.glb"));
+        m.texture_layer = Some(36.);
+        m
+    })
 }
 /// Supplied torch's looping flame animation, cached at 16 frames per cycle.
-pub fn torch_mesh(time:f32)-> &'static crate::voxel::mesher::MeshData {
-    static FRAMES:std::sync::OnceLock<Vec<crate::voxel::mesher::MeshData>>=std::sync::OnceLock::new();
-    let frames=FRAMES.get_or_init(|| {
-        let m=torch_model();
-        (0..16).map(|frame| {
-            let mut mesh=crate::voxel::mesher::MeshData{vertices:vec![],indices:vec![]};
-            let matrices=compute_world_matrices(m,m.animations.get("on"),frame as f32*1.2/16.);
-            emit_rigid_parts(m,&matrices,&mut mesh.vertices,&mut mesh.indices,Vec3::ZERO,&|x,z|(x,z),white_uv());
-            mesh
-        }).collect()
+pub fn torch_mesh(time: f32) -> &'static crate::voxel::mesher::MeshData {
+    static FRAMES: std::sync::OnceLock<Vec<crate::voxel::mesher::MeshData>> =
+        std::sync::OnceLock::new();
+    let frames = FRAMES.get_or_init(|| {
+        let m = torch_model();
+        (0..16)
+            .map(|frame| {
+                let mut mesh = crate::voxel::mesher::MeshData {
+                    vertices: vec![],
+                    indices: vec![],
+                };
+                let matrices =
+                    compute_world_matrices(m, m.animations.get("on"), frame as f32 * 1.2 / 16.);
+                emit_rigid_parts(
+                    m,
+                    &matrices,
+                    &mut mesh.vertices,
+                    &mut mesh.indices,
+                    Vec3::ZERO,
+                    &|x, z| (x, z),
+                    white_uv(),
+                );
+                mesh
+            })
+            .collect()
     });
-    &frames[((time.max(0.)/1.2*16.) as usize)%16]
+    &frames[((time.max(0.) / 1.2 * 16.) as usize) % 16]
 }
 pub fn lore_book_mesh() -> &'static crate::voxel::mesher::MeshData {
-    static MESH:std::sync::OnceLock<crate::voxel::mesher::MeshData>=std::sync::OnceLock::new();
+    static MESH: std::sync::OnceLock<crate::voxel::mesher::MeshData> = std::sync::OnceLock::new();
     MESH.get_or_init(|| {
-        let model=lore_book_model();
-        let mut mesh=crate::voxel::mesher::MeshData{vertices:Vec::new(),indices:Vec::new()};
-        let matrices=compute_world_matrices(model,None,0.0);
-        emit_rigid_parts(model,&matrices,&mut mesh.vertices,&mut mesh.indices,Vec3::ZERO,&|x,z|(x,z),white_uv());
+        let model = lore_book_model();
+        let mut mesh = crate::voxel::mesher::MeshData {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+        };
+        let matrices = compute_world_matrices(model, None, 0.0);
+        emit_rigid_parts(
+            model,
+            &matrices,
+            &mut mesh.vertices,
+            &mut mesh.indices,
+            Vec3::ZERO,
+            &|x, z| (x, z),
+            white_uv(),
+        );
         // The supplied book lies flat. Stand it on its bottom edge, keeping lighting correct.
-        let upright=glam::Mat3::from_rotation_x(std::f32::consts::FRAC_PI_2);
+        let upright = glam::Mat3::from_rotation_x(std::f32::consts::FRAC_PI_2);
         for v in &mut mesh.vertices {
-            v.position=(upright*Vec3::from_array(v.position)).to_array();
-            v.normal=(upright*Vec3::from_array(v.normal)).to_array();
+            v.position = (upright * Vec3::from_array(v.position)).to_array();
+            v.normal = (upright * Vec3::from_array(v.normal)).to_array();
         }
-        let min=mesh.vertices.iter().fold(Vec3::splat(f32::INFINITY),|a,v|a.min(Vec3::from_array(v.position)));
-        let max=mesh.vertices.iter().fold(Vec3::splat(f32::NEG_INFINITY),|a,v|a.max(Vec3::from_array(v.position)));
-        let scale=0.85/(max-min).max_element().max(0.001);
-        let origin=Vec3::new((min.x+max.x)*0.5,min.y,(min.z+max.z)*0.5);
-        for v in &mut mesh.vertices {v.position=((Vec3::from_array(v.position)-origin)*scale).to_array();v.emission=0.;}
+        let min = mesh
+            .vertices
+            .iter()
+            .fold(Vec3::splat(f32::INFINITY), |a, v| {
+                a.min(Vec3::from_array(v.position))
+            });
+        let max = mesh
+            .vertices
+            .iter()
+            .fold(Vec3::splat(f32::NEG_INFINITY), |a, v| {
+                a.max(Vec3::from_array(v.position))
+            });
+        let scale = 0.85 / (max - min).max_element().max(0.001);
+        let origin = Vec3::new((min.x + max.x) * 0.5, min.y, (min.z + max.z) * 0.5);
+        for v in &mut mesh.vertices {
+            v.position = ((Vec3::from_array(v.position) - origin) * scale).to_array();
+            v.emission = 0.;
+        }
         mesh
     })
 }
 pub fn loot_bag_mesh() -> &'static crate::voxel::mesher::MeshData {
     static MESH: std::sync::OnceLock<crate::voxel::mesher::MeshData> = std::sync::OnceLock::new();
     MESH.get_or_init(|| {
-        let model=load_glb(include_bytes!("../models/loot_bag.glb"));
-        let mut mesh=crate::voxel::mesher::MeshData {vertices:Vec::new(),indices:Vec::new()};
-        let matrices=compute_world_matrices(&model,None,0.0);
-        emit_rigid_parts(&model,&matrices,&mut mesh.vertices,&mut mesh.indices,Vec3::ZERO,&|x,z|(x,z),white_uv());
+        let model = load_glb(include_bytes!("../models/loot_bag.glb"));
+        let mut mesh = crate::voxel::mesher::MeshData {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+        };
+        let matrices = compute_world_matrices(&model, None, 0.0);
+        emit_rigid_parts(
+            &model,
+            &matrices,
+            &mut mesh.vertices,
+            &mut mesh.indices,
+            Vec3::ZERO,
+            &|x, z| (x, z),
+            white_uv(),
+        );
         for v in &mut mesh.vertices {
             // Keep the bag readable at pickup size and center it on the bobbing origin.
-            v.position=(Vec3::from_array(v.position)*1.5-Vec3::Y*0.2).to_array();
+            v.position = (Vec3::from_array(v.position) * 1.5 - Vec3::Y * 0.2).to_array();
             // The white atlas sample makes emission add white over the vertex
             // colors. Keep the bag normally lit so its colors stay saturated.
-            v.emission=0.0;
+            v.emission = 0.0;
         }
         mesh
     })
@@ -1128,21 +1421,27 @@ pub fn loot_bag_mesh() -> &'static crate::voxel::mesher::MeshData {
 mod tests {
     #[test]
     fn wet_materials_respect_absorption_overrides_and_metal_content() {
-        let json=serde_json::json!({"materials":[
+        let json = serde_json::json!({"materials":[
             {"pbrMetallicRoughness":{"metallicFactor":0,"roughnessFactor":1}},
             {"pbrMetallicRoughness":{"metallicFactor":1,"roughnessFactor":1}},
             {"extras":{"wetAbsorption":0.42}}
         ]});
-        assert!(super::material_absorption(&json,Some(0))>super::material_absorption(&json,Some(1)));
-        assert_eq!(super::material_absorption(&json,Some(2)),0.42);
+        assert!(
+            super::material_absorption(&json, Some(0)) > super::material_absorption(&json, Some(1))
+        );
+        assert_eq!(super::material_absorption(&json, Some(2)), 0.42);
     }
     #[test]
     fn chest_has_its_embedded_texture_and_fits_one_voxel() {
-        let mesh=super::chest_mesh();
-        assert!(!mesh.vertices.is_empty());assert!(!mesh.indices.is_empty());
+        let mesh = super::chest_mesh();
+        assert!(!mesh.vertices.is_empty());
+        assert!(!mesh.indices.is_empty());
         assert!(super::chest_model().texture.is_some());
-        assert!(mesh.vertices.iter().all(|v|v.tex_layer==28.0 && v.position.iter().all(|n|*n>=0.0 && *n<=1.0)));
-        assert!(mesh.vertices.windows(2).any(|v|v[0].uv!=v[1].uv));
+        assert!(mesh
+            .vertices
+            .iter()
+            .all(|v| v.tex_layer == 28.0 && v.position.iter().all(|n| *n >= 0.0 && *n <= 1.0)));
+        assert!(mesh.vertices.windows(2).any(|v| v[0].uv != v[1].uv));
     }
     #[test]
     fn player_actions_keep_resources_on_the_animated_right_grip() {
@@ -1151,48 +1450,99 @@ mod tests {
         let models = Models::load();
         for index in 0..4 {
             let model = &models.players[index];
-            let grip = model.right_grip.expect("player requires a right grip socket");
-            for animation in [Clip::Idle,Clip::Walk,Clip::Run,Clip::Attack,Clip::Work,Clip::Jump,Clip::Dance,Clip::Angry] {
-                let clip = model.animations.get(animation.name()).expect("required player animation");
+            let grip = model
+                .right_grip
+                .expect("player requires a right grip socket");
+            for animation in [
+                Clip::Idle,
+                Clip::Walk,
+                Clip::Run,
+                Clip::Attack,
+                Clip::Work,
+                Clip::Jump,
+                Clip::Dance,
+                Clip::Angry,
+            ] {
+                let clip = model
+                    .animations
+                    .get(animation.name())
+                    .expect("required player animation");
                 if let Some(duration) = animation.duration() {
-                    assert!((clip.duration-duration).abs()<0.001);
+                    assert!((clip.duration - duration).abs() < 0.001);
                 }
                 let mut positions = Vec::new();
-                for time in [0.0,clip.duration*0.3,clip.duration*0.6] {
-                    let matrices = compute_world_matrices(model,Some(clip),time);
-                    for yaw in [0.0,1.1,-2.0] {
-                        let origin = Vec3::new(17.0,26.0,-11.0);
-                        let rotation = Mat3::from_rotation_y(std::f32::consts::FRAC_PI_2-yaw);
-                        let expected = origin+rotation*matrices[grip].transform_point3(Vec3::ZERO);
+                for time in [0.0, clip.duration * 0.3, clip.duration * 0.6] {
+                    let matrices = compute_world_matrices(model, Some(clip), time);
+                    for yaw in [0.0, 1.1, -2.0] {
+                        let origin = Vec3::new(17.0, 26.0, -11.0);
+                        let rotation = Mat3::from_rotation_y(std::f32::consts::FRAC_PI_2 - yaw);
+                        let expected =
+                            origin + rotation * matrices[grip].transform_point3(Vec3::ZERO);
                         let mut vertices = Vec::new();
                         let mut indices = Vec::new();
-                        models.push_player_animated(&mut vertices,&mut indices,
-                            crate::remote_player::Appearance {model:index as u8,hat:Some(1)},origin,yaw,
-                            animation,time,Some(crate::equipment::Entry::Resource(crate::voxel::BlockType::Stone)));
-                        let held: Vec<_> = vertices.iter().filter(|v|v.tex_layer==0.0).collect();
+                        models.push_player_animated(
+                            &mut vertices,
+                            &mut indices,
+                            crate::remote_player::Appearance {
+                                model: index as u8,
+                                hat: Some(1),
+                            },
+                            origin,
+                            yaw,
+                            animation,
+                            time,
+                            Some(crate::equipment::Entry::Resource(
+                                crate::voxel::BlockType::Stone,
+                            )),
+                        );
+                        let held: Vec<_> = vertices.iter().filter(|v| v.tex_layer == 0.0).collect();
                         assert!(!held.is_empty());
-                        let center = held.iter().map(|v|Vec3::from_array(v.position)).sum::<Vec3>()/held.len() as f32;
-                        assert!(center.distance(expected)<0.0001,"{index} {animation:?}: {center:?} != {expected:?}");
-                        assert!(vertices.iter().all(|v|Vec3::from_array(v.position).is_finite()));
-                        assert!(indices.iter().all(|&i|(i as usize)<vertices.len()));
+                        let center = held
+                            .iter()
+                            .map(|v| Vec3::from_array(v.position))
+                            .sum::<Vec3>()
+                            / held.len() as f32;
+                        assert!(
+                            center.distance(expected) < 0.0001,
+                            "{index} {animation:?}: {center:?} != {expected:?}"
+                        );
+                        assert!(vertices
+                            .iter()
+                            .all(|v| Vec3::from_array(v.position).is_finite()));
+                        assert!(indices.iter().all(|&i| (i as usize) < vertices.len()));
                     }
                     positions.push(matrices[grip].transform_point3(Vec3::ZERO));
                 }
-                if matches!(animation,Clip::Work|Clip::Attack|Clip::Dance) {
-                    assert!(positions[0].distance(positions[1])>0.01,"hand must move during {animation:?}");
+                if matches!(animation, Clip::Work | Clip::Attack | Clip::Dance) {
+                    assert!(
+                        positions[0].distance(positions[1]) > 0.01,
+                        "hand must move during {animation:?}"
+                    );
                 }
             }
         }
     }
     #[test]
     fn loot_bag_preserves_vertex_colors_and_valid_geometry() {
-        let mesh=super::loot_bag_mesh();
-        assert_eq!(mesh.vertices.len(),6480);
-        assert_eq!(mesh.indices.len(),6480);
-        assert!(mesh.indices.iter().all(|i|(*i as usize)<mesh.vertices.len()));
-        assert!(mesh.vertices.iter().all(|v|v.position.iter().all(|p|p.is_finite())));
-        assert!(mesh.vertices.iter().any(|v|v.color!=mesh.vertices[0].color));
-        assert!(mesh.vertices.iter().all(|v|v.position[1]>=-0.21 && v.position[1]<0.3));
+        let mesh = super::loot_bag_mesh();
+        assert_eq!(mesh.vertices.len(), 6480);
+        assert_eq!(mesh.indices.len(), 6480);
+        assert!(mesh
+            .indices
+            .iter()
+            .all(|i| (*i as usize) < mesh.vertices.len()));
+        assert!(mesh
+            .vertices
+            .iter()
+            .all(|v| v.position.iter().all(|p| p.is_finite())));
+        assert!(mesh
+            .vertices
+            .iter()
+            .any(|v| v.color != mesh.vertices[0].color));
+        assert!(mesh
+            .vertices
+            .iter()
+            .all(|v| v.position[1] >= -0.21 && v.position[1] < 0.3));
     }
     #[test]
     fn fish_model_animates_and_fits_its_water_clearance() {
@@ -1204,13 +1554,29 @@ mod tests {
         for time in [0.0, 0.2, 0.6, 1.0] {
             let mut vertices = Vec::new();
             let mut indices = Vec::new();
-            push_model(&mut vertices, &mut indices, model, CreatureKind::Fish, "idle", time, Vec3::ZERO, 0.0);
+            push_model(
+                &mut vertices,
+                &mut indices,
+                model,
+                CreatureKind::Fish,
+                "idle",
+                time,
+                Vec3::ZERO,
+                0.0,
+            );
             assert!(!indices.is_empty());
             assert!(vertices.iter().all(|v| v.tex_layer == 27.0));
-            assert!(vertices.iter().all(|v| v.position[0].abs() <= 0.7 && v.position[2].abs() <= 0.7
-                && v.position[1].abs() <= 0.35), "fish mesh must fit inside the checked water volume");
-            if first.is_empty() { first = vertices.iter().map(|v| v.position).collect(); }
-            else { assert!(vertices.iter().zip(&first).any(|(v, p)| v.position != *p)); }
+            assert!(
+                vertices.iter().all(|v| v.position[0].abs() <= 0.7
+                    && v.position[2].abs() <= 0.7
+                    && v.position[1].abs() <= 0.35),
+                "fish mesh must fit inside the checked water volume"
+            );
+            if first.is_empty() {
+                first = vertices.iter().map(|v| v.position).collect();
+            } else {
+                assert!(vertices.iter().zip(&first).any(|(v, p)| v.position != *p));
+            }
         }
     }
     #[test]
@@ -1218,10 +1584,28 @@ mod tests {
         let models = Models::load();
         let mut human = Vec::new();
         let mut indices = Vec::new();
-        models.push_player(&mut human, &mut indices,
-            crate::remote_player::Appearance { model: 0, hat: None }, Vec3::ZERO, 0.0, 0.0, 0.0);
-        let height = |vertices: &[Vertex]| vertices.iter().map(|v| v.position[1]).fold(f32::NEG_INFINITY, f32::max)
-            - vertices.iter().map(|v| v.position[1]).fold(f32::INFINITY, f32::min);
+        models.push_player(
+            &mut human,
+            &mut indices,
+            crate::remote_player::Appearance {
+                model: 0,
+                hat: None,
+            },
+            Vec3::ZERO,
+            0.0,
+            0.0,
+            0.0,
+        );
+        let height = |vertices: &[Vertex]| {
+            vertices
+                .iter()
+                .map(|v| v.position[1])
+                .fold(f32::NEG_INFINITY, f32::max)
+                - vertices
+                    .iter()
+                    .map(|v| v.position[1])
+                    .fold(f32::INFINITY, f32::min)
+        };
         let human_height = height(&human);
         for kind in [CreatureKind::DragonGreen, CreatureKind::DragonRed] {
             let model = models.for_kind(kind);
@@ -1230,14 +1614,30 @@ mod tests {
                 assert!(model.animations.contains_key(clip), "missing {clip}");
                 let mut vertices = Vec::new();
                 let mut indices = Vec::new();
-                push_model(&mut vertices, &mut indices, model, kind, clip, 0.3, Vec3::ZERO, 0.0);
+                push_model(
+                    &mut vertices,
+                    &mut indices,
+                    model,
+                    kind,
+                    clip,
+                    0.3,
+                    Vec3::ZERO,
+                    0.0,
+                );
                 assert!(!indices.is_empty());
                 assert!(indices.iter().all(|&i| (i as usize) < vertices.len()));
-                assert!(vertices.iter().all(|v| Vec3::from_array(v.position).is_finite()));
-                assert!(vertices.iter().all(|v| v.tex_layer == model.texture_layer.unwrap()));
+                assert!(vertices
+                    .iter()
+                    .all(|v| Vec3::from_array(v.position).is_finite()));
+                assert!(vertices
+                    .iter()
+                    .all(|v| v.tex_layer == model.texture_layer.unwrap()));
                 if clip == "idle" {
                     let ratio = height(&vertices) / human_height;
-                    assert!((6.0..=8.0).contains(&ratio), "dragon/human height ratio = {ratio}");
+                    assert!(
+                        (6.0..=8.0).contains(&ratio),
+                        "dragon/human height ratio = {ratio}"
+                    );
                 }
             }
         }
@@ -1245,7 +1645,11 @@ mod tests {
     #[test]
     fn undead_variants_have_textures_and_render_all_required_animations() {
         let models = Models::load();
-        for kind in [CreatureKind::Zombie, CreatureKind::Skeleton, CreatureKind::SkeletonSorcerer] {
+        for kind in [
+            CreatureKind::Zombie,
+            CreatureKind::Skeleton,
+            CreatureKind::SkeletonSorcerer,
+        ] {
             for variant in 0..4 {
                 let model = models.for_variant(kind, variant);
                 assert!(model.texture.is_some());
@@ -1253,29 +1657,56 @@ mod tests {
                     assert!(model.animations.contains_key(clip));
                     let mut vertices = Vec::new();
                     let mut indices = Vec::new();
-                    push_model(&mut vertices, &mut indices, model, kind, clip, 0.3, Vec3::ZERO, 0.0);
+                    push_model(
+                        &mut vertices,
+                        &mut indices,
+                        model,
+                        kind,
+                        clip,
+                        0.3,
+                        Vec3::ZERO,
+                        0.0,
+                    );
                     assert!(!indices.is_empty());
                     assert!(indices.iter().all(|&i| (i as usize) < vertices.len()));
-                    assert!(vertices.iter().all(|v| Vec3::from_array(v.position).is_finite()));
-                    assert!(vertices.iter().all(|v| v.tex_layer == model.texture_layer.unwrap()));
+                    assert!(vertices
+                        .iter()
+                        .all(|v| Vec3::from_array(v.position).is_finite()));
+                    assert!(vertices
+                        .iter()
+                        .all(|v| v.tex_layer == model.texture_layer.unwrap()));
                 }
             }
         }
     }
     #[test]
     fn all_six_npcs_render_textured_animated_human_sized_models() {
-        let models=Models::load();
-        for (kind,model) in models.npcs.iter().enumerate() {
+        let models = Models::load();
+        for (kind, model) in models.npcs.iter().enumerate() {
             assert!(model.texture.is_some());
-            for clip in ["idle","walk"] {
+            for clip in ["idle", "walk"] {
                 assert!(model.animations.contains_key(clip));
-                let mut vertices=Vec::new();let mut indices=Vec::new();
-                push_model(&mut vertices,&mut indices,model,CreatureKind::Sheep,clip,0.3,Vec3::ZERO,0.);
+                let mut vertices = Vec::new();
+                let mut indices = Vec::new();
+                push_model(
+                    &mut vertices,
+                    &mut indices,
+                    model,
+                    CreatureKind::Sheep,
+                    clip,
+                    0.3,
+                    Vec3::ZERO,
+                    0.,
+                );
                 assert!(!indices.is_empty());
-                assert!(vertices.iter().all(|v|v.tex_layer==29.+kind as f32 && Vec3::from_array(v.position).is_finite()));
-                assert!(indices.iter().all(|&i|(i as usize)<vertices.len()));
-                let top=vertices.iter().map(|v|v.position[1]).fold(f32::NEG_INFINITY,f32::max);
-                assert!((1.4..2.8).contains(&top),"NPC {kind} height {top}");
+                assert!(vertices.iter().all(|v| v.tex_layer == 29. + kind as f32
+                    && Vec3::from_array(v.position).is_finite()));
+                assert!(indices.iter().all(|&i| (i as usize) < vertices.len()));
+                let top = vertices
+                    .iter()
+                    .map(|v| v.position[1])
+                    .fold(f32::NEG_INFINITY, f32::max);
+                assert!((1.4..2.8).contains(&top), "NPC {kind} height {top}");
             }
         }
     }
@@ -1283,23 +1714,39 @@ mod tests {
     fn player_models_and_all_hats_render_with_textures_and_animated_sockets() {
         use super::*;
         let models = Models::load();
-        assert!(models.creature_texture_layers()[8..].iter().all(|t| t.is_some()));
+        assert!(models.creature_texture_layers()[8..]
+            .iter()
+            .all(|t| t.is_some()));
         for model in 0..4 {
             assert!(models.players[model as usize].hat_socket.is_some());
             for hat in [None, Some(0), Some(1), Some(2), Some(3)] {
                 for speed in [0.0, 3.0, 7.0] {
                     let mut vertices = Vec::new();
                     let mut indices = Vec::new();
-                    models.push_player(&mut vertices, &mut indices,
-                        crate::remote_player::Appearance { model, hat }, Vec3::ZERO, 0.0, speed, 0.3);
+                    models.push_player(
+                        &mut vertices,
+                        &mut indices,
+                        crate::remote_player::Appearance { model, hat },
+                        Vec3::ZERO,
+                        0.0,
+                        speed,
+                        0.3,
+                    );
                     assert!(!indices.is_empty());
                     assert!(indices.iter().all(|&i| (i as usize) < vertices.len()));
-                    assert!(vertices.iter().all(|v| Vec3::from_array(v.position).is_finite()));
+                    assert!(vertices
+                        .iter()
+                        .all(|v| Vec3::from_array(v.position).is_finite()));
                     assert!(vertices.iter().any(|v| v.tex_layer == 9.0 + model as f32));
                     if let Some(hat) = hat {
-                        let hat_vertices: Vec<_> = vertices.iter().filter(|v| v.tex_layer == 13.0 + hat as f32).collect();
+                        let hat_vertices: Vec<_> = vertices
+                            .iter()
+                            .filter(|v| v.tex_layer == 13.0 + hat as f32)
+                            .collect();
                         assert!(!hat_vertices.is_empty());
-                        assert!(hat_vertices.iter().all(|v| v.position[1] > 1.4 && v.position[1] < 2.3));
+                        assert!(hat_vertices
+                            .iter()
+                            .all(|v| v.position[1] > 1.4 && v.position[1] < 2.3));
                         assert!(hat_vertices.iter().any(|v| v.uv != hat_vertices[0].uv));
                     }
                 }
@@ -1321,8 +1768,14 @@ mod tests {
                 let mut vertices = Vec::new();
                 let mut indices = Vec::new();
                 push_model(
-                    &mut vertices, &mut indices, model, kind, clip, 0.37,
-                    Vec3::new(37.0, 5.0, -12.0), 0.73,
+                    &mut vertices,
+                    &mut indices,
+                    model,
+                    kind,
+                    clip,
+                    0.37,
+                    Vec3::new(37.0, 5.0, -12.0),
+                    0.73,
                 );
                 assert!(!vertices.is_empty());
                 // Only a rigid part's vertices (tex_layer == 0.0) sample the
@@ -1382,28 +1835,41 @@ mod tests {
         ] {
             let mut checked = 0;
             let mut wrong = 0;
-            let mut check_triangle = |i0: usize, i1: usize, i2: usize, positions: &[Vec3], normals: &[Vec3]| {
-                let (v0, v1, v2) = (positions[i0], positions[i1], positions[i2]);
-                let face_normal = (v1 - v0).cross(v2 - v0);
-                if face_normal.length_squared() < 1e-10 {
-                    return; // degenerate/near-zero-area triangle
-                }
-                let vertex_normal = (normals[i0] + normals[i1] + normals[i2]) / 3.0;
-                checked += 1;
-                if face_normal.dot(vertex_normal) > 0.0 {
-                    wrong += 1;
-                }
-            };
+            let mut check_triangle =
+                |i0: usize, i1: usize, i2: usize, positions: &[Vec3], normals: &[Vec3]| {
+                    let (v0, v1, v2) = (positions[i0], positions[i1], positions[i2]);
+                    let face_normal = (v1 - v0).cross(v2 - v0);
+                    if face_normal.length_squared() < 1e-10 {
+                        return; // degenerate/near-zero-area triangle
+                    }
+                    let vertex_normal = (normals[i0] + normals[i1] + normals[i2]) / 3.0;
+                    checked += 1;
+                    if face_normal.dot(vertex_normal) > 0.0 {
+                        wrong += 1;
+                    }
+                };
             for node in &model.nodes {
                 for prim in &node.mesh {
                     for tri in prim.indices.chunks_exact(3) {
-                        check_triangle(tri[0] as usize, tri[1] as usize, tri[2] as usize, &prim.positions, &prim.normals);
+                        check_triangle(
+                            tri[0] as usize,
+                            tri[1] as usize,
+                            tri[2] as usize,
+                            &prim.positions,
+                            &prim.normals,
+                        );
                     }
                 }
             }
             if let Some(skin) = &model.skin {
                 for tri in skin.mesh.indices.chunks_exact(3) {
-                    check_triangle(tri[0] as usize, tri[1] as usize, tri[2] as usize, &skin.mesh.positions, &skin.mesh.normals);
+                    check_triangle(
+                        tri[0] as usize,
+                        tri[1] as usize,
+                        tri[2] as usize,
+                        &skin.mesh.positions,
+                        &skin.mesh.normals,
+                    );
                 }
             }
             assert!(checked > 0, "expected {name} to have triangles to check");
@@ -1453,12 +1919,32 @@ mod tests {
         let cases: &[(&AnimatedModel, CreatureKind, &[&str])] = &[
             (&models.sheep, CreatureKind::Sheep, &["idle", "walk"]),
             (&models.chicken, CreatureKind::Chicken, &["idle", "walk"]),
-            (&models.stone_golem, CreatureKind::StoneGolem, &["idle", "walk", "attack", "die"]),
-            (&models.wolf, CreatureKind::Wolf, &["idle", "walk", "run", "attack", "die"]),
-            (&models.stinger, CreatureKind::Stinger, &["idle", "walk", "run", "attack", "die"]),
+            (
+                &models.stone_golem,
+                CreatureKind::StoneGolem,
+                &["idle", "walk", "attack", "die"],
+            ),
+            (
+                &models.wolf,
+                CreatureKind::Wolf,
+                &["idle", "walk", "run", "attack", "die"],
+            ),
+            (
+                &models.stinger,
+                CreatureKind::Stinger,
+                &["idle", "walk", "run", "attack", "die"],
+            ),
             (&models.cow, CreatureKind::Cow, &["idle", "walk", "die"]),
-            (&models.goblin, CreatureKind::Goblin, &["idle", "walk", "run", "attack", "die"]),
-            (&models.sunscorch, CreatureKind::Sunscorch, &["idle", "walk", "attack", "die"]),
+            (
+                &models.goblin,
+                CreatureKind::Goblin,
+                &["idle", "walk", "run", "attack", "die"],
+            ),
+            (
+                &models.sunscorch,
+                CreatureKind::Sunscorch,
+                &["idle", "walk", "attack", "die"],
+            ),
         ];
         for (model, kind, clips) in cases {
             assert!(
@@ -1515,19 +2001,43 @@ mod tests {
     #[test]
     fn a_walk_clip_pose_actually_changes_over_time() {
         let models = Models::load();
-        for (model, kind) in [(&models.sheep, CreatureKind::Sheep), (&models.wolf, CreatureKind::Wolf)] {
+        for (model, kind) in [
+            (&models.sheep, CreatureKind::Sheep),
+            (&models.wolf, CreatureKind::Wolf),
+        ] {
             let mut early = Vec::new();
             let mut early_i = Vec::new();
-            push_model(&mut early, &mut early_i, model, kind, "walk", 0.0, Vec3::ZERO, 0.0);
+            push_model(
+                &mut early,
+                &mut early_i,
+                model,
+                kind,
+                "walk",
+                0.0,
+                Vec3::ZERO,
+                0.0,
+            );
             let mut later = Vec::new();
             let mut later_i = Vec::new();
-            push_model(&mut later, &mut later_i, model, kind, "walk", 0.35, Vec3::ZERO, 0.0);
+            push_model(
+                &mut later,
+                &mut later_i,
+                model,
+                kind,
+                "walk",
+                0.35,
+                Vec3::ZERO,
+                0.0,
+            );
 
-            assert_eq!(early.len(), later.len(), "same clip should yield the same vertex count");
-            let moved = early
-                .iter()
-                .zip(later.iter())
-                .any(|(a, b)| Vec3::from_array(a.position).distance(Vec3::from_array(b.position)) > 1e-4);
+            assert_eq!(
+                early.len(),
+                later.len(),
+                "same clip should yield the same vertex count"
+            );
+            let moved = early.iter().zip(later.iter()).any(|(a, b)| {
+                Vec3::from_array(a.position).distance(Vec3::from_array(b.position)) > 1e-4
+            });
             assert!(moved, "expected at least one vertex to move between two different times in the walk cycle");
         }
     }
@@ -1637,23 +2147,88 @@ mod tests {
         // dropping it, so this pins the known counts down instead of
         // asserting a blanket zero.
         let cases: &[(&str, &AnimatedModel, CreatureKind, &str, f32, usize, usize)] = &[
-            ("sheep", &models.sheep, CreatureKind::Sheep, "idle", 0.0, 0, 0),
-            ("sheep", &models.sheep, CreatureKind::Sheep, "walk", 0.3, 0, 0),
-            ("chicken", &models.chicken, CreatureKind::Chicken, "idle", 0.0, 0, 0),
+            (
+                "sheep",
+                &models.sheep,
+                CreatureKind::Sheep,
+                "idle",
+                0.0,
+                0,
+                0,
+            ),
+            (
+                "sheep",
+                &models.sheep,
+                CreatureKind::Sheep,
+                "walk",
+                0.3,
+                0,
+                0,
+            ),
+            (
+                "chicken",
+                &models.chicken,
+                CreatureKind::Chicken,
+                "idle",
+                0.0,
+                0,
+                0,
+            ),
             ("wolf", &models.wolf, CreatureKind::Wolf, "idle", 0.0, 0, 0),
             ("wolf", &models.wolf, CreatureKind::Wolf, "walk", 0.3, 0, 0),
             ("wolf", &models.wolf, CreatureKind::Wolf, "run", 0.3, 0, 0),
-            ("stone_golem", &models.stone_golem, CreatureKind::StoneGolem, "idle", 0.0, 0, 0),
-            ("stinger", &models.stinger, CreatureKind::Stinger, "idle", 0.0, 0, 0),
+            (
+                "stone_golem",
+                &models.stone_golem,
+                CreatureKind::StoneGolem,
+                "idle",
+                0.0,
+                0,
+                0,
+            ),
+            (
+                "stinger",
+                &models.stinger,
+                CreatureKind::Stinger,
+                "idle",
+                0.0,
+                0,
+                0,
+            ),
             ("cow", &models.cow, CreatureKind::Cow, "idle", 0.0, 0, 0),
-            ("goblin", &models.goblin, CreatureKind::Goblin, "idle", 0.0, 0, 0),
-            ("sunscorch", &models.sunscorch, CreatureKind::Sunscorch, "idle", 0.0, 64, 12),
+            (
+                "goblin",
+                &models.goblin,
+                CreatureKind::Goblin,
+                "idle",
+                0.0,
+                0,
+                0,
+            ),
+            (
+                "sunscorch",
+                &models.sunscorch,
+                CreatureKind::Sunscorch,
+                "idle",
+                0.0,
+                64,
+                12,
+            ),
         ];
 
         for (name, model, kind, clip, time, expected_exact_dupes, expected_sub_mm_pairs) in cases {
             let mut vertices = Vec::new();
             let mut indices = Vec::new();
-            push_model(&mut vertices, &mut indices, model, *kind, clip, *time, Vec3::ZERO, 0.0);
+            push_model(
+                &mut vertices,
+                &mut indices,
+                model,
+                *kind,
+                clip,
+                *time,
+                Vec3::ZERO,
+                0.0,
+            );
 
             let mut seen: HashMap<[[i32; 3]; 3], usize> = HashMap::new();
             for tri in indices.chunks_exact(3) {
@@ -1705,7 +2280,9 @@ mod tests {
             let mut sub_mm_pairs = 0;
             for i in 0..centroids.len() {
                 for j in (i + 1)..centroids.len() {
-                    if centroids[i].distance(centroids[j]) < 0.001 && normals[i].dot(normals[j]).abs() > 0.95 {
+                    if centroids[i].distance(centroids[j]) < 0.001
+                        && normals[i].dot(normals[j]).abs() > 0.95
+                    {
                         sub_mm_pairs += 1;
                     }
                 }
@@ -1806,7 +2383,10 @@ mod tests {
             ("wolf", &models.wolf),
             ("sunscorch", &models.sunscorch),
         ] {
-            let texture = model.texture.as_ref().unwrap_or_else(|| panic!("expected {name} to have a decoded baseColorTexture"));
+            let texture = model
+                .texture
+                .as_ref()
+                .unwrap_or_else(|| panic!("expected {name} to have a decoded baseColorTexture"));
             let mut distinct = std::collections::HashSet::new();
             for pixel in texture.pixels() {
                 distinct.insert(pixel.0);
@@ -1836,9 +2416,21 @@ mod tests {
         ] {
             let mut vertices = Vec::new();
             let mut indices = Vec::new();
-            push_model(&mut vertices, &mut indices, model, kind, "idle", 0.0, Vec3::ZERO, 0.0);
+            push_model(
+                &mut vertices,
+                &mut indices,
+                model,
+                kind,
+                "idle",
+                0.0,
+                Vec3::ZERO,
+                0.0,
+            );
             let skin_vertices: Vec<_> = vertices.iter().filter(|v| v.tex_layer != 0.0).collect();
-            assert!(!skin_vertices.is_empty(), "expected {name} to have skinned-mesh vertices");
+            assert!(
+                !skin_vertices.is_empty(),
+                "expected {name} to have skinned-mesh vertices"
+            );
 
             let expected_layer = kind.to_u8() as f32 + 1.0;
             assert!(

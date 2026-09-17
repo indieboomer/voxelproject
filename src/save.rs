@@ -16,7 +16,7 @@ pub struct CraftingSave {
     pub creature_next_id: u32,
     pub enchantments: Vec<crate::enchantment::Saved>,
     pub spellbook: crate::spellbook::Spellbook,
-    pub creature_statuses: std::collections::BTreeMap<u32,crate::creature::magic::Status>,
+    pub creature_statuses: std::collections::BTreeMap<u32, crate::creature::magic::Status>,
     pub starter_camp: Option<(i32, i32, i32)>,
     /// Complete scrollback, independent of the bounded on-screen log.
     pub chat_transcript: Vec<String>,
@@ -92,12 +92,28 @@ fn legacy_generation() -> crate::worldgen::WorldGeneration {
 const MAGIC: &[u8] = b"VOXEL_SAVE_2\n";
 /// Capture a development session without changing the named world's save file.
 #[cfg(feature = "dev-playtest")]
-pub fn playtest_snapshot(world: &World, player: &Player, camera: &Camera, time_of_day: f32,
-    modules: Vec<ModuleSaveEntry>, crafting: &CraftingSave) -> Result<Vec<u8>, String> {
-    encode_save(WorldSave { seed: world.seed, player_pos: player.position.to_array(),
-        player_yaw: camera.yaw, player_pitch: camera.pitch, time_of_day,
-        edits: world.edits.iter().map(|(k,v)|(*k,*v)).collect(), modules }, crafting, &world.generation)
-        .map_err(|e|e.to_string())
+pub fn playtest_snapshot(
+    world: &World,
+    player: &Player,
+    camera: &Camera,
+    time_of_day: f32,
+    modules: Vec<ModuleSaveEntry>,
+    crafting: &CraftingSave,
+) -> Result<Vec<u8>, String> {
+    encode_save(
+        WorldSave {
+            seed: world.seed,
+            player_pos: player.position.to_array(),
+            player_yaw: camera.yaw,
+            player_pitch: camera.pitch,
+            time_of_day,
+            edits: world.edits.iter().map(|(k, v)| (*k, *v)).collect(),
+            modules,
+        },
+        crafting,
+        &world.generation,
+    )
+    .map_err(|e| e.to_string())
 }
 fn encode_save(
     world: WorldSave,
@@ -124,7 +140,10 @@ fn decode_save(
     if let Some(json) = bytes.strip_prefix(MAGIC) {
         let save: SaveV2 = serde_json::from_slice(json).ok()?;
         if !valid_world(&save.world)
-            || save.crafting.starter_camp.is_some_and(|p| !crate::automation::valid_cell(p))
+            || save
+                .crafting
+                .starter_camp
+                .is_some_and(|p| !crate::automation::valid_cell(p))
             || save.crafting.player.as_ref().is_some_and(|p| !p.valid())
             || save
                 .crafting
@@ -289,13 +308,23 @@ pub fn save_world(
     let path = world_path(&world.name)?;
     let bytes = encode_save(save, crafting, &world.generation).map_err(|e| e.to_string())?;
     write_save(&path, &bytes).map_err(|e| format!("Could not save {}: {e}", world.name))?;
-    export_chat(&path.with_file_name(format!("{}_chat.log", world.name)), &crafting.chat_transcript)
-        .map_err(|e| format!("World saved, but could not export chat for {}: {e}", world.name))
+    export_chat(
+        &path.with_file_name(format!("{}_chat.log", world.name)),
+        &crafting.chat_transcript,
+    )
+    .map_err(|e| {
+        format!(
+            "World saved, but could not export chat for {}: {e}",
+            world.name
+        )
+    })
 }
 
 fn export_chat(path: &Path, transcript: &[String]) -> std::io::Result<()> {
     let mut text = transcript.join("\n");
-    if !transcript.is_empty() { text.push('\n'); }
+    if !transcript.is_empty() {
+        text.push('\n');
+    }
     write_save(path, text.as_bytes())
 }
 
@@ -311,7 +340,7 @@ fn load_path(path: &Path, name: &str) -> Option<LoadedWorld> {
     let (save, crafting, generation) = decode_save(&bytes)?;
     let mut world = World::new(save.seed);
     world.name = name.to_owned();
-    world.identity=crafting.world_identity.clone();
+    world.identity = crafting.world_identity.clone();
     world.underground_discovered = crafting.underground_discovered.clone();
     world.automation = crafting.automation.clone();
     world.starter_camp = crafting.starter_camp;
@@ -363,7 +392,10 @@ mod tests {
         assert_eq!(text.lines().count(), 601);
         assert!(text.starts_with("Player: wiadomość 0\n"));
         assert!(text.ends_with("Guest: found iron!\n"));
-        assert_eq!(std::fs::read(path.with_extension("log.bak")).unwrap(), first);
+        assert_eq!(
+            std::fs::read(path.with_extension("log.bak")).unwrap(),
+            first
+        );
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_file(path.with_extension("log.bak")).unwrap();
         std::fs::remove_dir(&dir).unwrap();
@@ -372,20 +404,40 @@ mod tests {
     #[cfg(feature = "dev-playtest")]
     #[test]
     fn playtest_snapshot_loads_through_the_real_save_reader() {
-        let mut world=World::new(71);
-        world.set_block(2,127,2,crate::voxel::BlockType::Crystal);
-        let mut player=Player::new(Vec3::new(2.5,60.0,2.5));
-        player.health=37.0;player.crafting.mana=17;
-        let crafting=CraftingSave {starter_camp:Some((4,30,5)),player:Some(PlayerSave::capture(&player)),host:player.crafting.clone(),..Default::default()};
-        let bytes=playtest_snapshot(&world,&player,&Camera::new(player.position,1.0),0.35,vec![],&crafting).unwrap();
-        let path=std::path::PathBuf::from(format!("target/playtest-save-test-{}.bin",std::process::id()));
-        fs::write(&path,bytes).unwrap();
-        let loaded=load_path(&path,"diagnostic snapshot").unwrap();
-        assert_eq!(loaded.player_pos,player.position);
-        assert_eq!(loaded.world.starter_camp,Some((4,30,5)));
-        assert_eq!(loaded.crafting.host.mana,17);
-        assert_eq!(loaded.crafting.player.unwrap().health,37.0);
-        assert_eq!(loaded.world.edits.get(&(2,127,2)),Some(&crate::voxel::BlockType::Crystal));
+        let mut world = World::new(71);
+        world.set_block(2, 127, 2, crate::voxel::BlockType::Crystal);
+        let mut player = Player::new(Vec3::new(2.5, 60.0, 2.5));
+        player.health = 37.0;
+        player.crafting.mana = 17;
+        let crafting = CraftingSave {
+            starter_camp: Some((4, 30, 5)),
+            player: Some(PlayerSave::capture(&player)),
+            host: player.crafting.clone(),
+            ..Default::default()
+        };
+        let bytes = playtest_snapshot(
+            &world,
+            &player,
+            &Camera::new(player.position, 1.0),
+            0.35,
+            vec![],
+            &crafting,
+        )
+        .unwrap();
+        let path = std::path::PathBuf::from(format!(
+            "target/playtest-save-test-{}.bin",
+            std::process::id()
+        ));
+        fs::write(&path, bytes).unwrap();
+        let loaded = load_path(&path, "diagnostic snapshot").unwrap();
+        assert_eq!(loaded.player_pos, player.position);
+        assert_eq!(loaded.world.starter_camp, Some((4, 30, 5)));
+        assert_eq!(loaded.crafting.host.mana, 17);
+        assert_eq!(loaded.crafting.player.unwrap().health, 37.0);
+        assert_eq!(
+            loaded.world.edits.get(&(2, 127, 2)),
+            Some(&crate::voxel::BlockType::Crystal)
+        );
         fs::remove_file(path).unwrap();
     }
     #[test]
@@ -398,8 +450,16 @@ mod tests {
         write_save(&second, &old).unwrap();
         let mut crafting = CraftingSave::default();
         let p = (0, 30, 0);
-        crafting.host.adventure=crate::adventure::Progress{stage:2,home:Some((4,30,8)),explored_depths:true,recoveries:3,..Default::default()};
-        crafting.guests.insert("expedition-guest".into(),crafting.host.clone());
+        crafting.host.adventure = crate::adventure::Progress {
+            stage: 2,
+            home: Some((4, 30, 8)),
+            explored_depths: true,
+            recoveries: 3,
+            ..Default::default()
+        };
+        crafting
+            .guests
+            .insert("expedition-guest".into(), crafting.host.clone());
         let mut chest = crate::automation::Device::new(crate::automation::Kind::Chest, p, 0);
         chest.items.insert("resource:stone".into(), 2_000_000);
         crafting.automation.devices.insert(p, chest);
@@ -419,19 +479,27 @@ mod tests {
             machine: false,
             launch: None,
         }]);
-        let mut saved=world_save();
-        saved.edits.push(((4,127,4),crate::voxel::BlockType::Bricks));
+        let mut saved = world_save();
+        saved
+            .edits
+            .push(((4, 127, 4), crate::voxel::BlockType::Bricks));
         let bytes = encode_save(saved, &crafting, &Default::default()).unwrap();
         write_save(&path, &bytes).unwrap();
         assert_eq!(fs::read(path.with_extension("bin.bak")).unwrap(), old);
         assert_eq!(fs::read(&second).unwrap(), old);
         let mut loaded = load_path(&path, "First World").unwrap();
-        assert_eq!(loaded.crafting.host.adventure,crafting.host.adventure);
-        assert_eq!(loaded.crafting.guests["expedition-guest"].adventure,crafting.host.adventure);
+        assert_eq!(loaded.crafting.host.adventure, crafting.host.adventure);
+        assert_eq!(
+            loaded.crafting.guests["expedition-guest"].adventure,
+            crafting.host.adventure
+        );
         assert_eq!(loaded.world.name, "First World");
         assert_eq!(loaded.player_pos, Vec3::new(1., 2., 3.));
         loaded.world.ensure_chunk_loaded(0, 0);
-        assert_eq!(loaded.world.get_block(4,127,4),crate::voxel::BlockType::Bricks);
+        assert_eq!(
+            loaded.world.get_block(4, 127, 4),
+            crate::voxel::BlockType::Bricks
+        );
         assert_eq!(
             loaded.world.get_block(1, 2, 3),
             crate::voxel::BlockType::Bricks
@@ -498,22 +566,90 @@ mod tests {
     }
     #[test]
     fn spellbook_survives_world_envelope_and_old_json_defaults_without_changing_modules() {
-        let mut crafting=CraftingSave::default();
-        let source=include_str!("../modules/target_heal.lua");
-        let module=crate::scripting::Module::load("Heal".into(),"Heal my target".into(),source.into()).unwrap();
-        let id=crafting.spellbook.remember(&module,"Host").unwrap();
-        let mut world=world_save();world.modules.push(module.to_save_entry());
-        let bytes=encode_save(world,&crafting,&Default::default()).unwrap();
-        let (world,mut restored,_)=decode_save(&bytes).unwrap();
+        let mut crafting = CraftingSave::default();
+        let source = include_str!("../modules/target_heal.lua");
+        let module =
+            crate::scripting::Module::load("Heal".into(), "Heal my target".into(), source.into())
+                .unwrap();
+        let id = crafting.spellbook.remember(&module, "Host").unwrap();
+        crafting
+            .spellbook
+            .set_flavor_quote(id, 1, "Even broken things remember the shape of hope.")
+            .unwrap();
+        let mut world = world_save();
+        world.modules.push(module.to_save_entry());
+        let bytes = encode_save(world, &crafting, &Default::default()).unwrap();
+        let (world, mut restored, _) = decode_save(&bytes).unwrap();
         restored.spellbook.revalidate();
-        let spell=restored.spellbook.get(id).unwrap();
-        assert!(spell.ready());assert_eq!(spell.source,source);
-        assert_eq!(world.modules[0].source,source);
-        let mut json:serde_json::Value=serde_json::from_slice(bytes.strip_prefix(MAGIC).unwrap()).unwrap();
-        json["crafting"].as_object_mut().unwrap().remove("spellbook");
-        let mut old=MAGIC.to_vec();old.extend(serde_json::to_vec(&json).unwrap());
-        let (world,restored,_)=decode_save(&old).unwrap();
-        assert!(restored.spellbook.spells.is_empty());assert_eq!(world.modules[0].source,source);
+        let spell = restored.spellbook.get(id).unwrap();
+        assert!(spell.ready());
+        assert_eq!(spell.source, source);
+        assert_eq!(
+            spell.flavor_quote,
+            "Even broken things remember the shape of hope."
+        );
+        assert_eq!(spell.artwork, crafting.spellbook.get(id).unwrap().artwork);
+        assert_eq!(
+            crate::spell_art::render(spell.artwork()),
+            crate::spell_art::render(module.artwork)
+        );
+        assert_eq!(world.modules[0].source, source);
+        let mut json: serde_json::Value =
+            serde_json::from_slice(bytes.strip_prefix(MAGIC).unwrap()).unwrap();
+        // Existing worlds with remembered spells but no artwork migrate offline.
+        json["crafting"]["spellbook"]["spells"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("artwork");
+        json["crafting"]["spellbook"]["spells"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("flavor_quote");
+        let mut legacy = MAGIC.to_vec();
+        legacy.extend(serde_json::to_vec(&json).unwrap());
+        let (_, mut migrated, _) = decode_save(&legacy).unwrap();
+        migrated.spellbook.revalidate();
+        assert!(migrated.spellbook.get(id).unwrap().flavor_quote.is_empty());
+        assert_eq!(
+            migrated.spellbook.get(id).unwrap().artwork(),
+            spell.artwork()
+        );
+        json["crafting"]
+            .as_object_mut()
+            .unwrap()
+            .remove("spellbook");
+        let mut old = MAGIC.to_vec();
+        old.extend(serde_json::to_vec(&json).unwrap());
+        let (world, restored, _) = decode_save(&old).unwrap();
+        assert!(restored.spellbook.spells.is_empty());
+        assert_eq!(world.modules[0].source, source);
+    }
+    #[test]
+    fn generated_rule_art_survives_world_save_and_attachment_save() {
+        let artwork = crate::spell_art::Recipe::fallback("sheep hunt at night");
+        let source = format!(
+            "-- Intent plan: {}\nfunction on_tick(api) end",
+            serde_json::json!({"artwork":artwork})
+        );
+        let module =
+            crate::scripting::Module::load("Night hunt".into(), "A custom rule".into(), source)
+                .unwrap();
+        let mut world = world_save();
+        world.modules.push(module.to_save_entry());
+        let crafting = CraftingSave::default();
+        let bytes = encode_save(world, &crafting, &Default::default()).unwrap();
+        let (saved, _, _) = decode_save(&bytes).unwrap();
+        let loaded = crate::scripting::ScriptHost::load_from_save(&saved.modules);
+        assert_eq!(loaded.modules.last().unwrap().artwork, artwork);
+        assert_eq!(
+            crate::spell_art::render(loaded.modules.last().unwrap().artwork),
+            crate::spell_art::render(artwork)
+        );
+        // Attachments use this same ModuleSaveEntry inside their Saved record.
+        let entry: crate::scripting::ModuleSaveEntry =
+            serde_json::from_str(&serde_json::to_string(&module.to_save_entry()).unwrap()).unwrap();
+        let loaded = crate::scripting::ScriptHost::load_from_save(&[entry]);
+        assert_eq!(loaded.modules[0].artwork, artwork);
     }
     #[test]
     fn automation_save_preserves_paid_batches_and_packed_devices() {

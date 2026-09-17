@@ -1,0 +1,260 @@
+Phase 0 — Immediate polish and usability fixes
+These changes are small or currently interfere with normal play. They should be completed before expanding the survival mechanics.
+0.1 Reduce flower-field size
+Make flower patches significantly smaller.
+Preserve both mixed-color patches and nearly uniform clusters.
+Add configurable minimum and maximum patch radius.
+Prevent large flower fields from dominating entire terrain regions.
+
+0.2 Change gesture key bindings
+Use:
+, — Hello
+. — Dance
+/ — Angry
+Verify that these bindings work consistently for both the host and connected peers.
+
+0.3 Fix mouse cursor and camera-control states
+Introduce an explicit input-mode state machine:
+Gameplay Mode: cursor captured, mouse controls the camera.
+UI Mode: cursor visible and free, camera movement disabled.
+Text Input Mode: keyboard input goes to the active text field; gameplay shortcuts are suppressed
+Esc should allow to exit all UI or Input does and go back to gameplay
+Required behavior:
+Opening any full UI panel releases the cursor.
+Closing the last UI panel restores camera control.
+Escape closes the topmost UI layer before opening the pause menu.
+The cursor state must never depend on which UI element was clicked last.
+Switching between inventory, spellbook, crafting, and gameplay must not leave the game in a mixed state.
+0.4 Improve block targeting
+Separate interaction range from targeting logic.
+Limit the maximum build and mining distance.
+Prefer the closest valid surface intersected by the crosshair ray.
+Allow placement directly below or immediately in front of the player.
+Add special handling for bridge building:
+permit placement against the edge of the block the player is standing on;
+avoid selecting distant blocks through the intended placement area.
+Display a clear outline of the block being mined and a preview of the block being placed.
+Run tests from standing, crouching, jumping, swimming, and looking sharply downward.
+
+0.5 Show spell-generation progress
+Spell creation may involve long LLM processing, so the UI must clearly represent its state.
+Suggested stages:
+Generating the spell
+Validating the script
+Checking permissions and cost
+Waiting for host approval, if required
+Saving the spell
+Ready or failed
+Additionally:
+Show a spinner or progress animation immediately.
+Let the player cancel generation.
+Prevent duplicate submissions.
+If exact percentage progress is unavailable, show named stages rather than fake percentages.
+0.6 Improve spell-card artwork
+The current images repeat too often and communicate too little.
+Generate card visuals from structured spell metadata, not only from spell names.
+Visually distinguish:
+instant spells;
+world rules;
+attachable spells;
+target type;
+dominant element;
+beneficial, neutral, or dangerous effects.
+Use a consistent icon language for fire, water, earth, life, death, mana, creatures, blocks, areas, and global rules.
+Allow procedural combinations of background, frame, element icon, target icon, and effect symbol.
+Reserve unique generated illustrations for important or player-favorited spells.
+
+Phase 1 — Repair and complete the multiplayer spell system
+This is the highest-priority functional area because spell creation is the project’s defining feature.
+1.1 Investigate current host/peer spell ownership
+Document the complete flow:
+The current defect appears to be:
+the peer receives a message saying that host approval is required;
+the host receives no actionable approval prompt;
+spells may be stored only in the host’s local collection.
+Audit:
+where spell definitions are created;
+where they are validated;
+which machine owns the generated script;
+which machine stores player spell collections;
+how spell IDs are synchronized;
+whether host approval is currently a placeholder rather than a complete flow.
+1.2 Add a real host-approval interface
+When a peer creates a spell, the host should receive a panel containing:
+requesting player;
+original prompt;
+generated spell name and description;
+spell type;
+target type;
+mana cost;
+required permissions;
+safety/validation result;
+generated behavior summary;
+Approve, Reject, and optionally Approve Once buttons.
+The peer should see a clear Waiting for host approval state.
+For early testing, add configurable server policies:
+approve every valid spell automatically;
+require approval for world rules and attachable spells;
+require approval for every player-created spell;
+disable peer spell creation.
+1.3 Save personal spell collections on each client
+Separate three concepts:
+Spell Definition: behavior, parameters, cost, and validation data.
+Player Spell Item: ownership, custom name, icon, hotbar assignment, and trade state.
+Server Registration: permission to use a particular spell in the current world.
+Each client should retain their own spell collection between sessions. The host remains authoritative over spell execution in multiplayer, but should not be the sole owner of everyone’s spellbook.
+Handle:
+reconnecting to the same world;
+joining a new world with existing spells;
+spells unsupported by the server version;
+duplicate spell IDs;
+host rejection;
+modified or unsafe client data.
+1.4 Represent saved spells as tradable items
+A spell should be saved as an inventory item—possibly a scroll, rune, tablet, or spell card.
+Required operations:
+add it to inventory;
+move it to the spellbook;
+assign it to the hotbar;
+drop it;
+place it in a chest;
+give or trade it to another player;
+inspect its description and requirements.
+Recommended ownership model:
+the item contains a reference to an immutable spell definition;
+trading transfers the item, not arbitrary executable code;
+the receiving client requests the validated definition from the host;
+the host verifies that the spell exists and is allowed in the current world.
+Decide explicitly whether trading:
+transfers the only copy;
+creates a learnable copy;
+teaches the spell permanently while consuming the item.
+For the first implementation, transferring a single physical spell item is the clearest and easiest model to secure.
+
+Phase 2 — Unified survival and resource framework
+Build the shared data model first. Cooking, hunger, poisonous plants, rain damage, fuel, and harvesting should all use it.
+2.1 Extend resource definitions
+Resources should support optional properties such as:
+edible
+raw_health_change
+cooked_health_change
+raw_status_effects
+cooked_status_effects
+cookable
+cooked_resource_id
+fuel_value
+plantable
+seed_resource_id
+harvest_yield
+renewable_source
+This supports:
+edible raw plants;
+food that becomes better after cooking;
+food poisonous only when raw;
+food poisonous in every form;
+non-edible but cookable ingredients;
+wood and coal as fuels;
+seeds and later farming.
+Avoid hard-coding special cases such as “meat restores health” or “mushrooms poison the player.”
+2.2 Add a general status-effect system
+Create reusable timed effects:
+hungry;
+starving;
+wet;
+cold;
+poisoned;
+regeneration;
+sheltered;
+burning 
+Each effect should define:
+duration;
+periodic health change;
+stacking behavior;
+UI icon and message;
+source;
+removal conditions.
+This will let rain, hunger, poison, spells, and equipment use the same underlying system.
+2.3 Expand campfire interaction
+Allow the player to:
+light the campfire;
+extinguish it;
+add wood;
+add coal;
+inspect remaining burn time;
+cook compatible resources.
+Possible interaction design:
+short F: open campfire interface;
+contextual action: light or extinguish;
+fuel slot;
+input slot;
+output slot;
+visible cooking and fuel progress.
+The campfire state and inventory must be server-authoritative and synchronized for all players. However, campfire with campkeeper NPC next to it should never go off - NPC is supposed to bethe one taking care of the campfire
+2.4 Expand cooking
+Support meat, plants, mushrooms, and later recipes.
+First iteration:
+one input resource;
+one output resource;
+cooking time;
+fuel consumption;
+raw and cooked effects;
+clear visual indication when food is ready.
+Example cases:
+Resource
+Raw
+Cooked
+Meat
+Edible, weak healing or small risk
+Stronger healing
+Potato-like plant
+Edible, weak
+Better healing
+Toxic mushroom
+Poisonous
+Still poisonous
+Bitter root
+Poisonous
+Safe and nutritious
+Herb
+Edible or medicinal
+Effect may be reduced or changed
+
+Later, this can grow into multi-ingredient recipes without replacing the basic resource-processing system.
+2.5 Add hunger as a light survival pressure
+Avoid making hunger a constantly draining meter that dominates gameplay.
+Recommended model:
+a hidden satiety value decreases slowly;
+the player first receives a Hungry notification;
+after a grace period, the player becomes Starving;
+starvation causes slow periodic health loss;
+eating restores satiety according to the food resource;
+difficulty settings control hunger speed or disable it entirely.
+The UI should communicate state without requiring permanent meter watching.
+2.6 Give rain a gameplay effect
+Rain should affect exposed players only.
+Required shelter test:
+cast upward checks or use a sky-visibility query;
+if solid cover blocks the sky, the player is sheltered;
+leaves and partial blocks may provide reduced protection
+Suggested effect:
+daytime rain: slowly applies wetness and very minor health pressure;
+nighttime rain: wetness accumulates faster and causes slightly greater health loss;
+entering shelter stops accumulation;
+a lit campfire removes wetness faster;
+appropriate clothing can later reduce or eliminate the effect.
+Keep damage mild. Rain should encourage shelter-building, not interrupt exploration every few minutes.
+2.7 Add renewable animal harvesting
+Interacting with a sheep using F should yield wool at intervals.
+Generalize this as a renewable-resource component:
+resource type;
+quantity range;
+cooldown;
+required tool or empty hand;
+visual state;
+interaction message.
+For sheep:
+harvest wool;
+start a regrowth cooldown;
+optionally show a sheared visual variant;
+synchronize cooldown and appearance through the host.
+This system can later support milk, eggs, honey (when bee hives are added), and similar resources.

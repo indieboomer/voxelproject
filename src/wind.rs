@@ -138,9 +138,7 @@ impl Air {
                 let phase = f.phase + (self.clock * 8.0).floor() / 8.0 * 0.65;
                 let path = |t: f32| {
                     f.pos - direction() * length * t
-                        + Vec3::Y
-                            * (((t * 4.0 + phase).sin() - phase.sin()) * 3.0).round()
-                            * 0.06
+                        + Vec3::Y * (((t * 4.0 + phase).sin() - phase.sin()) * 3.0).round() * 0.06
                 };
                 for segment in 0..SEGMENTS {
                     let t0 = segment as f32 / SEGMENTS as f32;
@@ -304,14 +302,31 @@ impl Wind {
 mod tests {
     use super::*;
     #[test]
-    #[ignore="CPU wind benchmark"]
-    fn profile_wind_geometry(){
-        let mut air=Air::new();let eye=Vec3::new(2048.0,30.0,0.0);let mut world=World::new(42);
-        for x in 126..=130 {for z in -2..=2 {world.ensure_chunk_loaded(x,z);}}
-        for _ in 0..100 {air.update(0.1,eye,Weather::Windy);}
-        let start=std::time::Instant::now();
-        for _ in 0..300 {std::hint::black_box(air.vertices(eye,Vec3::X,Vec3::Y,&world,false,Weather::Windy));}
-        println!("wind geometry average {:?}",start.elapsed()/300);
+    #[ignore = "CPU wind benchmark"]
+    fn profile_wind_geometry() {
+        let mut air = Air::new();
+        let eye = Vec3::new(2048.0, 30.0, 0.0);
+        let mut world = World::new(42);
+        for x in 126..=130 {
+            for z in -2..=2 {
+                world.ensure_chunk_loaded(x, z);
+            }
+        }
+        for _ in 0..100 {
+            air.update(0.1, eye, Weather::Windy);
+        }
+        let start = std::time::Instant::now();
+        for _ in 0..300 {
+            std::hint::black_box(air.vertices(
+                eye,
+                Vec3::X,
+                Vec3::Y,
+                &world,
+                false,
+                Weather::Windy,
+            ));
+        }
+        println!("wind geometry average {:?}", start.elapsed() / 300);
     }
     #[test]
     fn weather_visibility_stops_and_resumes_without_resetting_particles() {

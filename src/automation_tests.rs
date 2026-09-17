@@ -4,119 +4,334 @@ fn recipes() -> Registry {
 }
 #[test]
 fn storage_chest_large_transfers_are_atomic_and_pack_without_loss() {
-    let mut world=World::new(42); let mut state=State::default();let mut account=Account::default();
-    let cell=(0,40,0);let feet=Vec3::new(0.5,40.0,3.5);let r=recipes();let b=balance();
-    account_add(&mut account,"resource:oak_wood",4).unwrap();
-    apply(&world,&mut state,&mut account,feet,&[],&Action::Place{kind:Kind::Chest,cell,rotation:0,packed:None},b,&r).unwrap();
+    let mut world = World::new(42);
+    let mut state = State::default();
+    let mut account = Account::default();
+    let cell = (0, 40, 0);
+    let feet = Vec3::new(0.5, 40.0, 3.5);
+    let r = recipes();
+    let b = balance();
+    account_add(&mut account, "resource:oak_wood", 4).unwrap();
+    apply(
+        &world,
+        &mut state,
+        &mut account,
+        feet,
+        &[],
+        &Action::Place {
+            kind: Kind::Chest,
+            cell,
+            rotation: 0,
+            packed: None,
+        },
+        b,
+        &r,
+    )
+    .unwrap();
     assert!(!state.devices[&cell].config.eject_contents);
-    world.automation=state.clone();
-    account_add(&mut account,"resource:stone",2_000_000).unwrap();
-    apply(&world,&mut state,&mut account,feet,&[],&Action::Deposit{cell,item:"resource:stone".into(),amount:2_000_000},b,&r).unwrap();
-    let snapshot=state.clone();let balances=account.clone();
-    assert!(apply(&world,&mut state,&mut account,feet,&[],&Action::Withdraw{cell,item:"resource:stone".into(),amount:2_000_001},b,&r).is_err());
-    assert_eq!(state,snapshot);assert_eq!(account,balances);
-    apply(&world,&mut state,&mut account,feet,&[],&Action::Withdraw{cell,item:"resource:stone".into(),amount:1_000_000},b,&r).unwrap();
-    apply(&world,&mut state,&mut account,feet,&[],&Action::Pack{cell},b,&r).unwrap();
-    assert_eq!(account.packed_devices[0].items["resource:stone"],1_000_000);
-    assert_eq!(account_count(&account,"resource:stone"),1_000_000);
-    validate_account(&account,b,&r).unwrap();
+    world.automation = state.clone();
+    account_add(&mut account, "resource:stone", 2_000_000).unwrap();
+    apply(
+        &world,
+        &mut state,
+        &mut account,
+        feet,
+        &[],
+        &Action::Deposit {
+            cell,
+            item: "resource:stone".into(),
+            amount: 2_000_000,
+        },
+        b,
+        &r,
+    )
+    .unwrap();
+    let snapshot = state.clone();
+    let balances = account.clone();
+    assert!(apply(
+        &world,
+        &mut state,
+        &mut account,
+        feet,
+        &[],
+        &Action::Withdraw {
+            cell,
+            item: "resource:stone".into(),
+            amount: 2_000_001
+        },
+        b,
+        &r
+    )
+    .is_err());
+    assert_eq!(state, snapshot);
+    assert_eq!(account, balances);
+    apply(
+        &world,
+        &mut state,
+        &mut account,
+        feet,
+        &[],
+        &Action::Withdraw {
+            cell,
+            item: "resource:stone".into(),
+            amount: 1_000_000,
+        },
+        b,
+        &r,
+    )
+    .unwrap();
+    apply(
+        &world,
+        &mut state,
+        &mut account,
+        feet,
+        &[],
+        &Action::Pack { cell },
+        b,
+        &r,
+    )
+    .unwrap();
+    assert_eq!(account.packed_devices[0].items["resource:stone"], 1_000_000);
+    assert_eq!(account_count(&account, "resource:stone"), 1_000_000);
+    validate_account(&account, b, &r).unwrap();
 }
 
 #[test]
 fn new_sustained_devices_start_charged_then_stop_and_packing_does_not_refill() {
-    for kind in [Kind::Lantern,Kind::DarkAltar,Kind::Shrine] {
-        let world=World::new(42);let mut state=State::default();let mut account=Account::default();
-        let cell=(0,40,0);let feet=Vec3::new(0.5,40.0,3.5);let b=balance();let r=recipes();
-        for (id,n) in &b.def(kind).cost {account_add(&mut account,id,*n).unwrap();}
-        apply(&world,&mut state,&mut account,feet,&[],&Action::Place{kind,cell,rotation:0,packed:None},b,&r).unwrap();
-        assert_eq!(state.devices[&cell].mana,30);
-        let mut pulses=0;
-        for _ in 0..30*b.def(kind).duration_ticks {pulses+=state.step(b,&r).len();}
-        assert_eq!(pulses,if kind==Kind::Lantern {0}else{30});
-        assert!(state.step(b,&r).is_empty());assert_eq!(state.devices[&cell].activity,Activity::InsufficientMana);
-        apply(&world,&mut state,&mut account,feet,&[],&Action::Pack{cell},b,&r).unwrap();
-        apply(&world,&mut state,&mut account,feet,&[],&Action::Place{kind,cell,rotation:0,packed:Some(0)},b,&r).unwrap();
-        assert!(state.step(b,&r).is_empty());assert_eq!(state.devices[&cell].activity,Activity::InsufficientMana);
+    for kind in [Kind::Lantern, Kind::DarkAltar, Kind::Shrine] {
+        let world = World::new(42);
+        let mut state = State::default();
+        let mut account = Account::default();
+        let cell = (0, 40, 0);
+        let feet = Vec3::new(0.5, 40.0, 3.5);
+        let b = balance();
+        let r = recipes();
+        for (id, n) in &b.def(kind).cost {
+            account_add(&mut account, id, *n).unwrap();
+        }
+        apply(
+            &world,
+            &mut state,
+            &mut account,
+            feet,
+            &[],
+            &Action::Place {
+                kind,
+                cell,
+                rotation: 0,
+                packed: None,
+            },
+            b,
+            &r,
+        )
+        .unwrap();
+        assert_eq!(state.devices[&cell].mana, 30);
+        let mut pulses = 0;
+        for _ in 0..30 * b.def(kind).duration_ticks {
+            pulses += state.step(b, &r).len();
+        }
+        assert_eq!(pulses, if kind == Kind::Lantern { 0 } else { 30 });
+        assert!(state.step(b, &r).is_empty());
+        assert_eq!(state.devices[&cell].activity, Activity::InsufficientMana);
+        apply(
+            &world,
+            &mut state,
+            &mut account,
+            feet,
+            &[],
+            &Action::Pack { cell },
+            b,
+            &r,
+        )
+        .unwrap();
+        apply(
+            &world,
+            &mut state,
+            &mut account,
+            feet,
+            &[],
+            &Action::Place {
+                kind,
+                cell,
+                rotation: 0,
+                packed: Some(0),
+            },
+            b,
+            &r,
+        )
+        .unwrap();
+        assert!(state.step(b, &r).is_empty());
+        assert_eq!(state.devices[&cell].activity, Activity::InsufficientMana);
     }
 }
 #[test]
 fn sustained_parts_pay_once_preserve_runtime_and_pause_without_effects() {
-    let b=balance(); let mut r=recipes();
-    for kind in [Kind::Lantern,Kind::DarkAltar,Kind::Shrine] {
-        let p=(0,30,0); let mut s=State::default(); install(&mut s,kind,p);
-        assert!(s.step(b,&r).is_empty());
-        assert_eq!(s.devices[&p].activity,Activity::InsufficientMana);
-        s.devices.get_mut(&p).unwrap().mana=1;
-        let pulses=s.step(b,&r);
-        assert_eq!(pulses.len(),usize::from(kind!=Kind::Lantern));
-        assert_eq!(s.devices[&p].mana,0);
-        let ticks=s.devices[&p].powered_ticks;
-        let saved=serde_json::to_string(&s).unwrap();
-        s=serde_json::from_str(&saved).unwrap(); s.validate(b,&r).unwrap();
-        s.devices.get_mut(&p).unwrap().config.enabled=false;
-        assert!(s.step(b,&r).is_empty());
-        assert_eq!(s.devices[&p].powered_ticks,ticks);
-        s.devices.get_mut(&p).unwrap().config.enabled=true;
-        for _ in 0..ticks {assert!(s.step(b,&r).is_empty());assert_eq!(s.devices[&p].activity,Activity::Working);}
-        assert!(s.step(b,&r).is_empty());
-        assert_eq!(s.devices[&p].activity,Activity::InsufficientMana);
-        r.mana_free=true;s.step(b,&r);
-        assert_eq!(s.devices[&p].activity,Activity::Working);
-        assert_eq!(s.devices[&p].mana,0);r.mana_free=false;
+    let b = balance();
+    let mut r = recipes();
+    for kind in [Kind::Lantern, Kind::DarkAltar, Kind::Shrine] {
+        let p = (0, 30, 0);
+        let mut s = State::default();
+        install(&mut s, kind, p);
+        assert!(s.step(b, &r).is_empty());
+        assert_eq!(s.devices[&p].activity, Activity::InsufficientMana);
+        s.devices.get_mut(&p).unwrap().mana = 1;
+        let pulses = s.step(b, &r);
+        assert_eq!(pulses.len(), usize::from(kind != Kind::Lantern));
+        assert_eq!(s.devices[&p].mana, 0);
+        let ticks = s.devices[&p].powered_ticks;
+        let saved = serde_json::to_string(&s).unwrap();
+        s = serde_json::from_str(&saved).unwrap();
+        s.validate(b, &r).unwrap();
+        s.devices.get_mut(&p).unwrap().config.enabled = false;
+        assert!(s.step(b, &r).is_empty());
+        assert_eq!(s.devices[&p].powered_ticks, ticks);
+        s.devices.get_mut(&p).unwrap().config.enabled = true;
+        for _ in 0..ticks {
+            assert!(s.step(b, &r).is_empty());
+            assert_eq!(s.devices[&p].activity, Activity::Working);
+        }
+        assert!(s.step(b, &r).is_empty());
+        assert_eq!(s.devices[&p].activity, Activity::InsufficientMana);
+        r.mana_free = true;
+        s.step(b, &r);
+        assert_eq!(s.devices[&p].activity, Activity::Working);
+        assert_eq!(s.devices[&p].mana, 0);
+        r.mana_free = false;
     }
 }
 #[test]
 fn aura_range_healing_cap_deaths_and_fixed_tick_catchup() {
-    use crate::creature::{Creatures,CreatureKind};
-    let p=(0,30,0);let mut c=Creatures::new();
-    let near=c.spawn_one(CreatureKind::Sheep,center(p)+Vec3::X*6.0,1);
-    let far=c.spawn_one(CreatureKind::Sheep,center(p)+Vec3::X*6.01,2);
-    let max=CreatureKind::Sheep.max_health();
-    let health=|c:&Creatures,id| c.snapshot_with_ids().into_iter().find(|v|v.0==id).unwrap().3;
-    let mut s=State::default();install(&mut s,Kind::DarkAltar,p);
-    s.devices.get_mut(&p).unwrap().mana=2;
-    let mut clock=Clock::default();let r=recipes();
-    clock.advance_with(1.0,&mut s,balance(),&r,|a|apply_auras(&mut c,a));
-    assert_eq!(health(&c,near),max-3.0);assert_eq!(health(&c,far),max);
-    clock.advance_with(0.1,&mut s,balance(),&r,|a|apply_auras(&mut c,a));
-    assert_eq!(health(&c,near),max-6.0);
-    for _ in 0..4 {apply_auras(&mut c,&[(p,Kind::Shrine)]);}
-    assert_eq!(health(&c,near),max);
-    c.damage(near,max-1.0);apply_auras(&mut c,&[(p,Kind::DarkAltar)]);
-    assert_eq!(c.combat_deaths.len(),1);
-    assert_eq!(c.snapshot_with_ids().len(),1);
+    use crate::creature::{CreatureKind, Creatures};
+    let p = (0, 30, 0);
+    let mut c = Creatures::new();
+    let near = c.spawn_one(CreatureKind::Sheep, center(p) + Vec3::X * 6.0, 1);
+    let far = c.spawn_one(CreatureKind::Sheep, center(p) + Vec3::X * 6.01, 2);
+    let max = CreatureKind::Sheep.max_health();
+    let health = |c: &Creatures, id| {
+        c.snapshot_with_ids()
+            .into_iter()
+            .find(|v| v.0 == id)
+            .unwrap()
+            .3
+    };
+    let mut s = State::default();
+    install(&mut s, Kind::DarkAltar, p);
+    s.devices.get_mut(&p).unwrap().mana = 2;
+    let mut clock = Clock::default();
+    let r = recipes();
+    clock.advance_with(1.0, &mut s, balance(), &r, |a| apply_auras(&mut c, a));
+    assert_eq!(health(&c, near), max - 3.0);
+    assert_eq!(health(&c, far), max);
+    clock.advance_with(0.1, &mut s, balance(), &r, |a| apply_auras(&mut c, a));
+    assert_eq!(health(&c, near), max - 6.0);
+    for _ in 0..4 {
+        apply_auras(&mut c, &[(p, Kind::Shrine)]);
+    }
+    assert_eq!(health(&c, near), max);
+    c.damage(near, max - 1.0);
+    apply_auras(&mut c, &[(p, Kind::DarkAltar)]);
+    assert_eq!(c.combat_deaths.len(), 1);
+    assert_eq!(c.snapshot_with_ids().len(), 1);
 }
 #[test]
 fn tall_parts_reserve_all_cells_and_personal_charge_is_atomic() {
-    let b=balance();let r=recipes();let p=(0,30,0);let feet=Vec3::new(0.5,30.0,3.5);
-    let mut world=World::new(42);let mut s=State::default();let mut a=Account::default();
-    a.packed_devices.push(Device::new(Kind::Lantern,p,0));a.mana=20;
-    let place=Action::Place{kind:Kind::Lantern,cell:p,rotation:0,packed:Some(0)};
-    install(&mut s,Kind::Chest,(0,32,0));
-    assert!(apply(&world,&mut s,&mut a,feet,&[],&place,b,&r).is_err());
-    assert_eq!(a.packed_devices.len(),1);s.devices.clear();
-    assert!(apply(&world,&mut s,&mut a,feet,&[Vec3::new(0.5,32.0,0.5)],&place,b,&r).is_err());
-    apply(&world,&mut s,&mut a,feet,&[],&place,b,&r).unwrap();
-    world.automation=s.clone();
-    for y in 30..33 {assert_eq!(world.get_block(0,y,0),BlockType::AutomationDevice);}
-    world.set_block(0,32,0,BlockType::Stone);
-    assert_eq!(world.get_block(0,32,0),BlockType::AutomationDevice);
-    assert_eq!(s.device_at((0,32,0)).unwrap().cell,p);
-    apply(&world,&mut s,&mut a,feet,&[],&Action::Charge{cell:p,amount:10},b,&r).unwrap();
-    assert_eq!(a.mana,10);assert_eq!(s.devices[&p].mana,10);
-    assert!(apply(&world,&mut s,&mut a,feet,&[],&Action::Charge{cell:p,amount:60},b,&r).is_err());
-    assert_eq!(a.mana,10);assert_eq!(s.devices[&p].mana,10);
-    apply(&world,&mut s,&mut a,feet,&[],&Action::Pack{cell:p},b,&r).unwrap();
-    assert_eq!(a.packed_devices[0].mana,10);assert!(s.device_at((0,32,0)).is_none());
+    let b = balance();
+    let r = recipes();
+    let p = (0, 30, 0);
+    let feet = Vec3::new(0.5, 30.0, 3.5);
+    let mut world = World::new(42);
+    let mut s = State::default();
+    let mut a = Account::default();
+    a.packed_devices.push(Device::new(Kind::Lantern, p, 0));
+    a.mana = 20;
+    let place = Action::Place {
+        kind: Kind::Lantern,
+        cell: p,
+        rotation: 0,
+        packed: Some(0),
+    };
+    install(&mut s, Kind::Chest, (0, 32, 0));
+    assert!(apply(&world, &mut s, &mut a, feet, &[], &place, b, &r).is_err());
+    assert_eq!(a.packed_devices.len(), 1);
+    s.devices.clear();
+    assert!(apply(
+        &world,
+        &mut s,
+        &mut a,
+        feet,
+        &[Vec3::new(0.5, 32.0, 0.5)],
+        &place,
+        b,
+        &r
+    )
+    .is_err());
+    apply(&world, &mut s, &mut a, feet, &[], &place, b, &r).unwrap();
+    world.automation = s.clone();
+    for y in 30..33 {
+        assert_eq!(world.get_block(0, y, 0), BlockType::AutomationDevice);
+    }
+    world.set_block(0, 32, 0, BlockType::Stone);
+    assert_eq!(world.get_block(0, 32, 0), BlockType::AutomationDevice);
+    assert_eq!(s.device_at((0, 32, 0)).unwrap().cell, p);
+    apply(
+        &world,
+        &mut s,
+        &mut a,
+        feet,
+        &[],
+        &Action::Charge {
+            cell: p,
+            amount: 10,
+        },
+        b,
+        &r,
+    )
+    .unwrap();
+    assert_eq!(a.mana, 10);
+    assert_eq!(s.devices[&p].mana, 10);
+    assert!(apply(
+        &world,
+        &mut s,
+        &mut a,
+        feet,
+        &[],
+        &Action::Charge {
+            cell: p,
+            amount: 60
+        },
+        b,
+        &r
+    )
+    .is_err());
+    assert_eq!(a.mana, 10);
+    assert_eq!(s.devices[&p].mana, 10);
+    apply(
+        &world,
+        &mut s,
+        &mut a,
+        feet,
+        &[],
+        &Action::Pack { cell: p },
+        b,
+        &r,
+    )
+    .unwrap();
+    assert_eq!(a.packed_devices[0].mana, 10);
+    assert!(s.device_at((0, 32, 0)).is_none());
 }
 #[test]
 fn collector_connections_power_all_sustained_parts() {
-    for kind in [Kind::Lantern,Kind::DarkAltar,Kind::Shrine] {
-        let mut s=State::default();install(&mut s,Kind::Collector,(0,30,0));
-        install(&mut s,kind,(1,30,0));let r=recipes();
-        let mut active=false;
-        for _ in 0..30 {s.step(balance(),&r);active |= s.devices[&(1,30,0)].activity==Activity::Working;}
-        assert!(active,"{kind:?}");
+    for kind in [Kind::Lantern, Kind::DarkAltar, Kind::Shrine] {
+        let mut s = State::default();
+        install(&mut s, Kind::Collector, (0, 30, 0));
+        install(&mut s, kind, (1, 30, 0));
+        let r = recipes();
+        let mut active = false;
+        for _ in 0..30 {
+            s.step(balance(), &r);
+            active |= s.devices[&(1, 30, 0)].activity == Activity::Working;
+        }
+        assert!(active, "{kind:?}");
     }
 }
 #[test]
@@ -598,9 +813,9 @@ fn packing_and_failed_placement_preserve_inventory_and_progress() {
         &r,
     )
     .unwrap();
-    let mut replaced=s.devices[&p].clone();
-    assert_ne!(replaced.persistent_id,original.persistent_id);
-    replaced.persistent_id=original.persistent_id;
+    let mut replaced = s.devices[&p].clone();
+    assert_ne!(replaced.persistent_id, original.persistent_id);
+    replaced.persistent_id = original.persistent_id;
     assert_eq!(replaced, original);
     assert!(account.packed_devices.is_empty());
 }

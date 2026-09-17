@@ -16,6 +16,8 @@ struct CameraUniform {
     // toward white in fs_main below during a storm's lightning strike.
     // y = cloud coverage, z = camera eye underwater, w = surface wetness.
     weather_fx: vec4<f32>,
+    // x = water Fresnel toggle (1 enabled, 0 disabled).
+    graphics: vec4<f32>,
     camp_lights: array<vec4<f32>,4>,
 };
 
@@ -242,8 +244,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if is_water {
         let t = camera.light_params.z;
         let moving = dot(in.flow, in.flow) > 0.25;
-        let wx = in.world_pos.x * 0.6 + t * 1.3;
-        let wz = in.world_pos.z * 0.5 + t * 1.7;
+        // Slow, broad waves keep the surface calm and avoid rapid shimmer.
+        let wx = in.world_pos.x * 0.6 + t * 0.42;
+        let wz = in.world_pos.z * 0.5 + t * 0.55;
         shading_normal = normalize(
             in.normal + vec3<f32>(cos(wx) * 0.6, 0.0, -sin(wz) * 0.6) * 0.15
         );
@@ -251,10 +254,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // A continuous world-space phase avoids seams when neighboring
             // blocks have slightly different river tangents, even far from origin.
             let river = in.flow.x > 0.1;
-            let along = select(-in.world_pos.z, in.world_pos.x, river) - t * 1.4;
+            let along = select(-in.world_pos.z, in.world_pos.x, river) - t * 0.48;
             let across = select(in.world_pos.x, in.world_pos.z, river);
-            let wave = cos(along * 2.0 + sin(across * 0.5)) * 0.10;
-            shading_normal = normalize(in.normal + vec3<f32>(-in.flow.x * wave, 0.0, -in.flow.y * wave));
             let ripple = sin(along * 5.0 + sin(across * 2.0));
             current_foam = smoothstep(0.86, 1.0, ripple) * 0.10;
         }
@@ -334,7 +335,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Dry matte blocks stay diffuse; rain adds a reflective surface coat.
     let grazing = 1.0 - max(dot(shading_normal, view_dir), 0.0);
     let grazing2 = grazing * grazing;
-    let fresnel = grazing2 * grazing2 * grazing;
+    // Broaden the Fresnel lobe: reflections remain visible away from the
+    // horizon while still becoming strongest at shallow viewing angles.
+    // Keep a small base reflection when disabled; the setting only removes
+    // the view-angle boost and leaves screen-space reflections intact.
+    let fresnel_base = select(0.06, 0.06 + 0.94 * grazing2 * grazing, camera.graphics.x > 0.5);
+    // Break up large, repeated reflection patches with a subtle continuous
+    // world-space modulation. It is deliberately low contrast so waves and
+    // reflected silhouettes remain the visual focus.
+    let fresnel_noise = 0.93 + 0.07 * sin(in.world_pos.x * 1.71 + sin(in.world_pos.z * 1.13));
+    let fresnel = fresnel_base * fresnel_noise;
     let reflection_dir = reflect(-view_dir, shading_normal);
     let sky_gradient = mix(camera.fog_color.rgb, camera.zenith_color.rgb, clamp(reflection_dir.y, 0.0, 1.0));
     // Analytic environment reflection: no cubemap, screen-space ray march,
@@ -385,9 +395,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         glimmer = mix(vec3<f32>(1.0), tex.rgb, 0.25) * in.glimmer
             * clamp(inclusion, 0.0, 1.0) * (sparkle * visibility * illumination + sheen);
     }
-    let reflected = lit + sky_reflection + sun_tint * specular + glow + glimmer
+    var reflected = lit + sky_reflection + sun_tint * specular + glow + glimmer
         + vec3<f32>(0.65, 0.85, 0.92) * current_foam * (ambient + sun_intensity * ndotl * shadow);
 
+    if is_water && in.normal.y > 0.5 {
+        // Schlick water/air interface: 2% reflection at normal incidence.
+        let water_fresnel = 0.06 + 0.94 * fresnel;
+        let body = mix(lit, vec3<f32>(0.025, 0.15, 0.19) * (fill + direct), 0.55);
+        reflected = mix(body, environment, water_fresnel) + sun_tint * specular
+            + vec3<f32>(0.65, 0.85, 0.92) * current_foam * (ambient + sun_intensity * ndotl * shadow);
+    }
     let dist = distance(in.world_pos, camera.camera_pos.xyz);
     let underwater = camera.weather_fx.z;
     let fog_start = mix(mix(70.0, 40.0, camera.weather_fx.y), 1.5, underwater);
@@ -404,5 +421,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // screen (terrain and sky both) flashes together, not just one or the
     // other.
     let flashed = mix(grade(final_color), vec3<f32>(1.0), camera.weather_fx.x * in.skylight);
-    return vec4<f32>(flashed, 1.0);
+    // Internal water mask; the reflection resolve restores opaque alpha.
+    return vec4<f32>(flashed, select(1.0, 0.0, is_water && in.normal.y > 0.5 && underwater < 0.5));
 }

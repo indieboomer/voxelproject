@@ -120,15 +120,25 @@ impl Weather {
 pub struct SurfaceWeather {
     pub wetness: f32,
     pub clouds: f32,
+    /// Base cloud layer restoration: 0 for sparse sunny skies, 1 otherwise.
+    pub cloud_fullness: f32,
 }
 
 impl SurfaceWeather {
     pub fn update(&mut self, weather: Weather, dt: f32) {
-        if !dt.is_finite() || dt <= 0.0 { return; }
-        let target = if weather.has_rain_particles() { 1.0 } else { 0.0 };
+        if !dt.is_finite() || dt <= 0.0 {
+            return;
+        }
+        let target = if weather.has_rain_particles() {
+            1.0
+        } else {
+            0.0
+        };
         let seconds = if target > self.wetness { 12.0 } else { 45.0 };
         self.wetness += (target - self.wetness).clamp(-dt / seconds, dt / seconds);
         self.clouds += (weather.cloud_coverage() - self.clouds).clamp(-dt / 5.0, dt / 5.0);
+        let fullness = if weather == Weather::Sunny { 0.0 } else { 1.0 };
+        self.cloud_fullness += (fullness - self.cloud_fullness).clamp(-dt / 5.0, dt / 5.0);
     }
 }
 
@@ -145,7 +155,9 @@ pub struct WeatherState {
 }
 
 impl WeatherState {
-    pub fn valid_save(&self) -> bool { self.timer.is_finite() && self.timer >= 0.0 && self.rng != 0 }
+    pub fn valid_save(&self) -> bool {
+        self.timer.is_finite() && self.timer >= 0.0 && self.rng != 0
+    }
     pub fn new(seed: u32) -> Self {
         let mut state = Self {
             current: Weather::Sunny,
@@ -280,7 +292,12 @@ mod tests {
         assert!(Weather::Rain.cloud_coverage() > 0.0);
         assert!(Weather::Storm.cloud_coverage() > Weather::Rain.cloud_coverage());
         for w in [Weather::Sunny, Weather::Mist, Weather::Windy] {
-            assert_eq!(w.cloud_coverage(), 0.0, "expected {} to have no cloud cover yet", w.name());
+            assert_eq!(
+                w.cloud_coverage(),
+                0.0,
+                "expected {} to have no cloud cover yet",
+                w.name()
+            );
         }
     }
 
@@ -298,6 +315,10 @@ mod tests {
                 surface.update(dry, 100.0);
                 assert_eq!(surface.wetness, 0.0);
                 assert_eq!(surface.clouds, 0.0);
+                assert_eq!(
+                    surface.cloud_fullness,
+                    if dry == Weather::Sunny { 0.0 } else { 1.0 }
+                );
             }
         }
     }
@@ -306,20 +327,36 @@ mod tests {
     fn surface_weather_is_frame_rate_independent_and_ignores_invalid_time() {
         let mut fine = SurfaceWeather::default();
         let mut coarse = SurfaceWeather::default();
-        for _ in 0..360 { fine.update(Weather::Rain, 1.0 / 60.0); }
+        for _ in 0..360 {
+            fine.update(Weather::Rain, 1.0 / 60.0);
+        }
         coarse.update(Weather::Rain, 6.0);
         assert!((fine.wetness - coarse.wetness).abs() < 0.0001);
+        assert!((fine.cloud_fullness - coarse.cloud_fullness).abs() < 0.0001);
         for dt in [f32::NAN, f32::INFINITY, -1.0, 0.0] {
             coarse.update(Weather::Sunny, dt);
         }
         assert_eq!(coarse.wetness, 0.5);
+        assert_eq!(coarse.cloud_fullness, 1.0);
+        for weather in [Weather::Rain, Weather::Storm, Weather::Mist, Weather::Windy] {
+            let mut surface = SurfaceWeather::default();
+            surface.update(weather, 2.5);
+            assert!((surface.cloud_fullness - 0.5).abs() < 0.0001);
+            surface.update(weather, 2.5);
+            assert_eq!(surface.cloud_fullness, 1.0);
+            surface.update(Weather::Sunny, 5.0);
+            assert_eq!(surface.cloud_fullness, 0.0);
+        }
     }
 
     #[test]
     fn storm_stretches_are_shorter_than_sunny_stretches() {
         let (storm_min, storm_max) = Weather::Storm.stretch_range();
         let (sunny_min, sunny_max) = Weather::Sunny.stretch_range();
-        assert!(storm_max <= sunny_min, "expected every storm stretch to be shorter than every sunny stretch");
+        assert!(
+            storm_max <= sunny_min,
+            "expected every storm stretch to be shorter than every sunny stretch"
+        );
         assert!(storm_min > 0.0 && sunny_max > storm_max);
     }
 

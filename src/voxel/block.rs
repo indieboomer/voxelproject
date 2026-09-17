@@ -264,15 +264,34 @@ impl BlockType {
         use BlockType::*;
         match self {
             AutomationDevice => BlockDef {
-                display_name:"Automation device",resource_type:"automation",opacity:0.0,
-                roughness:1.0,emission:0.0,hardness:0,tile_top:TILE_WHITE,tile_side:TILE_WHITE,tile_bottom:TILE_WHITE,
-                only_on_top:false,single_item:true,cutout:false,cross:false,
+                display_name: "Automation device",
+                resource_type: "automation",
+                opacity: 0.0,
+                roughness: 1.0,
+                emission: 0.0,
+                hardness: 0,
+                tile_top: TILE_WHITE,
+                tile_side: TILE_WHITE,
+                tile_bottom: TILE_WHITE,
+                only_on_top: false,
+                single_item: true,
+                cutout: false,
+                cross: false,
             },
             Campfire => BlockDef {
-                display_name: "Campfire", resource_type: "world_feature",
-                opacity: 0.0, roughness: 1.0, emission: 0.0, hardness: 2,
-                tile_top: TILE_WHITE, tile_side: TILE_WHITE, tile_bottom: TILE_WHITE,
-                only_on_top: true, single_item: true, cutout: false, cross: false,
+                display_name: "Campfire",
+                resource_type: "world_feature",
+                opacity: 0.0,
+                roughness: 1.0,
+                emission: 0.0,
+                hardness: 2,
+                tile_top: TILE_WHITE,
+                tile_side: TILE_WHITE,
+                tile_bottom: TILE_WHITE,
+                only_on_top: true,
+                single_item: true,
+                cutout: false,
+                cross: false,
             },
             Air => BlockDef {
                 display_name: "Air",
@@ -362,12 +381,11 @@ impl BlockType {
     pub fn glimmer(self) -> f32 {
         use BlockType::*;
         match self {
-            Crystal | Diamond | Emerald | Ruby | Sapphire | Quartz | Amethyst
-            | Moonstone | EnchantedGlass | Runestone => 1.0,
-            IronOre | CopperOre | TinOre | SilverOre | GoldOre | DiamondOre
-            | EmeraldOre | RubyOre | SapphireOre | MithrilOre => 0.45,
-            Iron | Copper | Tin | Silver | Gold | Steel | Bronze | Mithril
-            | MoonSilver => 0.75,
+            Crystal | Diamond | Emerald | Ruby | Sapphire | Quartz | Amethyst | Moonstone
+            | EnchantedGlass | Runestone => 1.0,
+            IronOre | CopperOre | TinOre | SilverOre | GoldOre | DiamondOre | EmeraldOre
+            | RubyOre | SapphireOre | MithrilOre => 0.45,
+            Iron | Copper | Tin | Silver | Gold | Steel | Bronze | Mithril | MoonSilver => 0.75,
             Glass | Obsidian | Amber | RockSalt => 0.65,
             _ => 0.0,
         }

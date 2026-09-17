@@ -131,7 +131,8 @@ impl Player {
     }
 
     pub fn set_speed_multiplier(&mut self, multiplier: f32) {
-        self.speed_multiplier = multiplier.clamp(MIN_ATTRIBUTE_MULTIPLIER, MAX_ATTRIBUTE_MULTIPLIER);
+        self.speed_multiplier =
+            multiplier.clamp(MIN_ATTRIBUTE_MULTIPLIER, MAX_ATTRIBUTE_MULTIPLIER);
     }
 
     /// Clamped at 0 -- called by `App`'s oxygen pass while submerged.
@@ -200,7 +201,10 @@ impl Player {
     }
 
     pub fn update(&mut self, world: &World, input: &Input, forward: Vec3, right: Vec3, dt: f32) {
-        if self.health <= 0.0 { self.velocity=Vec3::ZERO;return; }
+        if self.health <= 0.0 {
+            self.velocity = Vec3::ZERO;
+            return;
+        }
         let forward_flat = Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
         let right_flat = Vec3::new(right.x, 0.0, right.z).normalize_or_zero();
 
@@ -234,20 +238,26 @@ impl Player {
             speed *= MUD_SPEED_MULTIPLIER;
         }
         speed *= self.speed_multiplier;
-        if crate::gear_catalog::held(&self.crafting,crate::equipment::Gear::TrailCharm) {speed*=1.3;}
+        if crate::gear_catalog::held(&self.crafting, crate::equipment::Gear::TrailCharm) {
+            speed *= 1.3;
+        }
 
         self.velocity.x = wish.x * speed;
         self.velocity.z = wish.z * speed;
 
         if input.is_down(KeyCode::Space) && self.on_ground {
             self.velocity.y = JUMP_SPEED * self.jump_multiplier;
-            if crate::gear_catalog::held(&self.crafting,crate::equipment::Gear::LeapingCharm) {self.velocity.y*=1.35;}
+            if crate::gear_catalog::held(&self.crafting, crate::equipment::Gear::LeapingCharm) {
+                self.velocity.y *= 1.35;
+            }
             self.on_ground = false;
         }
 
         self.velocity.y += GRAVITY * dt;
         self.velocity.y = self.velocity.y.max(-50.0);
-        if crate::gear_catalog::held(&self.crafting,crate::equipment::Gear::FeatherCharm) {self.velocity.y=self.velocity.y.max(-3.0);}
+        if crate::gear_catalog::held(&self.crafting, crate::equipment::Gear::FeatherCharm) {
+            self.velocity.y = self.velocity.y.max(-3.0);
+        }
 
         let delta = self.velocity * dt;
         let before = self.position;
@@ -271,7 +281,9 @@ impl Player {
             // Stop a blocked axis for the rest of this frame; keep sliding
             // on the other axes and retain ground contact after landing.
             for axis in 0..3 {
-                if self.position[axis] == before[axis] { step[axis] = 0.0; }
+                if self.position[axis] == before[axis] {
+                    step[axis] = 0.0;
+                }
             }
         }
     }
@@ -345,7 +357,9 @@ mod tests {
     fn fast_movement_cannot_skip_a_thin_cave_wall_or_floor() {
         let mut world = World::new(1);
         let mut chunk = crate::voxel::chunk::Chunk::new(0, 0);
-        for y in 1..8 { chunk.set_local(5, y, 5, BlockType::Stone); }
+        for y in 1..8 {
+            chunk.set_local(5, y, 5, BlockType::Stone);
+        }
         chunk.set_local(2, 2, 5, BlockType::Stone);
         world.chunks.insert((0, 0), chunk);
 
@@ -385,7 +399,10 @@ mod tests {
         assert_eq!(player.health, 80.0);
 
         player.damage(1000.0);
-        assert_eq!(player.health, 0.0, "damage should clamp at 0, not go negative");
+        assert_eq!(
+            player.health, 0.0,
+            "damage should clamp at 0, not go negative"
+        );
 
         player.heal(1000.0);
         assert_eq!(player.health, MAX_HEALTH, "heal should clamp at max_health");
@@ -414,10 +431,16 @@ mod tests {
         assert_eq!(player.oxygen, 80.0);
 
         player.drain_oxygen(1000.0);
-        assert_eq!(player.oxygen, 0.0, "drain should clamp at 0, not go negative");
+        assert_eq!(
+            player.oxygen, 0.0,
+            "drain should clamp at 0, not go negative"
+        );
 
         player.regenerate_oxygen(1000.0);
-        assert_eq!(player.oxygen, MAX_OXYGEN, "regenerate should clamp at MAX_OXYGEN");
+        assert_eq!(
+            player.oxygen, MAX_OXYGEN,
+            "regenerate should clamp at MAX_OXYGEN"
+        );
     }
 
     #[test]
@@ -428,12 +451,18 @@ mod tests {
         for _ in 0..50 {
             player.drain_oxygen(OXYGEN_DRAIN_PER_SEC * 1.0);
         }
-        assert_eq!(player.oxygen, 0.0, "expected 50s of draining to fully empty oxygen");
+        assert_eq!(
+            player.oxygen, 0.0,
+            "expected 50s of draining to fully empty oxygen"
+        );
 
         for _ in 0..8 {
             player.regenerate_oxygen(OXYGEN_REGEN_PER_SEC * 1.0);
         }
-        assert_eq!(player.oxygen, MAX_OXYGEN, "expected 8s of regenerating to fully refill oxygen");
+        assert_eq!(
+            player.oxygen, MAX_OXYGEN,
+            "expected 8s of regenerating to fully refill oxygen"
+        );
     }
 
     #[test]
@@ -530,27 +559,41 @@ mod tests {
 
     #[test]
     fn held_charms_change_motion_and_stop_when_unequipped() {
-        use crate::equipment::{Entry,Gear};
-        let world=World::new(1);
-        let mut player=Player::new(Vec3::new(0.5,60.,0.5));let mut input=Input::new();
-        input.key_event(KeyCode::KeyW,ElementState::Pressed);
-        player.crafting.gear[Gear::TrailCharm as usize]=1;
-        player.crafting.hotbar.assign(Some(Entry::Gear(Gear::TrailCharm)));
-        player.update(&world,&input,Vec3::X,Vec3::Z,0.01);
-        assert!((player.velocity.x-WALK_SPEED*1.3).abs()<0.001);
+        use crate::equipment::{Entry, Gear};
+        let world = World::new(1);
+        let mut player = Player::new(Vec3::new(0.5, 60., 0.5));
+        let mut input = Input::new();
+        input.key_event(KeyCode::KeyW, ElementState::Pressed);
+        player.crafting.gear[Gear::TrailCharm as usize] = 1;
+        player
+            .crafting
+            .hotbar
+            .assign(Some(Entry::Gear(Gear::TrailCharm)));
+        player.update(&world, &input, Vec3::X, Vec3::Z, 0.01);
+        assert!((player.velocity.x - WALK_SPEED * 1.3).abs() < 0.001);
         player.crafting.hotbar.assign(None);
-        player.update(&world,&input,Vec3::X,Vec3::Z,0.01);
-        assert!((player.velocity.x-WALK_SPEED).abs()<0.001);
-        player.crafting.gear[Gear::LeapingCharm as usize]=1;
-        player.crafting.hotbar.assign(Some(Entry::Gear(Gear::LeapingCharm)));
-        player.on_ground=true;input.key_event(KeyCode::Space,ElementState::Pressed);
-        player.update(&world,&input,Vec3::X,Vec3::Z,0.01);
-        assert!((player.velocity.y-(JUMP_SPEED*1.35+GRAVITY*0.01)).abs()<0.001);
-        player.crafting.gear[Gear::FeatherCharm as usize]=1;
-        player.crafting.hotbar.assign(Some(Entry::Gear(Gear::FeatherCharm)));player.velocity.y=-20.;
-        player.update(&world,&input,Vec3::X,Vec3::Z,0.01);assert_eq!(player.velocity.y,-3.);
+        player.update(&world, &input, Vec3::X, Vec3::Z, 0.01);
+        assert!((player.velocity.x - WALK_SPEED).abs() < 0.001);
+        player.crafting.gear[Gear::LeapingCharm as usize] = 1;
+        player
+            .crafting
+            .hotbar
+            .assign(Some(Entry::Gear(Gear::LeapingCharm)));
+        player.on_ground = true;
+        input.key_event(KeyCode::Space, ElementState::Pressed);
+        player.update(&world, &input, Vec3::X, Vec3::Z, 0.01);
+        assert!((player.velocity.y - (JUMP_SPEED * 1.35 + GRAVITY * 0.01)).abs() < 0.001);
+        player.crafting.gear[Gear::FeatherCharm as usize] = 1;
+        player
+            .crafting
+            .hotbar
+            .assign(Some(Entry::Gear(Gear::FeatherCharm)));
+        player.velocity.y = -20.;
+        player.update(&world, &input, Vec3::X, Vec3::Z, 0.01);
+        assert_eq!(player.velocity.y, -3.);
         player.crafting.hotbar.assign(None);
-        player.update(&world,&input,Vec3::X,Vec3::Z,0.01);assert!(player.velocity.y < -3.);
+        player.update(&world, &input, Vec3::X, Vec3::Z, 0.01);
+        assert!(player.velocity.y < -3.);
     }
     #[test]
     fn walking_forward_on_the_ground_eventually_queues_a_footstep() {
@@ -564,10 +607,19 @@ mod tests {
         // 3 seconds at up to 4.5 blocks/sec keeps the player within the
         // one-chunk-radius loaded above (CHUNK_X/Z == 16).
         for _ in 0..180 {
-            player.update(&world, &input, Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0 / 60.0);
+            player.update(
+                &world,
+                &input,
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                1.0 / 60.0,
+            );
             total_steps += player.take_steps();
         }
-        assert!(total_steps > 0, "expected walking forward for 3s to queue at least one footstep");
+        assert!(
+            total_steps > 0,
+            "expected walking forward for 3s to queue at least one footstep"
+        );
     }
 
     #[test]
@@ -578,10 +630,23 @@ mod tests {
         let input = Input::new();
 
         for _ in 0..120 {
-            player.update(&world, &input, Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0 / 60.0);
-            assert_eq!(player.take_steps(), 0, "standing still should never queue a footstep");
+            player.update(
+                &world,
+                &input,
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                1.0 / 60.0,
+            );
+            assert_eq!(
+                player.take_steps(),
+                0,
+                "standing still should never queue a footstep"
+            );
         }
-        assert!(player.on_ground, "sanity check: the player should have actually landed");
+        assert!(
+            player.on_ground,
+            "sanity check: the player should have actually landed"
+        );
     }
 
     #[test]
@@ -593,11 +658,23 @@ mod tests {
         input.key_event(KeyCode::KeyW, ElementState::Pressed);
 
         for _ in 0..180 {
-            player.update(&world, &input, Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0 / 60.0);
+            player.update(
+                &world,
+                &input,
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                1.0 / 60.0,
+            );
         }
         let first = player.take_steps();
-        assert!(first > 0, "expected accumulated distance to produce at least one step");
+        assert!(
+            first > 0,
+            "expected accumulated distance to produce at least one step"
+        );
         let second = player.take_steps();
-        assert_eq!(second, 0, "a drained step must not reappear on the next take_steps call");
+        assert_eq!(
+            second, 0,
+            "a drained step must not reappear on the next take_steps call"
+        );
     }
 }

@@ -26,18 +26,18 @@ use crate::world_api_gen::{
 
 #[path = "script_api.rs"]
 mod api;
-#[path = "script_environment.rs"]
-mod environment;
-#[path = "script_world_edit.rs"]
-mod world_edit;
-#[path = "script_inventory.rs"]
-mod inventory;
 #[path = "script_automation.rs"]
 mod automation_api;
+#[path = "script_environment.rs"]
+mod environment;
+#[path = "script_inventory.rs"]
+mod inventory;
 #[path = "script_scheduler.rs"]
 mod scheduler;
 #[path = "script_transaction.rs"]
 mod transaction;
+#[path = "script_world_edit.rs"]
+mod world_edit;
 use api::Callback;
 use transaction::CallbackTransaction;
 
@@ -103,8 +103,15 @@ pub struct InventoryBalances {
 }
 impl InventoryBalances {
     pub fn from_account(account: &crate::crafting::Account) -> Self {
-        Self {mana:account.mana,elements:account.elements,items:account.gear,
-            adventure:account.adventure,held:account.hotbar.entry().filter(|e|!matches!(e,crate::equipment::Entry::Spell(_)) || e.count(account)>0)}
+        Self {
+            mana: account.mana,
+            elements: account.elements,
+            items: account.gear,
+            adventure: account.adventure,
+            held: account.hotbar.entry().filter(|e| {
+                !matches!(e, crate::equipment::Entry::Spell(_)) || e.count(account) > 0
+            }),
+        }
     }
 }
 
@@ -145,8 +152,14 @@ pub struct InteractEvent {
 /// growing a new field for every future player-targeted action.
 #[derive(Debug, PartialEq)]
 pub enum PlayerEffect {
-    AutomationState { state: Box<crate::automation::State> },
-    Inventory { player_id: PlayerId, balances: InventoryBalances, resources: [u32; COLLECTIBLE_BLOCKS.len()] },
+    AutomationState {
+        state: Box<crate::automation::State>,
+    },
+    Inventory {
+        player_id: PlayerId,
+        balances: InventoryBalances,
+        resources: [u32; COLLECTIBLE_BLOCKS.len()],
+    },
     /// `api.give_item` -- always succeeds once accepted (there's no
     /// "insufficient inventory" failure mode for adding), so nothing else
     /// needs to observe the outcome.
@@ -231,6 +244,7 @@ pub struct ModuleSaveEntry {
 /// never leak into another's, and a crashed module can't corrupt the rest),
 /// with instruction/time/memory budgets enforced at the VM level.
 pub struct Module {
+    pub artwork: crate::spell_art::Recipe,
     pub attachment: Option<crate::enchantment::Binding>,
     pub attachment_candidate: Option<crate::enchantment::Reference>,
     pub name: String,
@@ -306,7 +320,9 @@ impl Module {
         });
 
         Ok(Module {
-            attachment:None,attachment_candidate:None,
+            artwork: crate::spell_art::Recipe::from_source(&source, &prompt),
+            attachment: None,
+            attachment_candidate: None,
             name,
             prompt,
             source,
@@ -334,23 +350,52 @@ impl Module {
     }
 
     fn execute(&mut self, input: &mut TickInput, event: Callback) -> mlua::Result<()> {
-        self.last_work=WorkUsage::default();
-        if let Some(binding)=&mut self.attachment {
-            let validity=if let Some(reason)=&binding.lost {Err(reason.clone())} else {binding.target.available(input.world,input.creatures)};
+        self.last_work = WorkUsage::default();
+        if let Some(binding) = &mut self.attachment {
+            let validity = if let Some(reason) = &binding.lost {
+                Err(reason.clone())
+            } else {
+                binding.target.available(input.world, input.creatures)
+            };
             match validity {
-                Ok(false)=>{input.creatures.attack_policies.remove(&(self.runtime_id,self.activation_epoch));return Ok(());},
-                Ok(true)=>{},
-                Err(reason)=>{binding.lost=Some(reason.clone());input.creatures.attack_policies.remove(&(self.runtime_id,self.activation_epoch));return Err(mlua::Error::RuntimeError(reason));}
+                Ok(false) => {
+                    input
+                        .creatures
+                        .attack_policies
+                        .remove(&(self.runtime_id, self.activation_epoch));
+                    return Ok(());
+                }
+                Ok(true) => {}
+                Err(reason) => {
+                    binding.lost = Some(reason.clone());
+                    input
+                        .creatures
+                        .attack_policies
+                        .remove(&(self.runtime_id, self.activation_epoch));
+                    return Err(mlua::Error::RuntimeError(reason));
+                }
             }
-            if let crate::enchantment::Object::Block{cell,material,..}=binding.target.object {
-                if input.block_edits.iter().any(|&(x,y,z,b)|(x,y,z)==cell && b!=material) {
-                    binding.lost=Some("Block was replaced by another callback".into());
-                    input.creatures.attack_policies.remove(&(self.runtime_id,self.activation_epoch));
+            if let crate::enchantment::Object::Block { cell, material, .. } = binding.target.object
+            {
+                if input
+                    .block_edits
+                    .iter()
+                    .any(|&(x, y, z, b)| (x, y, z) == cell && b != material)
+                {
+                    binding.lost = Some("Block was replaced by another callback".into());
+                    input
+                        .creatures
+                        .attack_policies
+                        .remove(&(self.runtime_id, self.activation_epoch));
                     return Err(mlua::Error::RuntimeError(binding.lost.clone().unwrap()));
                 }
             }
         }
-        let registry = self.lua.app_data_ref::<std::sync::Arc<crate::crafting::Registry>>().map(|r|r.clone()).unwrap_or_else(default_inventory_registry);
+        let registry = self
+            .lua
+            .app_data_ref::<std::sync::Arc<crate::crafting::Registry>>()
+            .map(|r| r.clone())
+            .unwrap_or_else(default_inventory_registry);
         self.last_work = WorkUsage::default();
         let initialization_work = if self.needs_reload {
             crate::world_api_gen::SCRIPT_INSTRUCTIONS
@@ -368,21 +413,33 @@ impl Module {
             replacement.spawn_seed.set(seed);
             replacement.runtime_id = self.runtime_id;
             replacement.activation_epoch = self.activation_epoch;
-            replacement.attachment=self.attachment.clone();replacement.attachment_candidate=self.attachment_candidate.clone();
+            replacement.attachment = self.attachment.clone();
+            replacement.attachment_candidate = self.attachment_candidate.clone();
             *self = replacement;
         }
         self.lua.set_app_data(registry);
         let result = self.budget.run(|| {
             let mut tx = CallbackTransaction::new(input, self.spawn_seed.get());
-            tx.attachment=self.attachment.clone();
-            if let Some(binding)=&tx.attachment {
-                if let crate::enchantment::Object::Device{id,cell,kind}=binding.target.object {
-                    if !tx.automation.borrow().devices.get(&cell).is_some_and(|d|d.persistent_id==id&&d.kind==kind) {
-                        return Err(mlua::Error::RuntimeError("Attached device was removed by another callback".into()));
+            tx.attachment = self.attachment.clone();
+            if let Some(binding) = &tx.attachment {
+                if let crate::enchantment::Object::Device { id, cell, kind } = binding.target.object
+                {
+                    if !tx
+                        .automation
+                        .borrow()
+                        .devices
+                        .get(&cell)
+                        .is_some_and(|d| d.persistent_id == id && d.kind == kind)
+                    {
+                        return Err(mlua::Error::RuntimeError(
+                            "Attached device was removed by another callback".into(),
+                        ));
                     }
                 }
             }
-            if matches!(event, Callback::Tick) { tx.policy_owner = Some((self.runtime_id, self.activation_epoch)); }
+            if matches!(event, Callback::Tick) {
+                tx.policy_owner = Some((self.runtime_id, self.activation_epoch));
+            }
             api::call(&self.lua, &tx, event)?;
             Ok(tx)
         });
@@ -398,7 +455,10 @@ impl Module {
                 Ok(())
             }
             Err(error) => {
-                input.creatures.attack_policies.remove(&(self.runtime_id, self.activation_epoch));
+                input
+                    .creatures
+                    .attack_policies
+                    .remove(&(self.runtime_id, self.activation_epoch));
                 self.needs_reload = true;
                 Err(error)
             }
@@ -625,7 +685,7 @@ fn horizontal_speed(v: Vec3) -> f32 {
 /// -- factored out so the two don't drift out of sync (`nearest_player`
 /// just adds its own `distance` on top).
 fn set_player_fields<'lua>(e: &Table<'lua>, p: &PlayerSnapshot) -> mlua::Result<()> {
-    e.set("mana",p.finances.mana)?;
+    e.set("mana", p.finances.mana)?;
     e.set("id", p.id)?;
     e.set("x", p.pos.x)?;
     e.set("y", p.pos.y)?;
@@ -672,9 +732,9 @@ fn random_offset_in_disk(seed: u64, radius: f32) -> (f32, f32) {
 /// (block edits replicate reliably, creature positions ride the existing
 /// snapshot broadcast).
 pub struct ScriptHost {
-    unloaded_enchantments:Vec<crate::enchantment::Saved>,
+    unloaded_enchantments: Vec<crate::enchantment::Saved>,
     pub spellbook: crate::spellbook::Spellbook,
-    pub spell_cooldowns: std::collections::HashMap<crate::spellbook::SpellId,std::time::Instant>,
+    pub spell_cooldowns: std::collections::HashMap<crate::spellbook::SpellId, std::time::Instant>,
     pub inventory_registry: std::sync::Arc<crate::crafting::Registry>,
     last_cast_success: Option<(u64, PlayerId)>,
     pub modules: Vec<Module>,
@@ -686,7 +746,7 @@ impl ScriptHost {
     pub fn new() -> Self {
         Self {
             spellbook: Default::default(),
-            unloaded_enchantments:Vec::new(),
+            unloaded_enchantments: Vec::new(),
             spell_cooldowns: Default::default(),
             inventory_registry: default_inventory_registry(),
             modules: Vec::new(),
@@ -788,6 +848,7 @@ impl ScriptHost {
     }
 
     /// Returns the removed module's name, if any, for a notification.
+    /// Internal cast cleanup must not delete remembered definitions.
     pub fn remove(&mut self, index: usize) -> Option<String> {
         if index >= self.modules.len() {
             return None;
@@ -798,9 +859,21 @@ impl ScriptHost {
         Some(m.name)
     }
 
+    /// Explicit Rules-panel deletion also removes remembered copies of this module.
+    pub fn delete_rule(&mut self, index: usize) -> Option<String> {
+        let module = self.modules.get(index)?;
+        self.spellbook.delete_for_module(module);
+        self.spell_cooldowns
+            .retain(|id, _| self.spellbook.get(*id).is_some());
+        self.remove(index)
+    }
+
     pub fn sync_attack_policies(&self, creatures: &mut Creatures) {
-        creatures.attack_policies.retain(|&(id, epoch), _| self.modules.iter().any(|m|
-            m.enabled && !m.is_instant && m.runtime_id == id && m.activation_epoch == epoch));
+        creatures.attack_policies.retain(|&(id, epoch), _| {
+            self.modules.iter().any(|m| {
+                m.enabled && !m.is_instant && m.runtime_id == id && m.activation_epoch == epoch
+            })
+        });
     }
 
     /// Enqueues ticks and player events, then fairly dispatches bounded work.
@@ -862,31 +935,58 @@ impl ScriptHost {
     /// cancels unexecuted work so a refunded cast cannot execute on a later tick.
     #[allow(clippy::too_many_arguments)]
     pub fn run_targeted_cast(
-        &mut self, index: usize, world: &World, creatures: &mut Creatures,
-        players: &[PlayerSnapshot], time_of_day: &mut f32, weather: &mut WeatherState,
-        caster_id: PlayerId, host_resources: [u32; COLLECTIBLE_BLOCKS.len()],
+        &mut self,
+        index: usize,
+        world: &World,
+        creatures: &mut Creatures,
+        players: &[PlayerSnapshot],
+        time_of_day: &mut f32,
+        weather: &mut WeatherState,
+        caster_id: PlayerId,
+        host_resources: [u32; COLLECTIBLE_BLOCKS.len()],
         context: crate::spell_target::TargetContext,
     ) -> TickOutcome {
         self.last_cast_success = None;
         let validation = (|| {
-            if !self.can_cast_immediately() { return Err("Rules are busy; try again".into()); }
-            if !self.modules.get(index).is_some_and(|m|m.is_instant) {
+            if !self.can_cast_immediately() {
+                return Err("Rules are busy; try again".into());
+            }
+            if !self.modules.get(index).is_some_and(|m| m.is_instant) {
                 return Err("Select an instant spell".into());
             }
-            let caster = players.iter().find(|p|p.id == caster_id).ok_or("Caster is not connected")?;
-            if caster.health <= 0.0 { return Err("Defeated players cannot cast".into()); }
+            let caster = players
+                .iter()
+                .find(|p| p.id == caster_id)
+                .ok_or("Caster is not connected")?;
+            if caster.health <= 0.0 {
+                return Err("Defeated players cannot cast".into());
+            }
             context.validate(world, creatures, caster.pos + Vec3::Y * 1.62)
         })();
         let context = match validation {
             Ok(context) => context,
-            Err(error) => return TickOutcome { warnings: vec![error], ..TickOutcome::default() },
+            Err(error) => {
+                return TickOutcome {
+                    warnings: vec![error],
+                    ..TickOutcome::default()
+                }
+            }
         };
         self.enqueue_targeted_cast(index, caster_id, context);
-        let mut outcome = self.dispatch_world(world, creatures, players, time_of_day, weather, host_resources);
+        let mut outcome = self.dispatch_world(
+            world,
+            creatures,
+            players,
+            time_of_day,
+            weather,
+            host_resources,
+        );
         if !self.cast_succeeded(index, caster_id) {
             self.scheduler.cancel(self.modules[index].runtime_id);
             if outcome.crashes.is_empty() {
-                outcome.warnings.push("Cast did not execute; try again".into());
+                outcome
+                    .warnings
+                    .push("Cast did not execute; try again".into());
             }
         }
         outcome
@@ -921,47 +1021,88 @@ impl ScriptHost {
     pub fn save_entries(&self) -> Vec<ModuleSaveEntry> {
         self.modules
             .iter()
-            .filter(|m|m.attachment.is_none())
+            .filter(|m| m.attachment.is_none())
             .map(Module::to_save_entry)
             .chain(self.unloaded_entries.iter().cloned())
             .collect()
     }
-    pub fn save_enchantments(&self)->Vec<crate::enchantment::Saved> {
-        self.modules.iter().filter_map(|m|m.attachment.clone().map(|binding|crate::enchantment::Saved{binding,module:m.to_save_entry()}))
-            .chain(self.unloaded_enchantments.iter().cloned()).collect()
+    pub fn save_enchantments(&self) -> Vec<crate::enchantment::Saved> {
+        self.modules
+            .iter()
+            .filter_map(|m| {
+                m.attachment
+                    .clone()
+                    .map(|binding| crate::enchantment::Saved {
+                        binding,
+                        module: m.to_save_entry(),
+                    })
+            })
+            .chain(self.unloaded_enchantments.iter().cloned())
+            .collect()
     }
-    pub fn attach_at(&mut self,index:usize,binding:crate::enchantment::Binding)->Result<(),String> {
-        let old=self.modules.get(index).ok_or("Rule no longer exists")?;
-        if old.is_instant || old.attachment.is_some() {return Err("Choose an unattached continuous rule".into());}
-        let mut module=Module::load(old.name.clone(),old.prompt.clone(),old.source.clone())?;
+    pub fn attach_at(
+        &mut self,
+        index: usize,
+        binding: crate::enchantment::Binding,
+    ) -> Result<(), String> {
+        let old = self.modules.get(index).ok_or("Rule no longer exists")?;
+        if old.is_instant || old.attachment.is_some() {
+            return Err("Choose an unattached continuous rule".into());
+        }
+        let mut module = Module::load(old.name.clone(), old.prompt.clone(), old.source.clone())?;
         self.scheduler.cancel(old.runtime_id);
-        module.attachment=Some(binding);module.enabled=true;self.modules[index]=module;Ok(())
+        module.attachment = Some(binding);
+        module.enabled = true;
+        self.modules[index] = module;
+        Ok(())
     }
-    pub fn detach_at(&mut self,index:usize) {
-        if let Some(module)=self.modules.get_mut(index) {
+    pub fn detach_at(&mut self, index: usize) {
+        if let Some(module) = self.modules.get_mut(index) {
             if module.attachment.take().is_some() {
-                module.enabled=false;module.attachment_candidate=None;module.needs_reload=true;
+                module.enabled = false;
+                module.attachment_candidate = None;
+                module.needs_reload = true;
                 self.scheduler.cancel(module.runtime_id);
             }
         }
     }
-    pub fn load_enchantments(&mut self,entries:Vec<crate::enchantment::Saved>) {
-        let mut ids=std::collections::HashSet::new();
+    pub fn load_enchantments(&mut self, entries: Vec<crate::enchantment::Saved>) {
+        let mut ids = std::collections::HashSet::new();
         for mut entry in entries {
-            if !ids.insert(entry.binding.id) || entry.binding.id==0 {entry.binding.lost=Some("Invalid duplicate creation ID".into());entry.module.enabled=false;}
-            if self.modules.len()>=crate::world_api_gen::SCRIPT_MODULES_MAX {self.unloaded_enchantments.push(entry);continue;}
-            let mut restored=Self::load_from_save(&[entry.module.clone()]);
-            if let Some(mut module)=restored.modules.pop() {
-                if module.is_instant {module.enabled=false;module.error=Some("Attachments require a continuous rule".into());}
-                module.attachment=Some(entry.binding);self.modules.push(module);
-            }else{self.unloaded_enchantments.push(entry);}
+            if !ids.insert(entry.binding.id) || entry.binding.id == 0 {
+                entry.binding.lost = Some("Invalid duplicate creation ID".into());
+                entry.module.enabled = false;
+            }
+            if self.modules.len() >= crate::world_api_gen::SCRIPT_MODULES_MAX {
+                self.unloaded_enchantments.push(entry);
+                continue;
+            }
+            let mut restored = Self::load_from_save(&[entry.module.clone()]);
+            if let Some(mut module) = restored.modules.pop() {
+                if module.is_instant {
+                    module.enabled = false;
+                    module.error = Some("Attachments require a continuous rule".into());
+                }
+                module.attachment = Some(entry.binding);
+                self.modules.push(module);
+            } else {
+                self.unloaded_enchantments.push(entry);
+            }
         }
     }
 }
 
 fn default_inventory_registry() -> std::sync::Arc<crate::crafting::Registry> {
-    static REGISTRY: std::sync::OnceLock<std::sync::Arc<crate::crafting::Registry>> = std::sync::OnceLock::new();
-    REGISTRY.get_or_init(||std::sync::Arc::new(crate::crafting::Registry::parse(include_str!("../data/crafting.json")).expect("embedded crafting registry"))).clone()
+    static REGISTRY: std::sync::OnceLock<std::sync::Arc<crate::crafting::Registry>> =
+        std::sync::OnceLock::new();
+    REGISTRY
+        .get_or_init(|| {
+            std::sync::Arc::new(
+                crate::crafting::Registry::parse(include_str!("../data/crafting.json"))
+                    .expect("embedded crafting registry"),
+            )
+        })
+        .clone()
 }
 
 #[cfg(test)]
@@ -984,89 +1125,157 @@ mod tests {
 
     fn targeted_fixture(source: &str) -> (ScriptHost, World, Creatures, PlayerSnapshot) {
         let mut host = ScriptHost::new();
-        host.modules.push(Module::load("target test".into(), "manual".into(), source.into()).unwrap());
+        host.modules
+            .push(Module::load("target test".into(), "manual".into(), source.into()).unwrap());
         let mut world = World::new(42);
         world.ensure_chunk_loaded(0, 0);
-        for x in 0..16 { for z in 0..16 { for y in 65..75 {
-            world.set_block(x, y, z, BlockType::Air);
-        } } }
-        (host, world, Creatures::new(), snapshot(0, Vec3::new(2.5, 68.38, 2.5), false))
+        for x in 0..16 {
+            for z in 0..16 {
+                for y in 65..75 {
+                    world.set_block(x, y, z, BlockType::Air);
+                }
+            }
+        }
+        (
+            host,
+            world,
+            Creatures::new(),
+            snapshot(0, Vec3::new(2.5, 68.38, 2.5), false),
+        )
     }
 
-    fn targeted_run(host: &mut ScriptHost, world: &World, creatures: &mut Creatures,
-        player: PlayerSnapshot, context: crate::spell_target::TargetContext) -> TickOutcome {
-        host.run_targeted_cast(0, world, creatures, &[player], &mut 0.5,
-            &mut WeatherState::new(42), player.id, NO_RESOURCES, context)
+    fn targeted_run(
+        host: &mut ScriptHost,
+        world: &World,
+        creatures: &mut Creatures,
+        player: PlayerSnapshot,
+        context: crate::spell_target::TargetContext,
+    ) -> TickOutcome {
+        host.run_targeted_cast(
+            0,
+            world,
+            creatures,
+            &[player],
+            &mut 0.5,
+            &mut WeatherState::new(42),
+            player.id,
+            NO_RESOURCES,
+            context,
+        )
     }
 
     #[test]
     fn targeted_reference_heal_reuses_source_for_different_creatures_and_damage_works() {
         use crate::spell_target::TargetContext;
-        let (mut host, world, mut creatures, player) = targeted_fixture(include_str!("../modules/target_heal.lua"));
-        let a = creatures.spawn_one(CreatureKind::StoneGolem, Vec3::new(6.5,69.35,2.5), 1);
-        let b = creatures.spawn_one(CreatureKind::StoneGolem, Vec3::new(2.5,69.35,6.5), 2);
-        creatures.damage(a, 25.0); creatures.damage(b, 25.0);
+        let (mut host, world, mut creatures, player) =
+            targeted_fixture(include_str!("../modules/target_heal.lua"));
+        let a = creatures.spawn_one(CreatureKind::StoneGolem, Vec3::new(6.5, 69.35, 2.5), 1);
+        let b = creatures.spawn_one(CreatureKind::StoneGolem, Vec3::new(2.5, 69.35, 6.5), 2);
+        creatures.damage(a, 25.0);
+        creatures.damage(b, 25.0);
         let before = creatures.snapshot_with_ids();
         for direction in [Vec3::X, Vec3::Z] {
-            let context = TargetContext::resolve(&world, &creatures, player.pos + Vec3::Y*1.62, direction).unwrap();
-            let out = targeted_run(&mut host,&world,&mut creatures,player,context);
+            let context =
+                TargetContext::resolve(&world, &creatures, player.pos + Vec3::Y * 1.62, direction)
+                    .unwrap();
+            let out = targeted_run(&mut host, &world, &mut creatures, player, context);
             assert!(out.crashes.is_empty(), "{:?}", out.crashes);
-            assert!(host.cast_succeeded(0,0));
+            assert!(host.cast_succeeded(0, 0));
         }
-        for (id,_,_,health,_) in creatures.snapshot_with_ids() {
-            assert_eq!(health, before.iter().find(|c|c.0==id).unwrap().3 + 20.0);
+        for (id, _, _, health, _) in creatures.snapshot_with_ids() {
+            assert_eq!(health, before.iter().find(|c| c.0 == id).unwrap().3 + 20.0);
         }
-        host.modules[0] = Module::load("damage".into(), "manual".into(), include_str!("../modules/target_damage.lua").into()).unwrap();
-        let context = TargetContext::resolve(&world,&creatures,player.pos+Vec3::Y*1.62,Vec3::X).unwrap();
-        targeted_run(&mut host,&world,&mut creatures,player,context);
-        assert!(host.cast_succeeded(0,0));
-        assert_eq!(creatures.snapshot_with_ids().iter().find(|c|c.0==a).unwrap().3,
-            before.iter().find(|c|c.0==a).unwrap().3);
+        host.modules[0] = Module::load(
+            "damage".into(),
+            "manual".into(),
+            include_str!("../modules/target_damage.lua").into(),
+        )
+        .unwrap();
+        let context =
+            TargetContext::resolve(&world, &creatures, player.pos + Vec3::Y * 1.62, Vec3::X)
+                .unwrap();
+        targeted_run(&mut host, &world, &mut creatures, player, context);
+        assert!(host.cast_succeeded(0, 0));
+        assert_eq!(
+            creatures
+                .snapshot_with_ids()
+                .iter()
+                .find(|c| c.0 == a)
+                .unwrap()
+                .3,
+            before.iter().find(|c| c.0 == a).unwrap().3
+        );
     }
 
     #[test]
     fn targeted_block_replacement_and_wrong_kind_are_transactional() {
         use crate::spell_target::TargetContext;
-        let (mut host, mut world, mut creatures, player) = targeted_fixture(include_str!("../modules/target_stone.lua"));
-        world.set_block(6,70,2,BlockType::Soil);
-        let context = TargetContext::resolve(&world,&creatures,player.pos+Vec3::Y*1.62,Vec3::X).unwrap();
+        let (mut host, mut world, mut creatures, player) =
+            targeted_fixture(include_str!("../modules/target_stone.lua"));
+        world.set_block(6, 70, 2, BlockType::Soil);
+        let context =
+            TargetContext::resolve(&world, &creatures, player.pos + Vec3::Y * 1.62, Vec3::X)
+                .unwrap();
         assert_eq!(context.hit_normal, -Vec3::X);
-        assert!((context.hit_position.x-6.0).abs()<0.001);
-        let out = targeted_run(&mut host,&world,&mut creatures,player,context);
-        assert_eq!(out.block_edits, [(6,70,2,BlockType::Stone)]);
-        assert!(host.cast_succeeded(0,0));
-        host.modules[0] = Module::load("heal".into(), "manual".into(), include_str!("../modules/target_heal.lua").into()).unwrap();
-        let out = targeted_run(&mut host,&world,&mut creatures,player,context);
-        assert!(!host.cast_succeeded(0,0));
-        assert_eq!(out.crashes.len(),1);
+        assert!((context.hit_position.x - 6.0).abs() < 0.001);
+        let out = targeted_run(&mut host, &world, &mut creatures, player, context);
+        assert_eq!(out.block_edits, [(6, 70, 2, BlockType::Stone)]);
+        assert!(host.cast_succeeded(0, 0));
+        host.modules[0] = Module::load(
+            "heal".into(),
+            "manual".into(),
+            include_str!("../modules/target_heal.lua").into(),
+        )
+        .unwrap();
+        let out = targeted_run(&mut host, &world, &mut creatures, player, context);
+        assert!(!host.cast_succeeded(0, 0));
+        assert_eq!(out.crashes.len(), 1);
         assert!(out.block_edits.is_empty());
         assert!(out.player_effects.is_empty());
     }
 
     #[test]
     fn targeted_stale_obstructed_moved_and_forged_casts_never_execute() {
-        use crate::spell_target::{TargetContext, Target};
-        let (mut host, mut world, mut creatures, player) = targeted_fixture("function on_cast(api,e) api.broadcast('executed') end");
-        let id = creatures.spawn_one(CreatureKind::Sheep, Vec3::new(6.5,69.35,2.5), 1);
-        let eye = player.pos + Vec3::Y*1.62;
-        let context = TargetContext::resolve(&world,&creatures,eye,Vec3::X).unwrap();
-        for bad in [TargetContext{target:Target::Creature{id:id+1},..context},
-            TargetContext{origin:eye+Vec3::X,..context},
-            TargetContext{facing:Vec3::splat(f32::NAN),..context},
-            TargetContext{facing:Vec3::ZERO,..context}] {
-            let out = targeted_run(&mut host,&world,&mut creatures,player,bad);
-            assert!(!host.cast_succeeded(0,0)); assert!(out.broadcasts.is_empty());
+        use crate::spell_target::{Target, TargetContext};
+        let (mut host, mut world, mut creatures, player) =
+            targeted_fixture("function on_cast(api,e) api.broadcast('executed') end");
+        let id = creatures.spawn_one(CreatureKind::Sheep, Vec3::new(6.5, 69.35, 2.5), 1);
+        let eye = player.pos + Vec3::Y * 1.62;
+        let context = TargetContext::resolve(&world, &creatures, eye, Vec3::X).unwrap();
+        for bad in [
+            TargetContext {
+                target: Target::Creature { id: id + 1 },
+                ..context
+            },
+            TargetContext {
+                origin: eye + Vec3::X,
+                ..context
+            },
+            TargetContext {
+                facing: Vec3::splat(f32::NAN),
+                ..context
+            },
+            TargetContext {
+                facing: Vec3::ZERO,
+                ..context
+            },
+        ] {
+            let out = targeted_run(&mut host, &world, &mut creatures, player, bad);
+            assert!(!host.cast_succeeded(0, 0));
+            assert!(out.broadcasts.is_empty());
         }
-        world.set_block(4,70,2,BlockType::Stone);
-        let out = targeted_run(&mut host,&world,&mut creatures,player,context);
-        assert!(out.broadcasts.is_empty()); assert!(!host.cast_succeeded(0,0));
-        world.set_block(4,70,2,BlockType::Air);
-        creatures.damage(id,999.0);
-        let out = targeted_run(&mut host,&world,&mut creatures,player,context);
-        assert!(out.broadcasts.is_empty()); assert!(!host.cast_succeeded(0,0));
-        assert!(TargetContext::resolve(&world,&creatures,eye,Vec3::ZERO).is_none());
-        creatures.spawn_one(CreatureKind::Sheep,Vec3::new(24.5,69.35,2.5),2);
-        assert!(TargetContext::resolve(&world,&creatures,eye,Vec3::X).is_none());
+        world.set_block(4, 70, 2, BlockType::Stone);
+        let out = targeted_run(&mut host, &world, &mut creatures, player, context);
+        assert!(out.broadcasts.is_empty());
+        assert!(!host.cast_succeeded(0, 0));
+        world.set_block(4, 70, 2, BlockType::Air);
+        creatures.damage(id, 999.0);
+        let out = targeted_run(&mut host, &world, &mut creatures, player, context);
+        assert!(out.broadcasts.is_empty());
+        assert!(!host.cast_succeeded(0, 0));
+        assert!(TargetContext::resolve(&world, &creatures, eye, Vec3::ZERO).is_none());
+        creatures.spawn_one(CreatureKind::Sheep, Vec3::new(24.5, 69.35, 2.5), 2);
+        assert!(TargetContext::resolve(&world, &creatures, eye, Vec3::X).is_none());
     }
 
     #[test]
@@ -1074,16 +1283,30 @@ mod tests {
         use crate::spell_target::TargetContext;
         let source = "function on_cast(api,e) api.damage(e.target.id,20); api.replace_block(3,70,3,'stone'); api.give_mana(e.player_id,20); error('rollback') end";
         let (mut host, world, mut creatures, player) = targeted_fixture(source);
-        creatures.spawn_one(CreatureKind::Sheep, Vec3::new(6.5,69.35,2.5), 1);
+        creatures.spawn_one(CreatureKind::Sheep, Vec3::new(6.5, 69.35, 2.5), 1);
         let before = creatures.snapshot_with_ids();
-        let context = TargetContext::resolve(&world,&creatures,player.pos+Vec3::Y*1.62,Vec3::X).unwrap();
-        let out = targeted_run(&mut host,&world,&mut creatures,player,context);
-        assert!(!host.cast_succeeded(0,0)); assert_eq!(out.crashes.len(),1);
-        assert!(out.block_edits.is_empty()); assert!(out.player_effects.is_empty());
+        let context =
+            TargetContext::resolve(&world, &creatures, player.pos + Vec3::Y * 1.62, Vec3::X)
+                .unwrap();
+        let out = targeted_run(&mut host, &world, &mut creatures, player, context);
+        assert!(!host.cast_succeeded(0, 0));
+        assert_eq!(out.crashes.len(), 1);
+        assert!(out.block_edits.is_empty());
+        assert!(out.player_effects.is_empty());
         assert_eq!(creatures.snapshot_with_ids(), before);
-        let out = host.run_tick(&world,&mut creatures,&[player],&mut 0.5,&mut WeatherState::new(42),&[],&[],NO_RESOURCES);
-        assert!(out.crashes.is_empty()); assert!(out.block_edits.is_empty());
-        assert_eq!(creatures.snapshot_with_ids(),before);
+        let out = host.run_tick(
+            &world,
+            &mut creatures,
+            &[player],
+            &mut 0.5,
+            &mut WeatherState::new(42),
+            &[],
+            &[],
+            NO_RESOURCES,
+        );
+        assert!(out.crashes.is_empty());
+        assert!(out.block_edits.is_empty());
+        assert_eq!(creatures.snapshot_with_ids(), before);
     }
 
     #[test]
@@ -1091,63 +1314,120 @@ mod tests {
         use crate::spell_target::TargetContext;
         let source = "function on_cast(api,e) assert(e.cast_id>0); assert(e.target.kind=='block'); assert(e.target.material=='soil'); assert(e.hit_position.x==6); assert(e.hit_normal.x==-1); assert(e.origin.x==2.5); assert(e.facing.x==1) end";
         let (mut host, mut world, mut creatures, player) = targeted_fixture(source);
-        world.set_block(6,70,2,BlockType::Soil);
-        let eye=player.pos+Vec3::Y*1.62;
-        let mut context=TargetContext::resolve(&world,&creatures,eye,Vec3::X).unwrap();
-        context.hit_position=Vec3::splat(f32::NAN);
-        context.hit_normal=Vec3::splat(123.0);
-        let out=targeted_run(&mut host,&world,&mut creatures,player,context);
-        assert!(out.crashes.is_empty(),"{:?}",out.crashes);
-        assert!(host.cast_succeeded(0,0));
-        world.set_block(6,70,2,BlockType::Stone);
-        let out=targeted_run(&mut host,&world,&mut creatures,player,context);
-        assert!(!host.cast_succeeded(0,0)); assert!(!out.warnings.is_empty());
-        world.set_block(6,70,2,BlockType::Air);
-        creatures.spawn_one(CreatureKind::Sheep,Vec3::new(18.0,69.35,2.5),1);
-        assert!(TargetContext::resolve(&world,&creatures,eye,Vec3::X).is_none());
-        world.ensure_chunk_loaded(1,0);
-        assert!(TargetContext::resolve(&world,&creatures,eye,Vec3::X).is_some());
+        world.set_block(6, 70, 2, BlockType::Soil);
+        let eye = player.pos + Vec3::Y * 1.62;
+        let mut context = TargetContext::resolve(&world, &creatures, eye, Vec3::X).unwrap();
+        context.hit_position = Vec3::splat(f32::NAN);
+        context.hit_normal = Vec3::splat(123.0);
+        let out = targeted_run(&mut host, &world, &mut creatures, player, context);
+        assert!(out.crashes.is_empty(), "{:?}", out.crashes);
+        assert!(host.cast_succeeded(0, 0));
+        world.set_block(6, 70, 2, BlockType::Stone);
+        let out = targeted_run(&mut host, &world, &mut creatures, player, context);
+        assert!(!host.cast_succeeded(0, 0));
+        assert!(!out.warnings.is_empty());
+        world.set_block(6, 70, 2, BlockType::Air);
+        creatures.spawn_one(CreatureKind::Sheep, Vec3::new(18.0, 69.35, 2.5), 1);
+        assert!(TargetContext::resolve(&world, &creatures, eye, Vec3::X).is_none());
+        world.ensure_chunk_loaded(1, 0);
+        assert!(TargetContext::resolve(&world, &creatures, eye, Vec3::X).is_some());
     }
 
     #[test]
     fn targeted_stage_1d_reference_spells_execute_for_guest_casters() {
         use crate::spell_target::TargetContext;
-        for (name,source) in [
-            ("slow",include_str!("../modules/target_slow.lua")),
-            ("stun",include_str!("../modules/target_stun.lua")),
-            ("push",include_str!("../modules/target_push.lua")),
-            ("summon",include_str!("../modules/target_summon.lua")),
+        for (name, source) in [
+            ("slow", include_str!("../modules/target_slow.lua")),
+            ("stun", include_str!("../modules/target_stun.lua")),
+            ("push", include_str!("../modules/target_push.lua")),
+            ("summon", include_str!("../modules/target_summon.lua")),
         ] {
-            let (mut host,mut world,mut creatures,mut player)=targeted_fixture(source);
-            player.id=7;
-            for x in 0..16 {for z in 0..16 {world.set_block(x,68,z,BlockType::Stone);}}
-            let target=creatures.spawn_one(CreatureKind::StoneGolem,Vec3::new(6.5,69.35,2.5),1);
-            let id=host.spellbook.remember(&host.modules[0],"Host").unwrap();
-            host.spellbook.spells[0].allow_guests=true;
-            let eye=player.pos+Vec3::Y*1.62;
-            let context=TargetContext::resolve(&world,&creatures,eye,Vec3::X).unwrap();
-            let request=crate::spell_network::Request {session:1,sequence:1,spell:id,revision:1,facing:Vec3::X.to_array(),target:Some(context.target)};
-            let context=crate::spell_network::resolve_request(&request,host.spellbook.get(id).unwrap(),&world,&creatures,eye).unwrap().unwrap();
-            let out=host.run_targeted_cast(0,&world,&mut creatures,&[player],&mut 0.5,&mut WeatherState::new(42),7,NO_RESOURCES,context);
-            assert!(host.cast_succeeded(0,7),"{name}: {:?} {:?}",host.modules[0].error,out.crashes);
+            let (mut host, mut world, mut creatures, mut player) = targeted_fixture(source);
+            player.id = 7;
+            for x in 0..16 {
+                for z in 0..16 {
+                    world.set_block(x, 68, z, BlockType::Stone);
+                }
+            }
+            let target =
+                creatures.spawn_one(CreatureKind::StoneGolem, Vec3::new(6.5, 69.35, 2.5), 1);
+            let id = host.spellbook.remember(&host.modules[0], "Host").unwrap();
+            host.spellbook.spells[0].allow_guests = true;
+            let eye = player.pos + Vec3::Y * 1.62;
+            let context = TargetContext::resolve(&world, &creatures, eye, Vec3::X).unwrap();
+            let request = crate::spell_network::Request {
+                session: 1,
+                sequence: 1,
+                spell: id,
+                revision: 1,
+                facing: Vec3::X.to_array(),
+                target: Some(context.target),
+            };
+            let context = crate::spell_network::resolve_request(
+                &request,
+                host.spellbook.get(id).unwrap(),
+                &world,
+                &creatures,
+                eye,
+            )
+            .unwrap()
+            .unwrap();
+            let out = host.run_targeted_cast(
+                0,
+                &world,
+                &mut creatures,
+                &[player],
+                &mut 0.5,
+                &mut WeatherState::new(42),
+                7,
+                NO_RESOURCES,
+                context,
+            );
+            assert!(
+                host.cast_succeeded(0, 7),
+                "{name}: {:?} {:?}",
+                host.modules[0].error,
+                out.crashes
+            );
             match name {
-                "slow"=>assert_eq!(creatures.magic_statuses[&target].slow,10.),
-                "stun"=>assert_eq!(creatures.magic_statuses[&target].stun,3.),
-                "push"=>assert!(creatures.snapshot_with_ids().iter().find(|c|c.0==target).unwrap().2[0]>10.),
-                "summon"=>assert!(creatures.snapshot_with_ids().iter().any(|c|c.1==CreatureKind::Wolf.to_u8())),
-                _=>unreachable!(),
+                "slow" => assert_eq!(creatures.magic_statuses[&target].slow, 10.),
+                "stun" => assert_eq!(creatures.magic_statuses[&target].stun, 3.),
+                "push" => assert!(
+                    creatures
+                        .snapshot_with_ids()
+                        .iter()
+                        .find(|c| c.0 == target)
+                        .unwrap()
+                        .2[0]
+                        > 10.
+                ),
+                "summon" => assert!(creatures
+                    .snapshot_with_ids()
+                    .iter()
+                    .any(|c| c.1 == CreatureKind::Wolf.to_u8())),
+                _ => unreachable!(),
             }
         }
     }
 
     #[test]
     fn targeted_device_spell_uses_device_base_and_stages_authoritative_state() {
-        let (mut host,mut world,mut creatures,player)=targeted_fixture(include_str!("../modules/target_device_toggle.lua"));
-        let cell=(6,70,2);
-        world.automation.devices.insert(cell,crate::automation::Device::new(crate::automation::Kind::Signal,cell,0));
-        let context=crate::spell_target::TargetContext::resolve(&world,&creatures,player.pos+Vec3::Y*1.62,Vec3::X).unwrap();
-        let out=targeted_run(&mut host,&world,&mut creatures,player,context);
-        assert!(host.cast_succeeded(0,0),"{:?}",host.modules[0].error);
+        let (mut host, mut world, mut creatures, player) =
+            targeted_fixture(include_str!("../modules/target_device_toggle.lua"));
+        let cell = (6, 70, 2);
+        world.automation.devices.insert(
+            cell,
+            crate::automation::Device::new(crate::automation::Kind::Signal, cell, 0),
+        );
+        let context = crate::spell_target::TargetContext::resolve(
+            &world,
+            &creatures,
+            player.pos + Vec3::Y * 1.62,
+            Vec3::X,
+        )
+        .unwrap();
+        let out = targeted_run(&mut host, &world, &mut creatures, player, context);
+        assert!(host.cast_succeeded(0, 0), "{:?}", host.modules[0].error);
         assert!(out.player_effects.iter().any(|e|matches!(e,PlayerEffect::AutomationState {state} if !state.devices[&cell].config.enabled)));
         assert!(world.automation.devices[&cell].config.enabled);
     }
@@ -1155,24 +1435,83 @@ mod tests {
     #[test]
     fn spellbook_restored_definition_casts_without_replacing_or_saving_a_second_module() {
         use crate::spell_target::TargetContext;
-        let (mut host,world,mut creatures,player)=targeted_fixture(include_str!("../modules/target_stone.lua"));
-        let id=host.spellbook.remember(&host.modules[0],"Host").unwrap();
-        host.spellbook=serde_json::from_slice(&serde_json::to_vec(&host.spellbook).unwrap()).unwrap();
+        let (mut host, world, mut creatures, player) =
+            targeted_fixture(include_str!("../modules/target_stone.lua"));
+        let id = host.spellbook.remember(&host.modules[0], "Host").unwrap();
+        host.spellbook =
+            serde_json::from_slice(&serde_json::to_vec(&host.spellbook).unwrap()).unwrap();
         host.spellbook.revalidate();
-        let original=host.save_entries();
-        let mut world=world;world.set_block(6,70,2,BlockType::Soil);
-        let context=TargetContext::resolve(&world,&creatures,player.pos+Vec3::Y*1.62,Vec3::X).unwrap();
+        let original = host.save_entries();
+        let mut world = world;
+        world.set_block(6, 70, 2, BlockType::Soil);
+        let context =
+            TargetContext::resolve(&world, &creatures, player.pos + Vec3::Y * 1.62, Vec3::X)
+                .unwrap();
         for _ in 0..2 {
-            let index=host.add_generated(host.spellbook.get(id).unwrap().compiled().unwrap()).unwrap();
-            let out=host.run_targeted_cast(index,&world,&mut creatures,&[player],&mut 0.5,
-                &mut WeatherState::new(42),player.id,NO_RESOURCES,context);
-            assert!(host.cast_succeeded(index,player.id));
-            assert_eq!(out.block_edits,[(6,70,2,BlockType::Stone)]);
+            let index = host
+                .add_generated(host.spellbook.get(id).unwrap().compiled().unwrap())
+                .unwrap();
+            let out = host.run_targeted_cast(
+                index,
+                &world,
+                &mut creatures,
+                &[player],
+                &mut 0.5,
+                &mut WeatherState::new(42),
+                player.id,
+                NO_RESOURCES,
+                context,
+            );
+            assert!(host.cast_succeeded(index, player.id));
+            assert_eq!(out.block_edits, [(6, 70, 2, BlockType::Stone)]);
             host.remove(index);
         }
-        assert_eq!(host.save_entries().len(),original.len());
-        assert_eq!(host.save_entries()[0].source,original[0].source);
-        assert_eq!(host.spellbook.spells.len(),1);assert_eq!(host.spellbook.spells[0].id,id);
+        assert_eq!(host.save_entries().len(), original.len());
+        assert_eq!(host.save_entries()[0].source, original[0].source);
+        assert_eq!(host.spellbook.spells.len(), 1);
+        assert_eq!(host.spellbook.spells[0].id, id);
+    }
+
+    #[test]
+    fn explicit_rule_deletion_removes_remembered_copies_after_save_and_rename() {
+        let (mut host, _, _, _) = targeted_fixture(include_str!("../modules/target_heal.lua"));
+        let id = host.spellbook.remember(&host.modules[0], "Host").unwrap();
+        let copy = host.spellbook.duplicate(id).unwrap();
+        host.spellbook
+            .update(
+                id,
+                "Renamed spell".into(),
+                crate::spellbook::TargetRequirement::Creature,
+            )
+            .unwrap();
+        let other = Module::load(
+            host.modules[0].name.clone(),
+            "Another prompt".into(),
+            host.modules[0].source.clone(),
+        )
+        .unwrap();
+        let unrelated = host.spellbook.remember(&other, "Host").unwrap();
+        host.spellbook =
+            serde_json::from_slice(&serde_json::to_vec(&host.spellbook).unwrap()).unwrap();
+        host.spell_cooldowns.insert(id, std::time::Instant::now());
+        let mut account = crate::crafting::Account::default();
+        host.spellbook.sync_hotbar(&mut account);
+        account
+            .hotbar
+            .assign(Some(crate::equipment::Entry::Spell(copy)));
+        assert!(host.delete_rule(99).is_none());
+        assert_eq!(host.spellbook.spells.len(), 3);
+        assert!(host.delete_rule(0).is_some());
+        host.spellbook.sync_hotbar(&mut account);
+        assert!(host.spellbook.get(id).is_none());
+        assert!(host.spellbook.get(copy).is_none());
+        assert!(host.spellbook.get(unrelated).is_some());
+        assert!(host.spell_cooldowns.is_empty());
+        assert_eq!(account.hotbar.entry(), None);
+        let restored: crate::spellbook::Spellbook =
+            serde_json::from_slice(&serde_json::to_vec(&host.spellbook).unwrap()).unwrap();
+        assert_eq!(restored.spells.len(), 1);
+        assert_eq!(restored.spells[0].id, unrelated);
     }
 
     /// Empty resource counts for tests that don't care about inventory --
@@ -1186,8 +1525,8 @@ mod tests {
     /// id/pos/carrying_crystal, matching the old 3-tuple's shape.
     fn snapshot(id: PlayerId, pos: Vec3, carrying_crystal: bool) -> PlayerSnapshot {
         PlayerSnapshot {
-                finances: Default::default(),
-                resources: [0; COLLECTIBLE_BLOCKS.len()],
+            finances: Default::default(),
+            resources: [0; COLLECTIBLE_BLOCKS.len()],
             id,
             pos,
             carrying_crystal,
@@ -1987,8 +2326,8 @@ mod tests {
         let world = World::new(1);
         let mut creatures = Creatures::new();
         let players = vec![PlayerSnapshot {
-                finances: Default::default(),
-                resources: [0; COLLECTIBLE_BLOCKS.len()],
+            finances: Default::default(),
+            resources: [0; COLLECTIBLE_BLOCKS.len()],
             id: 3,
             pos: Vec3::new(0.0, 0.0, 0.0),
             carrying_crystal: false,
@@ -2214,8 +2553,8 @@ mod tests {
         let mut creatures = Creatures::new();
         let target_pos = Vec3::new(4.0, 5.0, 4.0);
         let players = vec![PlayerSnapshot {
-                finances: Default::default(),
-                resources: [0; COLLECTIBLE_BLOCKS.len()],
+            finances: Default::default(),
+            resources: [0; COLLECTIBLE_BLOCKS.len()],
             id: 9,
             pos: target_pos,
             carrying_crystal: false,
@@ -2280,8 +2619,8 @@ mod tests {
         let world = World::new(1);
         let mut creatures = Creatures::new();
         let players = vec![PlayerSnapshot {
-                finances: Default::default(),
-                resources: [0; COLLECTIBLE_BLOCKS.len()],
+            finances: Default::default(),
+            resources: [0; COLLECTIBLE_BLOCKS.len()],
             id: 9,
             pos: Vec3::new(4.0, 5.0, 4.0),
             carrying_crystal: false,
@@ -2347,8 +2686,8 @@ mod tests {
         module.enabled = true;
 
         let grounded = PlayerSnapshot {
-                finances: Default::default(),
-                resources: [0; COLLECTIBLE_BLOCKS.len()],
+            finances: Default::default(),
+            resources: [0; COLLECTIBLE_BLOCKS.len()],
             id: 0,
             pos: Vec3::new(0.0, 0.0, 0.0),
             carrying_crystal: false,
@@ -2382,8 +2721,8 @@ mod tests {
         );
 
         let jumping = PlayerSnapshot {
-                finances: Default::default(),
-                resources: [0; COLLECTIBLE_BLOCKS.len()],
+            finances: Default::default(),
+            resources: [0; COLLECTIBLE_BLOCKS.len()],
             id: 0,
             pos: Vec3::new(0.0, 1.0, 0.0),
             carrying_crystal: false,
@@ -2431,8 +2770,8 @@ mod tests {
         module.enabled = true;
 
         let already_airborne = PlayerSnapshot {
-                finances: Default::default(),
-                resources: [0; COLLECTIBLE_BLOCKS.len()],
+            finances: Default::default(),
+            resources: [0; COLLECTIBLE_BLOCKS.len()],
             id: 0,
             pos: Vec3::new(0.0, 3.0, 0.0),
             carrying_crystal: false,
@@ -2465,12 +2804,13 @@ mod tests {
 
     #[test]
     fn undead_and_dragons_spawn_near_casting_player_through_world_api() {
-        for kind in ["zombie","skeleton","dragon_green","dragon_red"] {
-            let world=World::new(1);
-            let mut creatures=Creatures::new();
-            let players=vec![snapshot(5,Vec3::new(10.0,40.0,10.0),false)];
-            let mut host=ScriptHost::new();
-            let source=format!(r#"
+        for kind in ["zombie", "skeleton", "dragon_green", "dragon_red"] {
+            let world = World::new(1);
+            let mut creatures = Creatures::new();
+            let players = vec![snapshot(5, Vec3::new(10.0, 40.0, 10.0), false)];
+            let mut host = ScriptHost::new();
+            let source = format!(
+                r#"
                 function on_cast(api,event)
                     local id=api.spawn_creature_near_player(event.player_id,"{kind}",6)
                     assert(id ~= nil)
@@ -2480,16 +2820,36 @@ mod tests {
                         assert(api.spawn_creature_near_player(event.player_id,"dragon_red",6)==nil)
                     end
                 end
-            "#);
-            host.modules.push(Module::load("near_spawn".into(),String::new(),source).unwrap());
-            let result=host.run_cast(0,&world,&mut creatures,&players,&mut 0.5,&mut WeatherState::new(1),5,[0;COLLECTIBLE_BLOCKS.len()]);
-            assert!(result.crashes.is_empty(),"{kind}: {:?}",result.crashes);
-            let spawned=creatures.snapshot_with_ids();
-            assert_eq!(spawned.len(),1,"{kind}");
-            assert_eq!(CreatureKind::from_u8(spawned[0].1),parse_creature_kind(kind));
-            let pos=Vec3::from_array(spawned[0].2);
-            assert!(Vec3::new(pos.x-players[0].pos.x,0.0,pos.z-players[0].pos.z).length()<=6.001);
-            assert_eq!(pos.y,world.terrain_height(pos.x.floor() as i32,pos.z.floor() as i32) as f32+1.0);
+            "#
+            );
+            host.modules
+                .push(Module::load("near_spawn".into(), String::new(), source).unwrap());
+            let result = host.run_cast(
+                0,
+                &world,
+                &mut creatures,
+                &players,
+                &mut 0.5,
+                &mut WeatherState::new(1),
+                5,
+                [0; COLLECTIBLE_BLOCKS.len()],
+            );
+            assert!(result.crashes.is_empty(), "{kind}: {:?}", result.crashes);
+            let spawned = creatures.snapshot_with_ids();
+            assert_eq!(spawned.len(), 1, "{kind}");
+            assert_eq!(
+                CreatureKind::from_u8(spawned[0].1),
+                parse_creature_kind(kind)
+            );
+            let pos = Vec3::from_array(spawned[0].2);
+            assert!(
+                Vec3::new(pos.x - players[0].pos.x, 0.0, pos.z - players[0].pos.z).length()
+                    <= 6.001
+            );
+            assert_eq!(
+                pos.y,
+                world.terrain_height(pos.x.floor() as i32, pos.z.floor() as i32) as f32 + 1.0
+            );
         }
     }
     #[test]
@@ -3927,7 +4287,9 @@ mod behavior_api_tests {
     #[test]
     fn dragon_rule_spawns_are_queryable_and_cannot_form_a_pack() {
         let mut creatures = Creatures::new();
-        cast(&mut creatures, r#"
+        cast(
+            &mut creatures,
+            r#"
             local green = api.spawn_creature("dragon_green", 0, 40, 0)
             local red = api.spawn_creature("dragon_red", 400, 40, 0)
             local blocked = api.spawn_creature("dragon_red", 20, 40, 0)
@@ -3937,7 +4299,8 @@ mod behavior_api_tests {
                 api.damage(green, 1)
                 api.damage(red, 1)
             end
-        "#);
+        "#,
+        );
         let snapshot = creatures.snapshot_with_ids();
         assert_eq!(snapshot.len(), 2);
         for (_, kind, _, health, _) in snapshot {
@@ -3949,7 +4312,9 @@ mod behavior_api_tests {
     #[test]
     fn undead_spawn_and_query_through_the_rule_api() {
         let mut creatures = Creatures::new();
-        cast(&mut creatures, r#"
+        cast(
+            &mut creatures,
+            r#"
             for _, kind in ipairs({"zombie", "skeleton"}) do
                 local id = api.spawn_creature(kind, 5, 5, 5)
                 local found = api.find_creatures(kind, 5, 5, 5, 1)
@@ -3957,25 +4322,43 @@ mod behavior_api_tests {
                     api.damage(id, 1)
                 end
             end
-        "#);
+        "#,
+        );
         let snapshot = creatures.snapshot_with_ids();
         assert_eq!(snapshot.len(), 2);
         for (_, kind, _, health, max_health) in snapshot {
-            assert!(matches!(CreatureKind::from_u8(kind), CreatureKind::Zombie | CreatureKind::Skeleton));
+            assert!(matches!(
+                CreatureKind::from_u8(kind),
+                CreatureKind::Zombie | CreatureKind::Skeleton
+            ));
             assert_eq!(health, max_health - 1.0);
         }
     }
 
     fn cast(creatures: &mut Creatures, code: &str) -> TickOutcome {
         let mut host = ScriptHost::new();
-        host.modules.push(Module::load("behavior_test".into(), String::new(),
-            format!("function on_cast(api, event) {code} end")).unwrap());
-        host.run_cast(0, &World::new(1), creatures, &[], &mut 0.5,
-            &mut WeatherState::new(1), 0, [0; COLLECTIBLE_BLOCKS.len()])
+        host.modules.push(
+            Module::load(
+                "behavior_test".into(),
+                String::new(),
+                format!("function on_cast(api, event) {code} end"),
+            )
+            .unwrap(),
+        );
+        host.run_cast(
+            0,
+            &World::new(1),
+            creatures,
+            &[],
+            &mut 0.5,
+            &mut WeatherState::new(1),
+            0,
+            [0; COLLECTIBLE_BLOCKS.len()],
+        )
     }
     fn pair() -> (World, Creatures, u32, u32, Vec3) {
         let world = World::new(1);
-        let pos = Vec3::new(0.5, world.terrain_height(0,0) as f32 + 1.0, 0.5);
+        let pos = Vec3::new(0.5, world.terrain_height(0, 0) as f32 + 1.0, 0.5);
         let mut creatures = Creatures::new();
         let a = creatures.spawn_one(CreatureKind::Sheep, pos, 1);
         let b = creatures.spawn_one(CreatureKind::Chicken, pos, 2);
@@ -3988,34 +4371,82 @@ mod behavior_api_tests {
             "assert(api.select_target({a}, 'chicken', 32) == {b}); assert(api.attack({a})); local s=api.get_behavior({a}); assert(s.mode=='attack' and s.target_id=={b} and s.target_type=='creature')"));
         assert!(result.crashes.is_empty(), "{:?}", result.crashes);
         assert!(creatures.update(&world, 0.0, &[]).is_empty());
-        assert_eq!(creatures.snapshot_with_ids().iter().find(|c| c.0==b).unwrap().3, 4.0);
+        assert_eq!(
+            creatures
+                .snapshot_with_ids()
+                .iter()
+                .find(|c| c.0 == b)
+                .unwrap()
+                .3,
+            4.0
+        );
         creatures.update(&world, 0.0, &[]);
-        assert_eq!(creatures.snapshot_with_ids().iter().find(|c| c.0==b).unwrap().3, 4.0);
+        assert_eq!(
+            creatures
+                .snapshot_with_ids()
+                .iter()
+                .find(|c| c.0 == b)
+                .unwrap()
+                .3,
+            4.0
+        );
         creatures.update(&world, 2.0, &[]);
         creatures.update(&world, 2.0, &[]);
-        assert!(!creatures.snapshot_with_ids().iter().any(|c| c.0==b));
+        assert!(!creatures.snapshot_with_ids().iter().any(|c| c.0 == b));
         let mut host = ScriptHost::new();
-        let mut rule=Module::load("death_observer".into(), String::new(),
-            "function on_tick(api) end function on_death(api,e) api.broadcast(e.kind) end".into()).unwrap();
-        rule.enabled=true; host.modules.push(rule);
-        let out=host.run_tick(&world, &mut creatures, &[], &mut 0.5, &mut WeatherState::new(1), &[], &[], [0; COLLECTIBLE_BLOCKS.len()]);
+        let mut rule = Module::load(
+            "death_observer".into(),
+            String::new(),
+            "function on_tick(api) end function on_death(api,e) api.broadcast(e.kind) end".into(),
+        )
+        .unwrap();
+        rule.enabled = true;
+        host.modules.push(rule);
+        let out = host.run_tick(
+            &world,
+            &mut creatures,
+            &[],
+            &mut 0.5,
+            &mut WeatherState::new(1),
+            &[],
+            &[],
+            [0; COLLECTIBLE_BLOCKS.len()],
+        );
         assert_eq!(out.broadcasts, ["chicken"]);
     }
     #[test]
     fn chase_does_not_attack_and_ignore_overrides_hostile_ai() {
         let (world, mut creatures, _, b, pos) = pair();
         let wolf = creatures.spawn_one(CreatureKind::Wolf, pos, 3);
-        let out=cast(&mut creatures, &format!("assert(api.set_target({wolf}, 'creature', {b})); assert(api.chase_target({wolf}))"));
+        let out = cast(
+            &mut creatures,
+            &format!(
+                "assert(api.set_target({wolf}, 'creature', {b})); assert(api.chase_target({wolf}))"
+            ),
+        );
         assert!(out.crashes.is_empty());
-        assert!(creatures.update(&world, 0.0, &[(7,pos)]).is_empty());
-        assert_eq!(creatures.snapshot_with_ids().iter().find(|c| c.0==b).unwrap().3, 6.0);
-        assert!(cast(&mut creatures, &format!("api.ignore({wolf})")).crashes.is_empty());
-        assert!(creatures.update(&world, 0.0, &[(7,pos)]).is_empty());
+        assert!(creatures.update(&world, 0.0, &[(7, pos)]).is_empty());
+        assert_eq!(
+            creatures
+                .snapshot_with_ids()
+                .iter()
+                .find(|c| c.0 == b)
+                .unwrap()
+                .3,
+            6.0
+        );
+        assert!(cast(&mut creatures, &format!("api.ignore({wolf})"))
+            .crashes
+            .is_empty());
+        assert!(creatures.update(&world, 0.0, &[(7, pos)]).is_empty());
         // Existing coordinate chase can still be used after ignore.
-        cast(&mut creatures, &format!("api.chase({wolf}, 5, {}, 5)",pos.y));
+        cast(
+            &mut creatures,
+            &format!("api.chase({wolf}, 5, {}, 5)", pos.y),
+        );
         assert!(creatures.any_hunting());
         cast(&mut creatures, &format!("api.set_aggressive({wolf}, true)"));
-        assert!(!creatures.update(&world, 0.0, &[(7,pos)]).is_empty());
+        assert!(!creatures.update(&world, 0.0, &[(7, pos)]).is_empty());
     }
     #[test]
     fn behavior_drafts_rollback_and_validate_targets() {
@@ -4023,90 +4454,191 @@ mod behavior_api_tests {
         let out=cast(&mut creatures, &format!("api.set_target({a}, 'creature', {b}); api.attack({a}); api.die({b}); error('rollback')"));
         assert!(!out.crashes.is_empty());
         assert_eq!(creatures.behaviors[&a].mode, BehaviorMode::Auto);
-        assert!(creatures.snapshot_with_ids().iter().any(|c| c.0==b));
+        assert!(creatures.snapshot_with_ids().iter().any(|c| c.0 == b));
         let out=cast(&mut creatures, &format!("assert(not api.set_target({a}, 'creature', {a})); assert(not api.attack({a})); assert(api.select_target({a}, 'wolf', 32)==nil); assert(api.get_behavior(99999)==nil); assert(api.die({b})); assert(not api.die({b}))"));
         assert!(out.crashes.is_empty(), "{:?}", out.crashes);
-        assert!(!creatures.snapshot_with_ids().iter().any(|c| c.0==b));
+        assert!(!creatures.snapshot_with_ids().iter().any(|c| c.0 == b));
     }
     #[test]
     fn explicit_player_target_damages_selected_guest_and_stale_targets_clear() {
         let (world, mut creatures, a, _, pos) = pair();
-        let mut host=ScriptHost::new();
+        let mut host = ScriptHost::new();
         host.modules.push(Module::load("guest_target".into(), String::new(), format!(
             "function on_cast(api,e) assert(api.set_target({a}, 'player', 7)); assert(api.attack({a})) end"
         )).unwrap());
-        let players=[PlayerSnapshot {
-                finances: Default::default(),
-                resources: [0; COLLECTIBLE_BLOCKS.len()], id: 7, pos, carrying_crystal: false, health: 20.0,
-            sprinting: false, on_ground: true, velocity: Vec3::ZERO, in_water: false, poisoned: false,
-            speed_multiplier: 1.0, jump_multiplier: 1.0, oxygen: 100.0 }];
-        let out=host.run_cast(0,&world,&mut creatures,&players,&mut 0.5,&mut WeatherState::new(1),0,[0;COLLECTIBLE_BLOCKS.len()]);
+        let players = [PlayerSnapshot {
+            finances: Default::default(),
+            resources: [0; COLLECTIBLE_BLOCKS.len()],
+            id: 7,
+            pos,
+            carrying_crystal: false,
+            health: 20.0,
+            sprinting: false,
+            on_ground: true,
+            velocity: Vec3::ZERO,
+            in_water: false,
+            poisoned: false,
+            speed_multiplier: 1.0,
+            jump_multiplier: 1.0,
+            oxygen: 100.0,
+        }];
+        let out = host.run_cast(
+            0,
+            &world,
+            &mut creatures,
+            &players,
+            &mut 0.5,
+            &mut WeatherState::new(1),
+            0,
+            [0; COLLECTIBLE_BLOCKS.len()],
+        );
         assert!(out.crashes.is_empty(), "{:?}", out.crashes);
-        assert_eq!(creatures.update(&world,0.0,&[(0,pos),(7,pos)]),[(7,2.0)]);
-        creatures.update(&world,0.0,&[(0,pos)]);
-        assert_eq!(creatures.behaviors[&a].target,None);
-        assert!(creatures.update(&world,3.0,&[(0,pos)]).is_empty());
+        assert_eq!(
+            creatures.update(&world, 0.0, &[(0, pos), (7, pos)]),
+            [(7, 2.0)]
+        );
+        creatures.update(&world, 0.0, &[(0, pos)]);
+        assert_eq!(creatures.behaviors[&a].target, None);
+        assert!(creatures.update(&world, 3.0, &[(0, pos)]).is_empty());
     }
 
     #[test]
     fn temporary_policies_compose_and_release_without_mutating_behavior() {
-        let (world, mut creatures, _, prey, pos)=pair();
-        let wolf=creatures.spawn_one(CreatureKind::Wolf,pos,3);
-        let mut host=ScriptHost::new();
+        let (world, mut creatures, _, prey, pos) = pair();
+        let wolf = creatures.spawn_one(CreatureKind::Wolf, pos, 3);
+        let mut host = ScriptHost::new();
         for n in 0..2 {
             let mut m=Module::load(format!("protection{n}"),String::new(),
                 "function on_tick(api) if api.weather=='rain' then api.protect_player(7,'wolf') end end".into()).unwrap();
-            m.enabled=true;host.modules.push(m);
+            m.enabled = true;
+            host.modules.push(m);
         }
-        let players=[PlayerSnapshot { finances: Default::default(), resources:[0;COLLECTIBLE_BLOCKS.len()], id:7,pos,carrying_crystal:false,velocity:Vec3::ZERO,
-            on_ground:true,sprinting:false,in_water:false,health:20.0,poisoned:false,speed_multiplier:1.0,jump_multiplier:1.0,oxygen:100.0 }];
-        let mut weather=WeatherState::new(1);weather.set(Weather::Rain);
-        let out=host.run_tick(&world,&mut creatures,&players,&mut 0.25,&mut weather,&[],&[],[0;COLLECTIBLE_BLOCKS.len()]);
-        assert!(out.crashes.is_empty());assert_eq!(creatures.attack_policies.len(),2);
-        assert!(creatures.update(&world,0.0,&[(7,pos)]).is_empty());
+        let players = [PlayerSnapshot {
+            finances: Default::default(),
+            resources: [0; COLLECTIBLE_BLOCKS.len()],
+            id: 7,
+            pos,
+            carrying_crystal: false,
+            velocity: Vec3::ZERO,
+            on_ground: true,
+            sprinting: false,
+            in_water: false,
+            health: 20.0,
+            poisoned: false,
+            speed_multiplier: 1.0,
+            jump_multiplier: 1.0,
+            oxygen: 100.0,
+        }];
+        let mut weather = WeatherState::new(1);
+        weather.set(Weather::Rain);
+        let out = host.run_tick(
+            &world,
+            &mut creatures,
+            &players,
+            &mut 0.25,
+            &mut weather,
+            &[],
+            &[],
+            [0; COLLECTIBLE_BLOCKS.len()],
+        );
+        assert!(out.crashes.is_empty());
+        assert_eq!(creatures.attack_policies.len(), 2);
+        assert!(creatures.update(&world, 0.0, &[(7, pos)]).is_empty());
         assert!(creatures.behaviors[&wolf].aggressive);
-        host.toggle_at(0);host.sync_attack_policies(&mut creatures);
-        assert_eq!(creatures.attack_policies.len(),1);
-        assert!(creatures.update(&world,0.0,&[(7,pos)]).is_empty());
+        host.toggle_at(0);
+        host.sync_attack_policies(&mut creatures);
+        assert_eq!(creatures.attack_policies.len(), 1);
+        assert!(creatures.update(&world, 0.0, &[(7, pos)]).is_empty());
         // Protection of a player must not pacify attacks against other creatures.
-        creatures.behaviors.get_mut(&wolf).unwrap().mode=BehaviorMode::Attack;
-        creatures.behaviors.get_mut(&wolf).unwrap().target=Some(BehaviorTarget::Creature(prey));
-        creatures.update(&world,0.0,&[(7,pos)]);
-        assert!(creatures.snapshot_with_ids().iter().find(|c|c.0==prey).map_or(true,|c|c.3<6.0));
+        creatures.behaviors.get_mut(&wolf).unwrap().mode = BehaviorMode::Attack;
+        creatures.behaviors.get_mut(&wolf).unwrap().target = Some(BehaviorTarget::Creature(prey));
+        creatures.update(&world, 0.0, &[(7, pos)]);
+        assert!(creatures
+            .snapshot_with_ids()
+            .iter()
+            .find(|c| c.0 == prey)
+            .map_or(true, |c| c.3 < 6.0));
         weather.set(Weather::Sunny);
-        host.run_tick(&world,&mut creatures,&players,&mut 0.25,&mut weather,&[],&[],[0;COLLECTIBLE_BLOCKS.len()]);
+        host.run_tick(
+            &world,
+            &mut creatures,
+            &players,
+            &mut 0.25,
+            &mut weather,
+            &[],
+            &[],
+            [0; COLLECTIBLE_BLOCKS.len()],
+        );
         assert!(creatures.attack_policies.is_empty());
-        assert_eq!(creatures.behaviors[&wolf].mode,BehaviorMode::Attack);
-        assert_eq!(creatures.behaviors[&wolf].target,Some(BehaviorTarget::Creature(prey)));
+        assert_eq!(creatures.behaviors[&wolf].mode, BehaviorMode::Attack);
+        assert_eq!(
+            creatures.behaviors[&wolf].target,
+            Some(BehaviorTarget::Creature(prey))
+        );
     }
 
     #[test]
     fn failed_policy_callback_releases_previous_protection() {
-        let (world,mut creatures,_,_,pos)=pair();
-        let mut host=ScriptHost::new();
+        let (world, mut creatures, _, _, pos) = pair();
+        let mut host = ScriptHost::new();
         let mut m=Module::load("fails".into(),String::new(),
             "local n=0 function on_tick(api) n=n+1 api.protect_player(7,'wolf') if n>1 then error('failed') end end".into()).unwrap();
-        m.enabled=true;host.modules.push(m);
-        let players=[PlayerSnapshot { finances: Default::default(), resources:[0;COLLECTIBLE_BLOCKS.len()],id:7,pos,carrying_crystal:false,velocity:Vec3::ZERO,
-            on_ground:true,sprinting:false,in_water:false,health:20.0,poisoned:false,speed_multiplier:1.0,jump_multiplier:1.0,oxygen:100.0 }];
+        m.enabled = true;
+        host.modules.push(m);
+        let players = [PlayerSnapshot {
+            finances: Default::default(),
+            resources: [0; COLLECTIBLE_BLOCKS.len()],
+            id: 7,
+            pos,
+            carrying_crystal: false,
+            velocity: Vec3::ZERO,
+            on_ground: true,
+            sprinting: false,
+            in_water: false,
+            health: 20.0,
+            poisoned: false,
+            speed_multiplier: 1.0,
+            jump_multiplier: 1.0,
+            oxygen: 100.0,
+        }];
         for n in 0..2 {
-            host.run_tick(&world,&mut creatures,&players,&mut 0.25,&mut WeatherState::new(1),&[],&[],[0;COLLECTIBLE_BLOCKS.len()]);
-            assert_eq!(creatures.attack_policies.is_empty(),n==1);
+            host.run_tick(
+                &world,
+                &mut creatures,
+                &players,
+                &mut 0.25,
+                &mut WeatherState::new(1),
+                &[],
+                &[],
+                [0; COLLECTIBLE_BLOCKS.len()],
+            );
+            assert_eq!(creatures.attack_policies.is_empty(), n == 1);
         }
     }
 
     #[test]
     fn behavior_save_roundtrip_preserves_selected_target_and_mode() {
         let (_, mut creatures, a, b, _) = pair();
-        cast(&mut creatures, &format!("api.set_target({a}, 'creature', {b}); api.attack({a})"));
-        let save=crate::save::CraftingSave { creatures: Some(creatures.snapshot_with_ids()), behaviors: creatures.behaviors.clone(), ..Default::default() };
-        let saved: crate::save::CraftingSave=serde_json::from_slice(&serde_json::to_vec(&save).unwrap()).unwrap();
-        let mut restored=Creatures::new();
+        cast(
+            &mut creatures,
+            &format!("api.set_target({a}, 'creature', {b}); api.attack({a})"),
+        );
+        let save = crate::save::CraftingSave {
+            creatures: Some(creatures.snapshot_with_ids()),
+            behaviors: creatures.behaviors.clone(),
+            ..Default::default()
+        };
+        let saved: crate::save::CraftingSave =
+            serde_json::from_slice(&serde_json::to_vec(&save).unwrap()).unwrap();
+        let mut restored = Creatures::new();
         restored.restore_saved(saved.creatures.as_ref().unwrap(), 1);
-        restored.behaviors=saved.behaviors;
+        restored.behaviors = saved.behaviors;
         assert_eq!(restored.behaviors[&a].mode, BehaviorMode::Attack);
-        assert_eq!(restored.behaviors[&a].target, Some(BehaviorTarget::Creature(b)));
-        let old: crate::save::CraftingSave=serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            restored.behaviors[&a].target,
+            Some(BehaviorTarget::Creature(b))
+        );
+        let old: crate::save::CraftingSave = serde_json::from_str("{}").unwrap();
         assert!(old.behaviors.is_empty());
     }
 }

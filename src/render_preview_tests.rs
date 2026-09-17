@@ -5,9 +5,13 @@ use super::*;
 #[test]
 #[ignore = "requires GPU; writes target/render-*.png and reports fixed-scene render timings"]
 fn render_weather_previews() {
-    let temporal=std::env::var_os("VOXEL_SHADOW_TEMPORAL").is_some();
-    let legacy=std::env::var_os("VOXEL_SHADOW_LEGACY").is_some();
-    let scene_offset=if temporal {Vec3::new(16384.,0.,16384.)}else{Vec3::ZERO};
+    let temporal = std::env::var_os("VOXEL_SHADOW_TEMPORAL").is_some();
+    let legacy = std::env::var_os("VOXEL_SHADOW_LEGACY").is_some();
+    let scene_offset = if temporal {
+        Vec3::new(16384., 0., 16384.)
+    } else {
+        Vec3::ZERO
+    };
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
     println!("Adapter: {:?}", adapter.get_info());
@@ -72,11 +76,16 @@ fn render_weather_previews() {
     });
     let models = Models::load();
     let (atlas_bgl, atlas_bg) = create_atlas_bind_group(&device, &queue, &models);
-    let shadow = create_shadow_resources(&device,&atlas_bgl);
-    let mut light_visibility=crate::light_visibility::Visibility::new(&device,&queue);
+    let shadow = create_shadow_resources(&device, &atlas_bgl);
+    let mut light_visibility = crate::light_visibility::Visibility::new(&device, &queue);
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
-        bind_group_layouts: &[&camera_bgl, &atlas_bgl, &shadow.sample_bgl,&light_visibility.layout],
+        bind_group_layouts: &[
+            &camera_bgl,
+            &atlas_bgl,
+            &shadow.sample_bgl,
+            &light_visibility.layout,
+        ],
         push_constant_ranges: &[],
     });
     let sky_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -127,7 +136,11 @@ fn render_weather_previews() {
             multiview: None,
         })
     };
-    let main_source=if legacy {std::fs::read_to_string("target/shadow-edge-before.wgsl").unwrap()}else{include_str!("shader.wgsl").to_owned()};
+    let main_source = if legacy {
+        std::fs::read_to_string("target/shadow-edge-before.wgsl").unwrap()
+    } else {
+        include_str!("shader.wgsl").to_owned()
+    };
     let main = make_pipeline(&main_source, false);
     let sky = make_pipeline(include_str!("sky.wgsl"), true);
     let baseline = std::fs::read_to_string("target/render-before.wgsl")
@@ -170,58 +183,110 @@ fn render_weather_previews() {
             world.chunks.insert((cx, cz), chunk);
         }
     }
-    let adventure_preview=std::env::var_os("VOXEL_ADVENTURE_PREVIEW").is_some();
-    let torch_preview=std::env::var_os("VOXEL_TORCH_PREVIEW").is_some();
-    let crystal_preview=std::env::var_os("VOXEL_CRYSTAL_PREVIEW").is_some() || torch_preview;
+    let reflection_preview = std::env::var_os("VOXEL_REFLECTION_PREVIEW").is_some();
+    if reflection_preview {
+
+        for (x, block) in [(2, BlockType::OakWood), (6, BlockType::Stone)] {
+            for y in 7..13 {
+                world.set_block(x, y, 9, block);
+            }
+        }
+    }
+    let adventure_preview = std::env::var_os("VOXEL_ADVENTURE_PREVIEW").is_some();
+    let torch_preview = std::env::var_os("VOXEL_TORCH_PREVIEW").is_some();
+    let crystal_preview = std::env::var_os("VOXEL_CRYSTAL_PREVIEW").is_some() || torch_preview;
     let entrance_preview = std::env::var_os("VOXEL_ENTRANCE_PREVIEW").is_some();
-    let underground_preview = std::env::var_os("VOXEL_UNDERGROUND_PREVIEW").is_some() || entrance_preview;
+    let underground_preview =
+        std::env::var_os("VOXEL_UNDERGROUND_PREVIEW").is_some() || entrance_preview;
     let water_preview = std::env::var_os("VOXEL_WATER_PREVIEW").is_some();
     let camp_preview = std::env::var_os("VOXEL_CAMPFIRE_PREVIEW").is_some() || adventure_preview;
     let aura_preview = std::env::var_os("VOXEL_AURA_PREVIEW").is_some();
     let machine_preview = std::env::var_os("VOXEL_MACHINE_PREVIEW").is_some() || aura_preview;
-    let mut target = Vec3::new(3.0, 7.0, 0.0);
-    let landscape_preview=std::env::var("VOXEL_LANDSCAPE_PREVIEW").ok();
-    if let Some(mode)=&landscape_preview {
-        world=World::new(42);
-        let mut best=(i32::MIN,0,0);
-        for x in (-192..192).step_by(4) {for z in (-192..192).step_by(4) {
-            let h=world.terrain_height(x,z);
-            let score=if mode=="meadow" {
-                if !(22..30).contains(&h) {continue;}
-                (-5..=5).flat_map(|dx|(-5..=5).map(move|dz|(dx,dz)))
-                    .filter(|&(dx,dz)|crate::voxel::terrain::meadow_plant(x+dx,z+dz,42).is_some()).count() as i32
-            }else {(h-world.terrain_height(x-3,z)).abs()+(h-world.terrain_height(x,z+3)).abs()};
-            if score>best.0 {best=(score,x,z);}
-        }}
-        let (_,x,z)=best;let (cx,cz)=crate::voxel::chunk::world_to_chunk(x,z);
-        for dx in -4..=4 {for dz in -4..=4 {world.ensure_chunk_loaded(cx+dx,cz+dz);}}
-        target=Vec3::new(x as f32,world.terrain_height(x,z) as f32,z as f32);
+    let mut target = if reflection_preview { Vec3::new(4.5, 8.0, 9.0) } else { Vec3::new(3.0, 7.0, 0.0) };
+    let landscape_preview = std::env::var("VOXEL_LANDSCAPE_PREVIEW").ok();
+    if let Some(mode) = &landscape_preview {
+        world = World::new(42);
+        let mut best = (i32::MIN, 0, 0);
+        for x in (-192..192).step_by(4) {
+            for z in (-192..192).step_by(4) {
+                let h = world.terrain_height(x, z);
+                let score = if mode == "meadow" {
+                    if !(22..30).contains(&h) {
+                        continue;
+                    }
+                    (-5..=5)
+                        .flat_map(|dx| (-5..=5).map(move |dz| (dx, dz)))
+                        .filter(|&(dx, dz)| {
+                            crate::voxel::terrain::meadow_plant(x + dx, z + dz, 42).is_some()
+                        })
+                        .count() as i32
+                } else {
+                    (h - world.terrain_height(x - 3, z)).abs()
+                        + (h - world.terrain_height(x, z + 3)).abs()
+                };
+                if score > best.0 {
+                    best = (score, x, z);
+                }
+            }
+        }
+        let (_, x, z) = best;
+        let (cx, cz) = crate::voxel::chunk::world_to_chunk(x, z);
+        for dx in -4..=4 {
+            for dz in -4..=4 {
+                world.ensure_chunk_loaded(cx + dx, cz + dz);
+            }
+        }
+        target = Vec3::new(x as f32, world.terrain_height(x, z) as f32, z as f32);
         println!("Landscape preview {mode}: seed 42 at {x}, {z}");
     }
     if std::env::var_os("VOXEL_FOREST_PREVIEW").is_some() {
-        for x in [-6,0,6,12] {for z in [-8,-2,4] {
-            for y in 7..13 {world.set_block(x,y,z,BlockType::OakWood);}
-            for dx in -2..=2 {for dz in -2..=2 {for y in 11..15 {
-                if dx!=0||dz!=0||y>=13 {world.set_block(x+dx,y,z+dz,BlockType::OakLeaves);}
-            }}}
-        }}
-    }
-    let mut underground_creatures=Creatures::new();
-    if underground_preview {
-        world=World::new(42);
-        let site=(-5..5).flat_map(|x|(-5..5).map(move|z|(x,z)))
-            .find_map(|(x,z)|crate::underground::site(&world,x,z).filter(|s|s.dungeon)).unwrap();
-        let (cx,cz)=crate::voxel::chunk::world_to_chunk(site.x,site.z);
-        for dx in -1..=2 {for dz in -1..=1 {world.ensure_chunk_loaded(cx+dx,cz+dz);}}
-        crate::underground::discover(&mut world,&mut underground_creatures);
-        target=Vec3::new(site.x as f32-1.0,site.floor as f32+2.0,site.z as f32+1.0);
-        if entrance_preview {
-            let (x,y,z)=crate::underground::nearby_entrance(&world,Vec3::ZERO).unwrap();
-            let (cx,cz)=crate::voxel::chunk::world_to_chunk(x,z);
-            for dx in -2..=2 {for dz in -2..=2 {world.ensure_chunk_loaded(cx+dx,cz+dz);}}
-            target=Vec3::new(x as f32,y as f32+1.0,z as f32);
+        for x in [-6, 0, 6, 12] {
+            for z in [-8, -2, 4] {
+                for y in 7..13 {
+                    world.set_block(x, y, z, BlockType::OakWood);
+                }
+                for dx in -2..=2 {
+                    for dz in -2..=2 {
+                        for y in 11..15 {
+                            if dx != 0 || dz != 0 || y >= 13 {
+                                world.set_block(x + dx, y, z + dz, BlockType::OakLeaves);
+                            }
+                        }
+                    }
+                }
+            }
         }
-        println!("Dungeon preview at {}, {}, {}",site.x,site.floor,site.z);
+    }
+    let mut underground_creatures = Creatures::new();
+    if underground_preview {
+        world = World::new(42);
+        let site = (-5..5)
+            .flat_map(|x| (-5..5).map(move |z| (x, z)))
+            .find_map(|(x, z)| crate::underground::site(&world, x, z).filter(|s| s.dungeon))
+            .unwrap();
+        let (cx, cz) = crate::voxel::chunk::world_to_chunk(site.x, site.z);
+        for dx in -1..=2 {
+            for dz in -1..=1 {
+                world.ensure_chunk_loaded(cx + dx, cz + dz);
+            }
+        }
+        crate::underground::discover(&mut world, &mut underground_creatures);
+        target = Vec3::new(
+            site.x as f32 - 1.0,
+            site.floor as f32 + 2.0,
+            site.z as f32 + 1.0,
+        );
+        if entrance_preview {
+            let (x, y, z) = crate::underground::nearby_entrance(&world, Vec3::ZERO).unwrap();
+            let (cx, cz) = crate::voxel::chunk::world_to_chunk(x, z);
+            for dx in -2..=2 {
+                for dz in -2..=2 {
+                    world.ensure_chunk_loaded(cx + dx, cz + dz);
+                }
+            }
+            target = Vec3::new(x as f32, y as f32 + 1.0, z as f32);
+        }
+        println!("Dungeon preview at {}, {}, {}", site.x, site.floor, site.z);
     }
     if water_preview {
         world = World::new(42);
@@ -243,89 +308,173 @@ fn render_weather_previews() {
             .set_local(3, 7, 12, BlockType::Campfire);
         target = Vec3::new(3.5, 7.5, 12.5);
     }
-    if machine_preview {target=Vec3::new(4.5,7.5,12.5);}
-    if aura_preview {target.y=8.3;}
+    if machine_preview {
+        target = Vec3::new(4.5, 7.5, 12.5);
+    }
+    if aura_preview {
+        target.y = 8.3;
+    }
     if crystal_preview {
         // Compact cave fixture, 5-wide room and 3-high clearance. Midday tests
         // portable light independently of the sun/night switch.
-        for x in 0..12 {for z in 3..16 {for y in 6..11 {
-            let block=if (2..7).contains(&x)&&(5..15).contains(&z)&&(7..10).contains(&y) {BlockType::Air}else{BlockType::Stone};
-            world.chunks.get_mut(&(0,0)).unwrap().set_local(x,y,z,block);
-        }}}
-        target=Vec3::new(4.5,8.4,8.5);
+        for x in 0..12 {
+            for z in 3..16 {
+                for y in 6..11 {
+                    let block =
+                        if (2..7).contains(&x) && (5..15).contains(&z) && (7..10).contains(&y) {
+                            BlockType::Air
+                        } else {
+                            BlockType::Stone
+                        };
+                    world
+                        .chunks
+                        .get_mut(&(0, 0))
+                        .unwrap()
+                        .set_local(x, y, z, block);
+                }
+            }
+        }
+        target = Vec3::new(4.5, 8.4, 8.5);
     }
     let camps: Vec<_> = world
         .chunks
         .values()
         .flat_map(crate::campfire::positions)
         .collect();
-    let camp_eye = target + Vec3::new(-3.0, 1.3, if machine_preview {-4.5} else {4.5});
-    let mut effect_mesh=crate::campfire::effects(&camps, camp_eye, 10.0);
+    let camp_eye = target + Vec3::new(-3.0, 1.3, if machine_preview { -4.5 } else { 4.5 });
+    let mut effect_mesh = crate::campfire::effects(&camps, camp_eye, 10.0);
     if std::env::var_os("VOXEL_SPELL_PREVIEW").is_some() {
-        let mut fx=crate::spell_fx::Effects::default();
-        fx.cast(target+Vec3::new(-2.,1.,1.),target+Vec3::Y*0.5);
+        let mut fx = crate::spell_fx::Effects::default();
+        fx.cast(target + Vec3::new(-2., 1., 1.), target + Vec3::Y * 0.5);
         fx.update(0.2);
-        effect_mesh.extend(fx.mesh(|_|true));
+        effect_mesh.extend(fx.mesh(|_| true));
     }
     if adventure_preview {
-        let appearance=crate::remote_player::Appearance{model:1,hat:Some(2)};
-        models.push_player_animated(&mut effect_mesh.vertices,&mut effect_mesh.indices,appearance,
-            Vec3::new(5.5,7.,12.5),0.,crate::player_animation::Clip::Idle,0.5,None);
+        let appearance = crate::remote_player::Appearance {
+            model: 1,
+            hat: Some(2),
+        };
+        models.push_player_animated(
+            &mut effect_mesh.vertices,
+            &mut effect_mesh.indices,
+            appearance,
+            Vec3::new(5.5, 7., 12.5),
+            0.,
+            crate::player_animation::Clip::Idle,
+            0.5,
+            None,
+        );
     }
-    let mut feedback=crate::machine_feedback::Feedback::default();
+    let mut feedback = crate::machine_feedback::Feedback::default();
     if machine_preview {
-        use crate::automation::{State,Device,Kind,Activity};
-        let mut state=State::default();
-        let parts=if aura_preview {[(2,Kind::Lantern),(4,Kind::DarkAltar),(6,Kind::Shrine)]} else {[(2,Kind::Smelter),(4,Kind::Chest),(6,Kind::Valve)]};
-        for (x,kind) in parts {
-            state.devices.insert((x,7,12),Device::new(kind,(x,7,12),0));
+        use crate::automation::{Activity, Device, Kind, State};
+        let mut state = State::default();
+        let parts = if aura_preview {
+            [(2, Kind::Lantern), (4, Kind::DarkAltar), (6, Kind::Shrine)]
+        } else {
+            [(2, Kind::Smelter), (4, Kind::Chest), (6, Kind::Valve)]
+        };
+        for (x, kind) in parts {
+            state
+                .devices
+                .insert((x, 7, 12), Device::new(kind, (x, 7, 12), 0));
         }
         feedback.synchronize(&state);
         if aura_preview {
-            for d in state.devices.values_mut() {d.activity=Activity::Working;d.mana=10;}
+            for d in state.devices.values_mut() {
+                d.activity = Activity::Working;
+                d.mana = 10;
+            }
         } else {
-        state.devices.get_mut(&(2,7,12)).unwrap().feedback(0);
-        state.devices.get_mut(&(4,7,12)).unwrap().feedback(1);
-        let valve=state.devices.get_mut(&(6,7,12)).unwrap();valve.feedback(2);valve.activity=Activity::Closed;
+            state.devices.get_mut(&(2, 7, 12)).unwrap().feedback(0);
+            state.devices.get_mut(&(4, 7, 12)).unwrap().feedback(1);
+            let valve = state.devices.get_mut(&(6, 7, 12)).unwrap();
+            valve.feedback(2);
+            valve.activity = Activity::Closed;
         }
-        feedback.update(&state,0.1,camp_eye);feedback.update(&state,0.2,camp_eye);
+        feedback.update(&state, 0.1, camp_eye);
+        feedback.update(&state, 0.2, camp_eye);
         for d in state.devices.values() {
-            let mut prop=crate::automation_mesh::device(d,1.0,None,&state);
-            feedback.decorate(d.cell,&mut prop);effect_mesh.extend(prop);
+            let mut prop = crate::automation_mesh::device(d, 1.0, None, &state);
+            feedback.decorate(d.cell, &mut prop);
+            effect_mesh.extend(prop);
         }
         effect_mesh.extend(feedback.particles());
         if !aura_preview {
-        let mut loot=crate::loot::Effects::default();
-        assert!(loot.eject(&world,(4,7,12),"resource:stone",2,0));
-        loot.update(0.35,true);effect_mesh.extend(loot.mesh(|_|true));
+            let mut loot = crate::loot::Effects::default();
+            assert!(loot.eject(&world, (4, 7, 12), "resource:stone", 2, 0));
+            loot.update(0.35, true);
+            effect_mesh.extend(loot.mesh(|_| true));
         }
     }
     if underground_preview {
-        for d in world.automation.devices.values() {effect_mesh.extend(crate::automation_mesh::device(d,1.0,None,&world.automation));}
-        for (_,kind,pos,_,_) in underground_creatures.snapshot_with_ids() {
-            let kind=crate::creature::CreatureKind::from_u8(kind);
-            crate::model::push_model(&mut effect_mesh.vertices,&mut effect_mesh.indices,models.for_kind(kind),kind,"idle",0.0,Vec3::from_array(pos),0.0);
+        for d in world.automation.devices.values() {
+            effect_mesh.extend(crate::automation_mesh::device(
+                d,
+                1.0,
+                None,
+                &world.automation,
+            ));
+        }
+        for (_, kind, pos, _, _) in underground_creatures.snapshot_with_ids() {
+            let kind = crate::creature::CreatureKind::from_u8(kind);
+            crate::model::push_model(
+                &mut effect_mesh.vertices,
+                &mut effect_mesh.indices,
+                models.for_kind(kind),
+                kind,
+                "idle",
+                0.0,
+                Vec3::from_array(pos),
+                0.0,
+            );
         }
     }
     if std::env::var_os("VOXEL_BOOK_PREVIEW").is_some() {
-        target=Vec3::new(-3.,7.5,1.5);
-        let book=crate::lore_books::Book{sector:(0,0,0),kind:0,pos:Vec3::new(-3.,7.,1.5)};
-        effect_mesh.extend(crate::lore_books::mesh(&[book],1.0));
+        target = Vec3::new(-3., 7.5, 1.5);
+        let book = crate::lore_books::Book {
+            sector: (0, 0, 0),
+            kind: 0,
+            pos: Vec3::new(-3., 7., 1.5),
+        };
+        effect_mesh.extend(crate::lore_books::mesh(&[book], 1.0));
     }
     if std::env::var_os("VOXEL_NPC_PREVIEW").is_some() {
-        target=Vec3::new(1.5,8.1,-1.5);
+        target = Vec3::new(1.5, 8.1, -1.5);
         for kind in 0..6 {
-            let home=(-4+kind as i32*2,7,-2);
-            let npc=crate::npc::Npc{kind,home,position:crate::adventure::feet(home).to_array(),facing:1.2,walking:kind%2==0,phase:0.3,wait:0.,step:0,target:None};
-            models.push_npc(&mut effect_mesh.vertices,&mut effect_mesh.indices,&npc);
+            let home = (-4 + kind as i32 * 2, 7, -2);
+            let npc = crate::npc::Npc {
+                kind,
+                home,
+                position: crate::adventure::feet(home).to_array(),
+                facing: 1.2,
+                walking: kind % 2 == 0,
+                phase: 0.3,
+                wait: 0.,
+                step: 0,
+                target: None,
+            };
+            models.push_npc(&mut effect_mesh.vertices, &mut effect_mesh.indices, &npc);
         }
     }
     if torch_preview {
-        effect_mesh.extend(crate::torch::mesh(Vec3::new(4.12,8.05,12.85),glam::Mat3::IDENTITY,0.75,0.45));
-        effect_mesh.extend(crate::held_item::mesh(Some(crate::equipment::Entry::Gear(crate::equipment::Gear::Sword)),Vec3::new(4.82,8.08,12.85),glam::Mat3::from_rotation_y(std::f32::consts::FRAC_PI_2),0.45));
-        crate::shelter::Roofs::default().shade(&world,&mut effect_mesh);
+        effect_mesh.extend(crate::torch::mesh(
+            Vec3::new(4.12, 8.05, 12.85),
+            glam::Mat3::IDENTITY,
+            0.75,
+            0.45,
+        ));
+        effect_mesh.extend(crate::held_item::mesh(
+            Some(crate::equipment::Entry::Gear(crate::equipment::Gear::Sword)),
+            Vec3::new(4.82, 8.08, 12.85),
+            glam::Mat3::from_rotation_y(std::f32::consts::FRAC_PI_2),
+            0.45,
+        ));
+        crate::shelter::Roofs::default().shade(&world, &mut effect_mesh);
     }
-    for v in &mut effect_mesh.vertices {v.position=(Vec3::from_array(v.position)+scene_offset).to_array();}
+    for v in &mut effect_mesh.vertices {
+        v.position = (Vec3::from_array(v.position) + scene_offset).to_array();
+    }
     let falls: Vec<_> = world
         .chunks
         .values()
@@ -396,10 +545,12 @@ fn render_weather_previews() {
     let mut old_meshes = Vec::new();
     for chunk in world.chunks.values() {
         let mut mesh = crate::voxel::mesher::build_chunk_mesh(&world, chunk);
-        for v in &mut mesh.vertices {v.position=(Vec3::from_array(v.position)+scene_offset).to_array();}
+        for v in &mut mesh.vertices {
+            v.position = (Vec3::from_array(v.position) + scene_offset).to_array();
+        }
         if std::env::var_os("VOXEL_WET_STRESS_PREVIEW").is_some() {
             // Worst-case local-light shading: even the sheltered cave is soaked.
-            crate::wetness::apply(&mut mesh.vertices,1.0);
+            crate::wetness::apply(&mut mesh.vertices, 1.0);
         }
         meshes.push(upload_mesh(&device, &mesh).unwrap());
         for v in &mut mesh.vertices {
@@ -419,7 +570,11 @@ fn render_weather_previews() {
         }
         old_meshes.push(upload_mesh(&device, &mesh).unwrap());
     }
-    let (width, height) = if std::env::var_os("VOXEL_PREVIEW_1080").is_some() {(1920,1080)}else{(1280,720)};
+    let (width, height) = if std::env::var_os("VOXEL_PREVIEW_1080").is_some() {
+        (1920, 1080)
+    } else {
+        (1280, 720)
+    };
     let size = wgpu::Extent3d {
         width,
         height,
@@ -444,28 +599,31 @@ fn render_weather_previews() {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         })
         .create_view(&Default::default());
+    let water_reflections = crate::water_reflections::Reflections::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb, width, height, &depth, &camera_bgl);
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size: (width * height * 4) as u64,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let eye = if landscape_preview.is_some() {
-        target+Vec3::new(-22.,18.,30.)
+    let eye = if reflection_preview {
+        Vec3::new(4.5, 8.2, 0.5)
+    } else if landscape_preview.is_some() {
+        target + Vec3::new(-22., 18., 30.)
     } else if std::env::var_os("VOXEL_BOOK_PREVIEW").is_some() {
-        Vec3::new(0.5,10.,6.)
+        Vec3::new(0.5, 10., 6.)
     } else if std::env::var_os("VOXEL_NPC_PREVIEW").is_some() {
-        Vec3::new(1.5,10.,11.)
+        Vec3::new(1.5, 10., 11.)
     } else if crystal_preview {
-        Vec3::new(4.5,8.5,13.5)
+        Vec3::new(4.5, 8.5, 13.5)
     } else if entrance_preview {
-        target+Vec3::new(10.0,7.0,-15.0)
+        target + Vec3::new(10.0, 7.0, -15.0)
     } else if underground_preview {
-        target+Vec3::new(6.0,0.6,-5.0)
+        target + Vec3::new(6.0, 0.6, -5.0)
     } else if camp_preview || machine_preview {
         camp_eye
     } else if water_preview {
@@ -473,21 +631,28 @@ fn render_weather_previews() {
     } else {
         Vec3::new(-18.0, 15.0, 27.0)
     };
-    let eye=eye+scene_offset;let target=target+scene_offset;
+    let eye = eye + scene_offset;
+    let target = target + scene_offset;
     let vp = glam::Mat4::perspective_rh(
         65.0f32.to_radians(),
         width as f32 / height as f32,
         0.1,
         200.0,
     ) * glam::Mat4::look_at_rh(eye, target, Vec3::Y);
-    let lighting = crate::daynight::sky_lighting(if camp_preview || std::env::var_os("VOXEL_MACHINE_NIGHT_PREVIEW").is_some() { 0.75 } else { 0.14 });
+    let lighting = crate::daynight::sky_lighting(
+        if camp_preview || std::env::var_os("VOXEL_MACHINE_NIGHT_PREVIEW").is_some() {
+            0.75
+        } else {
+            0.14
+        },
+    );
     let light_vp = light_view_proj(lighting.sun_dir, eye);
     queue.write_buffer(
         &shadow.light_buffer,
         0,
         bytemuck::bytes_of(&LightUniform {
             view_proj: light_vp.to_cols_array_2d(),
-            motion:[10.,1.,0.,0.],
+            motion: [10., 1., 0., 0.],
         }),
     );
     for (name, wet, clouds, old) in [
@@ -500,9 +665,9 @@ fn render_weather_previews() {
     ] {
         // Exercise actual per-vertex character moisture for every weather case.
         if std::env::var_os("VOXEL_WET_PREVIEW").is_some() {
-            crate::wetness::apply(&mut effect_mesh.vertices,wet);
+            crate::wetness::apply(&mut effect_mesh.vertices, wet);
         }
-        let camp_fx=upload_mesh(&device,&effect_mesh);
+        let camp_fx = upload_mesh(&device, &effect_mesh);
         let (main, sky) = if old {
             if let Some((m, s)) = &baseline {
                 (m, s)
@@ -513,62 +678,102 @@ fn render_weather_previews() {
             (&main, &sky)
         };
         let meshes = if old { &old_meshes } else { &meshes };
-        let mut local_lights=if crystal_preview {let mut lights=[[0.;4];4];if torch_preview {lights[0]=crate::torch::light(eye+Vec3::new(-0.35,0.,-0.4));}lights} else {feedback.lights(&camps, eye)};
+        let mut local_lights = if crystal_preview {
+            let mut lights = [[0.; 4]; 4];
+            if torch_preview {
+                lights[0] = crate::torch::light(eye + Vec3::new(-0.35, 0., -0.4));
+            }
+            lights
+        } else {
+            feedback.lights(&camps, eye)
+        };
         if std::env::var_os("VOXEL_FOUR_TORCHES_PREVIEW").is_some() {
-            for (i,light) in local_lights.iter_mut().enumerate() {*light=crate::torch::light(eye+Vec3::new((i%2) as f32,0.,-1.-(i/2) as f32*3.));}
-            let mut moving=Vec::new();
+            for (i, light) in local_lights.iter_mut().enumerate() {
+                *light = crate::torch::light(
+                    eye + Vec3::new((i % 2) as f32, 0., -1. - (i / 2) as f32 * 3.),
+                );
+            }
+            let mut moving = Vec::new();
             for frame in 0..40 {
-                let moved=local_lights.map(|mut l|{l[0]+=(frame%8) as f32*0.26;l});
-                let start=std::time::Instant::now();light_visibility.update(&world,&moved,&queue);moving.push(start.elapsed().as_secs_f64()*1000.);
+                let moved = local_lights.map(|mut l| {
+                    l[0] += (frame % 8) as f32 * 0.26;
+                    l
+                });
+                let start = std::time::Instant::now();
+                light_visibility.update(&world, &moved, &queue);
+                moving.push(start.elapsed().as_secs_f64() * 1000.);
             }
             moving.sort_by(f64::total_cmp);
-            println!("four moving lights CPU median {:.3} ms, p95 {:.3} ms",moving[20],moving[38]);
+            println!(
+                "four moving lights CPU median {:.3} ms, p95 {:.3} ms",
+                moving[20], moving[38]
+            );
         }
-        light_visibility.update(&world,&local_lights,&queue);
-        let mut camera_uniform=CameraUniform {
-                camp_lights: local_lights,
-                view_proj: vp.to_cols_array_2d(),
-                inv_view_proj: vp.inverse().to_cols_array_2d(),
-                light_view_proj: light_vp.to_cols_array_2d(),
-                camera_pos: eye.extend(1.0).to_array(),
-                fog_color: [
-                    lighting.sky_color[0],
-                    lighting.sky_color[1],
-                    lighting.sky_color[2],
-                    1.0,
-                ],
-                zenith_color: [
-                    lighting.zenith_color[0],
-                    lighting.zenith_color[1],
-                    lighting.zenith_color[2],
-                    1.0,
-                ],
-                sun_dir: lighting.sun_dir.extend(lighting.sun_height).to_array(),
-                light_params: [
-                    lighting.ambient * if old { 1.0 } else { 1.0 - clouds * 0.12 },
-                    lighting.sun_intensity * if old { 1.0 } else { 1.0 - clouds * 0.72 },
-                    std::env::var("VOXEL_CLOUD_TIME").ok().and_then(|s|s.parse().ok()).unwrap_or(10.0),
-                    1.0,
-                ],
-                weather_fx: [0.0, clouds, 0.0, wet],
-            };
-        queue.write_buffer(&camera,0,bytemuck::bytes_of(&camera_uniform));
+        light_visibility.update(&world, &local_lights, &queue);
+        let mut camera_uniform = CameraUniform {
+            camp_lights: local_lights,
+            view_proj: vp.to_cols_array_2d(),
+            inv_view_proj: vp.inverse().to_cols_array_2d(),
+            light_view_proj: light_vp.to_cols_array_2d(),
+            camera_pos: eye.extend(1.0).to_array(),
+            fog_color: [
+                lighting.sky_color[0],
+                lighting.sky_color[1],
+                lighting.sky_color[2],
+                1.0,
+            ],
+            zenith_color: [
+                lighting.zenith_color[0],
+                lighting.zenith_color[1],
+                lighting.zenith_color[2],
+                if old || clouds > 0.0 { 1.0 } else { 0.0 },
+            ],
+            sun_dir: lighting.sun_dir.extend(lighting.sun_height).to_array(),
+            light_params: [
+                lighting.ambient * if old { 1.0 } else { 1.0 - clouds * 0.12 },
+                lighting.sun_intensity * if old { 1.0 } else { 1.0 - clouds * 0.72 },
+                std::env::var("VOXEL_CLOUD_TIME")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(10.0),
+                1.0,
+            ],
+            weather_fx: [0.0, clouds, 0.0, wet],
+            graphics: [1.0, 0.0, 0.0, 0.0],
+        };
+        queue.write_buffer(&camera, 0, bytemuck::bytes_of(&camera_uniform));
         let mut times = Vec::new();
-        let mut previous:Option<Vec<u8>>=None;let mut temporal_changes=Vec::new();
+        let mut previous: Option<Vec<u8>> = None;
+        let mut temporal_changes = Vec::new();
         for frame in 0..50 {
             if temporal {
-                let position=eye+Vec3::new(frame as f32*0.007,0.,frame as f32*0.003);
-                let matrix=if legacy {
-                    let view=glam::Mat4::look_at_rh(position+lighting.sun_dir*SHADOW_LIGHT_DISTANCE,position,Vec3::Y);
-                    let h=SHADOW_ORTHO_HALF_SIZE;
-                    let m=glam::Mat4::orthographic_rh(-h,h,-h,h,1.,SHADOW_LIGHT_DISTANCE*2.5)*view;
-                    let a=m.transform_point3(Vec3::ZERO)*(SHADOW_MAP_SIZE as f32*0.5);
-                    let o=(a.round()-a)*(2./SHADOW_MAP_SIZE as f32);
-                    glam::Mat4::from_translation(Vec3::new(o.x,o.y,0.))*m
-                }else{light_view_proj(lighting.sun_dir,position)};
-                camera_uniform.light_view_proj=matrix.to_cols_array_2d();
-                queue.write_buffer(&camera,0,bytemuck::bytes_of(&camera_uniform));
-                queue.write_buffer(&shadow.light_buffer,0,bytemuck::bytes_of(&LightUniform {view_proj:matrix.to_cols_array_2d(),motion:[10.,1.,0.,0.]}));
+                let position = eye + Vec3::new(frame as f32 * 0.007, 0., frame as f32 * 0.003);
+                let matrix = if legacy {
+                    let view = glam::Mat4::look_at_rh(
+                        position + lighting.sun_dir * SHADOW_LIGHT_DISTANCE,
+                        position,
+                        Vec3::Y,
+                    );
+                    let h = SHADOW_ORTHO_HALF_SIZE;
+                    let m =
+                        glam::Mat4::orthographic_rh(-h, h, -h, h, 1., SHADOW_LIGHT_DISTANCE * 2.5)
+                            * view;
+                    let a = m.transform_point3(Vec3::ZERO) * (SHADOW_MAP_SIZE as f32 * 0.5);
+                    let o = (a.round() - a) * (2. / SHADOW_MAP_SIZE as f32);
+                    glam::Mat4::from_translation(Vec3::new(o.x, o.y, 0.)) * m
+                } else {
+                    light_view_proj(lighting.sun_dir, position)
+                };
+                camera_uniform.light_view_proj = matrix.to_cols_array_2d();
+                queue.write_buffer(&camera, 0, bytemuck::bytes_of(&camera_uniform));
+                queue.write_buffer(
+                    &shadow.light_buffer,
+                    0,
+                    bytemuck::bytes_of(&LightUniform {
+                        view_proj: matrix.to_cols_array_2d(),
+                        motion: [10., 1., 0., 0.],
+                    }),
+                );
             }
             let mut encoder = device.create_command_encoder(&Default::default());
             {
@@ -603,7 +808,7 @@ fn render_weather_previews() {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: None,
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
+                        view: &water_reflections.scene,
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -621,7 +826,7 @@ fn render_weather_previews() {
                     timestamp_writes: queries.as_ref().map(|q| wgpu::RenderPassTimestampWrites {
                         query_set: q,
                         beginning_of_pass_write_index: None,
-                        end_of_pass_write_index: Some(1),
+                        end_of_pass_write_index: None,
                     }),
                     occlusion_query_set: None,
                 });
@@ -631,7 +836,7 @@ fn render_weather_previews() {
                 pass.set_pipeline(main);
                 pass.set_bind_group(1, &atlas_bg, &[]);
                 pass.set_bind_group(2, &shadow.sample_bind_group, &[]);
-                pass.set_bind_group(3,&light_visibility.bind_group,&[]);
+                pass.set_bind_group(3, &light_visibility.bind_group, &[]);
                 for mesh in meshes {
                     pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                     pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
@@ -649,7 +854,9 @@ fn render_weather_previews() {
                     pass.draw_indexed(0..mesh.index_count, 0, 0..1);
                 }
             }
+            water_reflections.draw(&mut encoder, &view, &camera_bg);
             if let Some(q) = &queries {
+                encoder.write_timestamp(q, 1);
                 encoder.resolve_query_set(q, 0..2, &resolve, 0);
                 encoder.copy_buffer_to_buffer(&resolve, 0, &timing, 0, 16);
             }
@@ -669,12 +876,16 @@ fn render_weather_previews() {
             }
             queue.submit(Some(encoder.finish()));
             if temporal {
-                let pixels=read_buffer(&device,&readback);
-                if let Some(last)=&previous {
-                    let changed=pixels.chunks_exact(4).zip(last.chunks_exact(4)).filter(|(a,b)|(0..3).any(|i|a[i].abs_diff(b[i])>16)).count();
+                let pixels = read_buffer(&device, &readback);
+                if let Some(last) = &previous {
+                    let changed = pixels
+                        .chunks_exact(4)
+                        .zip(last.chunks_exact(4))
+                        .filter(|(a, b)| (0..3).any(|i| a[i].abs_diff(b[i]) > 16))
+                        .count();
                     temporal_changes.push(changed);
                 }
-                previous=Some(pixels);
+                previous = Some(pixels);
             }
             if timestamps {
                 let data = read_buffer(&device, &timing);
@@ -690,12 +901,16 @@ fn render_weather_previews() {
         if !times.is_empty() {
             times.sort_by(f64::total_cmp);
             println!(
-                "{name}: median GPU {:.3} ms, p95 {:.3} ms (shadow + sky + scene, {width}x{height})",
+                "{name}: median GPU {:.3} ms, p95 {:.3} ms (shadow + sky + scene + reflections, {width}x{height})",
                 times[times.len() / 2], times[times.len()*95/100]
             );
         }
         if !temporal_changes.is_empty() {
-            temporal_changes.sort();println!("{name}: temporal pixels changing >16/255: median {} p95 {}",temporal_changes[24],temporal_changes[46]);
+            temporal_changes.sort();
+            println!(
+                "{name}: temporal pixels changing >16/255: median {} p95 {}",
+                temporal_changes[24], temporal_changes[46]
+            );
         }
         image::save_buffer(
             format!("target/render-{name}.png"),

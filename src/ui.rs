@@ -69,8 +69,8 @@ pub struct UiRequests {
     pub remember_index: Option<usize>,
     pub spellbook_action: Option<crate::spellbook_ui::Action>,
     pub open_spellbook: bool,
-    pub attach_rule:Option<usize>,
-    pub detach_rule:Option<usize>,
+    pub attach_rule: Option<usize>,
+    pub detach_rule: Option<usize>,
     pub eat_food: Option<crate::voxel::BlockType>,
     pub camp_action: Option<crate::adventure::Action>,
     pub quest_action: Option<crate::quests::Action>,
@@ -95,22 +95,22 @@ pub struct UiRequests {
 
 pub struct Ui {
     pub spellbook: crate::spellbook_ui::Panel,
-    pub spell_hud: Option<(String,bool)>,
-    pub aimed_object:String,
-    pub aimed_enchantments:Vec<String>,
-    pub attach_generation:bool,
-    pub compass_yaw:f32,
-    pub machine_compass:[Option<egui::Pos2>;5],
+    pub spell_hud: Option<(String, bool)>,
+    pub aimed_object: String,
+    pub aimed_enchantments: Vec<String>,
+    pub attach_generation: bool,
+    pub compass_yaw: f32,
+    pub machine_compass: [Option<egui::Pos2>; 5],
     pub journal: crate::adventure_ui::Journal,
     pub automation: crate::automation_ui::Panel,
-    pickup_rows: Vec<(crate::voxel::BlockType,u32)>,
+    pickup_rows: Vec<(crate::voxel::BlockType, u32)>,
     pickup_started: Instant,
     #[cfg(feature = "dev-playtest")]
     pub agent_nameplate: Option<(egui::Pos2, String)>,
     #[cfg(feature = "dev-playtest")]
-    pub agent_home_marker:Option<(egui::Pos2,&'static str)>,
-    pub nameplates: Vec<(egui::Pos2,String)>,
-    pub chat_bubbles: Vec<(egui::Pos2,String,f32)>,
+    pub agent_home_marker: Option<(egui::Pos2, &'static str)>,
+    pub nameplates: Vec<(egui::Pos2, String)>,
+    pub chat_bubbles: Vec<(egui::Pos2, String, f32)>,
     pub settings: crate::settings::SettingsPanel,
     ctx: egui::Context,
     state: State,
@@ -121,24 +121,30 @@ pub struct Ui {
     viewing_index: Option<usize>,
     pub map: crate::map_ui::Map,
     pub inventory_open: bool,
-    last_hotbar: Option<(usize,Option<crate::equipment::Entry>)>,
+    last_hotbar: Option<(usize, Option<crate::equipment::Entry>)>,
     selected_until: Instant,
     inventory: crate::inventory_ui::Inventory,
 }
 
 impl Ui {
-    pub fn show_pickup(&mut self, contents: Vec<(crate::voxel::BlockType,u32)>) {
-        if contents.is_empty() {return;}
-        if self.pickup_started.elapsed().as_secs_f32()>=4.0 {self.pickup_rows.clear();}
-        for (block,amount) in contents {
-            if amount==0 {continue;}
-            if let Some((_,count))=self.pickup_rows.iter_mut().find(|(b,_)|*b==block) {
-                *count=count.saturating_add(amount);
-            } else if self.pickup_rows.len()<12 {
-                self.pickup_rows.push((block,amount));
+    pub fn show_pickup(&mut self, contents: Vec<(crate::voxel::BlockType, u32)>) {
+        if contents.is_empty() {
+            return;
+        }
+        if self.pickup_started.elapsed().as_secs_f32() >= 4.0 {
+            self.pickup_rows.clear();
+        }
+        for (block, amount) in contents {
+            if amount == 0 {
+                continue;
+            }
+            if let Some((_, count)) = self.pickup_rows.iter_mut().find(|(b, _)| *b == block) {
+                *count = count.saturating_add(amount);
+            } else if self.pickup_rows.len() < 12 {
+                self.pickup_rows.push((block, amount));
             }
         }
-        self.pickup_started=Instant::now();
+        self.pickup_started = Instant::now();
     }
 
     pub fn new(device: &wgpu::Device, output_format: wgpu::TextureFormat, window: &Window) -> Self {
@@ -149,18 +155,21 @@ impl Ui {
         Self {
             spellbook: Default::default(),
             spell_hud: None,
-            aimed_object:String::new(),aimed_enchantments:Vec::new(),attach_generation:false,
-            pickup_rows:Vec::new(),
+            aimed_object: String::new(),
+            aimed_enchantments: Vec::new(),
+            attach_generation: false,
+            pickup_rows: Vec::new(),
             journal: Default::default(),
             automation: Default::default(),
-            pickup_started:Instant::now(),
-            nameplates:Vec::new(),
-            compass_yaw:0.,machine_compass:[None;5],
+            pickup_started: Instant::now(),
+            nameplates: Vec::new(),
+            compass_yaw: 0.,
+            machine_compass: [None; 5],
             #[cfg(feature = "dev-playtest")]
             agent_nameplate: None,
             #[cfg(feature = "dev-playtest")]
-            agent_home_marker:None,
-            chat_bubbles:Vec::new(),
+            agent_home_marker: None,
+            chat_bubbles: Vec::new(),
             settings,
             ctx,
             state,
@@ -183,12 +192,17 @@ impl Ui {
     /// Runs a one-off egui frame with caller-provided content, for UI that
     /// isn't the in-game HUD (currently just the main menu). Pass the
     /// returned `FullOutput` to `render`.
-    pub fn run(&mut self, window: &Window, contents: impl FnOnce(&egui::Context)) -> egui::FullOutput {
+    pub fn run(
+        &mut self,
+        window: &Window,
+        contents: impl FnOnce(&egui::Context),
+    ) -> egui::FullOutput {
         let raw_input = self.state.take_egui_input(window);
         self.ctx.run(raw_input, |ctx| {
             if self.settings.open {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    if self.settings.values.appearance.ui_theme == crate::settings::UiTheme::Fantasy {
+                    if self.settings.values.appearance.ui_theme == crate::settings::UiTheme::Fantasy
+                    {
                         crate::ui_theme::menu_backdrop(ui);
                     }
                 });
@@ -342,6 +356,7 @@ impl Ui {
                         let is_recent = Some(i) == recent_index;
                         let marker = if is_recent { "-> " } else { "" };
                         ui.horizontal_wrapped(|ui| {
+                            crate::spell_art::image(ui,m.artwork,egui::vec2(40.,40.));
                             ui.colored_label(status_color, format!("{marker}{} [{status}]", m.name));
                             let version_label = match m.api_version() {
                                 Some(v) => format!("api v{v}"),
@@ -588,7 +603,9 @@ impl Ui {
             }
         });
 
-        if open_settings { self.settings.open = true; }
+        if open_settings {
+            self.settings.open = true;
+        }
         self.viewing_index = viewing_index;
         (full_output, requests)
     }
@@ -651,48 +668,57 @@ impl Ui {
 }
 
 /// Position status below the actual shortcut-panel bounds in either theme.
-pub(crate) fn status_hud(ctx:&egui::Context,player:&Player,fps:f32) {
-            let hints = egui::Window::new("fps")
-                .title_bar(false)
-                .anchor(egui::Align2::RIGHT_TOP, [-8.0, 56.0])
-                .resizable(false)
-                .collapsible(false)
-                .interactable(false)
-                .show(ctx, |ui| {
-                      ui.label(format!("{fps:.0} FPS | I: Inventory | C: Craft | M: Map | F10: Settings"));
-                      ui.label("J: Field journal · Gestures: , Dance | . Angry | / Jump");
-                      ui.label("B: Automation · F: Configure device");
-                });
+pub(crate) fn status_hud(ctx: &egui::Context, player: &Player, fps: f32) {
+    let hints = egui::Window::new("fps")
+        .title_bar(false)
+        .anchor(egui::Align2::RIGHT_TOP, [-8.0, 56.0])
+        .resizable(false)
+        .collapsible(false)
+        .interactable(false)
+        .show(ctx, |ui| {
+            ui.label(format!(
+                "{fps:.0} FPS | I: Inventory | C: Craft | M: Map | F10: Settings"
+            ));
+            ui.label("J: Field journal · Gestures: , Dance | . Angry | / Jump");
+            ui.label("B: Automation · F: Configure device");
+        });
 
-            egui::Window::new("health")
-                .title_bar(false)
-                .anchor(egui::Align2::RIGHT_TOP, [-8.0, hints.as_ref().map_or(110.0, |h| h.response.rect.bottom()+10.0)])
-                .resizable(false)
-                .collapsible(false)
-                .interactable(false)
-                .show(ctx, |ui| {
-                    let health_color = if player.health <= 25.0 {
-                        egui::Color32::from_rgb(220, 90, 90)
-                    } else if player.health <= 60.0 {
-                        IMPORTANT_TOAST_COLOR
-                    } else {
-                        egui::Color32::from_rgb(100, 200, 100)
-                    };
-                    ui.colored_label(health_color, format!("Health: {:.0}/100", player.health));
-                    if player.poisoned {
-                        ui.colored_label(egui::Color32::from_rgb(140, 210, 100), "POISONED");
-                    }
-                    // Only shown while it's actually relevant (currently
-                    // draining, or still catching back up) rather than
-                    // permanently cluttering the HUD on dry land.
-                    if player.oxygen < 100.0 {
-                        let oxygen_color = if player.oxygen <= 0.0 {
-                            egui::Color32::from_rgb(220, 90, 90)
-                        } else {
-                            egui::Color32::from_rgb(120, 190, 230)
-                        };
-                        ui.colored_label(oxygen_color, format!("Oxygen: {:.0}/100", player.oxygen));
-                    }
-                });
-
+    egui::Window::new("health")
+        .title_bar(false)
+        .anchor(
+            egui::Align2::RIGHT_TOP,
+            [
+                -8.0,
+                hints
+                    .as_ref()
+                    .map_or(110.0, |h| h.response.rect.bottom() + 10.0),
+            ],
+        )
+        .resizable(false)
+        .collapsible(false)
+        .interactable(false)
+        .show(ctx, |ui| {
+            let health_color = if player.health <= 25.0 {
+                egui::Color32::from_rgb(220, 90, 90)
+            } else if player.health <= 60.0 {
+                IMPORTANT_TOAST_COLOR
+            } else {
+                egui::Color32::from_rgb(100, 200, 100)
+            };
+            ui.colored_label(health_color, format!("Health: {:.0}/100", player.health));
+            if player.poisoned {
+                ui.colored_label(egui::Color32::from_rgb(140, 210, 100), "POISONED");
+            }
+            // Only shown while it's actually relevant (currently
+            // draining, or still catching back up) rather than
+            // permanently cluttering the HUD on dry land.
+            if player.oxygen < 100.0 {
+                let oxygen_color = if player.oxygen <= 0.0 {
+                    egui::Color32::from_rgb(220, 90, 90)
+                } else {
+                    egui::Color32::from_rgb(120, 190, 230)
+                };
+                ui.colored_label(oxygen_color, format!("Oxygen: {:.0}/100", player.oxygen));
+            }
+        });
 }

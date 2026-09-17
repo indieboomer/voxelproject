@@ -4,7 +4,7 @@ use crate::creature::CreatureDraft;
 use std::collections::HashMap;
 
 pub(super) struct CallbackTransaction<'a> {
-    pub attachment:Option<crate::enchantment::Binding>,
+    pub attachment: Option<crate::enchantment::Binding>,
     pub world: &'a World,
     pub automation: RefCell<crate::automation::State>,
     pub automation_changed: Cell<bool>,
@@ -31,18 +31,30 @@ impl<'a> CallbackTransaction<'a> {
         }
         let mut resources = HashMap::new();
         for player in input.players {
-            let mut counts = if player.id == HOST_PLAYER_ID { input.host_resources } else { player.resources };
+            let mut counts = if player.id == HOST_PLAYER_ID {
+                input.host_resources
+            } else {
+                player.resources
+            };
             for (i, block) in COLLECTIBLE_BLOCKS.iter().enumerate() {
                 counts[i] = resource_balance(counts[i], player.id, *block, input.player_effects);
             }
             resources.insert(player.id, counts);
         }
         Self {
-            attachment:None,
+            attachment: None,
             world: input.world,
-            automation: RefCell::new(input.player_effects.iter().rev().find_map(|e|match e {
-                PlayerEffect::AutomationState{state}=>Some((**state).clone()),_=>None,
-            }).unwrap_or_else(||input.world.automation.clone())),
+            automation: RefCell::new(
+                input
+                    .player_effects
+                    .iter()
+                    .rev()
+                    .find_map(|e| match e {
+                        PlayerEffect::AutomationState { state } => Some((**state).clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| input.world.automation.clone()),
+            ),
             automation_changed: Cell::new(false),
             creatures: RefCell::new(CreatureDraft::new(input.creatures)),
             weather: RefCell::new(input.weather.clone()),
@@ -65,7 +77,9 @@ impl<'a> CallbackTransaction<'a> {
     }
 
     pub fn get_block(&self, x: i32, y: i32, z: i32) -> BlockType {
-        if self.automation.borrow().device_at((x,y,z)).is_some() {return BlockType::AutomationDevice;}
+        if self.automation.borrow().device_at((x, y, z)).is_some() {
+            return BlockType::AutomationDevice;
+        }
         self.blocks
             .borrow()
             .iter()
@@ -93,46 +107,84 @@ impl<'a> CallbackTransaction<'a> {
     }
 
     pub fn resource_count(&self, player_id: PlayerId, index: usize) -> Option<u32> {
-        Some(resource_balance(self.resources.get(&player_id)?[index], player_id,
-            COLLECTIBLE_BLOCKS[index], &self.effects.borrow()))
+        Some(resource_balance(
+            self.resources.get(&player_id)?[index],
+            player_id,
+            COLLECTIBLE_BLOCKS[index],
+            &self.effects.borrow(),
+        ))
     }
     pub fn inventory(&self, player_id: PlayerId) -> Option<crate::crafting::Account> {
-        let p = self.players().into_iter().find(|p|p.id==player_id)?;
-        let mut account = crate::crafting::Account {mana:p.finances.mana,elements:p.finances.elements,gear:p.finances.items,..Default::default()};
-        account.adventure=p.finances.adventure;
-        account.hotbar.slots[0]=p.finances.held;
-        if let Some(crate::equipment::Entry::Spell(id))=p.finances.held {account.known_spells.push(id);}
-        account.resources=*self.resources.get(&player_id)?;
+        let p = self.players().into_iter().find(|p| p.id == player_id)?;
+        let mut account = crate::crafting::Account {
+            mana: p.finances.mana,
+            elements: p.finances.elements,
+            gear: p.finances.items,
+            ..Default::default()
+        };
+        account.adventure = p.finances.adventure;
+        account.hotbar.slots[0] = p.finances.held;
+        if let Some(crate::equipment::Entry::Spell(id)) = p.finances.held {
+            account.known_spells.push(id);
+        }
+        account.resources = *self.resources.get(&player_id)?;
         for effect in self.effects.borrow().iter() {
             match *effect {
-                PlayerEffect::Inventory {player_id:id,resources,..} if id==player_id => account.resources=resources,
-                PlayerEffect::GiveItem {player_id:id,block,amount} if id==player_id => {
-                    if let Some(i)=COLLECTIBLE_BLOCKS.iter().position(|b|*b==block) {account.resources[i]=account.resources[i].saturating_add(amount);}
+                PlayerEffect::Inventory {
+                    player_id: id,
+                    resources,
+                    ..
+                } if id == player_id => account.resources = resources,
+                PlayerEffect::GiveItem {
+                    player_id: id,
+                    block,
+                    amount,
+                } if id == player_id => {
+                    if let Some(i) = COLLECTIBLE_BLOCKS.iter().position(|b| *b == block) {
+                        account.resources[i] = account.resources[i].saturating_add(amount);
+                    }
                 }
-                PlayerEffect::TakeItem {player_id:id,block,amount} if id==player_id => {
-                    if let Some(i)=COLLECTIBLE_BLOCKS.iter().position(|b|*b==block) {account.resources[i]=account.resources[i].saturating_sub(amount);}
+                PlayerEffect::TakeItem {
+                    player_id: id,
+                    block,
+                    amount,
+                } if id == player_id => {
+                    if let Some(i) = COLLECTIBLE_BLOCKS.iter().position(|b| *b == block) {
+                        account.resources[i] = account.resources[i].saturating_sub(amount);
+                    }
                 }
-                _=>{}
+                _ => {}
             }
         }
         Some(account)
     }
     pub fn stage_inventory(&self, player_id: PlayerId, account: &crate::crafting::Account) {
-        self.effects.borrow_mut().push(PlayerEffect::Inventory {player_id,balances:InventoryBalances::from_account(account),resources:account.resources});
+        self.effects.borrow_mut().push(PlayerEffect::Inventory {
+            player_id,
+            balances: InventoryBalances::from_account(account),
+            resources: account.resources,
+        });
     }
 
     pub fn commit(self, input: &mut TickInput, spawn_seed: &Cell<u64>, emit_deaths: bool) {
         if let Some(owner) = self.policy_owner {
             let policies = self.attack_policies.into_inner();
-            if policies.is_empty() { input.creatures.attack_policies.remove(&owner); }
-            else { input.creatures.attack_policies.insert(owner, policies); }
+            if policies.is_empty() {
+                input.creatures.attack_policies.remove(&owner);
+            } else {
+                input.creatures.attack_policies.insert(owner, policies);
+            }
         }
         self.creatures.into_inner().commit(input.creatures);
         *input.weather = self.weather.into_inner();
         *input.time_of_day = self.time.into_inner();
         input.block_edits.extend(self.blocks.into_inner());
         input.player_effects.extend(self.effects.into_inner());
-        if self.automation_changed.get() {input.player_effects.push(PlayerEffect::AutomationState{state:Box::new(self.automation.into_inner())});}
+        if self.automation_changed.get() {
+            input.player_effects.push(PlayerEffect::AutomationState {
+                state: Box::new(self.automation.into_inner()),
+            });
+        }
         if emit_deaths {
             input.death_events.extend(self.deaths.into_inner());
         }
@@ -144,11 +196,22 @@ impl<'a> CallbackTransaction<'a> {
     }
 }
 
-fn resource_balance(mut balance: u32, owner: PlayerId, block: BlockType, effects: &[PlayerEffect]) -> u32 {
+fn resource_balance(
+    mut balance: u32,
+    owner: PlayerId,
+    block: BlockType,
+    effects: &[PlayerEffect],
+) -> u32 {
     for effect in effects {
         match *effect {
-            PlayerEffect::Inventory {player_id, resources, ..} if player_id==owner => {
-                if let Some(i)=COLLECTIBLE_BLOCKS.iter().position(|b|*b==block) {balance=resources[i];}
+            PlayerEffect::Inventory {
+                player_id,
+                resources,
+                ..
+            } if player_id == owner => {
+                if let Some(i) = COLLECTIBLE_BLOCKS.iter().position(|b| *b == block) {
+                    balance = resources[i];
+                }
             }
             PlayerEffect::GiveItem {
                 player_id,
@@ -173,7 +236,11 @@ fn resource_balance(mut balance: u32, owner: PlayerId, block: BlockType, effects
 fn apply_player_preview(players: &mut [PlayerSnapshot], effect: &PlayerEffect) {
     for player in players {
         match *effect {
-            PlayerEffect::Inventory {player_id,balances,..} if player_id==player.id => player.finances=balances,
+            PlayerEffect::Inventory {
+                player_id,
+                balances,
+                ..
+            } if player_id == player.id => player.finances = balances,
             PlayerEffect::Health { player_id, delta } if player_id == player.id => {
                 player.health = (player.health + delta).clamp(0.0, crate::player::MAX_HEALTH);
             }

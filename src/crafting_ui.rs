@@ -36,7 +36,10 @@ impl Default for CraftingUi {
             extraction_block: BlockType::Stone,
             extraction_amount: 1,
             recipe_search: String::new(),
-            tab: 0, gear_search: String::new(), gear_path: None, craftable_only: false,
+            tab: 0,
+            gear_search: String::new(),
+            gear_path: None,
+            craftable_only: false,
             selected_gear: crate::equipment::Gear::Axe,
         }
     }
@@ -51,59 +54,140 @@ fn selector(ui: &mut egui::Ui, id: impl std::hash::Hash, element: &mut Element) 
         });
 }
 impl CraftingUi {
-    pub fn show_book(&mut self,kind:u8) {
-        if kind>=4 {return;}
-        self.tab=0;self.gear_path=Some(kind as usize+1);self.gear_search.clear();self.craftable_only=false;
-        self.selected_gear=crate::equipment::Gear::ALL[4+kind as usize*4];
-        self.feedback=format!("{}: four recipes learned. This book remains for other travelers.",crate::gear_catalog::BOOK_NAMES[kind as usize]);
+    pub fn show_book(&mut self, kind: u8) {
+        if kind >= 4 {
+            return;
+        }
+        self.tab = 0;
+        self.gear_path = Some(kind as usize + 1);
+        self.gear_search.clear();
+        self.craftable_only = false;
+        self.selected_gear = crate::equipment::Gear::ALL[4 + kind as usize * 4];
+        self.feedback = format!(
+            "{}: four recipes learned. This book remains for other travelers.",
+            crate::gear_catalog::BOOK_NAMES[kind as usize]
+        );
     }
     #[allow(clippy::too_many_arguments)]
-    fn equipment_panel(&mut self,ui:&mut egui::Ui,registry:&Registry,account:&Account,world:&World,creatures:&Creatures,pos:Vec3,players:&[Vec3])->Option<Action> {
-        use crate::equipment::{Gear,Entry};
-        let mut request=None;
+    fn equipment_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        registry: &Registry,
+        account: &Account,
+        world: &World,
+        creatures: &Creatures,
+        pos: Vec3,
+        players: &[Vec3],
+    ) -> Option<Action> {
+        use crate::equipment::{Entry, Gear};
+        let mut request = None;
         ui.horizontal_wrapped(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.gear_search).hint_text("Search equipment or effect").desired_width(260.));
-            ui.checkbox(&mut self.craftable_only,"Can craft now");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.gear_search)
+                    .hint_text("Search equipment or effect")
+                    .desired_width(260.),
+            );
+            ui.checkbox(&mut self.craftable_only, "Can craft now");
         });
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.gear_path,None,"All");
-            for (i,path) in crate::gear_catalog::PATHS.iter().enumerate() {ui.selectable_value(&mut self.gear_path,Some(i),*path);}
+            ui.selectable_value(&mut self.gear_path, None, "All");
+            for (i, path) in crate::gear_catalog::PATHS.iter().enumerate() {
+                ui.selectable_value(&mut self.gear_path, Some(i), *path);
+            }
         });
         ui.small(format!("{} / 4 recipe books discovered. Find floating books on dry land; look at one and press F.",account.adventure.recipe_books.count_ones()));
-        let query=self.gear_search.trim().to_lowercase();
-        let rows:Vec<_>=Gear::available().filter(|g|self.gear_path.is_none_or(|p|p==g.path()))
-            .filter(|g|format!("{} {}",g.name(),g.description()).to_lowercase().contains(&query))
-            .filter(|g|!self.craftable_only || registry.preview(account,&Action::CraftGear(*g),world,creatures,pos,players).is_ok()).collect();
-        if !rows.contains(&self.selected_gear) {if let Some(g)=rows.first(){self.selected_gear=*g;}}
-        let selected=self.selected_gear;
-        ui.columns(2,|columns| {
-            egui::ScrollArea::vertical().id_source("equipment_catalog").max_height(340.).show(&mut columns[0],|ui| {
-                if rows.is_empty(){ui.label("No matching equipment. Change the search or filters.");}
-                for g in &rows {
-                    ui.horizontal(|ui| {
-                        crate::equipment_ui::icon(ui,Entry::Gear(*g));
-                        ui.selectable_value(&mut self.selected_gear,*g,format!("{}{}  ({})",if g.known(account){""}else{"? "},g.name(),Entry::Gear(*g).count(account)));
-                    });
-                }
-            });
-            let ui=&mut columns[1];
+        let query = self.gear_search.trim().to_lowercase();
+        let rows: Vec<_> = Gear::available()
+            .filter(|g| self.gear_path.is_none_or(|p| p == g.path()))
+            .filter(|g| {
+                format!("{} {}", g.name(), g.description())
+                    .to_lowercase()
+                    .contains(&query)
+            })
+            .filter(|g| {
+                !self.craftable_only
+                    || registry
+                        .preview(
+                            account,
+                            &Action::CraftGear(*g),
+                            world,
+                            creatures,
+                            pos,
+                            players,
+                        )
+                        .is_ok()
+            })
+            .collect();
+        if !rows.contains(&self.selected_gear) {
+            if let Some(g) = rows.first() {
+                self.selected_gear = *g;
+            }
+        }
+        let selected = self.selected_gear;
+        ui.columns(2, |columns| {
+            egui::ScrollArea::vertical()
+                .id_source("equipment_catalog")
+                .max_height(340.)
+                .show(&mut columns[0], |ui| {
+                    if rows.is_empty() {
+                        ui.label("No matching equipment. Change the search or filters.");
+                    }
+                    for g in &rows {
+                        ui.horizontal(|ui| {
+                            crate::equipment_ui::icon(ui, Entry::Gear(*g));
+                            ui.selectable_value(
+                                &mut self.selected_gear,
+                                *g,
+                                format!(
+                                    "{}{}  ({})",
+                                    if g.known(account) { "" } else { "? " },
+                                    g.name(),
+                                    Entry::Gear(*g).count(account)
+                                ),
+                            );
+                        });
+                    }
+                });
+            let ui = &mut columns[1];
             if !rows.is_empty() {
-                ui.heading(selected.name());ui.label(selected.description());
-                ui.label(format!("Owned: {}",Entry::Gear(selected).count(account)));
-                if let Some(book)=selected.book() {
-                    ui.small(format!("Recipe: {}",crate::gear_catalog::BOOK_NAMES[book as usize]));
+                ui.heading(selected.name());
+                ui.label(selected.description());
+                ui.label(format!("Owned: {}", Entry::Gear(selected).count(account)));
+                if let Some(book) = selected.book() {
+                    ui.small(format!(
+                        "Recipe: {}",
+                        crate::gear_catalog::BOOK_NAMES[book as usize]
+                    ));
                 }
                 ui.separator();
-                for (block,n) in selected.ingredients(false) {
-                    let have=Entry::Resource(block).count(account);
-                    ui.colored_label(if have>=n {egui::Color32::LIGHT_GREEN}else{egui::Color32::LIGHT_RED},format!("{}: {have} / {n}",block.name()));
+                for (block, n) in selected.ingredients(false) {
+                    let have = Entry::Resource(block).count(account);
+                    ui.colored_label(
+                        if have >= n {
+                            egui::Color32::LIGHT_GREEN
+                        } else {
+                            egui::Color32::LIGHT_RED
+                        },
+                        format!("{}: {have} / {n}", block.name()),
+                    );
                 }
-                let mana=registry.mana_charge(crate::crafting::gear_formula(selected,false).unwrap().2);
-                ui.label(format!("Mana: {} / {mana}",account.mana));
-                let action=Action::CraftGear(selected);
-                let status=registry.preview(account,&action,world,creatures,pos,players);
-                if ui.add_enabled(self.ready() && status.is_ok(),egui::Button::new(format!("Craft {}",selected.name()))).clicked(){request=Some(action);}
-                if let Err(error)=status {ui.label(error);}
+                let mana =
+                    registry.mana_charge(crate::crafting::gear_formula(selected, false).unwrap().2);
+                ui.label(format!("Mana: {} / {mana}", account.mana));
+                let action = Action::CraftGear(selected);
+                let status = registry.preview(account, &action, world, creatures, pos, players);
+                if ui
+                    .add_enabled(
+                        self.ready() && status.is_ok(),
+                        egui::Button::new(format!("Craft {}", selected.name())),
+                    )
+                    .clicked()
+                {
+                    request = Some(action);
+                }
+                if let Err(error) = status {
+                    ui.label(error);
+                }
                 ui.small("Assign crafted equipment to your hotbar in I. Effects apply while held.");
             }
         });
@@ -464,7 +548,7 @@ mod tests {
             ..CraftingUi::default()
         };
         for known in [false, true] {
-            ui.tab=1;
+            ui.tab = 1;
             if known {
                 ui.slots[0] = Some(Slot {
                     element: Element::Earth,

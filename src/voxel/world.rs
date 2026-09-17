@@ -119,15 +119,21 @@ const VEINS: [VeinConfig; 6] = [
 
 const RESOURCE_VEINS: &[VeinConfig] = include!("resource_veins.rs");
 
-struct SurfaceResource { block: BlockType, habitat: &'static str, chance: f32, salt: u32 }
+struct SurfaceResource {
+    block: BlockType,
+    habitat: &'static str,
+    chance: f32,
+    salt: u32,
+}
 const SURFACE_RESOURCES: &[SurfaceResource] = include!("resource_surface.rs");
 
 pub struct World {
     pub identity: crate::enchantment::WorldIdentity,
     pub starter_camp: Option<(i32, i32, i32)>,
-    pub(crate) cave_layouts: std::cell::RefCell<HashMap<(i32,i32),std::sync::Arc<crate::underground::Layout>>>,
+    pub(crate) cave_layouts:
+        std::cell::RefCell<HashMap<(i32, i32), std::sync::Arc<crate::underground::Layout>>>,
     pub name: String,
-    pub underground_discovered: std::collections::BTreeSet<(i32,i32)>,
+    pub underground_discovered: std::collections::BTreeSet<(i32, i32)>,
     pub automation: crate::automation::State,
     pub generation: crate::worldgen::WorldGeneration,
     pub seed: u32,
@@ -147,7 +153,8 @@ impl World {
             identity: Default::default(),
             starter_camp: None,
             seed,
-            cave_layouts: Default::default(),            automation: Default::default(),
+            cave_layouts: Default::default(),
+            automation: Default::default(),
             generation: Default::default(),
             name: "world".into(),
             underground_discovered: Default::default(),
@@ -170,7 +177,7 @@ impl World {
     }
 
     pub fn terrain_height(&self, wx: i32, wz: i32) -> i32 {
-        self.generation.height(wx,wz,self.seed)
+        self.generation.height(wx, wz, self.seed)
     }
 
     fn generate_chunk(&self, cx: i32, cz: i32) -> Chunk {
@@ -179,26 +186,52 @@ impl World {
 
         // Reuse the seed-only height map for all generation passes. The one-cell
         // halo supplies exact mountain slopes at chunk boundaries.
-        let halo:[[i32;(CHUNK_Z+2) as usize];(CHUNK_X+2) as usize]=std::array::from_fn(|x|std::array::from_fn(|z|self.terrain_height(ox+x as i32-1,oz+z as i32-1)));
-        let heights:[[i32;CHUNK_Z as usize];CHUNK_X as usize]=std::array::from_fn(|x|std::array::from_fn(|z|halo[x+1][z+1]));
+        let halo: [[i32; (CHUNK_Z + 2) as usize]; (CHUNK_X + 2) as usize] =
+            std::array::from_fn(|x| {
+                std::array::from_fn(|z| self.terrain_height(ox + x as i32 - 1, oz + z as i32 - 1))
+            });
+        let heights: [[i32; CHUNK_Z as usize]; CHUNK_X as usize] =
+            std::array::from_fn(|x| std::array::from_fn(|z| halo[x + 1][z + 1]));
         for lx in 0..CHUNK_X {
             for lz in 0..CHUNK_Z {
                 let wx = ox + lx;
                 let wz = oz + lz;
-                let (x,z)=(lx as usize+1,lz as usize+1);
+                let (x, z) = (lx as usize + 1, lz as usize + 1);
                 let height = halo[x][z];
                 let water_level = if self.generation.shape == crate::worldgen::Shape::Mainland {
-                    super::terrain::tributary(wx,wz,self.seed).map(|p|p.1).unwrap_or(SEA_LEVEL)
-                } else { SEA_LEVEL };
-                let slope=[halo[x-1][z],halo[x+1][z],halo[x][z-1],halo[x][z+1]].into_iter().map(|h|(h-height).abs()).max().unwrap_or(0);
-                let mountain_surface=super::terrain::mountain_surface_with_slope(wx,wz,height,self.seed,slope);
-                let undercut=matches!(self.generation.landscape_version,1|2) && self.generation.shape!=crate::worldgen::Shape::Flat
-                    && super::terrain::undercut(wx,wz,self.seed,height,slope,self.generation.landscape_version);
+                    super::terrain::tributary(wx, wz, self.seed)
+                        .map(|p| p.1)
+                        .unwrap_or(SEA_LEVEL)
+                } else {
+                    SEA_LEVEL
+                };
+                let slope = [
+                    halo[x - 1][z],
+                    halo[x + 1][z],
+                    halo[x][z - 1],
+                    halo[x][z + 1],
+                ]
+                .into_iter()
+                .map(|h| (h - height).abs())
+                .max()
+                .unwrap_or(0);
+                let mountain_surface =
+                    super::terrain::mountain_surface_with_slope(wx, wz, height, self.seed, slope);
+                let undercut = matches!(self.generation.landscape_version, 1 | 2)
+                    && self.generation.shape != crate::worldgen::Shape::Flat
+                    && super::terrain::undercut(
+                        wx,
+                        wz,
+                        self.seed,
+                        height,
+                        slope,
+                        self.generation.landscape_version,
+                    );
 
                 for ly in 0..super::chunk::TERRAIN_HEIGHT {
                     let block = if ly < BEDROCK_DEPTH {
                         BlockType::Bedrock
-                    } else if undercut && ly>=height-5 && ly<=height-2 {
+                    } else if undercut && ly >= height - 5 && ly <= height - 2 {
                         BlockType::Air
                     } else if ly > height {
                         if ly <= water_level {
@@ -215,14 +248,16 @@ impl World {
                             }
                         } else if height <= SEA_LEVEL + 1 {
                             BlockType::Sand
-                        } else if height>=super::terrain::ALPINE_LINE {
+                        } else if height >= super::terrain::ALPINE_LINE {
                             mountain_surface
                         } else {
                             BlockType::Grass
                         }
-                    } else if self.generation.surface == crate::worldgen::Surface::Sand && ly > height - 5 {
+                    } else if self.generation.surface == crate::worldgen::Surface::Sand
+                        && ly > height - 5
+                    {
                         BlockType::Sand
-                    } else if height>=super::terrain::ALPINE_LINE {
+                    } else if height >= super::terrain::ALPINE_LINE {
                         BlockType::Stone
                     } else if ly > height - 4 {
                         BlockType::Soil
@@ -234,15 +269,21 @@ impl World {
 
                 // Simple tree scattering, away from the shoreline. Species
                 // is picked per-tree so all four wood types show up.
-                let on_dry_land = self.generation.surface == crate::worldgen::Surface::Natural && height > water_level + 2 && height < super::terrain::ALPINE_LINE;
+                let on_dry_land = self.generation.surface == crate::worldgen::Surface::Natural
+                    && height > water_level + 2
+                    && height < super::terrain::ALPINE_LINE;
                 let mut placed_topper = false;
                 let tree_land = if self.generation.surface == crate::worldgen::Surface::Natural {
                     on_dry_land
                 } else {
-                    height > water_level + 2 && height < super::chunk::TERRAIN_HEIGHT - 12
+                    height > water_level + 2
+                        && height < super::chunk::TERRAIN_HEIGHT - 12
                         && self.generation.surface != crate::worldgen::Surface::Stone
                 };
-                if tree_land && column_rand(wx, wz, self.seed, 0xA11CE) < 0.006 * self.generation.trees as f32 / 100. {
+                if tree_land
+                    && column_rand(wx, wz, self.seed, 0xA11CE)
+                        < 0.006 * self.generation.trees as f32 / 100.
+                {
                     let species_roll = column_rand(wx, wz, self.seed, 0x5FEC1E5);
                     let idx = ((species_roll * TREE_SPECIES.len() as f32) as usize)
                         .min(TREE_SPECIES.len() - 1);
@@ -263,9 +304,7 @@ impl World {
 
                 // Short grass tufts -- a common, purely decorative "only on
                 // top" cover, so it should never overwrite a tree/pumpkin.
-                if on_dry_land
-                    && !placed_topper
-                    && column_rand(wx, wz, self.seed, 0x5407A55) < 0.06
+                if on_dry_land && !placed_topper && column_rand(wx, wz, self.seed, 0x5407A55) < 0.06
                 {
                     chunk.set_local(lx, height + 1, lz, BlockType::ShortGrass);
                 }
@@ -284,10 +323,14 @@ impl World {
         crate::campfire::generate(&mut chunk, self.seed);
         // Keep a stone support directly beneath generated snow even where
         // ore/deposit passes have changed the surrounding mountain interior.
-        for lx in 0..CHUNK_X {for lz in 0..CHUNK_Z {
-            let h=heights[lx as usize][lz as usize];
-            if chunk.get_local(lx,h,lz)==BlockType::Snow {chunk.set_local(lx,h-1,lz,BlockType::Stone);}
-        }}
+        for lx in 0..CHUNK_X {
+            for lz in 0..CHUNK_Z {
+                let h = heights[lx as usize][lz as usize];
+                if chunk.get_local(lx, h, lz) == BlockType::Snow {
+                    chunk.set_local(lx, h - 1, lz, BlockType::Stone);
+                }
+            }
+        }
 
         crate::underground::carve(self, &mut chunk);
         chunk.dirty = true;
@@ -295,49 +338,100 @@ impl World {
     }
 
     /// A second pass never overwrites tree trunks, leaves, existing decorations or water.
-    fn scatter_surface_resources(&self, chunk: &mut Chunk, heights:&[[i32;CHUNK_Z as usize];CHUNK_X as usize]) {
-        let (ox,oz)=chunk.world_origin();
-        for lx in 0..CHUNK_X { for lz in 0..CHUNK_Z {
-            let (wx,wz)=(ox+lx,oz+lz);
-            let y=heights[lx as usize][lz as usize];
-            let surface=chunk.get_local(lx,y,lz);
-            let wet=(SEA_LEVEL..=SEA_LEVEL+2).contains(&y);
-            if wet && matches!(surface,BlockType::Sand | BlockType::Grass | BlockType::Soil) {
-                let roll=column_rand(wx,wz,self.seed,0x7200A001);
-                let ground=if roll<0.12 {Some(BlockType::Clay)} else if roll<0.20 {Some(BlockType::Peat)} else if roll<0.28 {Some(BlockType::Mud)} else {None};
-                if let Some(block)=ground { chunk.set_local(lx,y,lz,block); }
-            }
-            if y<SEA_LEVEL || chunk.get_local(lx,y+1,lz)!=BlockType::Air {continue;}
-            let roll=column_rand(wx,wz,self.seed,0x7200A002);
-            let plant=if wet && roll<0.07 {Some(BlockType::Reeds)}
-                else if surface==BlockType::Grass && roll<0.012 {Some(BlockType::Flax)}
-                else if surface==BlockType::Grass && roll<0.028 {Some(BlockType::WildHerbs)} else {None};
-            if let Some(block)=plant {chunk.set_local(lx,y+1,lz,block);continue;}
-            if !chunk.get_local(lx,y,lz).is_solid() {continue;}
-            let shaded=(-2..=2).any(|dx|(-2..=2).any(|dz|(2..=6).any(|dy| {
-                let block=chunk.get_local(lx+dx,y+dy,lz+dz);
-                block.is_wood() || block.def().cutout
-            })));
-            if self.generation.landscape_version>0 && surface==BlockType::Grass && !shaded && !wet {
-                if let Some(plant)=super::terrain::meadow_plant(wx,wz,self.seed) {
-                    chunk.set_local(lx,y+1,lz,plant);continue;
+    fn scatter_surface_resources(
+        &self,
+        chunk: &mut Chunk,
+        heights: &[[i32; CHUNK_Z as usize]; CHUNK_X as usize],
+    ) {
+        let (ox, oz) = chunk.world_origin();
+        for lx in 0..CHUNK_X {
+            for lz in 0..CHUNK_Z {
+                let (wx, wz) = (ox + lx, oz + lz);
+                let y = heights[lx as usize][lz as usize];
+                let surface = chunk.get_local(lx, y, lz);
+                let wet = (SEA_LEVEL..=SEA_LEVEL + 2).contains(&y);
+                if wet
+                    && matches!(
+                        surface,
+                        BlockType::Sand | BlockType::Grass | BlockType::Soil
+                    )
+                {
+                    let roll = column_rand(wx, wz, self.seed, 0x7200A001);
+                    let ground = if roll < 0.12 {
+                        Some(BlockType::Clay)
+                    } else if roll < 0.20 {
+                        Some(BlockType::Peat)
+                    } else if roll < 0.28 {
+                        Some(BlockType::Mud)
+                    } else {
+                        None
+                    };
+                    if let Some(block) = ground {
+                        chunk.set_local(lx, y, lz, block);
+                    }
                 }
-            }
-            for resource in SURFACE_RESOURCES {
-                let suitable=match resource.habitat {
-                    "shade"=>shaded,
-                    "wet"=>wet,
-                    "meadow"=>surface==BlockType::Grass && !shaded,
-                    "dry"=>surface==BlockType::Grass && y>=SEA_LEVEL+6,
-                    _=>false,
+                if y < SEA_LEVEL || chunk.get_local(lx, y + 1, lz) != BlockType::Air {
+                    continue;
+                }
+                let roll = column_rand(wx, wz, self.seed, 0x7200A002);
+                let plant = if wet && roll < 0.07 {
+                    Some(BlockType::Reeds)
+                } else if surface == BlockType::Grass && roll < 0.012 {
+                    Some(BlockType::Flax)
+                } else if surface == BlockType::Grass && roll < 0.028 {
+                    Some(BlockType::WildHerbs)
+                } else {
+                    None
                 };
-                // Coarse patches plus independent local rolls give natural clumps, not a grid.
-                if suitable && column_rand(wx.div_euclid(5),wz.div_euclid(5),self.seed,resource.salt^0x99)<0.7
-                    && column_rand(wx,wz,self.seed,resource.salt)<resource.chance {
-                    chunk.set_local(lx,y+1,lz,resource.block);break;
+                if let Some(block) = plant {
+                    chunk.set_local(lx, y + 1, lz, block);
+                    continue;
+                }
+                if !chunk.get_local(lx, y, lz).is_solid() {
+                    continue;
+                }
+                let shaded = (-2..=2).any(|dx| {
+                    (-2..=2).any(|dz| {
+                        (2..=6).any(|dy| {
+                            let block = chunk.get_local(lx + dx, y + dy, lz + dz);
+                            block.is_wood() || block.def().cutout
+                        })
+                    })
+                });
+                if self.generation.landscape_version > 0
+                    && surface == BlockType::Grass
+                    && !shaded
+                    && !wet
+                {
+                    if let Some(plant) = super::terrain::meadow_plant(wx, wz, self.seed) {
+                        chunk.set_local(lx, y + 1, lz, plant);
+                        continue;
+                    }
+                }
+                for resource in SURFACE_RESOURCES {
+                    let suitable = match resource.habitat {
+                        "shade" => shaded,
+                        "wet" => wet,
+                        "meadow" => surface == BlockType::Grass && !shaded,
+                        "dry" => surface == BlockType::Grass && y >= SEA_LEVEL + 6,
+                        _ => false,
+                    };
+                    // Coarse patches plus independent local rolls give natural clumps, not a grid.
+                    if suitable
+                        && column_rand(
+                            wx.div_euclid(5),
+                            wz.div_euclid(5),
+                            self.seed,
+                            resource.salt ^ 0x99,
+                        ) < 0.7
+                        && column_rand(wx, wz, self.seed, resource.salt) < resource.chance
+                    {
+                        chunk.set_local(lx, y + 1, lz, resource.block);
+                        break;
+                    }
                 }
             }
-        }}
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -384,8 +478,7 @@ impl World {
                     // Per-cell jitter on the outer ring, so the edge isn't
                     // a perfectly even circle either.
                     if dist == radius {
-                        let jitter =
-                            column_rand(wx + dx, wz + dz, self.seed, 0x1EAF ^ (dy as u32));
+                        let jitter = column_rand(wx + dx, wz + dz, self.seed, 0x1EAF ^ (dy as u32));
                         if jitter > 0.55 + fullness * 0.3 {
                             continue;
                         }
@@ -407,15 +500,22 @@ impl World {
     /// deterministic per-chunk-attempt roll and grows via a short random
     /// walk, so results are reproducible from `(seed, cx, cz)` alone like
     /// the rest of chunk generation.
-    fn scatter_veins(&self, chunk: &mut Chunk, cx: i32, cz: i32, heights:&[[i32;CHUNK_Z as usize];CHUNK_X as usize]) {
+    fn scatter_veins(
+        &self,
+        chunk: &mut Chunk,
+        cx: i32,
+        cz: i32,
+        heights: &[[i32; CHUNK_Z as usize]; CHUNK_X as usize],
+    ) {
         for vein in VEINS.iter().chain(RESOURCE_VEINS.iter()) {
-            let ore=vein.block.id().ends_with("_ore") || vein.block==BlockType::Coal;
-            let attempts=vein.attempts_per_chunk * if ore {2} else {1};
+            let ore = vein.block.id().ends_with("_ore") || vein.block == BlockType::Coal;
+            let attempts = vein.attempts_per_chunk * if ore { 2 } else { 1 };
             for attempt in 0..attempts as i32 {
                 if block_rand(cx, attempt, cz, self.seed, vein.salt) >= vein.spawn_chance {
                     continue;
                 }
-                let lx = block_rand_range(cx, attempt, cz, self.seed, vein.salt ^ 0xA1, 0, CHUNK_X - 1);
+                let lx =
+                    block_rand_range(cx, attempt, cz, self.seed, vein.salt ^ 0xA1, 0, CHUNK_X - 1);
                 let ly = block_rand_range(
                     cx,
                     attempt,
@@ -425,18 +525,30 @@ impl World {
                     vein.min_y,
                     vein.max_y,
                 );
-                let lz = block_rand_range(cx, attempt, cz, self.seed, vein.salt ^ 0xC3, 0, CHUNK_Z - 1);
-                let size =
-                    block_rand_range(cx, attempt, cz, self.seed, vein.salt ^ 0xD4, vein.min_size, vein.max_size) + if ore {2} else {0};
+                let lz =
+                    block_rand_range(cx, attempt, cz, self.seed, vein.salt ^ 0xC3, 0, CHUNK_Z - 1);
+                let size = block_rand_range(
+                    cx,
+                    attempt,
+                    cz,
+                    self.seed,
+                    vein.salt ^ 0xD4,
+                    vein.min_size,
+                    vein.max_size,
+                ) + if ore { 2 } else { 0 };
 
                 let (mut x, mut y, mut z) = (lx, ly, lz);
                 for step in 0..size {
-                    if Chunk::in_bounds(x, y, z) && (vein.min_y..=vein.max_y).contains(&y)
+                    if Chunk::in_bounds(x, y, z)
+                        && (vein.min_y..=vein.max_y).contains(&y)
                         && y < heights[x as usize][z as usize]
-                        && (chunk.get_local(x,y,z)==BlockType::Stone || (ore && chunk.get_local(x,y,z)==BlockType::Soil)) {
+                        && (chunk.get_local(x, y, z) == BlockType::Stone
+                            || (ore && chunk.get_local(x, y, z) == BlockType::Soil))
+                    {
                         chunk.set_local(x, y, z, vein.block);
                     }
-                    let dir = block_rand_range(x, y, z, self.seed, vein.salt ^ (step as u32), 0, 5) as usize;
+                    let dir = block_rand_range(x, y, z, self.seed, vein.salt ^ (step as u32), 0, 5)
+                        as usize;
                     let (dx, dy, dz) = NEIGHBOR_OFFSETS[dir];
                     x += dx;
                     y += dy;
@@ -478,13 +590,18 @@ impl World {
         self.chunks.insert((cx, cz), chunk);
         // Previously meshed neighbors may have exposed boundary faces/AO
         // calculated while this chunk was absent. Refresh them incrementally.
-        self.dirty_neighbors(cx,cz);
+        self.dirty_neighbors(cx, cz);
     }
 
-    fn dirty_neighbors(&mut self,cx:i32,cz:i32) {
-        for dx in -1..=1 {for dz in -1..=1 {
-            if let Some(chunk)=self.chunks.get_mut(&(cx+dx,cz+dz)){chunk.dirty=true;*chunk.sky_cache.get_mut()=None;}
-        }}
+    fn dirty_neighbors(&mut self, cx: i32, cz: i32) {
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                if let Some(chunk) = self.chunks.get_mut(&(cx + dx, cz + dz)) {
+                    chunk.dirty = true;
+                    *chunk.sky_cache.get_mut() = None;
+                }
+            }
+        }
     }
 
     fn apply_edits_to_chunk(&self, chunk: &mut Chunk) {
@@ -504,11 +621,15 @@ impl World {
     }
 
     pub fn unload_chunk(&mut self, cx: i32, cz: i32) {
-        if self.chunks.remove(&(cx, cz)).is_some(){self.dirty_neighbors(cx,cz);}
+        if self.chunks.remove(&(cx, cz)).is_some() {
+            self.dirty_neighbors(cx, cz);
+        }
     }
 
     pub fn get_block(&self, wx: i32, wy: i32, wz: i32) -> BlockType {
-        if self.automation.device_at((wx,wy,wz)).is_some() { return BlockType::AutomationDevice; }
+        if self.automation.device_at((wx, wy, wz)).is_some() {
+            return BlockType::AutomationDevice;
+        }
         if wy < 0 || wy >= CHUNK_Y {
             return BlockType::Air;
         }
@@ -522,12 +643,17 @@ impl World {
 
     pub fn set_block(&mut self, wx: i32, wy: i32, wz: i32, block: BlockType) {
         // Devices are packed transactionally; ordinary edits cannot erase cargo.
-        if block==BlockType::AutomationDevice || self.automation.device_at((wx,wy,wz)).is_some() { return; }
+        if block == BlockType::AutomationDevice || self.automation.device_at((wx, wy, wz)).is_some()
+        {
+            return;
+        }
         if wy < 0 || wy >= CHUNK_Y {
             return;
         }
         let was = self.get_block(wx, wy, wz);
-        if was!=block {self.identity.block_changed((wx,wy,wz));}
+        if was != block {
+            self.identity.block_changed((wx, wy, wz));
+        }
         if was == BlockType::RedStone && block != BlockType::RedStone {
             self.redstone_positions.retain(|&p| p != (wx, wy, wz));
         } else if block == BlockType::RedStone && was != BlockType::RedStone {
@@ -541,11 +667,11 @@ impl World {
         }
         // Only chunks within the skylight halo can change (also covers AO and
         // boundary faces). Avoid rebuilding all nine chunks for every edit.
-        for z in (wz-8).div_euclid(CHUNK_Z)..=(wz+8).div_euclid(CHUNK_Z) {
-            for x in (wx-8).div_euclid(CHUNK_X)..=(wx+8).div_euclid(CHUNK_X) {
-                if let Some(neighbor)=self.chunks.get_mut(&(x,z)) {
-                    neighbor.dirty=true;
-                    *neighbor.sky_cache.get_mut()=None;
+        for z in (wz - 8).div_euclid(CHUNK_Z)..=(wz + 8).div_euclid(CHUNK_Z) {
+            for x in (wx - 8).div_euclid(CHUNK_X)..=(wx + 8).div_euclid(CHUNK_X) {
+                if let Some(neighbor) = self.chunks.get_mut(&(x, z)) {
+                    neighbor.dirty = true;
+                    *neighbor.sky_cache.get_mut() = None;
                 }
             }
         }
@@ -622,19 +748,31 @@ mod tests {
     #[test]
     fn prompted_surfaces_and_chunk_order_are_consistent() {
         use crate::worldgen::{Shape, Surface, WorldGeneration};
-        for (surface, block) in [(Surface::Sand, BlockType::Sand), (Surface::Snow, BlockType::Snow), (Surface::Stone, BlockType::Stone)] {
+        for (surface, block) in [
+            (Surface::Sand, BlockType::Sand),
+            (Surface::Snow, BlockType::Snow),
+            (Surface::Stone, BlockType::Stone),
+        ] {
             let mut world = World::new(42);
-            world.generation = WorldGeneration { shape: Shape::Flat, surface, trees: 0, relief: 0, ..Default::default() };
+            world.generation = WorldGeneration {
+                shape: Shape::Flat,
+                surface,
+                trees: 0,
+                relief: 0,
+                ..Default::default()
+            };
             let first = world.generate_chunk(-1, 0);
             let _neighbor = world.generate_chunk(0, 0);
             let again = world.generate_chunk(-1, 0);
-            for x in 0..CHUNK_X { for z in 0..CHUNK_Z {
-                assert_eq!(first.get_local(x,25,z), block);
-                for y in 0..CHUNK_Y {
-                    assert_eq!(first.get_local(x,y,z), again.get_local(x,y,z));
-                    assert!(!first.get_local(x,y,z).is_wood());
+            for x in 0..CHUNK_X {
+                for z in 0..CHUNK_Z {
+                    assert_eq!(first.get_local(x, 25, z), block);
+                    for y in 0..CHUNK_Y {
+                        assert_eq!(first.get_local(x, y, z), again.get_local(x, y, z));
+                        assert!(!first.get_local(x, y, z).is_wood());
+                    }
                 }
-            }}
+            }
         }
     }
 
@@ -749,54 +887,94 @@ mod resource_generation_tests {
     use super::*;
     #[test]
     fn resources_are_obtainable_and_refined_materials_never_spawn() {
-        let mut counts=vec![0u64;crate::voxel::COLLECTIBLE_BLOCKS.len()];
-        let mut blocks=0u64;
-        let mut soil_ores=0u64;
-        for seed in [7,42,2026] {
-            let world=World::new(seed);
-            for cx in -6..6 {for cz in -6..6 {
-                let chunk=world.generate_chunk(cx*7,cz*7);
-                for x in 0..CHUNK_X { for z in 0..CHUNK_Z {for y in 0..CHUNK_Y {
-                    let block=chunk.get_local(x,y,z);
-                    if block==BlockType::Air || block==BlockType::Water {continue;}
-                    blocks+=1;
-                    if block.id().ends_with("_ore") {
-                        let (ox,oz)=chunk.world_origin();
-                        let h=world.terrain_height(ox+x,oz+z);
-                        assert!(y<h,"ore broke the surface");
-                        if y>=h-3 {soil_ores+=1;}
+        let mut counts = vec![0u64; crate::voxel::COLLECTIBLE_BLOCKS.len()];
+        let mut blocks = 0u64;
+        let mut soil_ores = 0u64;
+        for seed in [7, 42, 2026] {
+            let world = World::new(seed);
+            for cx in -6..6 {
+                for cz in -6..6 {
+                    let chunk = world.generate_chunk(cx * 7, cz * 7);
+                    for x in 0..CHUNK_X {
+                        for z in 0..CHUNK_Z {
+                            for y in 0..CHUNK_Y {
+                                let block = chunk.get_local(x, y, z);
+                                if block == BlockType::Air || block == BlockType::Water {
+                                    continue;
+                                }
+                                blocks += 1;
+                                if block.id().ends_with("_ore") {
+                                    let (ox, oz) = chunk.world_origin();
+                                    let h = world.terrain_height(ox + x, oz + z);
+                                    assert!(y < h, "ore broke the surface");
+                                    if y >= h - 3 {
+                                        soil_ores += 1;
+                                    }
+                                }
+                                if let Some(i) = crate::voxel::COLLECTIBLE_BLOCKS
+                                    .iter()
+                                    .position(|&b| b == block)
+                                {
+                                    counts[i] += 1;
+                                }
+                                if y < BEDROCK_DEPTH {
+                                    assert_eq!(block, BlockType::Bedrock);
+                                }
+                                if block.def().cross {
+                                    assert!(chunk.get_local(x, y - 1, z).is_solid());
+                                }
+                            }
+                        }
                     }
-                    if let Some(i)=crate::voxel::COLLECTIBLE_BLOCKS.iter().position(|&b|b==block) {counts[i]+=1;}
-                    if y<BEDROCK_DEPTH {assert_eq!(block,BlockType::Bedrock);}
-                    if block.def().cross {assert!(chunk.get_local(x,y-1,z).is_solid());}
-                }}}
-            }}
+                }
+            }
         }
-        let mut report=String::from("resource,count_in_432_sampled_chunks\n");
-        for (i,info) in crate::voxel::resource_catalog::RESOURCES.iter().enumerate() {
-            report.push_str(&format!("{},{}\n",info.block.id(),counts[i]));
-            if matches!(info.source,"crafted"|"loot"|"cooked") {assert_eq!(counts[i],0,"non-terrain resource {} spawned",info.block.id());}
-            else {assert!(counts[i]>0,"natural {} unavailable",info.block.id());}
+        let mut report = String::from("resource,count_in_432_sampled_chunks\n");
+        for (i, info) in crate::voxel::resource_catalog::RESOURCES.iter().enumerate() {
+            report.push_str(&format!("{},{}\n", info.block.id(), counts[i]));
+            if matches!(info.source, "crafted" | "loot" | "cooked") {
+                assert_eq!(
+                    counts[i],
+                    0,
+                    "non-terrain resource {} spawned",
+                    info.block.id()
+                );
+            } else {
+                assert!(counts[i] > 0, "natural {} unavailable", info.block.id());
+            }
         }
-        let count=|block|counts[crate::voxel::COLLECTIBLE_BLOCKS.iter().position(|&b|b==block).unwrap()];
-        assert!(soil_ores>100,"ores never reached buried soil");
+        let count = |block| {
+            counts[crate::voxel::COLLECTIBLE_BLOCKS
+                .iter()
+                .position(|&b| b == block)
+                .unwrap()]
+        };
+        assert!(soil_ores > 100, "ores never reached buried soil");
         // Baseline for this identical 432-chunk survey was 4,025 iron / 4,492 coal.
-        assert!(count(BlockType::IronOre)>8_050);
-        assert!(count(BlockType::Coal)>8_984);
-        assert!(count(BlockType::IronOre)>count(BlockType::MithrilOre)*3);
-        assert!(count(BlockType::Coal)>count(BlockType::Moonstone)*3);
-        assert!(count(BlockType::Stone)>blocks/2,"deposits crowded out basic stone");
+        assert!(count(BlockType::IronOre) > 8_050);
+        assert!(count(BlockType::Coal) > 8_984);
+        assert!(count(BlockType::IronOre) > count(BlockType::MithrilOre) * 3);
+        assert!(count(BlockType::Coal) > count(BlockType::Moonstone) * 3);
+        assert!(
+            count(BlockType::Stone) > blocks / 2,
+            "deposits crowded out basic stone"
+        );
         std::fs::create_dir_all("target").unwrap();
-        std::fs::write("target/resource-distribution.csv",report).unwrap();
+        std::fs::write("target/resource-distribution.csv", report).unwrap();
     }
     #[test]
     fn generated_resources_are_deterministic_across_load_order() {
-        let a=World::new(2026).generate_chunk(-3,5);
-        let mut other=World::new(2026); other.ensure_chunk_loaded(2,3);
-        let b=other.generate_chunk(-3,5);
-        for x in 0..CHUNK_X {for z in 0..CHUNK_Z {for y in 0..CHUNK_Y {
-            assert_eq!(a.get_local(x,y,z),b.get_local(x,y,z));
-        }}}
+        let a = World::new(2026).generate_chunk(-3, 5);
+        let mut other = World::new(2026);
+        other.ensure_chunk_loaded(2, 3);
+        let b = other.generate_chunk(-3, 5);
+        for x in 0..CHUNK_X {
+            for z in 0..CHUNK_Z {
+                for y in 0..CHUNK_Y {
+                    assert_eq!(a.get_local(x, y, z), b.get_local(x, y, z));
+                }
+            }
+        }
     }
 }
 
@@ -804,24 +982,50 @@ mod resource_generation_tests {
 mod performance_tests {
     use super::*;
     #[test]
-    fn streamed_neighbor_arrival_and_departure_invalidate_boundary_meshes(){
-        let mut world=World::new(42);world.ensure_chunk_loaded(0,0);world.chunks.get_mut(&(0,0)).unwrap().dirty=false;
-        world.ensure_chunk_loaded(1,0);assert!(world.chunks[&(0,0)].dirty);
-        world.chunks.get_mut(&(0,0)).unwrap().dirty=false;world.unload_chunk(1,0);assert!(world.chunks[&(0,0)].dirty);
+    fn streamed_neighbor_arrival_and_departure_invalidate_boundary_meshes() {
+        let mut world = World::new(42);
+        world.ensure_chunk_loaded(0, 0);
+        world.chunks.get_mut(&(0, 0)).unwrap().dirty = false;
+        world.ensure_chunk_loaded(1, 0);
+        assert!(world.chunks[&(0, 0)].dirty);
+        world.chunks.get_mut(&(0, 0)).unwrap().dirty = false;
+        world.unload_chunk(1, 0);
+        assert!(world.chunks[&(0, 0)].dirty);
     }
     #[test]
     #[ignore = "CPU terrain/meshing benchmark; prints exploration costs"]
     fn profile_exploration() {
         use std::time::Instant;
-        for center in [0,128,1024] {
-            let mut world=World::new(42);
-            let start=Instant::now();
-            for x in center-5..=center+5 {for z in -5..=5 {world.ensure_chunk_loaded(x,z);}}
-            let generation=start.elapsed();let start=Instant::now();let mut triangles=0;
-            for chunk in world.chunks.values(){triangles+=super::super::mesher::build_chunk_mesh(&world,chunk).indices.len()/3;}
-            let meshing=start.elapsed();let start=Instant::now();
-            for z in -5..=5 {world.ensure_chunk_loaded(center+6,z);}
-            println!("center_x={} blocks, generate121={:?}, mesh121={:?}, crossing11={:?}, triangles={}",center*16,generation,meshing,start.elapsed(),triangles);
+        for center in [0, 128, 1024] {
+            let mut world = World::new(42);
+            let start = Instant::now();
+            for x in center - 5..=center + 5 {
+                for z in -5..=5 {
+                    world.ensure_chunk_loaded(x, z);
+                }
+            }
+            let generation = start.elapsed();
+            let start = Instant::now();
+            let mut triangles = 0;
+            for chunk in world.chunks.values() {
+                triangles += super::super::mesher::build_chunk_mesh(&world, chunk)
+                    .indices
+                    .len()
+                    / 3;
+            }
+            let meshing = start.elapsed();
+            let start = Instant::now();
+            for z in -5..=5 {
+                world.ensure_chunk_loaded(center + 6, z);
+            }
+            println!(
+                "center_x={} blocks, generate121={:?}, mesh121={:?}, crossing11={:?}, triangles={}",
+                center * 16,
+                generation,
+                meshing,
+                start.elapsed(),
+                triangles
+            );
         }
     }
 }

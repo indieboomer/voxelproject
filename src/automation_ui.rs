@@ -39,7 +39,9 @@ impl Panel {
         self.config = d.config.clone();
         self.revision = d.config_revision;
         self.feedback.clear();
-        if d.kind==Kind::Smelter {self.item="resource:copper_ore".into();}
+        if d.kind == Kind::Smelter {
+            self.item = "resource:copper_ore".into();
+        }
     }
     pub fn draw(
         &mut self,
@@ -59,8 +61,20 @@ impl Panel {
         if !self.open {
             return None;
         }
-        if let Some(chest)=self.selected.and_then(|p|state.devices.get(&p)).filter(|d|d.kind==Kind::Chest) {
-            return chest_ui::draw(ctx,chest,account,&mut self.open,&mut self.item,&mut self.amount,&self.feedback);
+        if let Some(chest) = self
+            .selected
+            .and_then(|p| state.devices.get(&p))
+            .filter(|d| d.kind == Kind::Chest)
+        {
+            return chest_ui::draw(
+                ctx,
+                chest,
+                account,
+                &mut self.open,
+                &mut self.item,
+                &mut self.amount,
+                &self.feedback,
+            );
         }
         let mut open = self.open;
         let mut close = false;

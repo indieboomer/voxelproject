@@ -121,7 +121,7 @@ pub fn lights(positions: &[Vec3], eye: Vec3) -> [[f32; 4]; 4] {
 
 pub fn effects(positions: &[Vec3], eye: Vec3, time: f32) -> MeshData {
     // Discrete animation frames keep pixel shapes from smoothly stretching.
-    let time=(time*8.0).floor()/8.0;
+    let time = (time * 8.0).floor() / 8.0;
     let mut mesh = MeshData {
         vertices: Vec::new(),
         indices: Vec::new(),
@@ -134,7 +134,8 @@ pub fn effects(positions: &[Vec3], eye: Vec3, time: f32) -> MeshData {
         }
         for i in 0..3 {
             let offset = (i as f32 - 1.0) * 0.18;
-            let height = ((0.65 + 0.13 * (time * 6.0 + phase + i as f32 * 2.0).sin())*16.0).round()/16.0;
+            let height =
+                ((0.65 + 0.13 * (time * 6.0 + phase + i as f32 * 2.0).sin()) * 16.0).round() / 16.0;
             card(
                 &mut mesh,
                 pos + right * offset + Vec3::Y * 0.28,
@@ -178,7 +179,9 @@ fn card(mesh: &mut MeshData, base: Vec3, right: Vec3, width: f32, height: f32, k
             emission: 0.0,
             wind: 0.0,
             tex_layer: kind,
-            glimmer: 0.0, skylight:1.0, wet:[0.,0.],
+            glimmer: 0.0,
+            skylight: 1.0,
+            wet: [0., 0.],
         });
     }
     // Double sided; effects are excluded from the sun shadow pass.
@@ -238,24 +241,32 @@ mod tests {
     }
     #[test]
     fn ordinary_world_generation_produces_campfires() {
-        let mut survey=String::new();
-        for seed in [7,42,2026] {
-        let mut world = crate::voxel::World::new(seed);
-        let mut found=Vec::new();
-        for cx in -6..=6 {
-            for cz in -6..=6 {
-                let key = (cx * 3 + 1, cz * 3 + 1);
-                world.ensure_chunk_loaded(key.0, key.1);
-                found.extend(positions(&world.chunks[&key]));
+        let mut survey = String::new();
+        for seed in [7, 42, 2026] {
+            let mut world = crate::voxel::World::new(seed);
+            let mut found = Vec::new();
+            for cx in -6..=6 {
+                for cz in -6..=6 {
+                    let key = (cx * 3 + 1, cz * 3 + 1);
+                    world.ensure_chunk_loaded(key.0, key.1);
+                    found.extend(positions(&world.chunks[&key]));
+                }
             }
-        }
-        assert!(found.len() >= 3, "too few campfires in natural terrain survey: seed {seed}, count {}",found.len());
-        found.sort_by(|a,b|a.length_squared().total_cmp(&b.length_squared()));
-        survey.push_str(&format!("seed={seed}: {} campfires; nearest to origin {:?}\n",found.len(),found[0]));
+            assert!(
+                found.len() >= 3,
+                "too few campfires in natural terrain survey: seed {seed}, count {}",
+                found.len()
+            );
+            found.sort_by(|a, b| a.length_squared().total_cmp(&b.length_squared()));
+            survey.push_str(&format!(
+                "seed={seed}: {} campfires; nearest to origin {:?}\n",
+                found.len(),
+                found[0]
+            ));
         }
         println!("{survey}");
         std::fs::create_dir_all("target").unwrap();
-        std::fs::write("target/campfire-generation.txt",survey).unwrap();
+        std::fs::write("target/campfire-generation.txt", survey).unwrap();
     }
 
     #[test]
@@ -282,9 +293,17 @@ mod tests {
         let a = effects(&positions, Vec3::new(3.0, 2.0, 3.0), 0.0);
         let b = effects(&positions, Vec3::new(3.0, 2.0, 3.0), 1.0);
         assert_eq!(a.vertices.len(), 8 * 8 * 4);
-        assert!(a.vertices.iter().zip(&b.vertices).any(|(a,b)|a.position!=b.position));
-        let same_frame=effects(&positions,Vec3::new(3.0,2.0,3.0),0.01);
-        assert!(a.vertices.iter().zip(&same_frame.vertices).all(|(a,b)|a.position==b.position));
+        assert!(a
+            .vertices
+            .iter()
+            .zip(&b.vertices)
+            .any(|(a, b)| a.position != b.position));
+        let same_frame = effects(&positions, Vec3::new(3.0, 2.0, 3.0), 0.01);
+        assert!(a
+            .vertices
+            .iter()
+            .zip(&same_frame.vertices)
+            .all(|(a, b)| a.position == b.position));
         assert!(a
             .vertices
             .iter()

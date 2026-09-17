@@ -20,12 +20,21 @@ const INFERENCE_ARGS: &[&str] = &["--ctx-size", "32768", "--parallel", "1"];
 /// This always runs on a worker, never the render/network thread.
 pub fn ensure_ready(llm_url: &str) -> Result<(), String> {
     static STARTUP: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let Some((host, _)) = parse_host_port(llm_url) else { return Ok(()); };
-    if !is_loopback(&host) { return Ok(()); }
+    let Some((host, _)) = parse_host_port(llm_url) else {
+        return Ok(());
+    };
+    if !is_loopback(&host) {
+        return Ok(());
+    }
     let _guard = STARTUP.lock().map_err(|_| "AI startup worker failed")?;
-    if is_reachable(llm_url) { return Ok(()); }
+    if is_reachable(llm_url) {
+        return Ok(());
+    }
     let health_url = format!("{}/health", llm_url.trim_end_matches('/'));
-    let loading = matches!(ureq::get(&health_url).timeout(HEALTH_CHECK_TIMEOUT).call(), Err(ureq::Error::Status(503, _)));
+    let loading = matches!(
+        ureq::get(&health_url).timeout(HEALTH_CHECK_TIMEOUT).call(),
+        Err(ureq::Error::Status(503, _))
+    );
     if !loading {
         if find_server_dir().is_none() {
             return Err("Local AI is unavailable. Install the full AI package or start the configured llama server.".into());
@@ -34,7 +43,9 @@ pub fn ensure_ready(llm_url: &str) -> Result<(), String> {
     }
     let started = std::time::Instant::now();
     while started.elapsed() < Duration::from_secs(120) {
-        if is_reachable(llm_url) { return Ok(()); }
+        if is_reachable(llm_url) {
+            return Ok(());
+        }
         std::thread::sleep(Duration::from_millis(250));
     }
     Err("The local AI model did not become ready within 120 seconds. Check the server log.".into())
@@ -158,7 +169,8 @@ fn spawn_server(server_dir: &Path, host: &str, port: u16) -> Result<(), String> 
     }
     let model_path = crate::runtime_paths::bundle_resources().map_or_else(
         || server_dir.join(MODEL_RELATIVE),
-        |resources| resources.join("llm-runtime/models/qwen2.5-coder-7b-instruct-q4_k_m.gguf"));
+        |resources| resources.join("llm-runtime/models/qwen2.5-coder-7b-instruct-q4_k_m.gguf"),
+    );
     cmd.current_dir(server_dir)
         .arg("--model")
         .arg(model_path)

@@ -1,80 +1,83 @@
-#[cfg(feature = "dev-playtest")]
-mod playtest;
-mod app;
 mod adventure;
-mod quests;
-mod npc;
-mod compass;
 mod adventure_ui;
-mod map_ui;
+mod app;
 mod audio;
-mod machine_feedback;
-mod camera;
-mod creature;
-mod crafting;
-mod crafting_ui;
-mod resource_ui;
-mod daynight;
-mod input;
-mod emoticons;
-mod equipment;
-mod food;
-mod shelter;
-mod torch;
-mod texture_mips;
-mod light_visibility;
-mod wetness;
-mod prop_cache;
-mod gear_catalog;
-mod lore_books;
-mod equipment_ui;
-mod inventory_ui;
-mod loot;
-mod spell_fx;
-mod spell_network;
-mod enchantment;
-mod fantasy_name;
-mod held_item;
-mod llm;
-mod llm_server;
-mod menu;
-mod worldgen;
-mod underground;
-mod model;
-mod runtime_paths;
-mod rule_sharing;
-mod net;
-mod transport;
-#[cfg(feature = "steam")]
-mod steam_transport;
-mod player;
 mod automation;
+mod automation_mesh;
 mod automation_net;
 mod automation_ui;
-mod automation_mesh;
+mod block_target;
+mod camera;
+mod campfire;
+mod compass;
+mod crafting;
+mod crafting_ui;
+mod creature;
+mod daynight;
+mod emoticons;
+mod enchantment;
+mod equipment;
+mod equipment_ui;
+mod fantasy_name;
+mod food;
+mod gear_catalog;
+mod held_item;
+mod input;
+mod inventory_ui;
+mod light_visibility;
+mod llm;
+mod llm_server;
+mod loot;
+mod lore_books;
+mod machine_feedback;
+mod map_ui;
+mod menu;
+mod model;
+mod net;
+mod npc;
+mod player;
 mod player_animation;
+#[cfg(feature = "dev-playtest")]
+mod playtest;
+mod prop_cache;
+mod quests;
 mod raycast;
+mod remote_player;
+mod resource_ui;
+mod rule_sharing;
+mod runtime_paths;
+mod save;
+mod script_budget;
+mod scripting;
+mod settings;
+mod shelter;
+mod spell_art;
+mod spell_flavor;
+mod spell_fx;
+mod spell_network;
 mod spell_target;
 mod spellbook;
 mod spellbook_ui;
-mod block_target;
-mod remote_player;
-mod save;
-mod settings;
-mod ui_theme;
+#[cfg(feature = "steam")]
+mod steam_transport;
+mod texture_mips;
+mod torch;
+mod transport;
+mod ui;
 #[cfg(test)]
 mod ui_preview_tests;
-mod script_budget;
-mod scripting;
-mod ui;
-mod voxel;
+mod ui_theme;
+mod underground;
 mod visibility;
-mod weather;
+mod voxel;
 mod water;
-mod campfire;
+mod water_reflections;
+mod weather;
+mod wetness;
 mod wind;
 mod world_api_gen;
 mod world_api_validate;
+mod worldgen;
 
 use std::sync::Arc;
 
@@ -102,12 +105,16 @@ fn main() {
     env_logger::init();
     #[cfg(feature = "dev-playtest")]
     if std::env::args().nth(1).as_deref() == Some("--playtest-replay") {
-        let result = std::env::args_os().nth(2)
+        let result = std::env::args_os()
+            .nth(2)
             .ok_or_else(|| "Usage: voxelproject --playtest-replay <session-directory>".to_string())
             .and_then(|path| playtest::replay::replay(std::path::Path::new(&path)));
         match result {
             Ok(report) => println!("{}", serde_json::to_string_pretty(&report).unwrap()),
-            Err(error) => { eprintln!("Replay failed: {error}"); std::process::exit(1); }
+            Err(error) => {
+                eprintln!("Replay failed: {error}");
+                std::process::exit(1);
+            }
         }
         return;
     }
@@ -118,7 +125,8 @@ fn main() {
 
     #[cfg(feature = "steam")]
     {
-        let settings = settings::Settings::load(std::path::Path::new("settings.json")).unwrap_or_default();
+        let settings =
+            settings::Settings::load(std::path::Path::new("settings.json")).unwrap_or_default();
         if let Err(e) = steam_transport::initialize(settings.multiplayer.steam_app_id) {
             log::warn!("{e}"); // Direct mode remains usable without a signed-in Steam client.
         }
@@ -146,7 +154,10 @@ fn main() {
             }
         }
     } else {
-        Stage::Menu(pollster::block_on(MenuApp::new(window.clone(), launch_config)))
+        Stage::Menu(pollster::block_on(MenuApp::new(
+            window.clone(),
+            launch_config,
+        )))
     };
     window.request_redraw();
 
@@ -159,7 +170,10 @@ fn main() {
                     // same whether you're at the menu or in-game.
                     // `!repeat` avoids the OS auto-repeating a held key into
                     // rapid fullscreen/windowed thrashing.
-                    if let WindowEvent::KeyboardInput { event: key_event, .. } = &event {
+                    if let WindowEvent::KeyboardInput {
+                        event: key_event, ..
+                    } = &event
+                    {
                         if key_event.state == ElementState::Pressed
                             && !key_event.repeat
                             && key_event.physical_key == PhysicalKey::Code(KeyCode::F11)
@@ -186,30 +200,42 @@ fn main() {
                                             let port = menu.port;
                                             let llm_url = menu.llm_url.clone();
                                             let cfg = match action {
-                                                MenuAction::NewWorld { nickname, generation, world_name } => LaunchConfig {
-                                                    world_name,                                                    connect: None,
+                                                MenuAction::NewWorld {
+                                                    nickname,
+                                                    generation,
+                                                    world_name,
+                                                } => LaunchConfig {
+                                                    world_name,
+                                                    connect: None,
                                                     port,
                                                     llm_url: llm_url.clone(),
                                                     fresh: true,
                                                     generation,
                                                     nickname,
                                                 },
-                                                MenuAction::LoadWorld { nickname, world_name } => LaunchConfig {
-                                                    world_name,                                                    connect: None,
+                                                MenuAction::LoadWorld {
+                                                    nickname,
+                                                    world_name,
+                                                } => LaunchConfig {
+                                                    world_name,
+                                                    connect: None,
                                                     port,
                                                     llm_url: llm_url.clone(),
                                                     fresh: false,
                                                     generation: Default::default(),
                                                     nickname,
                                                 },
-                                                MenuAction::Join { addr, nickname } => LaunchConfig {
-                                                    world_name: "world".into(),                                                    connect: Some(addr),
-                                                    port,
-                                                    llm_url: llm_url.clone(),
-                                                    fresh: false,
-                                                    generation: Default::default(),
-                                                    nickname,
-                                                },
+                                                MenuAction::Join { addr, nickname } => {
+                                                    LaunchConfig {
+                                                        world_name: "world".into(),
+                                                        connect: Some(addr),
+                                                        port,
+                                                        llm_url: llm_url.clone(),
+                                                        fresh: false,
+                                                        generation: Default::default(),
+                                                        nickname,
+                                                    }
+                                                }
                                                 MenuAction::Quit => unreachable!(),
                                             };
                                             // Drop the menu's device/surface
@@ -228,7 +254,7 @@ fn main() {
                                                         port,
                                                         llm_url,
                                                         fresh: false,
-                                                    generation: Default::default(),
+                                                        generation: Default::default(),
                                                         // MenuApp doesn't read this --
                                                         // it re-prompts for a nickname
                                                         // before any launch.
@@ -290,7 +316,9 @@ fn main() {
                                     }
                                     match state.render() {
                                         Ok(_) => {}
-                                        Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                                        Err(
+                                            wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated,
+                                        ) => {
                                             state.resize(window.inner_size());
                                         }
                                         Err(wgpu::SurfaceError::OutOfMemory) => {

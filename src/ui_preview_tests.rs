@@ -13,8 +13,31 @@ fn render_ui_previews() {
             .unwrap();
     let width = 1280;
     for (theme, name) in [(UiTheme::Generic, "generic"), (UiTheme::Fantasy, "fantasy")] {
-        for panel in ["settings", "crafting", "recipe_book", "resources", "hotbar", "hotbar_machine", "inventory", "food", "cooking", "chat", "automation", "chest", "map", "hud", "journal", "adventure", "recovery", "spellbook", "spellbook_guest", "enchantment"] {
-            if std::env::var("UI_PREVIEW_PANEL").is_ok_and(|filter|filter!=panel) { continue; }
+        for panel in [
+            "settings",
+            "crafting",
+            "recipe_book",
+            "resources",
+            "hotbar",
+            "hotbar_machine",
+            "inventory",
+            "food",
+            "cooking",
+            "chat",
+            "automation",
+            "chest",
+            "map",
+            "hud",
+            "journal",
+            "adventure",
+            "recovery",
+            "spellbook",
+            "spellbook_guest",
+            "enchantment",
+        ] {
+            if std::env::var("UI_PREVIEW_PANEL").is_ok_and(|filter| filter != panel) {
+                continue;
+            }
             let height = if panel == "resources" { 1024 } else { 720 };
             let ctx = egui::Context::default();
             ui_theme::apply(&ctx, theme);
@@ -42,56 +65,117 @@ fn render_ui_previews() {
                 mana: 24,
                 ..Default::default()
             };
-            account.hotbar.slots[4]=Some(crate::equipment::Entry::Resource(crate::voxel::BlockType::OakWood));
-            account.hotbar.slots[5]=Some(crate::equipment::Entry::Resource(crate::voxel::BlockType::Crystal));
-            account.resources[4]=12;
-            if panel=="recipe_book" {account.adventure.recipe_books=15;account.resources.fill(12);}
-            if panel == "inventory" { account.resources.fill(128); account.gear[crate::equipment::Gear::Torch as usize]=1;account.torch_equipped=true;account.adventure.recipe_books=15; }
+            account.hotbar.slots[4] = Some(crate::equipment::Entry::Resource(
+                crate::voxel::BlockType::OakWood,
+            ));
+            account.hotbar.slots[5] = Some(crate::equipment::Entry::Resource(
+                crate::voxel::BlockType::Crystal,
+            ));
+            account.resources[4] = 12;
+            if panel == "recipe_book" {
+                account.adventure.recipe_books = 15;
+                account.resources.fill(12);
+            }
+            if panel == "inventory" {
+                account.resources.fill(128);
+                account.gear[crate::equipment::Gear::Torch as usize] = 1;
+                account.torch_equipped = true;
+                account.adventure.recipe_books = 15;
+            }
             let mut inventory = crate::inventory_ui::Inventory::default();
-            inventory.preview_selection(crate::equipment::Entry::Gear(crate::equipment::Gear::Pickaxe));
-            if panel=="inventory" {inventory.preview_selection(crate::equipment::Entry::Gear(crate::equipment::Gear::Torch));}
-            if matches!(panel,"food"|"cooking") {
-                for (block,n) in [(crate::voxel::BlockType::Meat,8),(crate::voxel::BlockType::CookedMeat,3),(crate::voxel::BlockType::Pumpkin,4)] {
-                    account.resources[crate::voxel::COLLECTIBLE_BLOCKS.iter().position(|b|*b==block).unwrap()]=n;
+            inventory.preview_selection(crate::equipment::Entry::Gear(
+                crate::equipment::Gear::Pickaxe,
+            ));
+            if panel == "inventory" {
+                inventory.preview_selection(crate::equipment::Entry::Gear(
+                    crate::equipment::Gear::Torch,
+                ));
+            }
+            if matches!(panel, "food" | "cooking") {
+                for (block, n) in [
+                    (crate::voxel::BlockType::Meat, 8),
+                    (crate::voxel::BlockType::CookedMeat, 3),
+                    (crate::voxel::BlockType::Pumpkin, 4),
+                ] {
+                    account.resources[crate::voxel::COLLECTIBLE_BLOCKS
+                        .iter()
+                        .position(|b| *b == block)
+                        .unwrap()] = n;
                 }
-                inventory.preview_selection(crate::equipment::Entry::Resource(crate::voxel::BlockType::Meat));
+                inventory.preview_selection(crate::equipment::Entry::Resource(
+                    crate::voxel::BlockType::Meat,
+                ));
             }
             let mut world = crate::voxel::World::new(1);
             let mut automation = crate::automation_ui::Panel::default();
             if panel == "automation" {
-                let mut d=crate::automation::Device::new(crate::automation::Kind::Workshop,(3,30,0),0);
-                d.config.recipe="stone".into();d.mana=20;
-                d.items.insert("element:earth".into(),1);d.items.insert("element:water".into(),1);
-                world.automation.devices.insert(d.cell,d);
-                world.automation.step(crate::automation::balance(),&registry);
-                automation.inspect(&world.automation.devices[&(3,30,0)]);
+                let mut d = crate::automation::Device::new(
+                    crate::automation::Kind::Workshop,
+                    (3, 30, 0),
+                    0,
+                );
+                d.config.recipe = "stone".into();
+                d.mana = 20;
+                d.items.insert("element:earth".into(), 1);
+                d.items.insert("element:water".into(), 1);
+                world.automation.devices.insert(d.cell, d);
+                world
+                    .automation
+                    .step(crate::automation::balance(), &registry);
+                automation.inspect(&world.automation.devices[&(3, 30, 0)]);
             }
             if panel == "chest" {
-                let mut d=crate::automation::Device::new(crate::automation::Kind::Chest,(3,30,0),0);
-                d.items.insert("resource:stone".into(),2048);
-                d.items.insert("resource:copper_ore".into(),36);
-                d.items.insert("resource:crystal".into(),8);
-                d.items.insert("item:pickaxe".into(),1);
+                let mut d =
+                    crate::automation::Device::new(crate::automation::Kind::Chest, (3, 30, 0), 0);
+                d.items.insert("resource:stone".into(), 2048);
+                d.items.insert("resource:copper_ore".into(), 36);
+                d.items.insert("resource:crystal".into(), 8);
+                d.items.insert("item:pickaxe".into(), 1);
                 automation.inspect(&d);
-                world.automation.devices.insert(d.cell,d);
+                world.automation.devices.insert(d.cell, d);
             }
-            let mut map=crate::map_ui::Map::default();
-            let mut player=crate::player::Player::new(glam::Vec3::new(0.5,24.0,0.5));
-            if panel=="map" {
+            let mut map = crate::map_ui::Map::default();
+            let mut player = crate::player::Player::new(glam::Vec3::new(0.5, 24.0, 0.5));
+            if panel == "map" {
                 map.toggle(player.position);
-                for x in 10..16 {for z in 10..16 {world.edits.insert((x,25,z),crate::voxel::BlockType::Bricks);}}
+                for x in 10..16 {
+                    for z in 10..16 {
+                        world
+                            .edits
+                            .insert((x, 25, z), crate::voxel::BlockType::Bricks);
+                    }
+                }
             }
-            player.health=24.0;player.poisoned=true;player.oxygen=65.0;
-            player.crafting=account.clone();
-            player.crafting.adventure.home=Some((4,24,8));
-            let mut journal=crate::adventure_ui::Journal {open:matches!(panel,"journal"|"cooking"),camp:Some((4,24,8)),
-                hint:Some("F · Talk to Mira / rest at camp".into()),..Default::default()};
-            if panel=="adventure" {journal.target=Some(("goblin".into(),14.,40.));journal.hint=Some("Hostile · sword attacks within 3 blocks".into());}
-            if panel=="journal" {journal.npc=Some(0);journal.camp=None;player.crafting.adventure.quests.record(2,1);}
-            if panel=="recovery" {player.health=0.;journal.recovery_seconds=Some(2.);journal.damage_flash=0.55;}
+            player.health = 24.0;
+            player.poisoned = true;
+            player.oxygen = 65.0;
+            player.crafting = account.clone();
+            player.crafting.adventure.home = Some((4, 24, 8));
+            let mut journal = crate::adventure_ui::Journal {
+                open: matches!(panel, "journal" | "cooking"),
+                camp: Some((4, 24, 8)),
+                hint: Some("F · Talk to Mira / rest at camp".into()),
+                ..Default::default()
+            };
+            if panel == "adventure" {
+                journal.target = Some(("goblin".into(), 14., 40.));
+                journal.hint = Some("Hostile · sword attacks within 3 blocks".into());
+            }
+            if panel == "journal" {
+                journal.npc = Some(0);
+                journal.camp = None;
+                player.crafting.adventure.quests.record(2, 1);
+            }
+            if panel == "recovery" {
+                player.health = 0.;
+                journal.recovery_seconds = Some(2.);
+                journal.damage_flash = 0.55;
+            }
             let creatures = crate::creature::Creatures::new();
             let mut craft = crate::crafting_ui::CraftingUi::default();
-            if panel=="recipe_book" {craft.show_book(2);}
+            if panel == "recipe_book" {
+                craft.show_book(2);
+            }
             craft.open = true;
             craft.slots[0] = Some(crate::crafting::Slot {
                 element: crate::crafting::Element::Earth,
@@ -102,23 +186,76 @@ fn render_ui_previews() {
                 amount: 1,
             });
             let mut settings = crate::settings::SettingsPanel::new(&ctx);
-            let mut spellbook=crate::spellbook::Spellbook::default();
-            let mut spell_panel=crate::spellbook_ui::Panel::default();
-            if matches!(panel,"spellbook"|"spellbook_guest"|"inventory"|"hotbar") {
-                let module=crate::scripting::Module::load("Healing Touch".into(),
-                    "Heal the creature I am aiming at.".into(),include_str!("../modules/target_heal.lua").into()).unwrap();
-                spell_panel.selected=Some(spellbook.remember(&module,"Host").unwrap());spell_panel.open=true;
+            let mut spellbook = crate::spellbook::Spellbook::default();
+            let mut spell_panel = crate::spellbook_ui::Panel::default();
+            if matches!(
+                panel,
+                "spellbook" | "spellbook_guest" | "inventory" | "hotbar"
+            ) {
+                let module = crate::scripting::Module::load(
+                    "Healing Touch".into(),
+                    "Heal the creature I am aiming at.".into(),
+                    include_str!("../modules/target_heal.lua").into(),
+                )
+                .unwrap();
+                spell_panel.selected = Some(spellbook.remember(&module, "Host").unwrap());
+                spell_panel.open = true;
+                if matches!(panel, "spellbook" | "spellbook_guest") {
+                    for (name, prompt) in [
+                        ("Ember Edge", "Attach burning fire to my sword"),
+                        ("Moonlit Flock", "Summon sheep at night"),
+                        ("Winter Ward", "Protect a creature with a frost shield"),
+                        ("Verdant Stone", "Transform soil blocks with growing trees"),
+                        ("Stormcaller", "Summon lightning in rain"),
+                    ] {
+                        let module = crate::scripting::Module::load(
+                            name.into(),
+                            prompt.into(),
+                            include_str!("../modules/target_heal.lua").into(),
+                        )
+                        .unwrap();
+                        spellbook.remember(&module, "Host").unwrap();
+                    }
+                    for (spell, quote) in spellbook.spells.iter_mut().zip([
+                        "Even broken things remember the shape of hope.",
+                        "The blade kept one ember from the world's first dawn.",
+                        "When the moon whistles, the quiet hills answer.",
+                        "Winter lays a gentle hand upon those it guards.",
+                        "Beneath every stone, a forest waits to wake.",
+                        "The sky remembers every name the thunder speaks.",
+                    ]) {
+                        spell.flavor_quote = quote.into();
+                    }
+                }
                 spellbook.sync_hotbar(&mut account);
                 account.hotbar.select(8);
-                account.hotbar.assign(Some(crate::equipment::Entry::Spell(spell_panel.selected.unwrap())));
-                if panel=="inventory" {inventory.preview_selection(crate::equipment::Entry::Spell(spell_panel.selected.unwrap()));}
+                account.hotbar.assign(Some(crate::equipment::Entry::Spell(
+                    spell_panel.selected.unwrap(),
+                )));
+                if panel == "inventory" {
+                    inventory.preview_selection(crate::equipment::Entry::Spell(
+                        spell_panel.selected.unwrap(),
+                    ));
+                }
             }
             #[cfg(feature = "dev-playtest")]
-            {settings.playtest_in_game=true;}
+            {
+                settings.playtest_in_game = true;
+            }
             settings.values.appearance.ui_theme = theme;
+            let pixelized = std::env::var("UI_PREVIEW_ART").is_ok_and(|v| v == "pixelized");
+            settings.values.appearance.spell_artwork = if pixelized {
+                crate::settings::SpellArtwork::Pixelized
+            } else {
+                crate::settings::SpellArtwork::Default
+            };
+            crate::spell_art::apply_style(&ctx, settings.values.appearance.spell_artwork);
             ui_theme::apply(&ctx, theme);
             // Multiple frames settle egui window measurements and font atlas updates.
             for frame in 0..4 {
+                if matches!(panel, "spellbook" | "spellbook_guest") {
+                    std::thread::sleep(std::time::Duration::from_millis(60));
+                }
                 let output = ctx.run(
                     egui::RawInput {
                         time: Some(frame as f64 * 0.2),
@@ -283,7 +420,10 @@ fn render_ui_previews() {
             recv.recv().unwrap().unwrap();
             let bytes = buffer.slice(..).get_mapped_range();
             image::save_buffer(
-                format!("target/ui-{name}-{panel}.png"),
+                format!(
+                    "target/ui-{name}-{panel}{}.png",
+                    if pixelized { "-pixelized" } else { "" }
+                ),
                 &bytes,
                 width,
                 height,

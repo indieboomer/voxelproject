@@ -6,6 +6,10 @@ use serde_json::{json, Value};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Plan {
+    #[serde(default, deserialize_with = "crate::spell_flavor::deserialize")]
+    pub flavor_quote: String,
+    #[serde(default, deserialize_with = "crate::spell_art::optional_recipe")]
+    pub artwork: Option<crate::spell_art::Recipe>,
     pub execution: String,
     pub summary: String,
     pub condition: String,
@@ -43,7 +47,9 @@ const GROUPS: &[&str] = &[
 pub const SUMMARY_PREFIX: &str = "-- Interpretation: ";
 
 fn schema() -> Value {
-    json!({"type":"object","additionalProperties":false,"required":["execution","summary","condition","actor_kind","effect","targets","api_groups","requirements","unsupported"],"properties":{
+    json!({"type":"object","additionalProperties":false,"required":["execution","summary","condition","actor_kind","effect","targets","api_groups","requirements","unsupported","artwork","flavor_quote"],"properties":{
+        "flavor_quote":{"type":"string","maxLength":96},
+        "artwork":crate::spell_art::Recipe::schema(),
         "execution":{"type":"string","enum":["rule","instant"]},
         "summary":{"type":"string"},
         "condition":{"type":"string","enum":["always","rain","sunny","storm","mist","night","day","custom"]},
@@ -177,7 +183,10 @@ fn interpreted(
 ) -> Result<Plan, String> {
     let instructions = include_str!("../prompts/interpretation.txt");
     let mut messages = vec![
-        ChatMessage::system(instructions.into()),
+        ChatMessage::system(format!(
+            "{instructions}\n{}",
+            crate::spell_flavor::INSTRUCTIONS
+        )),
         ChatMessage::user(LlmClient::build_user_turn(prompt, kind)),
     ];
     if let Some(feedback) = feedback {
@@ -191,6 +200,8 @@ fn interpreted(
         ),
     );
     messages.insert(2,ChatMessage::assistant(serde_json::to_string(&Plan {
+        flavor_quote:"Even goblin blades lose their courage in the silver mist.".into(),
+        artwork:Some(crate::spell_art::Recipe::fallback("protect goblins in mist")),
         execution:"rule".into(),summary:"During mist, players are protected from goblin attacks; protection ends with mist.".into(),
         condition:"mist".into(),actor_kind:"goblin".into(),effect:"protect_players".into(),targets:"players".into(),
         api_groups:vec!["weather".into(),"creatures".into(),"players".into()],
@@ -329,14 +340,34 @@ fn focused_prompt(plan: &Plan) -> String {
                 .iter()
                 .any(|k| method.contains(k)),
                 "players" => method.contains("player") || method.contains("poison"),
-                "inventory" => ["inventory", "resource", "item", "mana", "element", "decompose"]
+                "inventory" => [
+                    "inventory",
+                    "resource",
+                    "item",
+                    "mana",
+                    "element",
+                    "decompose",
+                ]
+                .iter()
+                .any(|k| method.contains(k)),
+                "weather" => ["weather", "rain", "is_exposed_to_sky", "is_block_loaded"]
                     .iter()
                     .any(|k| method.contains(k)),
-                "weather" => ["weather", "rain", "is_exposed_to_sky", "is_block_loaded"].iter().any(|k| method.contains(k)),
                 "time" => ["time", "night", "dawn"].iter().any(|k| method.contains(k)),
-                "blocks" => ["block", "device", "terrain", "distance", "campfire", "water", "fish", "fill_", "surface_height", "is_exposed_to_sky"]
-                    .iter()
-                    .any(|k| method.contains(k)),
+                "blocks" => [
+                    "block",
+                    "device",
+                    "terrain",
+                    "distance",
+                    "campfire",
+                    "water",
+                    "fish",
+                    "fill_",
+                    "surface_height",
+                    "is_exposed_to_sky",
+                ]
+                .iter()
+                .any(|k| method.contains(k)),
                 _ => false,
             });
         if relevant {
@@ -407,12 +438,18 @@ pub(super) fn prepare(url: &str, prompt: &str, kind: PromptKind) -> Result<Plan,
 }
 
 pub(super) fn generate_prepared(
-    url: &str, prompt: &str, kind: PromptKind,
-    correction: Option<(&str, &str)>, plan: Plan,
+    url: &str,
+    prompt: &str,
+    kind: PromptKind,
+    correction: Option<(&str, &str)>,
+    plan: Plan,
 ) -> Result<String, String> {
-    let mut plan=plan;
-    let attached=prompt.contains("[BOUND_OBJECT_RULE]");
-    if attached {plan.effect="custom".into();plan.targets="custom".into();}
+    let mut plan = plan;
+    let attached = prompt.contains("[BOUND_OBJECT_RULE]");
+    if attached {
+        plan.effect = "custom".into();
+        plan.targets = "custom".into();
+    }
     if let Some(code) = plan.compile() {
         crate::world_api_validate::validate_source(&code)
             .first()
@@ -476,28 +513,38 @@ pub(super) fn generate_prepared(
 pub(crate) fn validate_candidate(code: &str, kind: PromptKind) -> Result<(), String> {
     let issues = crate::world_api_validate::validate_source(code);
     if !issues.is_empty() {
-        return Err(issues.iter().map(|i| i.message.as_str()).collect::<Vec<_>>().join("; "));
+        return Err(issues
+            .iter()
+            .map(|i| i.message.as_str())
+            .collect::<Vec<_>>()
+            .join("; "));
     }
     smoke_code(code, kind)
 }
 
 fn smoke_code(code: &str, kind: PromptKind) -> Result<(), String> {
-    smoke_code_with_attachment(code,kind,None)
+    smoke_code_with_attachment(code, kind, None)
 }
 
-fn smoke_generated_code(code:&str,kind:PromptKind,prompt:&str)->Result<(),String> {
-    smoke_code(code,kind)?;
+fn smoke_generated_code(code: &str, kind: PromptKind, prompt: &str) -> Result<(), String> {
+    smoke_code(code, kind)?;
     if prompt.contains("[BOUND_OBJECT_RULE]") {
-        for target in ["creature","block","device"] {
-            if !prompt.contains("[BOUND_TARGET:") || prompt.contains(&format!("[BOUND_TARGET:{target}]")) {
-                smoke_code_with_attachment(code,kind,Some(target))?;
+        for target in ["creature", "block", "device"] {
+            if !prompt.contains("[BOUND_TARGET:")
+                || prompt.contains(&format!("[BOUND_TARGET:{target}]"))
+            {
+                smoke_code_with_attachment(code, kind, Some(target))?;
             }
         }
     }
     Ok(())
 }
 
-fn smoke_code_with_attachment(code: &str, kind: PromptKind, attachment:Option<&str>) -> Result<(), String> {
+fn smoke_code_with_attachment(
+    code: &str,
+    kind: PromptKind,
+    attachment: Option<&str>,
+) -> Result<(), String> {
     use crate::{
         creature::{CreatureKind, Creatures},
         scripting::{Module, PlayerSnapshot, ScriptHost},
@@ -524,23 +571,44 @@ fn smoke_code_with_attachment(code: &str, kind: PromptKind, attachment:Option<&s
     let pos = Vec3::new(8.5, 25.0, 8.5);
     let mut creatures = Creatures::new();
     creatures.spawn_one(CreatureKind::Wolf, pos, 1);
-    let sheep=creatures.spawn_one(CreatureKind::Sheep, pos + Vec3::X, 2);
+    let sheep = creatures.spawn_one(CreatureKind::Sheep, pos + Vec3::X, 2);
     let mut host = ScriptHost::new();
     host.modules.push(module);
     host.modules[0].enabled = true;
-    if let Some(kind)=attachment {
-        use crate::{enchantment::{Binding,Reference},spell_target::Target,voxel::BlockType};
-        let target=match kind {
-            "creature"=>Target::Creature{id:sheep},
-            "device"=>{
-                let cell=(8,25,8);
-                world.automation.devices.insert(cell,crate::automation::Device::new(crate::automation::Kind::Chest,cell,0));
-                Target::Block{position:cell,material:BlockType::AutomationDevice}
-            },
-            _=>Target::Block{position:(8,24,8),material:BlockType::Stone},
+    if let Some(kind) = attachment {
+        use crate::{
+            enchantment::{Binding, Reference},
+            spell_target::Target,
+            voxel::BlockType,
         };
-        let reference=Reference::capture(&mut world,&creatures,target)?;
-        host.attach_at(0,Binding{id:1,creator:0,target:reference,lost:None})?;
+        let target = match kind {
+            "creature" => Target::Creature { id: sheep },
+            "device" => {
+                let cell = (8, 25, 8);
+                world.automation.devices.insert(
+                    cell,
+                    crate::automation::Device::new(crate::automation::Kind::Chest, cell, 0),
+                );
+                Target::Block {
+                    position: cell,
+                    material: BlockType::AutomationDevice,
+                }
+            }
+            _ => Target::Block {
+                position: (8, 24, 8),
+                material: BlockType::Stone,
+            },
+        };
+        let reference = Reference::capture(&mut world, &creatures, target)?;
+        host.attach_at(
+            0,
+            Binding {
+                id: 1,
+                creator: 0,
+                target: reference,
+                lost: None,
+            },
+        )?;
     }
     for (weather_name, mut time) in [
         ("sunny", 0.25),
@@ -549,7 +617,15 @@ fn smoke_code_with_attachment(code: &str, kind: PromptKind, attachment:Option<&s
         ("sunny", 0.75),
     ] {
         let players = [0, 7].map(|id| PlayerSnapshot {
-            finances: crate::scripting::InventoryBalances {held:Some(crate::equipment::Entry::Resource(crate::voxel::BlockType::Crystal)),mana:100,elements:[20;5],items:crate::gear_catalog::starter_counts(),..Default::default()},
+            finances: crate::scripting::InventoryBalances {
+                held: Some(crate::equipment::Entry::Resource(
+                    crate::voxel::BlockType::Crystal,
+                )),
+                mana: 100,
+                elements: [20; 5],
+                items: crate::gear_catalog::starter_counts(),
+                ..Default::default()
+            },
             id,
             pos,
             resources: [1; COLLECTIBLE_BLOCKS.len()],
@@ -634,7 +710,12 @@ pub fn verify_policy(plan: &Plan, code: &str) -> Result<(), String> {
     let mut creatures = Creatures::new();
     let id = creatures.spawn_one(CreatureKind::from_u8(species), pos, 1);
     let players = [0, 7].map(|id| PlayerSnapshot {
-        finances: crate::scripting::InventoryBalances {mana:100,elements:[20;5],items:crate::gear_catalog::starter_counts(),..Default::default()},
+        finances: crate::scripting::InventoryBalances {
+            mana: 100,
+            elements: [20; 5],
+            items: crate::gear_catalog::starter_counts(),
+            ..Default::default()
+        },
         id,
         pos,
         resources: [0; COLLECTIBLE_BLOCKS.len()],
@@ -725,32 +806,57 @@ mod tests {
     use super::*;
     #[test]
     fn focused_context_includes_world_shaping_and_direct_caster_lookup() {
-        let mut p=plan();p.api_groups=vec!["blocks".into()];
-        let text=focused_prompt(&p);
-        for name in ["get_player","get_rule_target","get_device","set_device_enabled","fill_box","fill_sphere","get_block_kinds","get_block_info",
-            "block_matches","surface_height","is_exposed_to_sky","is_block_loaded"] {
-            assert!(text.contains(&format!("- api.{name}(")),"missing {name}");
+        let mut p = plan();
+        p.api_groups = vec!["blocks".into()];
+        let text = focused_prompt(&p);
+        for name in [
+            "get_player",
+            "get_rule_target",
+            "get_device",
+            "set_device_enabled",
+            "fill_box",
+            "fill_sphere",
+            "get_block_kinds",
+            "get_block_info",
+            "block_matches",
+            "surface_height",
+            "is_exposed_to_sky",
+            "is_block_loaded",
+        ] {
+            assert!(text.contains(&format!("- api.{name}(")), "missing {name}");
         }
-        p.api_groups=vec!["creatures".into()];
-        let text=focused_prompt(&p);
+        p.api_groups = vec!["creatures".into()];
+        let text = focused_prompt(&p);
         assert!(text.contains("- api.heal_creature(") && text.contains("- api.get_creature("));
-        p.api_groups=vec!["weather".into()];
+        p.api_groups = vec!["weather".into()];
         assert!(focused_prompt(&p).contains("- api.is_exposed_to_sky("));
         assert!(!text.contains("no separate equipment-item catalog"));
     }
     #[test]
     fn focused_block_context_keeps_campfire_placement_and_water_capabilities() {
-        let mut p=plan();p.api_groups=vec!["blocks".into()];
-        let text=focused_prompt(&p);
-        for method in ["place_campfire_near_player", "place_campfire", "get_campfire", "get_water", "get_waterfalls"] {
-            assert!(text.contains(&format!("- api.{method}(")),"missing {method}");
+        let mut p = plan();
+        p.api_groups = vec!["blocks".into()];
+        let text = focused_prompt(&p);
+        for method in [
+            "place_campfire_near_player",
+            "place_campfire",
+            "get_campfire",
+            "get_water",
+            "get_waterfalls",
+        ] {
+            assert!(
+                text.contains(&format!("- api.{method}(")),
+                "missing {method}"
+            );
         }
         assert!(text.contains("- api.broadcast("));
-        p.api_groups=vec!["creatures".into()];
+        p.api_groups = vec!["creatures".into()];
         assert!(focused_prompt(&p).contains("- api.spawn_fish("));
     }
     fn plan() -> Plan {
         Plan {
+            flavor_quote: String::new(),
+            artwork: None,
             execution: "rule".into(),
             summary: "Rain prevents wolf attacks on players; protection ends with rain.".into(),
             condition: "rain".into(),
@@ -795,21 +901,66 @@ mod tests {
     }
     #[test]
     fn attached_smoke_exercises_creature_ids_and_equipped_item_branch() {
-        let prompt="[BOUND_OBJECT_RULE] [BOUND_TARGET:creature]";
-        let valid=include_str!("../modules/attached_crystal_follower.lua");
-        smoke_generated_code(valid,PromptKind::Rule,prompt).unwrap();
-        for field in ["creature_id","entity_id"] {
-            let broken=valid.replace("api.chase(target.id,",&format!("api.chase(target.{field},"));
+        let prompt = "[BOUND_OBJECT_RULE] [BOUND_TARGET:creature]";
+        let valid = include_str!("../modules/attached_crystal_follower.lua");
+        smoke_generated_code(valid, PromptKind::Rule, prompt).unwrap();
+        for field in ["creature_id", "entity_id"] {
+            let broken = valid.replace(
+                "api.chase(target.id,",
+                &format!("api.chase(target.{field},"),
+            );
             // The old unattached-only fixture silently skipped the broken call.
-            smoke_code(&broken,PromptKind::Rule).unwrap();
-            let error=smoke_generated_code(&broken,PromptKind::Rule,prompt).unwrap_err();
-            assert!(error.contains("nil") && error.contains("chase"),"{error}");
+            smoke_code(&broken, PromptKind::Rule).unwrap();
+            let error = smoke_generated_code(&broken, PromptKind::Rule, prompt).unwrap_err();
+            assert!(error.contains("nil") && error.contains("chase"), "{error}");
         }
-        for (kind,source) in [("block",include_str!("../modules/attached_block_ward.lua")),("device",include_str!("../modules/attached_device_ward.lua"))] {
-            smoke_generated_code(source,PromptKind::Rule,&format!("[BOUND_OBJECT_RULE] [BOUND_TARGET:{kind}]")).unwrap();
-            let broken=source.replace("local target = api.get_rule_target()","local target = api.get_rule_target(); if target then api.chase(nil,0,0,0) end");
-            assert!(smoke_generated_code(&broken,PromptKind::Rule,&format!("[BOUND_OBJECT_RULE] [BOUND_TARGET:{kind}]")).is_err());
+        for (kind, source) in [
+            ("block", include_str!("../modules/attached_block_ward.lua")),
+            (
+                "device",
+                include_str!("../modules/attached_device_ward.lua"),
+            ),
+        ] {
+            smoke_generated_code(
+                source,
+                PromptKind::Rule,
+                &format!("[BOUND_OBJECT_RULE] [BOUND_TARGET:{kind}]"),
+            )
+            .unwrap();
+            let broken = source.replace(
+                "local target = api.get_rule_target()",
+                "local target = api.get_rule_target(); if target then api.chase(nil,0,0,0) end",
+            );
+            assert!(smoke_generated_code(
+                &broken,
+                PromptKind::Rule,
+                &format!("[BOUND_OBJECT_RULE] [BOUND_TARGET:{kind}]")
+            )
+            .is_err());
         }
+    }
+
+    #[test]
+    fn artwork_is_annotated_but_invalid_cosmetics_do_not_reject_behavior() {
+        let mut value = serde_json::to_value(plan()).unwrap();
+        value["flavor_quote"] = serde_json::json!({"unexpected":"cosmetic metadata"});
+        value["artwork"] = serde_json::json!({"subject":"not a supported symbol"});
+        let decoded: Plan = serde_json::from_value(value).unwrap();
+        decoded.validate(PromptKind::Rule).unwrap();
+        assert!(decoded.artwork.is_none());
+        assert!(decoded.flavor_quote.is_empty());
+        let mut described = plan();
+        let art = crate::spell_art::Recipe::fallback("healing sheep in rain");
+        described.artwork = Some(art);
+        let annotated = described.annotate("function on_tick(api) end", "test");
+        assert_eq!(
+            crate::spell_art::Recipe::from_source(&annotated, "unrelated"),
+            art
+        );
+        assert!(schema()["required"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("artwork")));
     }
     #[test]
     fn custom_smoke_checks_callback_and_runtime_contract() {
@@ -832,9 +983,13 @@ mod tests {
             let code = format!("function on_cast(api,event) api.nearest_player({arguments}) end");
             let error = smoke_code(&code, PromptKind::Instant).unwrap_err();
             assert!(error.contains("nearest_player(x, y, z)"), "{error}");
-            assert!(error.contains("api.place_campfire_near_player(event.player_id, 6)"), "{error}");
+            assert!(
+                error.contains("api.place_campfire_near_player(event.player_id, 6)"),
+                "{error}"
+            );
         }
-        smoke_code(r#"
+        smoke_code(
+            r#"
             function on_cast(api,event)
                 local fire = api.place_campfire_near_player(event.player_id,6)
                 assert(fire and fire.burning)
@@ -842,12 +997,16 @@ mod tests {
                 local p = api.nearest_player(fire.x,fire.y,fire.z)
                 assert(p and p.distance >= 0)
             end
-        "#, PromptKind::Instant).unwrap();
+        "#,
+            PromptKind::Instant,
+        )
+        .unwrap();
         let mut p = plan();
         p.api_groups = vec!["blocks".into()];
         let context = focused_prompt(&p);
         assert!(context.contains("- api.players()"));
-        assert!(context.contains("function on_cast(api, event) local fire = api.place_campfire_near_player"));
+        assert!(context
+            .contains("function on_cast(api, event) local fire = api.place_campfire_near_player"));
     }
 
     #[test]
@@ -859,10 +1018,21 @@ mod tests {
     }
     #[test]
     fn focused_inventory_context_contains_current_economy() {
-        let mut p=plan();p.api_groups=vec!["inventory".into()];
-        let prompt=focused_prompt(&p);
-        for name in ["get_player_inventory","get_player_journal","get_equipped_item","get_mana","give_element","craft_item","decompose_resource","convert_elements_to_mana","get_item_recipe"] {
-            assert!(prompt.contains(&format!("- api.{name}(")),"missing {name}");
+        let mut p = plan();
+        p.api_groups = vec!["inventory".into()];
+        let prompt = focused_prompt(&p);
+        for name in [
+            "get_player_inventory",
+            "get_player_journal",
+            "get_equipped_item",
+            "get_mana",
+            "give_element",
+            "craft_item",
+            "decompose_resource",
+            "convert_elements_to_mana",
+            "get_item_recipe",
+        ] {
+            assert!(prompt.contains(&format!("- api.{name}(")), "missing {name}");
         }
         assert!(!prompt.contains("There is no separate equipment-item catalog yet"));
     }
@@ -870,17 +1040,49 @@ mod tests {
     #[ignore = "live preflight timing and semantic checks; requires local llama-server"]
     fn profile_preflight() {
         let cases = [
-            ("players are protected during rain from wolf attack", "protect_players", "rain", "players"),
-            ("if it rains then wolf doesnt attack", "suppress_attacks", "rain", "all"),
+            (
+                "players are protected during rain from wolf attack",
+                "protect_players",
+                "rain",
+                "players",
+            ),
+            (
+                "if it rains then wolf doesnt attack",
+                "suppress_attacks",
+                "rain",
+                "all",
+            ),
             ("start day", "custom", "always", "custom"),
-            ("At night sheep hunt players carrying a crystal", "custom", "night", "custom"),
+            (
+                "At night sheep hunt players carrying a crystal",
+                "custom",
+                "night",
+                "custom",
+            ),
         ];
         for (prompt, effect, condition, targets) in cases {
             let start = std::time::Instant::now();
-            let p = interpreted("http://127.0.0.1:8090/v1/chat/completions", prompt, super::super::classify_prompt(prompt), None).unwrap();
+            let p = interpreted(
+                "http://127.0.0.1:8090/v1/chat/completions",
+                prompt,
+                super::super::classify_prompt(prompt),
+                None,
+            )
+            .unwrap();
             let interpretation = start.elapsed().as_secs_f32();
-            let scope = if p.effect != "custom" { Some(resolve_target_scope("http://127.0.0.1:8090/v1/chat/completions", prompt).unwrap()) } else { None };
-            println!("{prompt}: interpretation={interpretation:.2}s total={:.2}s plan={}", start.elapsed().as_secs_f32(), serde_json::to_string(&p).unwrap());
+            let scope = if p.effect != "custom" {
+                Some(
+                    resolve_target_scope("http://127.0.0.1:8090/v1/chat/completions", prompt)
+                        .unwrap(),
+                )
+            } else {
+                None
+            };
+            println!(
+                "{prompt}: interpretation={interpretation:.2}s total={:.2}s plan={}",
+                start.elapsed().as_secs_f32(),
+                serde_json::to_string(&p).unwrap()
+            );
             assert_eq!(p.effect, effect);
             if effect != "custom" {
                 assert_eq!(p.condition, condition);

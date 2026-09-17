@@ -282,7 +282,7 @@ fn submerged(world: &World, pos: Vec3) -> bool {
 /// Three cells beyond the center in every horizontal direction, with no
 /// dry corners or thin cross-shaped puddles. This also checks the model's body.
 pub(super) fn spawn_clear(world: &World, pos: Vec3) -> bool {
-    crate::water::fish_spawn_clear(|x,y,z|world.get_block(x,y,z),pos)
+    crate::water::fish_spawn_clear(|x, y, z| world.get_block(x, y, z), pos)
 }
 
 fn water_path(world: &World, from: Vec3, to: Vec3) -> bool {
@@ -370,14 +370,17 @@ impl Creatures {
             return;
         }
         for offset in 0..regions.len().min(8) {
-            if !self.has_population_room() || self.ecs.query::<&Fish>().iter().count() >= 32 { break; }
+            if !self.has_population_room() || self.ecs.query::<&Fish>().iter().count() >= 32 {
+                break;
+            }
             let cell = regions[(self.fish_scan_cursor + offset) % regions.len()];
             let seed = world.seed as u64
                 ^ (cell.0 as u64).wrapping_mul(0x9E3779B185EBCA87)
                 ^ (cell.1 as u64).wrapping_mul(0xC2B2AE3D27D4EB4F)
                 ^ 0xF15B1234;
             let mut rng = SimpleRng::new(seed);
-            if rng.next_f32() >= (0.6 * world.generation.abundance("fish") as f32 / 100.0).min(1.0) {
+            if rng.next_f32() >= (0.6 * world.generation.abundance("fish") as f32 / 100.0).min(1.0)
+            {
                 continue;
             }
             let center = Vec3::new(cell.0 as f32 * 16.0 + 8.0, 0.0, cell.1 as f32 * 16.0 + 8.0);

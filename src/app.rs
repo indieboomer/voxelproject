@@ -1,21 +1,21 @@
+#[path = "adventure_app.rs"]
+mod adventure_app;
+#[path = "enchantment_app.rs"]
+mod enchantment_app;
+#[path = "food_app.rs"]
+mod food_app;
+#[path = "lore_books_app.rs"]
+mod lore_books_app;
+#[path = "npc_app.rs"]
+mod npc_app;
 #[cfg(feature = "dev-playtest")]
 #[path = "playtest_app.rs"]
 mod playtest_app;
-#[path = "adventure_app.rs"]
-mod adventure_app;
-#[path = "npc_app.rs"]
-mod npc_app;
-#[path = "lore_books_app.rs"]
-mod lore_books_app;
-#[path = "food_app.rs"]
-mod food_app;
 #[path = "spell_app.rs"]
 mod spell_app;
-#[path = "enchantment_app.rs"]
-mod enchantment_app;
+use crate::transport::{JoinTarget, Peer, Transport};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use crate::transport::{Peer, Transport, JoinTarget};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -34,9 +34,9 @@ use crate::input::Input;
 use crate::llm::{classify_prompt, derive_rule_name, LlmClient, PendingGeneration, PromptKind};
 use crate::model::Models;
 use crate::net::{
-    self, decode, encode, LaunchConfig, NotifyKind, Packet, PlayerId, ReliableChannel,
-    ReliableMsg, SnapshotPlayer, UnreliableMsg, CONNECTION_TIMEOUT, HOST_PLAYER_ID,
-    MAX_NICKNAME_LEN, SNAPSHOT_INTERVAL,
+    self, decode, encode, LaunchConfig, NotifyKind, Packet, PlayerId, ReliableChannel, ReliableMsg,
+    SnapshotPlayer, UnreliableMsg, CONNECTION_TIMEOUT, HOST_PLAYER_ID, MAX_NICKNAME_LEN,
+    SNAPSHOT_INTERVAL,
 };
 use crate::player::{
     Player, DROWNING_DAMAGE_PER_SEC, MAX_ATTRIBUTE_MULTIPLIER, MAX_HEALTH, MAX_OXYGEN,
@@ -136,8 +136,11 @@ fn generation_noun(kind: PromptKind) -> &'static str {
 }
 
 fn is_in_water(world: &World, pos: Vec3) -> bool {
-    world.get_block(pos.x.floor() as i32, pos.y.floor() as i32, pos.z.floor() as i32)
-        == BlockType::Water
+    world.get_block(
+        pos.x.floor() as i32,
+        pos.y.floor() as i32,
+        pos.z.floor() as i32,
+    ) == BlockType::Water
 }
 
 /// Mirrors `Player::update`'s own `below` check, since remote players don't
@@ -159,7 +162,11 @@ fn sanitize_nickname(raw: &str) -> String {
     if trimmed.is_empty() {
         "Player".to_string()
     } else {
-        trimmed.chars().filter(|c| !c.is_control()).take(MAX_NICKNAME_LEN).collect()
+        trimmed
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(MAX_NICKNAME_LEN)
+            .collect()
     }
 }
 
@@ -339,7 +346,7 @@ struct ClientNet {
     reliable: ReliableChannel,
     remote_players: HashMap<PlayerId, RemotePlayer>,
     creature_snapshot: Vec<([f32; 3], u8, f32, u8, f32)>,
-    creature_vitals: Vec<([f32;3],u8,f32)>,
+    creature_vitals: Vec<([f32; 3], u8, f32)>,
     send_timer: f32,
     last_server_packet: Instant,
     lost_connection_logged: bool,
@@ -375,6 +382,7 @@ struct CameraUniform {
     inv_view_proj: [[f32; 4]; 4],
     camera_pos: [f32; 4],
     fog_color: [f32; 4],
+    /// RGB sky gradient; w restores the base cloud layer outside sunny weather.
     zenith_color: [f32; 4],
     /// xyz = normalized sun direction, w = raw `sky_lighting::sun_height`
     /// (see its doc comment for why the raw value travels separately from
@@ -394,14 +402,16 @@ struct CameraUniform {
     /// `Weather::cloud_coverage` -- how much of sky.wgsl's procedural cloud
     /// layer covers the sky dome). z = camera eye underwater; w = surface wetness.
     weather_fx: [f32; 4],
-    camp_lights: [[f32;4];4],
+    /// x = water Fresnel enabled (1/0); remaining lanes are reserved.
+    graphics: [f32; 4],
+    camp_lights: [[f32; 4]; 4],
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 struct LightUniform {
     view_proj: [[f32; 4]; 4],
-    motion: [f32;4],
+    motion: [f32; 4],
 }
 
 /// Places a "virtual light" back along the sun direction from the player
@@ -415,10 +425,10 @@ fn light_view_proj(sun_dir: Vec3, player_pos: Vec3) -> glam::Mat4 {
         * glam::Mat4::from_translation(-player_pos);
     let h = SHADOW_ORTHO_HALF_SIZE;
     let proj = glam::Mat4::orthographic_rh(-h, h, -h, h, 1.0, SHADOW_LIGHT_DISTANCE * 2.5);
-    let matrix=proj*view;
-    let anchor=matrix.transform_point3(Vec3::ZERO)* (SHADOW_MAP_SIZE as f32*0.5);
-    let offset=(anchor.round()-anchor)* (2.0/SHADOW_MAP_SIZE as f32);
-    glam::Mat4::from_translation(Vec3::new(offset.x,offset.y,0.))*matrix
+    let matrix = proj * view;
+    let anchor = matrix.transform_point3(Vec3::ZERO) * (SHADOW_MAP_SIZE as f32 * 0.5);
+    let offset = (anchor.round() - anchor) * (2.0 / SHADOW_MAP_SIZE as f32);
+    glam::Mat4::from_translation(Vec3::new(offset.x, offset.y, 0.)) * matrix
 }
 
 #[cfg(test)]
@@ -430,25 +440,36 @@ mod shadow_stability_tests {
     use super::*;
     #[test]
     fn moving_player_cannot_rotate_the_sun_shadow_camera() {
-        for time in [0.02,0.14,0.25,0.47] {
-            let sun=crate::daynight::sky_lighting(time).sun_dir;
-            let reference=light_view_proj(sun,Vec3::ZERO).to_cols_array_2d();
-            for origin in [-16384.,0.,16384.,999900.] {for step in 0..64 {
-                let pos=Vec3::new(origin+step as f32*0.007,24.,origin+step as f32*0.003);
-                let matrix=light_view_proj(sun,pos).to_cols_array_2d();
-                for column in 0..3 {assert_eq!(matrix[column],reference[column],"light orientation drift at {pos:?}");}
-            }}
+        for time in [0.02, 0.14, 0.25, 0.47] {
+            let sun = crate::daynight::sky_lighting(time).sun_dir;
+            let reference = light_view_proj(sun, Vec3::ZERO).to_cols_array_2d();
+            for origin in [-16384., 0., 16384., 999900.] {
+                for step in 0..64 {
+                    let pos = Vec3::new(
+                        origin + step as f32 * 0.007,
+                        24.,
+                        origin + step as f32 * 0.003,
+                    );
+                    let matrix = light_view_proj(sun, pos).to_cols_array_2d();
+                    for column in 0..3 {
+                        assert_eq!(
+                            matrix[column], reference[column],
+                            "light orientation drift at {pos:?}"
+                        );
+                    }
+                }
+            }
         }
     }
     #[test]
     fn translated_shadow_grid_moves_only_by_whole_texels() {
-        let sun=crate::daynight::sky_lighting(0.14).sun_dir;
-        for origin in [-16384.,0.,16384.] {
-            let base=light_view_proj(sun,Vec3::new(origin,24.,origin)).w_axis;
+        let sun = crate::daynight::sky_lighting(0.14).sun_dir;
+        for origin in [-16384., 0., 16384.] {
+            let base = light_view_proj(sun, Vec3::new(origin, 24., origin)).w_axis;
             for step in 0..128 {
-                let m=light_view_proj(sun,Vec3::new(origin+step as f32*0.007,24.,origin));
-                let d=(m.w_axis-base)*(SHADOW_MAP_SIZE as f32*0.5);
-                assert!((d.x-d.x.round()).abs()<0.001 && (d.y-d.y.round()).abs()<0.001);
+                let m = light_view_proj(sun, Vec3::new(origin + step as f32 * 0.007, 24., origin));
+                let d = (m.w_axis - base) * (SHADOW_MAP_SIZE as f32 * 0.5);
+                assert!((d.x - d.x.round()).abs() < 0.001 && (d.y - d.y.round()).abs() < 0.001);
             }
         }
     }
@@ -527,7 +548,12 @@ impl DynamicMesh {
         }
     }
 
-    fn make_buffer(device: &wgpu::Device, label: &str, size_bytes: usize, usage: wgpu::BufferUsages) -> wgpu::Buffer {
+    fn make_buffer(
+        device: &wgpu::Device,
+        label: &str,
+        size_bytes: usize,
+        usage: wgpu::BufferUsages,
+    ) -> wgpu::Buffer {
         device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
             // wgpu requires a nonzero buffer size even when there's
@@ -588,6 +614,7 @@ pub struct App {
     block_target: crate::block_target::BlockTarget,
     wind: crate::wind::Wind,
     render_pipeline: wgpu::RenderPipeline,
+    water_reflections: crate::water_reflections::Reflections,
     depth_view: wgpu::TextureView,
 
     /// Draws the gradient sky/sun/moon/stars background -- see sky.wgsl.
@@ -600,8 +627,8 @@ pub struct App {
     /// Fixed (x, z, phase) offsets for each rain streak, relative to the
     /// camera -- see `build_rain_particles`.
     rain_particles: Vec<(f32, f32, f32)>,
-    waterfalls: std::collections::HashMap<(i32,i32),Vec<crate::water::Waterfall>>,
-    campfires: std::collections::HashMap<(i32,i32),Vec<Vec3>>,
+    waterfalls: std::collections::HashMap<(i32, i32), Vec<crate::water::Waterfall>>,
+    campfires: std::collections::HashMap<(i32, i32), Vec<Vec3>>,
     campfire_mesh: DynamicMesh,
 
     bird_pipeline: wgpu::RenderPipeline,
@@ -616,8 +643,8 @@ pub struct App {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     texture_bind_group: wgpu::BindGroup,
-    light_visibility:crate::light_visibility::Visibility,
-    prop_cache:crate::prop_cache::Cache,
+    light_visibility: crate::light_visibility::Visibility,
+    prop_cache: crate::prop_cache::Cache,
 
     shadow_pipeline: wgpu::RenderPipeline,
     shadow_view: wgpu::TextureView,
@@ -721,11 +748,11 @@ pub struct App {
     loot: crate::loot::Effects,
     spell_fx: crate::spell_fx::Effects,
     spell_network: crate::spell_network::State,
-    generation_attachment:Option<crate::enchantment::Reference>,
-    console_attachment:Result<crate::enchantment::Reference,String>,
-    enchantment_summaries:Vec<crate::enchantment::Summary>,
-    enchantment_revision:u64,
-    generation_original_prompt:Option<String>,
+    generation_attachment: Option<crate::enchantment::Reference>,
+    console_attachment: Result<crate::enchantment::Reference, String>,
+    enchantment_summaries: Vec<crate::enchantment::Summary>,
+    enchantment_revision: u64,
+    generation_original_prompt: Option<String>,
     mana_timer: f32,
     /// Position of the block the player is currently chipping away at with
     /// left-click, and hits landed on it so far -- reset whenever a click
@@ -745,38 +772,72 @@ pub struct App {
 }
 
 impl App {
+    fn maintain_hotbars(&mut self) {
+        if !matches!(self.net, NetRole::Host(_)) {
+            return;
+        }
+        self.player.crafting.prune_hotbar();
+        let mut guests_changed = false;
+        for account in self.guest_accounts.values_mut() {
+            guests_changed |= account.prune_hotbar();
+        }
+        if guests_changed {
+            self.sync_guest_mana();
+        }
+    }
     fn sync_guest_mana(&mut self) {
         if let NetRole::Host(host) = &mut self.net {
-            for (peer,id) in &host.clients {
+            for (peer, id) in &host.clients {
                 if let Some(player) = host.remote_players.get(id) {
-                    if let Some(account) = self.guest_accounts.get(&peer.account_key(&player.nickname)) {
-                        host.reliable.send(&host.socket,*peer,ReliableMsg::CraftState {account:account.clone(),feedback:None});
+                    if let Some(account) = self
+                        .guest_accounts
+                        .get_mut(&peer.account_key(&player.nickname))
+                    {
+                        account.prune_hotbar();
+                        host.reliable.send(
+                            &host.socket,
+                            *peer,
+                            ReliableMsg::CraftState {
+                                account: account.clone(),
+                                feedback: None,
+                            },
+                        );
                     }
                 }
             }
         }
     }
     fn regenerate_mana(&mut self, dt: f32) {
-        if !matches!(self.net,NetRole::Host(_)) { return; }
+        if !matches!(self.net, NetRole::Host(_)) {
+            return;
+        }
         self.mana_timer += dt.max(0.0);
-        if self.mana_timer < 5.0 {return;}
+        if self.mana_timer < 5.0 {
+            return;
+        }
         self.mana_timer %= 5.0;
         self.player.crafting.regenerate_mana();
         let mut changed = false;
         if let NetRole::Host(host) = &self.net {
-            for (peer,id) in &host.clients {
+            for (peer, id) in &host.clients {
                 if let Some(player) = host.remote_players.get(id) {
-                    changed |= self.guest_accounts.entry(peer.account_key(&player.nickname)).or_default().regenerate_mana();
+                    changed |= self
+                        .guest_accounts
+                        .entry(peer.account_key(&player.nickname))
+                        .or_default()
+                        .regenerate_mana();
                 }
             }
         }
-        if changed {self.sync_guest_mana();}
+        if changed {
+            self.sync_guest_mana();
+        }
     }
     fn crafting_save(&self) -> crate::save::CraftingSave {
         crate::save::CraftingSave {
-            world_identity:self.world.identity.clone(),
-            creature_next_id:self.creatures.next_identity(),
-            enchantments:self.scripting.save_enchantments(),
+            world_identity: self.world.identity.clone(),
+            creature_next_id: self.creatures.next_identity(),
+            enchantments: self.scripting.save_enchantments(),
             spellbook: self.scripting.spellbook.clone(),
             creature_statuses: self.creatures.magic_statuses.clone(),
             starter_camp: self.world.starter_camp,
@@ -788,9 +849,27 @@ impl App {
             loot: Some(self.loot.drops.clone()),
             underground_discovered: self.world.underground_discovered.clone(),
             automation: self.world.automation.clone(),
-            machine_loot: self.loot.drops.iter().filter(|d|d.machine).cloned().collect(),
-            host: self.player.crafting.clone(),
-            guests: self.guest_accounts.clone(),
+            machine_loot: self
+                .loot
+                .drops
+                .iter()
+                .filter(|d| d.machine)
+                .cloned()
+                .collect(),
+            host: {
+                let mut account = self.player.crafting.clone();
+                account.prune_hotbar();
+                account
+            },
+            guests: self
+                .guest_accounts
+                .iter()
+                .map(|(key, account)| {
+                    let mut account = account.clone();
+                    account.prune_hotbar();
+                    (key.clone(), account)
+                })
+                .collect(),
             creatures: Some(self.creatures.snapshot_with_ids()),
             behaviors: self.creatures.behaviors.clone(),
             dragons: self.creatures.save_dragons(),
@@ -800,8 +879,12 @@ impl App {
     }
 
     fn submit_crafting(&mut self, action: crate::crafting::Action) {
-        if self.player.health <= 0. {self.crafting_ui.pending=false;return;}
-        self.player_animation.start(crate::player_animation::Clip::Work);
+        if self.player.health <= 0. {
+            self.crafting_ui.pending = false;
+            return;
+        }
+        self.player_animation
+            .start(crate::player_animation::Clip::Work);
         let revision = self.player.crafting.revision;
         if let NetRole::Joined(client) = &mut self.net {
             client.reliable.send(
@@ -843,19 +926,25 @@ impl App {
             return;
         };
         crate::crafting::load_interaction_area(&mut self.world, rp.pos);
-        let account = self.guest_accounts.entry(from.account_key(&rp.nickname)).or_default();
-        let feedback = if rp.health <= 0. { "Recover before crafting".into() } else { self
-            .crafting_registry
-            .execute(
-                account,
-                revision,
-                &action,
-                &self.world,
-                &mut self.creatures,
-                rp.pos,
-                &players,
-            )
-            .unwrap_or_else(|e| e) };
+        let account = self
+            .guest_accounts
+            .entry(from.account_key(&rp.nickname))
+            .or_default();
+        let feedback = if rp.health <= 0. {
+            "Recover before crafting".into()
+        } else {
+            self.crafting_registry
+                .execute(
+                    account,
+                    revision,
+                    &action,
+                    &self.world,
+                    &mut self.creatures,
+                    rp.pos,
+                    &players,
+                )
+                .unwrap_or_else(|e| e)
+        };
         host.reliable.send(
             &host.socket,
             from,
@@ -867,115 +956,310 @@ impl App {
     }
 
     fn publish_hotbar(&mut self) {
-        if let NetRole::Joined(client)=&mut self.net {
-            client.reliable.send(&client.socket,client.server_addr,ReliableMsg::Hotbar(self.player.crafting.hotbar.clone()));
+        if let NetRole::Joined(client) = &mut self.net {
+            client.reliable.send(
+                &client.socket,
+                client.server_addr,
+                ReliableMsg::Hotbar(self.player.crafting.hotbar.clone()),
+            );
         }
     }
 
-    fn handle_remote_hotbar(&mut self, from:Peer, hotbar:crate::equipment::Hotbar) {
-        let NetRole::Host(host)=&mut self.net else{return;};
-        let Some(rp)=host.clients.get(&from).and_then(|id|host.remote_players.get_mut(id)) else{return;};
-        let account=self.guest_accounts.entry(from.account_key(&rp.nickname)).or_default();
-        let feedback=crate::equipment::accept_hotbar(account,&hotbar).err();
-        rp.held=account.hotbar.entry().filter(|e|e.count(account)>0);rp.torch_lit=crate::torch::equipped(account) && rp.health>0.;
-        host.reliable.send(&host.socket,from,ReliableMsg::CraftState{account:account.clone(),feedback});
+    fn handle_remote_hotbar(&mut self, from: Peer, hotbar: crate::equipment::Hotbar) {
+        let NetRole::Host(host) = &mut self.net else {
+            return;
+        };
+        let Some(rp) = host
+            .clients
+            .get(&from)
+            .and_then(|id| host.remote_players.get_mut(id))
+        else {
+            return;
+        };
+        let account = self
+            .guest_accounts
+            .entry(from.account_key(&rp.nickname))
+            .or_default();
+        let feedback = crate::equipment::accept_hotbar(account, &hotbar).err();
+        rp.held = account.hotbar.entry().filter(|e| e.count(account) > 0);
+        rp.torch_lit = crate::torch::equipped(account) && rp.health > 0.;
+        host.reliable.send(
+            &host.socket,
+            from,
+            ReliableMsg::CraftState {
+                account: account.clone(),
+                feedback,
+            },
+        );
     }
 
-    fn all_player_positions(&self)->Vec<Vec3> {
-        let remote=match &self.net {NetRole::Host(h)=>&h.remote_players,NetRole::Joined(c)=>&c.remote_players};
-        std::iter::once(self.player.position).chain(remote.values().map(|p|p.pos)).collect()
+    fn all_player_positions(&self) -> Vec<Vec3> {
+        let remote = match &self.net {
+            NetRole::Host(h) => &h.remote_players,
+            NetRole::Joined(c) => &c.remote_players,
+        };
+        std::iter::once(self.player.position)
+            .chain(remote.values().map(|p| p.pos))
+            .collect()
     }
 
-    fn submit_automation(&mut self,action:crate::automation::Action) {
-        self.player_animation.start(crate::player_animation::Clip::Work);
-        if let NetRole::Joined(client)=&mut self.net {
-            if !self.inventory_ready {self.ui.automation.feedback="Waiting for host inventory".into();return;}
-            client.reliable.send(&client.socket,client.server_addr,ReliableMsg::AutomationAction(action));
-        }else{self.perform_automation(None,action);}
-    }
-
-    fn perform_automation(&mut self,from:Option<Peer>,action:crate::automation::Action) {
-        if !self.adventure_actor_alive(from) {return;}
-        let (feet,key)=if let Some(peer)=from {
-            let NetRole::Host(host)=&self.net else{return;};
-            let Some(rp)=host.clients.get(&peer).and_then(|id|host.remote_players.get(id))else{return;};
-            (rp.pos,Some(peer.account_key(&rp.nickname)))
-        }else{(self.player.position,None)};
-        crate::crafting::load_interaction_area(&mut self.world,feet);
-        let players=self.all_player_positions();let mut state=self.world.automation.clone();
-        let account=if let Some(key)=key {self.guest_accounts.entry(key).or_default()}else{&mut self.player.crafting};
-        let result=if let crate::automation::Action::Release{cell,item}=&action {
-            crate::automation::release(&self.world,&mut self.creatures,account,feet,&players,*cell,item)
-        }else{crate::automation::apply(&self.world,&mut state,account,feet,&players,&action,crate::automation::balance(),&self.crafting_registry)};
-        let ok=result.is_ok();let feedback=result.err().unwrap_or_else(||"Device updated".into());
-        if ok {crate::quests::machine_action(account,&state,&action);self.world.automation=state;self.automation_timer=1.0;}
-        if let Some(peer)=from {
-            if let NetRole::Host(host)=&mut self.net {
-                host.reliable.send(&host.socket,peer,ReliableMsg::CraftState{account:account.clone(),feedback:None});
-                host.reliable.send(&host.socket,peer,ReliableMsg::AutomationResult{ok,feedback});
+    fn submit_automation(&mut self, action: crate::automation::Action) {
+        self.player_animation
+            .start(crate::player_animation::Clip::Work);
+        if let NetRole::Joined(client) = &mut self.net {
+            if !self.inventory_ready {
+                self.ui.automation.feedback = "Waiting for host inventory".into();
+                return;
             }
-        }else{
-            self.ui.automation.feedback=feedback;
-            if ok && matches!(action,crate::automation::Action::Place{packed:Some(_),..}) {self.ui.automation.build=None;}
+            client.reliable.send(
+                &client.socket,
+                client.server_addr,
+                ReliableMsg::AutomationAction(action),
+            );
+        } else {
+            self.perform_automation(None, action);
         }
     }
 
-    fn update_automation(&mut self,dt:f32) {
-        if !matches!(self.net,NetRole::Host(_)) {return;}
-        crate::underground::discover(&mut self.world,&mut self.creatures);
-        self.automation_clock.advance_with(dt,&mut self.world.automation,crate::automation::balance(),&self.crafting_registry,
-            |auras|crate::automation::apply_auras(&mut self.creatures,auras));
-        let mut quest_changed=crate::quests::observe(&mut self.player.crafting,&self.world.automation);
-        for account in self.guest_accounts.values_mut() {quest_changed|=crate::quests::observe(account,&self.world.automation);}
-        if quest_changed {self.sync_guest_mana();}
-        let players=self.all_player_positions();
-        crate::automation::eject_chests(&mut self.world,&mut self.creatures,&mut self.loot,&players);
-        let NetRole::Host(host)=&mut self.net else{return;};
-        self.automation_timer+=dt;
-        if self.automation_timer>=0.5 {
-            self.automation_timer=0.0;self.automation_revision+=1;
-            let chunks=crate::automation_net::chunks(&self.world.automation,self.automation_revision);
-            for &peer in host.clients.keys(){for chunk in &chunks {host.reliable.send(&host.socket,peer,ReliableMsg::AutomationState(chunk.clone()));}}
+    fn perform_automation(&mut self, from: Option<Peer>, action: crate::automation::Action) {
+        if !self.adventure_actor_alive(from) {
+            return;
         }
-    }
-
-    fn perform_item_action(&mut self, from:Option<Peer>, intent:crate::equipment::Intent) {
-        if !self.adventure_actor_alive(from) {return;}
-        let (id,feet,key)=if let Some(peer)=from {
-            let NetRole::Host(host)=&self.net else{return;};
-            let Some(&id)=host.clients.get(&peer) else{return;};
-            let Some(rp)=host.remote_players.get(&id) else{return;};
-            (id,rp.pos,Some(peer.account_key(&rp.nickname)))
-        } else {(self.local_player_id,self.player.position,None)};
-        crate::crafting::load_interaction_area(&mut self.world,feet);
-        let players:Vec<_>=self.host_player_positions().iter().map(|p|p.pos).collect();
-        let account=if let Some(key)=key {self.guest_accounts.entry(key).or_default()}else{&mut self.player.crafting};
-        let state=self.interaction_states.entry(id).or_default();
-        let result=if matches!(intent.action,crate::equipment::Action::Attack) {
-            crate::equipment::attack(&self.world,&mut self.creatures,account,state,feet,&intent).map(|()|None)
-        } else {crate::equipment::block_action(&self.world,account,state,feet,&players,&intent)};
-        let feedback=result.as_ref().err().filter(|s|!s.is_empty()).cloned();
-        if let Some(peer)=from {
-            if let NetRole::Host(host)=&mut self.net {
-                if let Some(rp)=host.remote_players.get_mut(&id){rp.held=account.hotbar.entry().filter(|e|e.count(account)>0);rp.torch_lit=crate::torch::equipped(account) && rp.health>0.;}
-                host.reliable.send(&host.socket,peer,ReliableMsg::CraftState{account:account.clone(),feedback:None});
-                if let Some(text)=feedback {host.reliable.send(&host.socket,peer,ReliableMsg::Notify{kind:NotifyKind::Info,text});}
+        let (feet, key) = if let Some(peer) = from {
+            let NetRole::Host(host) = &self.net else {
+                return;
+            };
+            let Some(rp) = host
+                .clients
+                .get(&peer)
+                .and_then(|id| host.remote_players.get(id))
+            else {
+                return;
+            };
+            (rp.pos, Some(peer.account_key(&rp.nickname)))
+        } else {
+            (self.player.position, None)
+        };
+        crate::crafting::load_interaction_area(&mut self.world, feet);
+        let players = self.all_player_positions();
+        let mut state = self.world.automation.clone();
+        let account = if let Some(key) = key {
+            self.guest_accounts.entry(key).or_default()
+        } else {
+            &mut self.player.crafting
+        };
+        let result = if let crate::automation::Action::Release { cell, item } = &action {
+            crate::automation::release(
+                &self.world,
+                &mut self.creatures,
+                account,
+                feet,
+                &players,
+                *cell,
+                item,
+            )
+        } else {
+            crate::automation::apply(
+                &self.world,
+                &mut state,
+                account,
+                feet,
+                &players,
+                &action,
+                crate::automation::balance(),
+                &self.crafting_registry,
+            )
+        };
+        let ok = result.is_ok();
+        let feedback = result.err().unwrap_or_else(|| "Device updated".into());
+        if ok {
+            crate::quests::machine_action(account, &state, &action);
+            self.world.automation = state;
+            self.automation_timer = 1.0;
+        }
+        if let Some(peer) = from {
+            if let NetRole::Host(host) = &mut self.net {
+                host.reliable.send(
+                    &host.socket,
+                    peer,
+                    ReliableMsg::CraftState {
+                        account: account.clone(),
+                        feedback: None,
+                    },
+                );
+                host.reliable.send(
+                    &host.socket,
+                    peer,
+                    ReliableMsg::AutomationResult { ok, feedback },
+                );
             }
         } else {
-            self.mining_hits=state.hits;self.mining_target=state.target.map(|v|v.0);
-            if let Some(text)=feedback {self.toasts.push(Toast::new(text));}
+            self.ui.automation.feedback = feedback;
+            if ok
+                && matches!(
+                    action,
+                    crate::automation::Action::Place {
+                        packed: Some(_),
+                        ..
+                    }
+                )
+            {
+                self.ui.automation.build = None;
+            }
         }
-        if result.is_ok() && matches!(intent.action,crate::equipment::Action::Attack)
-            && intent.item==Some(crate::equipment::Entry::Gear(crate::equipment::Gear::LifeStaff)) {
-            if from.is_none() {self.player.heal(15.);}
-            else if let NetRole::Host(host)=&mut self.net {if let Some(rp)=host.remote_players.get_mut(&id) {rp.health=(rp.health+15.).min(crate::player::MAX_HEALTH);}}
+    }
+
+    fn update_automation(&mut self, dt: f32) {
+        if !matches!(self.net, NetRole::Host(_)) {
+            return;
         }
-        if let Ok(Some((p,block,old)))=result {
-            self.apply_block_edit(p.0,p.1,p.2,block);
-            if block==BlockType::Air {
-                self.pending_block_breaks.push(BlockBreakEvent{x:p.0,y:p.1,z:p.2,block:old,player_id:id});
-                if old==BlockType::Crystal && from.is_none(){self.player.carrying_crystal=true;}
-                for p in self.world.flood_from(p) {self.apply_block_edit(p.0,p.1,p.2,BlockType::Water);}
+        crate::underground::discover(&mut self.world, &mut self.creatures);
+        self.automation_clock.advance_with(
+            dt,
+            &mut self.world.automation,
+            crate::automation::balance(),
+            &self.crafting_registry,
+            |auras| crate::automation::apply_auras(&mut self.creatures, auras),
+        );
+        let mut quest_changed =
+            crate::quests::observe(&mut self.player.crafting, &self.world.automation);
+        for account in self.guest_accounts.values_mut() {
+            quest_changed |= crate::quests::observe(account, &self.world.automation);
+        }
+        if quest_changed {
+            self.sync_guest_mana();
+        }
+        let players = self.all_player_positions();
+        crate::automation::eject_chests(
+            &mut self.world,
+            &mut self.creatures,
+            &mut self.loot,
+            &players,
+        );
+        let NetRole::Host(host) = &mut self.net else {
+            return;
+        };
+        self.automation_timer += dt;
+        if self.automation_timer >= 0.5 {
+            self.automation_timer = 0.0;
+            self.automation_revision += 1;
+            let chunks =
+                crate::automation_net::chunks(&self.world.automation, self.automation_revision);
+            for &peer in host.clients.keys() {
+                for chunk in &chunks {
+                    host.reliable.send(
+                        &host.socket,
+                        peer,
+                        ReliableMsg::AutomationState(chunk.clone()),
+                    );
+                }
+            }
+        }
+    }
+
+    fn perform_item_action(&mut self, from: Option<Peer>, intent: crate::equipment::Intent) {
+        if !self.adventure_actor_alive(from) {
+            return;
+        }
+        let (id, feet, key) = if let Some(peer) = from {
+            let NetRole::Host(host) = &self.net else {
+                return;
+            };
+            let Some(&id) = host.clients.get(&peer) else {
+                return;
+            };
+            let Some(rp) = host.remote_players.get(&id) else {
+                return;
+            };
+            (id, rp.pos, Some(peer.account_key(&rp.nickname)))
+        } else {
+            (self.local_player_id, self.player.position, None)
+        };
+        crate::crafting::load_interaction_area(&mut self.world, feet);
+        let players: Vec<_> = self.host_player_positions().iter().map(|p| p.pos).collect();
+        let account = if let Some(key) = key {
+            self.guest_accounts.entry(key).or_default()
+        } else {
+            &mut self.player.crafting
+        };
+        let state = self.interaction_states.entry(id).or_default();
+        let result = if matches!(intent.action, crate::equipment::Action::Attack) {
+            crate::equipment::attack(
+                &self.world,
+                &mut self.creatures,
+                account,
+                state,
+                feet,
+                &intent,
+            )
+            .map(|()| None)
+        } else {
+            crate::equipment::block_action(&self.world, account, state, feet, &players, &intent)
+        };
+        let feedback = result.as_ref().err().filter(|s| !s.is_empty()).cloned();
+        if let Some(peer) = from {
+            if let NetRole::Host(host) = &mut self.net {
+                if let Some(rp) = host.remote_players.get_mut(&id) {
+                    rp.held = account.hotbar.entry().filter(|e| e.count(account) > 0);
+                    rp.torch_lit = crate::torch::equipped(account) && rp.health > 0.;
+                }
+                host.reliable.send(
+                    &host.socket,
+                    peer,
+                    ReliableMsg::CraftState {
+                        account: account.clone(),
+                        feedback: None,
+                    },
+                );
+                if let Some(text) = feedback {
+                    host.reliable.send(
+                        &host.socket,
+                        peer,
+                        ReliableMsg::Notify {
+                            kind: NotifyKind::Info,
+                            text,
+                        },
+                    );
+                }
+            }
+        } else {
+            self.mining_hits = state.hits;
+            self.mining_target = state.target.map(|v| v.0);
+            if let Some(text) = feedback {
+                self.toasts.push(Toast::new(text));
+            }
+        }
+        if result.is_ok()
+            && matches!(intent.action, crate::equipment::Action::Attack)
+            && intent.item
+                == Some(crate::equipment::Entry::Gear(
+                    crate::equipment::Gear::LifeStaff,
+                ))
+        {
+            if from.is_none() {
+                self.player.heal(15.);
+            } else if let NetRole::Host(host) = &mut self.net {
+                if let Some(rp) = host.remote_players.get_mut(&id) {
+                    rp.health = (rp.health + 15.).min(crate::player::MAX_HEALTH);
+                }
+            }
+        }
+        if let Ok(Some((p, block, old))) = result {
+            self.apply_block_edit(p.0, p.1, p.2, block);
+            if block == BlockType::Air {
+                self.pending_block_breaks.push(BlockBreakEvent {
+                    x: p.0,
+                    y: p.1,
+                    z: p.2,
+                    block: old,
+                    player_id: id,
+                });
+                if old == BlockType::Crystal && from.is_none() {
+                    self.player.carrying_crystal = true;
+                }
+                for p in self.world.flood_from(p) {
+                    self.apply_block_edit(p.0, p.1, p.2, BlockType::Water);
+                }
             }
         }
     }
@@ -1075,12 +1359,18 @@ impl App {
         // skinned model's decoded creature texture up front.
         let models = Models::load();
         let (texture_bgl, texture_bind_group) = create_atlas_bind_group(&device, &queue, &models);
-        let shadow = create_shadow_resources(&device,&texture_bgl);
-        let light_visibility=crate::light_visibility::Visibility::new(&device,&queue);
+        let shadow = create_shadow_resources(&device, &texture_bgl);
+        let light_visibility = crate::light_visibility::Visibility::new(&device, &queue);
 
+        let water_reflections = crate::water_reflections::Reflections::new(&device, config.format, config.width, config.height, &depth_view, &camera_bgl);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("pipeline layout"),
-            bind_group_layouts: &[&camera_bgl, &texture_bgl, &shadow.sample_bgl, &light_visibility.layout],
+            bind_group_layouts: &[
+                &camera_bgl,
+                &texture_bgl,
+                &shadow.sample_bgl,
+                &light_visibility.layout,
+            ],
             push_constant_ranges: &[],
         });
 
@@ -1221,7 +1511,8 @@ impl App {
         });
         let rain_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("rain vertex buffer"),
-            size: ((RAIN_PARTICLE_COUNT * 2 + crate::water::MAX_VERTICES) * std::mem::size_of::<RainVertex>()) as u64,
+            size: ((RAIN_PARTICLE_COUNT * 2 + crate::water::MAX_VERTICES)
+                * std::mem::size_of::<RainVertex>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1278,7 +1569,8 @@ impl App {
             label: Some("bird vertex buffer"),
             // 2 lines (4 vertices) per bird, sized for the largest possible
             // flock -- see BIRD_MAX_COUNT.
-            size: (BIRD_MAX_COUNT * BIRD_VERTICES_PER_BIRD * std::mem::size_of::<BirdVertex>()) as u64,
+            size: (BIRD_MAX_COUNT * BIRD_VERTICES_PER_BIRD * std::mem::size_of::<BirdVertex>())
+                as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1296,7 +1588,11 @@ impl App {
             mut scripting,
         ) = match launch.connect {
             None => {
-                let loaded = if launch.fresh { None } else { Some(load_world(&launch.world_name).ok_or_else(||format!("Could not load world {}. The save is missing, corrupt or incompatible.",launch.world_name))?) };
+                let loaded = if launch.fresh {
+                    None
+                } else {
+                    Some(load_world(&launch.world_name).ok_or_else(||format!("Could not load world {}. The save is missing, corrupt or incompatible.",launch.world_name))?)
+                };
                 let (world, spawn_pos, yaw, pitch, time_of_day, scripting) = match loaded {
                     Some(loaded) => {
                         crafting_save = loaded.crafting;
@@ -1308,13 +1604,14 @@ impl App {
                             loaded.time_of_day,
                             ScriptHost::load_from_save(&loaded.modules),
                         )
-                    },
+                    }
                     None => {
                         let seed = random_world_seed();
                         let mut world = World::new(seed);
                         world.generation = launch.generation.clone();
                         world.generation.underground = true;
-                        world.generation.cave_version = crate::worldgen::WorldGeneration::default().cave_version;
+                        world.generation.cave_version =
+                            crate::worldgen::WorldGeneration::default().cave_version;
                         world.name = launch.world_name.clone();
                         let spawn = crate::adventure::surface_spawn_position(&mut world, 0, 0);
                         (
@@ -1323,19 +1620,54 @@ impl App {
                             -90f32.to_radians(),
                             0.0,
                             0.28,
-                            ScriptHost::scan_dir(&crate::runtime_paths::resource("modules").to_string_lossy()),
+                            ScriptHost::scan_dir(
+                                &crate::runtime_paths::resource("modules").to_string_lossy(),
+                            ),
                         )
                     }
                 };
-                let network_settings = crate::settings::Settings::load(std::path::Path::new("settings.json")).unwrap_or_default().multiplayer;
-                let socket = Transport::host(network_settings.mode, launch.port, network_settings.steam_app_id)
-                    .map_err(|e| {
-                        format!("Cannot host multiplayer session: {e}")
-                    })?;
+                let network_settings =
+                    crate::settings::Settings::load(std::path::Path::new("settings.json"))
+                        .unwrap_or_default()
+                        .multiplayer;
+                // A saved Steam preference must not prevent starting a local
+                // world. This is especially important when settings.json was
+                // created by a Steam build but the current executable does not
+                // include Steam support, or Steam is not running. Direct mode
+                // is the same authoritative host and is a safe fallback.
+                let socket = match Transport::host(
+                    network_settings.mode,
+                    launch.port,
+                    network_settings.steam_app_id,
+                ) {
+                    Ok(socket) => socket,
+                    Err(steam_error)
+                        if network_settings.mode == crate::settings::MultiplayerMode::Steam =>
+                    {
+                        log::warn!("Steam hosting unavailable; falling back to Direct LAN: {steam_error}");
+                        Transport::host(
+                            crate::settings::MultiplayerMode::Direct,
+                            launch.port,
+                            network_settings.steam_app_id,
+                        )
+                        .map_err(|direct_error| {
+                            format!(
+                                "Cannot host multiplayer session (Steam: {steam_error}; Direct: {direct_error})"
+                            )
+                        })?
+                    }
+                    Err(error) => {
+                        return Err(format!("Cannot host multiplayer session: {error}"));
+                    }
+                };
                 log::info!("Hosting on port {}", launch.port);
                 // Guests never need local inference. Start it only after hosting succeeds.
                 let llm_url = launch.llm_url.clone();
-                std::thread::spawn(move || { if let Err(e) = crate::llm_server::ensure_ready(&llm_url) { log::warn!("{e}"); } });
+                std::thread::spawn(move || {
+                    if let Err(e) = crate::llm_server::ensure_ready(&llm_url) {
+                        log::warn!("{e}");
+                    }
+                });
                 let host_net = HostNet {
                     appearance: remote_player::Appearance::choose(random_world_seed(), []),
                     socket,
@@ -1388,46 +1720,64 @@ impl App {
             }
         };
 
-        scripting.spellbook=std::mem::take(&mut crafting_save.spellbook);
+        scripting.spellbook = std::mem::take(&mut crafting_save.spellbook);
         scripting.spellbook.revalidate();
         let mut camera = Camera::new(spawn_pos, config.width as f32 / config.height as f32);
         camera.yaw = yaw;
         camera.pitch = pitch;
         let mut player = Player::new(spawn_pos);
         player.crafting = crafting_save.host;
-        if let Some(saved)=crafting_save.player {saved.restore(&mut player);}
+        if let Some(saved) = crafting_save.player {
+            saved.restore(&mut player);
+        }
 
         let mut creatures = Creatures::new();
         if let Some(saved) = crafting_save.creatures {
             creatures.restore_saved(&saved, world.seed as u64);
             for (id, state) in crafting_save.behaviors {
-                if creatures.behaviors.contains_key(&id) { creatures.behaviors.insert(id, state); }
+                if creatures.behaviors.contains_key(&id) {
+                    creatures.behaviors.insert(id, state);
+                }
             }
         } else if spawn_creatures {
             creatures.spawn_around(&world, spawn_pos, CREATURE_COUNT, world.seed);
         }
         creatures.restore_dragons(crafting_save.dragons);
         creatures.reserve_identities(crafting_save.creature_next_id);
-        if matches!(net,NetRole::Host(_)) {
-            world.identity=std::mem::take(&mut crafting_save.world_identity);
+        if matches!(net, NetRole::Host(_)) {
+            world.identity = std::mem::take(&mut crafting_save.world_identity);
             world.automation.ensure_device_ids();
             for saved in &crafting_save.enchantments {
-                world.identity.next_creation=world.identity.next_creation.max(saved.binding.id.saturating_add(1));
-                if let crate::enchantment::Object::Creature{id,..}=saved.binding.target.object {creatures.reserve_identities(id.saturating_add(1));}
+                world.identity.next_creation = world
+                    .identity
+                    .next_creation
+                    .max(saved.binding.id.saturating_add(1));
+                if let crate::enchantment::Object::Creature { id, .. } = saved.binding.target.object
+                {
+                    creatures.reserve_identities(id.saturating_add(1));
+                }
             }
             scripting.load_enchantments(std::mem::take(&mut crafting_save.enchantments));
         }
-        let creature_ids:std::collections::HashSet<_>=creatures.snapshot_with_ids().iter().map(|c|c.0).collect();
-        creatures.magic_statuses=crafting_save.creature_statuses.into_iter().filter(|(id,s)|creature_ids.contains(id)&&s.valid()&&s.active()).collect();
+        let creature_ids: std::collections::HashSet<_> =
+            creatures.snapshot_with_ids().iter().map(|c| c.0).collect();
+        creatures.magic_statuses = crafting_save
+            .creature_statuses
+            .into_iter()
+            .filter(|(id, s)| creature_ids.contains(id) && s.valid() && s.active())
+            .collect();
         creatures.restore_fish(crafting_save.fish);
         creatures.wildlife.extend(crafting_save.wildlife);
-        let weather = crafting_save.weather.unwrap_or_else(||WeatherState::new(world.seed));
+        let weather = crafting_save
+            .weather
+            .unwrap_or_else(|| WeatherState::new(world.seed));
         let rain_particles = build_rain_particles(world.seed);
         let lightning_seed = world.seed;
 
         let llm = LlmClient::new(launch.llm_url.clone());
-        let wind=crate::wind::Wind::new(&device,&camera_bgl,config.format);
-        let block_target = crate::block_target::BlockTarget::new(&device, &camera_bgl, config.format);
+        let wind = crate::wind::Wind::new(&device, &camera_bgl, config.format);
+        let block_target =
+            crate::block_target::BlockTarget::new(&device, &camera_bgl, config.format);
         let ui = Ui::new(&device, config.format, &window);
         let entity_mesh = DynamicMesh::new(&device);
         let campfire_mesh = DynamicMesh::new(&device);
@@ -1448,6 +1798,7 @@ impl App {
             block_target,
             wind,
             render_pipeline,
+            water_reflections,
             depth_view,
             sky_pipeline,
             rain_pipeline,
@@ -1465,7 +1816,7 @@ impl App {
             camera_bind_group,
             texture_bind_group,
             light_visibility,
-            prop_cache:Default::default(),
+            prop_cache: Default::default(),
             shadow_pipeline: shadow.pipeline,
             shadow_view: shadow.view,
             shadow_light_buffer: shadow.light_buffer,
@@ -1518,7 +1869,11 @@ impl App {
             held_mesh,
             interaction_states: HashMap::new(),
             recovery_timers: HashMap::new(),
-            npcs: crafting_save.npcs.into_iter().filter(|n|n.valid()).collect(),
+            npcs: crafting_save
+                .npcs
+                .into_iter()
+                .filter(|n| n.valid())
+                .collect(),
             npc_distribution: crafting_save.npc_distribution,
             npc_timer: 0.,
             recovery_arrivals: HashMap::new(),
@@ -1530,12 +1885,16 @@ impl App {
             automation_transfer: Default::default(),
             machine_feedback: Default::default(),
             inventory_ready: false,
-            loot: crate::loot::Effects::restore_machine(crafting_save.loot.unwrap_or(crafting_save.machine_loot)),
+            loot: crate::loot::Effects::restore_machine(
+                crafting_save.loot.unwrap_or(crafting_save.machine_loot),
+            ),
             spell_fx: crate::spell_fx::Effects::default(),
             spell_network: crate::spell_network::State::default(),
-            generation_attachment:None,enchantment_summaries:Vec::new(),
-            console_attachment:Err("Open the console while aiming at an object.".into()),
-            enchantment_revision:0,generation_original_prompt:None,
+            generation_attachment: None,
+            enchantment_summaries: Vec::new(),
+            console_attachment: Err("Open the console while aiming at an object.".into()),
+            enchantment_revision: 0,
+            generation_original_prompt: None,
             mana_timer: 0.0,
             mining_target: None,
             mining_hits: 0,
@@ -1547,19 +1906,29 @@ impl App {
             water_time: 0.0,
         };
 
-        if matches!(app.net,NetRole::Host(_)) {
-            app.scripting.spellbook.sync_hotbar(&mut app.player.crafting);
-            let book=crate::spell_network::guest_book(&app.scripting.spellbook);
-            for account in app.guest_accounts.values_mut() {book.sync_hotbar(account);}
-        } else {app.player.crafting.known_spells.clear();}
+        if matches!(app.net, NetRole::Host(_)) {
+            app.scripting
+                .spellbook
+                .sync_hotbar(&mut app.player.crafting);
+            let book = crate::spell_network::guest_book(&app.scripting.spellbook);
+            for account in app.guest_accounts.values_mut() {
+                book.sync_hotbar(account);
+            }
+        } else {
+            app.player.crafting.known_spells.clear();
+        }
         app.grab_cursor(true);
-        crate::crafting::load_interaction_area(&mut app.world,app.player.position);
+        crate::crafting::load_interaction_area(&mut app.world, app.player.position);
         app.initialize_adventure(launch.fresh);
         app.initialize_npcs();
         app.update_chunks();
-        if launch.fresh && matches!(app.net,NetRole::Host(_)) {
-            if let Some((x,_,z))=crate::underground::nearby_entrance(&app.world,app.player.position) {
-                app.notify_important(format!("Explore underground: a stone-framed cave entrance is nearby at X {x}, Z {z}."));
+        if launch.fresh && matches!(app.net, NetRole::Host(_)) {
+            if let Some((x, _, z)) =
+                crate::underground::nearby_entrance(&app.world, app.player.position)
+            {
+                app.notify_important(format!(
+                    "Explore underground: a stone-framed cave entrance is nearby at X {x}, Z {z}."
+                ));
             }
         }
         Ok(app)
@@ -1591,6 +1960,7 @@ impl App {
         self.config.height = new_size.height;
         self.surface.configure(&self.device, &self.config);
         self.depth_view = create_depth_view(&self.device, &self.config);
+        self.water_reflections.resize(&self.device, self.config.format, self.config.width, self.config.height, &self.depth_view);
         self.camera.aspect = new_size.width as f32 / new_size.height as f32;
     }
 
@@ -1614,22 +1984,34 @@ impl App {
                     return;
                 };
                 if self.ui.spellbook.open {
-                    if code==KeyCode::F5 && !key_event.repeat {self.input.save_requested=true;}
-                    if code==KeyCode::Escape && !key_event.repeat {self.ui.spellbook.open=false;self.sync_settings_input();}
-                    return;
-                }
-                if code==KeyCode::KeyK && !key_event.repeat && self.cursor_grabbed {
-                    self.ui.spellbook.open=true;self.sync_settings_input();return;
-                }
-                if self.ui.journal.open {
-                    if !key_event.repeat && matches!(code,KeyCode::Escape|KeyCode::KeyJ) {
-                        self.ui.journal.open=false;self.sync_settings_input();
+                    if code == KeyCode::F5 && !key_event.repeat {
+                        self.input.save_requested = true;
+                    }
+                    if code == KeyCode::Escape && !key_event.repeat {
+                        self.ui.spellbook.open = false;
+                        self.sync_settings_input();
                     }
                     return;
                 }
-                if code==KeyCode::KeyJ && !key_event.repeat && self.cursor_grabbed {
-                    self.ui.journal.open=true;self.ui.journal.camp=None;self.ui.journal.npc=None;self.ui.journal.feedback.clear();
-                    self.sync_settings_input();return;
+                if code == KeyCode::KeyK && !key_event.repeat && self.cursor_grabbed {
+                    self.ui.spellbook.open = true;
+                    self.sync_settings_input();
+                    return;
+                }
+                if self.ui.journal.open {
+                    if !key_event.repeat && matches!(code, KeyCode::Escape | KeyCode::KeyJ) {
+                        self.ui.journal.open = false;
+                        self.sync_settings_input();
+                    }
+                    return;
+                }
+                if code == KeyCode::KeyJ && !key_event.repeat && self.cursor_grabbed {
+                    self.ui.journal.open = true;
+                    self.ui.journal.camp = None;
+                    self.ui.journal.npc = None;
+                    self.ui.journal.feedback.clear();
+                    self.sync_settings_input();
+                    return;
                 }
                 if code == KeyCode::F5 && !key_event.repeat {
                     self.input.save_requested = true;
@@ -1640,26 +2022,68 @@ impl App {
                     self.sync_settings_input();
                     return;
                 }
-                if code==KeyCode::KeyM && !key_event.repeat && !self.console_open && !self.chat_open && !self.quit_dialog_open && !self.crafting_ui.open && !self.ui.map.open && !self.ui.inventory_open && !self.ui.settings.open && !self.ui.automation.open {
-                    self.ui.map.toggle(self.player.position);self.sync_settings_input();return;
+                if code == KeyCode::KeyM
+                    && !key_event.repeat
+                    && !self.console_open
+                    && !self.chat_open
+                    && !self.quit_dialog_open
+                    && !self.crafting_ui.open
+                    && !self.ui.map.open
+                    && !self.ui.inventory_open
+                    && !self.ui.settings.open
+                    && !self.ui.automation.open
+                {
+                    self.ui.map.toggle(self.player.position);
+                    self.sync_settings_input();
+                    return;
                 }
                 if self.ui.map.open {
-                    if !key_event.repeat && matches!(code,KeyCode::Escape|KeyCode::KeyM) {self.ui.map.open=false;self.sync_settings_input();}
+                    if !key_event.repeat && matches!(code, KeyCode::Escape | KeyCode::KeyM) {
+                        self.ui.map.open = false;
+                        self.sync_settings_input();
+                    }
                     return;
                 }
-                if code==KeyCode::KeyB && !key_event.repeat && !self.console_open && !self.chat_open && !self.quit_dialog_open && !self.crafting_ui.open && !self.ui.map.open && !self.ui.inventory_open && !self.ui.settings.open {
-                    if self.ui.automation.build.take().is_some() {self.ui.automation.open=false;}
-                    else {self.ui.automation.open=!self.ui.automation.open;}
-                    self.ui.automation.selected=None;self.sync_settings_input();return;
+                if code == KeyCode::KeyB
+                    && !key_event.repeat
+                    && !self.console_open
+                    && !self.chat_open
+                    && !self.quit_dialog_open
+                    && !self.crafting_ui.open
+                    && !self.ui.map.open
+                    && !self.ui.inventory_open
+                    && !self.ui.settings.open
+                {
+                    if self.ui.automation.build.take().is_some() {
+                        self.ui.automation.open = false;
+                    } else {
+                        self.ui.automation.open = !self.ui.automation.open;
+                    }
+                    self.ui.automation.selected = None;
+                    self.sync_settings_input();
+                    return;
                 }
                 if self.ui.automation.open {
-                    if code==KeyCode::Escape {self.ui.automation.open=false;self.ui.automation.build=None;self.sync_settings_input();}
+                    if code == KeyCode::Escape {
+                        self.ui.automation.open = false;
+                        self.ui.automation.build = None;
+                        self.sync_settings_input();
+                    }
                     return;
                 }
-                if self.cursor_grabbed && code==KeyCode::KeyR && !key_event.repeat {
-                    if let Some((_,rotation,_))=&mut self.ui.automation.build {*rotation=(*rotation+1)%4;return;}
+                if self.cursor_grabbed && code == KeyCode::KeyR && !key_event.repeat {
+                    if let Some((_, rotation, _)) = &mut self.ui.automation.build {
+                        *rotation = (*rotation + 1) % 4;
+                        return;
+                    }
                 }
-                if self.cursor_grabbed && code==KeyCode::Escape && self.ui.automation.build.is_some() {self.ui.automation.build=None;return;}
+                if self.cursor_grabbed
+                    && code == KeyCode::Escape
+                    && self.ui.automation.build.is_some()
+                {
+                    self.ui.automation.build = None;
+                    return;
+                }
                 if self.ui.settings.open {
                     if code == KeyCode::Escape {
                         self.ui.settings.open = false;
@@ -1667,14 +2091,30 @@ impl App {
                     }
                     return;
                 }
-                if code==KeyCode::KeyI && !key_event.repeat && !self.console_open && !self.chat_open && !self.quit_dialog_open && !self.crafting_ui.open {
-                    self.ui.inventory_open=!self.ui.inventory_open;self.sync_settings_input();return;
-                }
-                if self.ui.inventory_open {
-                    if code==KeyCode::Escape {self.ui.inventory_open=false;self.sync_settings_input();}
+                if code == KeyCode::KeyI
+                    && !key_event.repeat
+                    && !self.console_open
+                    && !self.chat_open
+                    && !self.quit_dialog_open
+                    && !self.crafting_ui.open
+                {
+                    self.ui.inventory_open = !self.ui.inventory_open;
+                    self.sync_settings_input();
                     return;
                 }
-                if code == KeyCode::KeyC && !key_event.repeat && !self.console_open && !self.chat_open && !self.quit_dialog_open {
+                if self.ui.inventory_open {
+                    if code == KeyCode::Escape {
+                        self.ui.inventory_open = false;
+                        self.sync_settings_input();
+                    }
+                    return;
+                }
+                if code == KeyCode::KeyC
+                    && !key_event.repeat
+                    && !self.console_open
+                    && !self.chat_open
+                    && !self.quit_dialog_open
+                {
                     self.crafting_ui.open = !self.crafting_ui.open;
                     self.input.release_all();
                     self.grab_cursor(!self.crafting_ui.open);
@@ -1687,7 +2127,11 @@ impl App {
                     }
                     return;
                 }
-                if code == KeyCode::Backquote && !key_event.repeat && !self.quit_dialog_open && !self.chat_open {
+                if code == KeyCode::Backquote
+                    && !key_event.repeat
+                    && !self.quit_dialog_open
+                    && !self.chat_open
+                {
                     self.toggle_console();
                     return;
                 }
@@ -1711,32 +2155,72 @@ impl App {
                     }
                     return;
                 }
-                if !self.ui.map.open && !self.ui.inventory_open && !self.ui.settings.open && !self.crafting_ui.open && !self.console_open && !self.quit_dialog_open && !self.chat_open {
+                if !self.ui.map.open
+                    && !self.ui.inventory_open
+                    && !self.ui.settings.open
+                    && !self.crafting_ui.open
+                    && !self.console_open
+                    && !self.quit_dialog_open
+                    && !self.chat_open
+                {
                     self.input.key_event(code, key_event.state);
                 }
             }
             WindowEvent::MouseInput { state, button, .. }
-                if !self.ui.spellbook.open && !self.ui.journal.open && !self.ui.automation.open && !self.ui.map.open && !self.ui.inventory_open && !self.ui.settings.open && !self.crafting_ui.open && !self.console_open && !self.quit_dialog_open && !self.chat_open => {
-                    self.input.mouse_button_event(*button, *state);
-                    if *state == ElementState::Pressed
-                        && *button == MouseButton::Left
-                        && !self.cursor_grabbed
-                    {
-                        self.grab_cursor(true);
-                    }
+                if !self.ui.spellbook.open
+                    && !self.ui.journal.open
+                    && !self.ui.automation.open
+                    && !self.ui.map.open
+                    && !self.ui.inventory_open
+                    && !self.ui.settings.open
+                    && !self.crafting_ui.open
+                    && !self.console_open
+                    && !self.quit_dialog_open
+                    && !self.chat_open =>
+            {
+                self.input.mouse_button_event(*button, *state);
+                if *state == ElementState::Pressed
+                    && *button == MouseButton::Left
+                    && !self.cursor_grabbed
+                {
+                    self.grab_cursor(true);
+                }
             }
-            WindowEvent::MouseWheel {delta,..} if self.cursor_grabbed && (matches!(self.net,NetRole::Host(_)) || self.inventory_ready) => {
-                let y=match delta {winit::event::MouseScrollDelta::LineDelta(_,y)=>*y,winit::event::MouseScrollDelta::PixelDelta(p)=>p.y as f32};
-                if y.abs()>0.01 && !self.ui.automation.tools_suspended() {self.player.crafting.hotbar.cycle(if y>0.0 {-1}else{1});self.publish_hotbar();}
+            WindowEvent::MouseWheel { delta, .. }
+                if self.cursor_grabbed
+                    && (matches!(self.net, NetRole::Host(_)) || self.inventory_ready) =>
+            {
+                let y = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => *y,
+                    winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32,
+                };
+                if y.abs() > 0.01 && !self.ui.automation.tools_suspended() {
+                    self.player
+                        .crafting
+                        .hotbar
+                        .cycle(if y > 0.0 { -1 } else { 1 });
+                    self.publish_hotbar();
+                }
             }
             _ => {}
         }
     }
 
     fn sync_settings_input(&mut self) {
-        self.input.release_all();self.input.end_frame();
-        self.grab_cursor(!self.ui.spellbook.open && !self.ui.map.open && !self.ui.inventory_open && !self.ui.settings.open && !self.console_open && !self.chat_open
-            && !self.crafting_ui.open && !self.quit_dialog_open && !self.ui.automation.open && !self.ui.journal.open);
+        self.input.release_all();
+        self.input.end_frame();
+        self.grab_cursor(
+            !self.ui.spellbook.open
+                && !self.ui.map.open
+                && !self.ui.inventory_open
+                && !self.ui.settings.open
+                && !self.console_open
+                && !self.chat_open
+                && !self.crafting_ui.open
+                && !self.quit_dialog_open
+                && !self.ui.automation.open
+                && !self.ui.journal.open,
+        );
     }
 
     fn toggle_console(&mut self) {
@@ -1759,9 +2243,11 @@ impl App {
     }
 
     fn open_console(&mut self) {
-        if self.console_open {return;}
+        if self.console_open {
+            return;
+        }
         self.update_enchantment_view();
-        self.console_attachment=self.capture_enchantment_target();
+        self.console_attachment = self.capture_enchantment_target();
         self.console_open = true;
         self.input.release_all();
         self.grab_cursor(false);
@@ -1808,7 +2294,8 @@ impl App {
 
     fn next_lightning_interval(&mut self) -> f32 {
         LIGHTNING_MIN_INTERVAL_SECS
-            + self.next_lightning_f32() * (LIGHTNING_MAX_INTERVAL_SECS - LIGHTNING_MIN_INTERVAL_SECS)
+            + self.next_lightning_f32()
+                * (LIGHTNING_MAX_INTERVAL_SECS - LIGHTNING_MIN_INTERVAL_SECS)
     }
 
     /// Runs every frame, for host and joined client alike (see
@@ -1822,8 +2309,8 @@ impl App {
         if self.weather.current.has_lightning() {
             self.lightning_timer -= dt;
             if self.lightning_timer <= 0.0 {
-                self.lightning_flash =
-                    LIGHTNING_MIN_PEAK + self.next_lightning_f32() * (LIGHTNING_MAX_PEAK - LIGHTNING_MIN_PEAK);
+                self.lightning_flash = LIGHTNING_MIN_PEAK
+                    + self.next_lightning_f32() * (LIGHTNING_MAX_PEAK - LIGHTNING_MIN_PEAK);
                 self.lightning_timer = self.next_lightning_interval();
                 self.audio.play_lightning();
             }
@@ -1863,7 +2350,8 @@ impl App {
             flock.center += flock.velocity * dt;
             if flock.age >= flock.lifetime {
                 self.bird_flock = None;
-                self.bird_spawn_timer = self.next_bird_range(BIRD_MIN_INTERVAL_SECS, BIRD_MAX_INTERVAL_SECS);
+                self.bird_spawn_timer =
+                    self.next_bird_range(BIRD_MIN_INTERVAL_SECS, BIRD_MAX_INTERVAL_SECS);
             }
             return;
         }
@@ -1888,7 +2376,8 @@ impl App {
         let spawn_dir = Vec3::new(spawn_angle.cos(), 0.0, spawn_angle.sin());
         let flight_dir = Vec3::new(flight_angle.cos(), 0.0, flight_angle.sin());
 
-        let height = self.player.position.y + self.next_bird_range(BIRD_HEIGHT_MIN, BIRD_HEIGHT_MAX);
+        let height =
+            self.player.position.y + self.next_bird_range(BIRD_HEIGHT_MIN, BIRD_HEIGHT_MAX);
         let mut center = self.player.position + spawn_dir * BIRD_SPAWN_DISTANCE;
         center.y = height;
 
@@ -1941,17 +2430,26 @@ impl App {
         };
         let wing_axis = Vec3::new(-forward.z, 0.0, forward.x);
 
-        let mut verts: Vec<BirdVertex> = Vec::with_capacity(flock.birds.len() * BIRD_VERTICES_PER_BIRD);
+        let mut verts: Vec<BirdVertex> =
+            Vec::with_capacity(flock.birds.len() * BIRD_VERTICES_PER_BIRD);
         for &(offset, wingspan, phase, flap_rate) in &flock.birds {
             let pos = flock.center + offset;
             let flap = (flock.age * flap_rate + phase).sin() * BIRD_FLAP_AMPLITUDE;
             let half = wing_axis * (wingspan * 0.5);
             let left = pos - half + Vec3::new(0.0, flap, 0.0);
             let right = pos + half + Vec3::new(0.0, flap, 0.0);
-            verts.push(BirdVertex { position: left.to_array() });
-            verts.push(BirdVertex { position: pos.to_array() });
-            verts.push(BirdVertex { position: pos.to_array() });
-            verts.push(BirdVertex { position: right.to_array() });
+            verts.push(BirdVertex {
+                position: left.to_array(),
+            });
+            verts.push(BirdVertex {
+                position: pos.to_array(),
+            });
+            verts.push(BirdVertex {
+                position: pos.to_array(),
+            });
+            verts.push(BirdVertex {
+                position: right.to_array(),
+            });
         }
         self.queue
             .write_buffer(&self.bird_vertex_buffer, 0, bytemuck::cast_slice(&verts));
@@ -1963,7 +2461,9 @@ impl App {
     /// (including the sender) as `PlayerChat` -- so there's no separate local
     /// echo path to keep in sync with the relayed one.
     fn send_chat(&mut self, text: String) {
-        let Some(text) = net::chat_text(&text) else { return; };
+        let Some(text) = net::chat_text(&text) else {
+            return;
+        };
         if matches!(self.net, NetRole::Host(_)) {
             self.broadcast_chat(self.local_player_id, self.local_nickname.clone(), text);
         } else if let NetRole::Joined(client) = &mut self.net {
@@ -1985,15 +2485,20 @@ impl App {
     }
 
     pub fn update(&mut self) {
+        self.maintain_hotbars();
         // Only the host chooses the testing policy; clients receive it with
         // the crafting registry so previews and authoritative charges agree.
-        if let NetRole::Host(host)=&mut self.net {
-            let mana_free=self.ui.settings.values.gameplay.mana_free;
-            if self.crafting_registry.mana_free!=mana_free {
-                std::sync::Arc::make_mut(&mut self.crafting_registry).mana_free=mana_free;
-                self.scripting.inventory_registry=self.crafting_registry.clone();
+        if let NetRole::Host(host) = &mut self.net {
+            let mana_free = self.ui.settings.values.gameplay.mana_free;
+            if self.crafting_registry.mana_free != mana_free {
+                std::sync::Arc::make_mut(&mut self.crafting_registry).mana_free = mana_free;
+                self.scripting.inventory_registry = self.crafting_registry.clone();
                 for &peer in host.clients.keys() {
-                    host.reliable.send(&host.socket,peer,ReliableMsg::CraftRegistry((*self.crafting_registry).clone()));
+                    host.reliable.send(
+                        &host.socket,
+                        peer,
+                        ReliableMsg::CraftRegistry((*self.crafting_registry).clone()),
+                    );
                 }
             }
         }
@@ -2003,7 +2508,9 @@ impl App {
             if let Some(id) = crate::steam_transport::pending_invite() {
                 if self.notified_invite != Some(id) {
                     self.notified_invite = Some(id);
-                    self.toasts.push(Toast::important("Steam invitation received. Return to the main menu to join it."));
+                    self.toasts.push(Toast::important(
+                        "Steam invitation received. Return to the main menu to join it.",
+                    ));
                 }
             }
         }
@@ -2021,7 +2528,8 @@ impl App {
         self.surface_weather.update(self.weather.current, dt);
         self.update_lightning(dt);
         self.update_birds(dt);
-        self.audio.update_ambience(self.weather.current, self.time_of_day, dt);
+        self.audio
+            .update_ambience(self.weather.current, self.time_of_day, dt);
 
         const SENSITIVITY: f32 = 0.0022;
         self.camera.yaw += self.input.mouse_delta.0 * SENSITIVITY;
@@ -2034,68 +2542,131 @@ impl App {
         let forward = self.camera.forward();
         let right = self.camera.right();
         // Collision-critical terrain must exist before physics, including after teleport.
-        crate::crafting::load_interaction_area(&mut self.world,self.player.position);
+        crate::crafting::load_interaction_area(&mut self.world, self.player.position);
         self.player
             .update(&self.world, &self.input, forward, right, dt);
         self.camera.position = self.player.position;
-        self.wind.update(dt,self.camera.eye_position(),self.weather.current);
-        self.audio.update_listener(self.camera.eye_position(), right);
+        self.wind
+            .update(dt, self.camera.eye_position(), self.weather.current);
+        self.audio
+            .update_listener(self.camera.eye_position(), right);
         for _ in 0..self.player.take_steps() {
             self.audio.play_player_step();
         }
 
-        self.use_animation=(self.use_animation-dt).max(0.0);
-        let machine_input=self.ui.automation.tools_suspended();
+        self.use_animation = (self.use_animation - dt).max(0.0);
+        let machine_input = self.ui.automation.tools_suspended();
         if self.cursor_grabbed {
-            if let Some(hit)=raycast(&self.world,self.camera.eye_position(),self.camera.forward(),REACH) {
+            if let Some(hit) = raycast(
+                &self.world,
+                self.camera.eye_position(),
+                self.camera.forward(),
+                REACH,
+            ) {
                 if self.input.left_clicked || self.input.right_clicked {
-                    if let Some((kind,rotation,packed))=self.ui.automation.build {
-                        self.submit_automation(crate::automation::Action::Place{kind,cell:hit.place,rotation,packed});
-                        self.input.left_clicked=false;
-                        self.input.right_clicked=false;
+                    if let Some((kind, rotation, packed)) = self.ui.automation.build {
+                        self.submit_automation(crate::automation::Action::Place {
+                            kind,
+                            cell: hit.place,
+                            rotation,
+                            packed,
+                        });
+                        self.input.left_clicked = false;
+                        self.input.right_clicked = false;
                     }
                 }
-                if let Some(base)=self.world.automation.device_at(hit.target).map(|d|d.cell) {
-                    if !machine_input && self.input.left_clicked {self.submit_automation(crate::automation::Action::Pack{cell:base});self.input.left_clicked=false;}
+                if let Some(base) = self.world.automation.device_at(hit.target).map(|d| d.cell) {
+                    if !machine_input && self.input.left_clicked {
+                        self.submit_automation(crate::automation::Action::Pack { cell: base });
+                        self.input.left_clicked = false;
+                    }
                     if self.input.interact_clicked {
-                        if let Some(d)=self.world.automation.devices.get(&base) {self.ui.automation.inspect(d);}
+                        if let Some(d) = self.world.automation.devices.get(&base) {
+                            self.ui.automation.inspect(d);
+                        }
                         self.sync_settings_input();
                     }
                 }
             }
             // Capture the mode before placing: placing the last packed machine
             // can exit it, but that same click must never reach a restored tool.
-            if machine_input {self.input.left_clicked=false;self.input.right_clicked=false;}
+            if machine_input {
+                self.input.left_clicked = false;
+                self.input.right_clicked = false;
+            }
         }
-        self.player_animation.advance(dt,
+        self.player_animation.advance(
+            dt,
             glam::Vec2::new(self.player.velocity.x, self.player.velocity.z).length(),
-            self.player.on_ground);
+            self.player.on_ground,
+        );
         if self.cursor_grabbed {
-            if let Some(gesture) = self.input.gesture { self.player_animation.start(gesture); }
+            if let Some(gesture) = self.input.gesture {
+                self.player_animation.start(gesture);
+            }
         }
-        if let Some(i)=self.input.hotbar_select.filter(|_| !machine_input && (matches!(self.net,NetRole::Host(_)) || self.inventory_ready)) {
-            self.player.crafting.hotbar.select(i);self.publish_hotbar();
+        if let Some(i) = self.input.hotbar_select.filter(|_| {
+            !machine_input && (matches!(self.net, NetRole::Host(_)) || self.inventory_ready)
+        }) {
+            self.player.crafting.hotbar.select(i);
+            self.publish_hotbar();
         }
-        if self.cursor_grabbed && !machine_input && (matches!(self.net,NetRole::Host(_)) || self.inventory_ready) {
-            use crate::equipment::{Entry,Action,Intent};
-            let entry=self.player.crafting.hotbar.entry();
+        if self.cursor_grabbed
+            && !machine_input
+            && (matches!(self.net, NetRole::Host(_)) || self.inventory_ready)
+        {
+            use crate::equipment::{Action, Entry, Intent};
+            let entry = self.player.crafting.hotbar.entry();
             if self.input.left_clicked || self.input.right_clicked {
-                if let Some(Entry::Spell(id))=entry {
+                if let Some(Entry::Spell(id)) = entry {
                     if self.input.left_clicked {
                         self.cast_remembered_spell(id);
-                        self.toasts.push(Toast::new(self.ui.spellbook.feedback.clone()));
+                        self.toasts
+                            .push(Toast::new(self.ui.spellbook.feedback.clone()));
                     }
                 } else {
-                let action=if self.input.right_clicked {Action::Place} else {match entry {Some(Entry::Resource(_))=>Action::Place,Some(Entry::Gear(g)) if g.weapon().is_some()=>Action::Attack,_=>Action::Mine}};
-                let intent=Intent{hotbar:self.player.crafting.hotbar.clone(),item:entry,target:raycast(&self.world,self.camera.eye_position(),self.camera.forward(),REACH).map(|h|h.target),direction:self.camera.forward().to_array(),action};
-                if entry.is_none() || entry.is_some_and(|e|e.count(&self.player.crafting)>0) {
-                    self.use_animation=0.28;self.audio.play_player_attack();
-                    self.player_animation.start(if matches!(action, Action::Attack) {
-                        crate::player_animation::Clip::Attack
-                    } else { crate::player_animation::Clip::Work });
-                }
-                if let NetRole::Joined(client)=&mut self.net {client.reliable.send(&client.socket,client.server_addr,ReliableMsg::ItemAction(intent));}
-                else {self.perform_item_action(None,intent);}
+                    let action = if self.input.right_clicked {
+                        Action::Place
+                    } else {
+                        match entry {
+                            Some(Entry::Resource(_)) => Action::Place,
+                            Some(Entry::Gear(g)) if g.weapon().is_some() => Action::Attack,
+                            _ => Action::Mine,
+                        }
+                    };
+                    let intent = Intent {
+                        hotbar: self.player.crafting.hotbar.clone(),
+                        item: entry,
+                        target: raycast(
+                            &self.world,
+                            self.camera.eye_position(),
+                            self.camera.forward(),
+                            REACH,
+                        )
+                        .map(|h| h.target),
+                        direction: self.camera.forward().to_array(),
+                        action,
+                    };
+                    if entry.is_none() || entry.is_some_and(|e| e.count(&self.player.crafting) > 0)
+                    {
+                        self.use_animation = 0.28;
+                        self.audio.play_player_attack();
+                        self.player_animation
+                            .start(if matches!(action, Action::Attack) {
+                                crate::player_animation::Clip::Attack
+                            } else {
+                                crate::player_animation::Clip::Work
+                            });
+                    }
+                    if let NetRole::Joined(client) = &mut self.net {
+                        client.reliable.send(
+                            &client.socket,
+                            client.server_addr,
+                            ReliableMsg::ItemAction(intent),
+                        );
+                    } else {
+                        self.perform_item_action(None, intent);
+                    }
                 }
             }
         }
@@ -2105,28 +2676,63 @@ impl App {
         // and placing (right click) -- see world_api/schema.yaml's
         // `on_interact`. Only reports the event; a rule decides what, if
         // anything, happens.
-        if self.cursor_grabbed && self.player.health>0. && self.input.interact_clicked {
-            if let Some(book)=self.aimed_book() {
-                if let NetRole::Joined(client)=&mut self.net {client.reliable.send(&client.socket,client.server_addr,ReliableMsg::ReadRecipeBook(book.sector));}
-                else {self.read_recipe_book(None,book.sector);}
-                self.input.interact_clicked=false;
-            } else if let Some(npc)=self.aimed_npc() {
-                self.ui.journal.npc=Some(npc);self.ui.journal.camp=None;self.ui.journal.open=true;self.ui.journal.feedback.clear();
-                self.sync_settings_input();
-            } else if let Some(camp)=self.aimed_camp() {
-                match &mut self.net {
-                    NetRole::Host(_)=>self.pending_interacts.push(InteractEvent{x:camp.0,y:camp.1,z:camp.2,block:BlockType::Campfire,player_id:self.local_player_id}),
-                    NetRole::Joined(client)=>{client.reliable.send(&client.socket,client.server_addr,ReliableMsg::Interact{x:camp.0,y:camp.1,z:camp.2});}
+        if self.cursor_grabbed && self.player.health > 0. && self.input.interact_clicked {
+            if let Some(book) = self.aimed_book() {
+                if let NetRole::Joined(client) = &mut self.net {
+                    client.reliable.send(
+                        &client.socket,
+                        client.server_addr,
+                        ReliableMsg::ReadRecipeBook(book.sector),
+                    );
+                } else {
+                    self.read_recipe_book(None, book.sector);
                 }
-                self.ui.journal.camp=Some(camp);self.ui.journal.npc=None;self.ui.journal.open=true;self.ui.journal.feedback.clear();
+                self.input.interact_clicked = false;
+            } else if let Some(npc) = self.aimed_npc() {
+                self.ui.journal.npc = Some(npc);
+                self.ui.journal.camp = None;
+                self.ui.journal.open = true;
+                self.ui.journal.feedback.clear();
+                self.sync_settings_input();
+            } else if let Some(camp) = self.aimed_camp() {
+                match &mut self.net {
+                    NetRole::Host(_) => self.pending_interacts.push(InteractEvent {
+                        x: camp.0,
+                        y: camp.1,
+                        z: camp.2,
+                        block: BlockType::Campfire,
+                        player_id: self.local_player_id,
+                    }),
+                    NetRole::Joined(client) => {
+                        client.reliable.send(
+                            &client.socket,
+                            client.server_addr,
+                            ReliableMsg::Interact {
+                                x: camp.0,
+                                y: camp.1,
+                                z: camp.2,
+                            },
+                        );
+                    }
+                }
+                self.ui.journal.camp = Some(camp);
+                self.ui.journal.npc = None;
+                self.ui.journal.open = true;
+                self.ui.journal.feedback.clear();
                 self.sync_settings_input();
             }
         }
-        if self.cursor_grabbed && self.player.health>0. && !self.console_open && !self.chat_open && self.input.interact_clicked {
+        if self.cursor_grabbed
+            && self.player.health > 0.
+            && !self.console_open
+            && !self.chat_open
+            && self.input.interact_clicked
+        {
             let origin = self.camera.eye_position();
             let dir = self.camera.forward();
             if let Some(hit) = raycast(&self.world, origin, dir, REACH) {
-                self.player_animation.start(crate::player_animation::Clip::Work);
+                self.player_animation
+                    .start(crate::player_animation::Clip::Work);
                 match &mut self.net {
                     NetRole::Host(_) => {
                         let block = self
@@ -2165,8 +2771,13 @@ impl App {
                     self.scripting.save_entries(),
                     &self.crafting_save(),
                 );
-                let message=match result {Ok(())=>format!("Saved world: {}",self.world.name),Err(e)=>e};
-                if self.ui.spellbook.open {self.ui.spellbook.feedback=message.clone();}
+                let message = match result {
+                    Ok(()) => format!("Saved world: {}", self.world.name),
+                    Err(e) => e,
+                };
+                if self.ui.spellbook.open {
+                    self.ui.spellbook.feedback = message.clone();
+                }
                 self.notify_important(message);
             } else {
                 log::warn!("Only the host can save the world.");
@@ -2176,10 +2787,19 @@ impl App {
         self.input.end_frame();
         self.update_adventure_hints();
         self.ui.settings.poll_name(self.llm.base_url());
-        let display=crate::fantasy_name::clean(&self.ui.settings.values.player_name);
-        if !display.is_empty() && display!=self.local_nickname {
-            self.local_nickname=display.clone();
-            if let NetRole::Joined(client)=&mut self.net {client.reliable.send(&client.socket,client.server_addr,ReliableMsg::DisplayName(display));}
+        if let Some(action) = self.ui.spellbook.poll_quote() {
+            self.spellbook_action(action);
+        }
+        let display = crate::fantasy_name::clean(&self.ui.settings.values.player_name);
+        if !display.is_empty() && display != self.local_nickname {
+            self.local_nickname = display.clone();
+            if let NetRole::Joined(client) = &mut self.net {
+                client.reliable.send(
+                    &client.socket,
+                    client.server_addr,
+                    ReliableMsg::DisplayName(display),
+                );
+            }
         }
         self.update_chunks();
         self.poll_network(dt);
@@ -2198,15 +2818,20 @@ impl App {
                 .map(|p| (p.id, p.pos))
                 .collect();
             self.scripting.sync_attack_policies(&mut self.creatures);
-            self.creatures.update_start_protection(dt,&player_targets);
-            self.creatures.populate_wildlife(&self.world, &player_targets, dt);
-            self.creatures.discover_dragons(&self.world, &player_targets);
-            self.creatures.discover_fish(&self.world, &player_targets, dt);
+            self.creatures.update_start_protection(dt, &player_targets);
+            self.creatures
+                .populate_wildlife(&self.world, &player_targets, dt);
+            self.creatures
+                .discover_dragons(&self.world, &player_targets);
+            self.creatures
+                .discover_fish(&self.world, &player_targets, dt);
             let golem_attacks = self.creatures.update(&self.world, dt, &player_targets);
             for (player_id, damage) in golem_attacks {
                 #[cfg(feature = "dev-playtest")]
-                if player_id==crate::playtest::AGENT_ID {
-                    if let Some(session)=&mut self.playtest {session.hostile_hit(damage);}
+                if player_id == crate::playtest::AGENT_ID {
+                    if let Some(session) = &mut self.playtest {
+                        session.hostile_hit(damage);
+                    }
                 }
                 self.apply_player_effect(PlayerEffect::Health {
                     player_id,
@@ -2263,34 +2888,77 @@ impl App {
             for (kind, pos) in events.ambient_calls {
                 self.audio.play_creature_ambient(kind, pos);
             }
-            let puffs:Vec<_>=events.deaths.iter().take(16).map(|(_,p)|p.to_array()).collect();
-            if !puffs.is_empty() {if let NetRole::Host(host)=&mut self.net {for &peer in host.clients.keys() {host.reliable.send(&host.socket,peer,ReliableMsg::DeathPuffs(puffs.clone()));}}}
+            let puffs: Vec<_> = events
+                .deaths
+                .iter()
+                .take(16)
+                .map(|(_, p)| p.to_array())
+                .collect();
+            if !puffs.is_empty() {
+                if let NetRole::Host(host) = &mut self.net {
+                    for &peer in host.clients.keys() {
+                        host.reliable.send(
+                            &host.socket,
+                            peer,
+                            ReliableMsg::DeathPuffs(puffs.clone()),
+                        );
+                    }
+                }
+            }
             for (_, pos) in events.deaths {
                 self.loot.puff(pos);
                 self.audio.play_creature_death(pos);
             }
-            for death in self.creatures.player_kills.drain(..) {self.loot.spawn(&self.world,death.kind,death.pos);}
-            let inventory_revision=self.player.crafting.revision;
-            let acquired=self.loot.collect(&self.world,self.player.position,&mut self.player.crafting);
-            if self.player.crafting.revision!=inventory_revision {self.audio.play_loot();}
+            for death in self.creatures.player_kills.drain(..) {
+                self.loot.spawn(&self.world, death.kind, death.pos);
+            }
+            let inventory_revision = self.player.crafting.revision;
+            let acquired =
+                self.loot
+                    .collect(&self.world, self.player.position, &mut self.player.crafting);
+            if self.player.crafting.revision != inventory_revision {
+                self.audio.play_loot();
+            }
             self.ui.show_pickup(acquired);
-            let mut changed=false;
-            if let NetRole::Host(host)=&mut self.net {for (peer,id) in &host.clients {
-                if let Some(p)=host.remote_players.get(id) {let account=self.guest_accounts.entry(peer.account_key(&p.nickname)).or_default();let rev=account.revision;
-                    let acquired=self.loot.collect(&self.world,p.pos,account);changed|=rev!=account.revision;
-                    if rev!=account.revision {host.reliable.send(&host.socket,*peer,ReliableMsg::LootCollected(acquired));}
+            let mut changed = false;
+            if let NetRole::Host(host) = &mut self.net {
+                for (peer, id) in &host.clients {
+                    if let Some(p) = host.remote_players.get(id) {
+                        let account = self
+                            .guest_accounts
+                            .entry(peer.account_key(&p.nickname))
+                            .or_default();
+                        let rev = account.revision;
+                        let acquired = self.loot.collect(&self.world, p.pos, account);
+                        changed |= rev != account.revision;
+                        if rev != account.revision {
+                            host.reliable.send(
+                                &host.socket,
+                                *peer,
+                                ReliableMsg::LootCollected(acquired),
+                            );
+                        }
+                    }
                 }
-            }}
-            if changed {self.sync_guest_mana();}
+            }
+            if changed {
+                self.sync_guest_mana();
+            }
         }
-        self.loot.update(dt,matches!(self.net,NetRole::Host(_)));
+        self.loot.update(dt, matches!(self.net, NetRole::Host(_)));
         self.spell_fx.update(dt);
-        for (cell,cue) in self.machine_feedback.update(&self.world.automation,dt,self.camera.eye_position()) {
-            self.audio.play_machine(crate::automation::center(cell),cue);
+        for (cell, cue) in
+            self.machine_feedback
+                .update(&self.world.automation, dt, self.camera.eye_position())
+        {
+            self.audio
+                .play_machine(crate::automation::center(cell), cue);
         }
 
         match &self.net {
-            NetRole::Host(_) => self.audio.update_creature_flight(&self.creatures.snapshot()),
+            NetRole::Host(_) => self
+                .audio
+                .update_creature_flight(&self.creatures.snapshot()),
             NetRole::Joined(client) => self.audio.update_creature_flight(&client.creature_snapshot),
         }
         let mut visible_creatures = match &self.net {
@@ -2304,34 +2972,80 @@ impl App {
                 && self.chunk_meshes.contains_key(&cell)
         });
         self.wet_actors.begin();
-        let creature_wet=self.wet_actors.creatures(&visible_creatures,&self.world,self.weather.current,dt);
-        let mut mesh = crate::creature::mesh_for_snapshot_wet(&visible_creatures, &self.models,&creature_wet);
+        let creature_wet =
+            self.wet_actors
+                .creatures(&visible_creatures, &self.world, self.weather.current, dt);
+        let mut mesh =
+            crate::creature::mesh_for_snapshot_wet(&visible_creatures, &self.models, &creature_wet);
         self.prop_cache.retain(&self.world.automation);
         for d in self.world.automation.devices.values() {
-            let cell=chunk_of(crate::automation::center(d.cell));
-            if crate::visibility::within_terrain_range(cell,center,RENDER_RADIUS) && self.chunk_meshes.contains_key(&cell) {
-                let mut prop=self.prop_cache.mesh(d,self.water_time,&self.world.automation);
-                self.machine_feedback.decorate(d.cell,&mut prop);
+            let cell = chunk_of(crate::automation::center(d.cell));
+            if crate::visibility::within_terrain_range(cell, center, RENDER_RADIUS)
+                && self.chunk_meshes.contains_key(&cell)
+            {
+                let mut prop = self
+                    .prop_cache
+                    .mesh(d, self.water_time, &self.world.automation);
+                self.machine_feedback.decorate(d.cell, &mut prop);
                 mesh.extend(prop);
             }
         }
         mesh.extend(self.machine_feedback.particles());
-        if let Some((kind,rotation,packed))=self.ui.automation.build {
-            if let Some(hit)=raycast(&self.world,self.camera.eye_position(),self.camera.forward(),REACH) {
-                let mut preview=packed.and_then(|i|self.player.crafting.packed_devices.get(i)).cloned()
-                    .unwrap_or_else(||crate::automation::Device::new(kind,hit.place,rotation));
-                preview.cell=hit.place;preview.rotation=rotation;
-                let mut state=self.world.automation.clone();let mut account=self.player.crafting.clone();
-                let positions=self.all_player_positions();
-                let valid=crate::automation::apply(&self.world,&mut state,&mut account,self.player.position,&positions,
-                    &crate::automation::Action::Place{kind,cell:hit.place,rotation,packed},crate::automation::balance(),&self.crafting_registry).is_ok();
-                mesh.extend(crate::automation_mesh::device(&preview,self.water_time,Some(valid),&self.world.automation));
+        if let Some((kind, rotation, packed)) = self.ui.automation.build {
+            if let Some(hit) = raycast(
+                &self.world,
+                self.camera.eye_position(),
+                self.camera.forward(),
+                REACH,
+            ) {
+                let mut preview = packed
+                    .and_then(|i| self.player.crafting.packed_devices.get(i))
+                    .cloned()
+                    .unwrap_or_else(|| crate::automation::Device::new(kind, hit.place, rotation));
+                preview.cell = hit.place;
+                preview.rotation = rotation;
+                let mut state = self.world.automation.clone();
+                let mut account = self.player.crafting.clone();
+                let positions = self.all_player_positions();
+                let valid = crate::automation::apply(
+                    &self.world,
+                    &mut state,
+                    &mut account,
+                    self.player.position,
+                    &positions,
+                    &crate::automation::Action::Place {
+                        kind,
+                        cell: hit.place,
+                        rotation,
+                        packed,
+                    },
+                    crate::automation::balance(),
+                    &self.crafting_registry,
+                )
+                .is_ok();
+                mesh.extend(crate::automation_mesh::device(
+                    &preview,
+                    self.water_time,
+                    Some(valid),
+                    &self.world.automation,
+                ));
             }
         }
-        mesh.extend(self.loot.mesh(|pos|{let cell=chunk_of(pos);crate::visibility::within_terrain_range(cell,center,RENDER_RADIUS)&&self.chunk_meshes.contains_key(&cell)}));
-        mesh.extend(self.spell_fx.mesh(|pos|{let cell=chunk_of(pos);crate::visibility::within_terrain_range(cell,center,RENDER_RADIUS)&&self.chunk_meshes.contains_key(&cell)}));
-        let books=crate::lore_books::nearby(&self.world,self.player.position).into_iter().filter(|b|self.chunk_meshes.contains_key(&chunk_of(b.pos))).collect::<Vec<_>>();
-        mesh.extend(crate::lore_books::mesh(&books,self.water_time));
+        mesh.extend(self.loot.mesh(|pos| {
+            let cell = chunk_of(pos);
+            crate::visibility::within_terrain_range(cell, center, RENDER_RADIUS)
+                && self.chunk_meshes.contains_key(&cell)
+        }));
+        mesh.extend(self.spell_fx.mesh(|pos| {
+            let cell = chunk_of(pos);
+            crate::visibility::within_terrain_range(cell, center, RENDER_RADIUS)
+                && self.chunk_meshes.contains_key(&cell)
+        }));
+        let books = crate::lore_books::nearby(&self.world, self.player.position)
+            .into_iter()
+            .filter(|b| self.chunk_meshes.contains_key(&chunk_of(b.pos)))
+            .collect::<Vec<_>>();
+        mesh.extend(crate::lore_books::mesh(&books, self.water_time));
         let remote_players = match &self.net {
             NetRole::Host(host) => &host.remote_players,
             NetRole::Joined(client) => &client.remote_players,
@@ -2340,57 +3054,120 @@ impl App {
             remote_players,
             self.local_player_id,
             &self.models,
-            |id,pos|self.wet_actors.sample(crate::wetness::Key::Player(id),&self.world,pos+Vec3::Y*1.7,self.weather.current,dt),
+            |id, pos| {
+                self.wet_actors.sample(
+                    crate::wetness::Key::Player(id),
+                    &self.world,
+                    pos + Vec3::Y * 1.7,
+                    self.weather.current,
+                    dt,
+                )
+            },
         ));
         #[cfg(feature = "dev-playtest")]
-        if let Some(session) = &self.playtest { mesh.extend(remote_player::build_mesh(&session.visual,self.local_player_id,&self.models)); }
-        for (camp,position) in self.nearby_guides() {
-            let first=mesh.vertices.len();
-            let facing=self.camera.eye_position()-position;
-            let delta=facing.z.atan2(facing.x);
-            self.models.push_player_animated(&mut mesh.vertices,&mut mesh.indices,
-                crate::remote_player::Appearance{model:1,hat:Some(2)},position,delta,
-                crate::player_animation::Clip::Idle,self.water_time,None);
-            let _=camp;
-            let key=crate::wetness::Key::Guide((position.x.floor() as i32,position.y.floor() as i32,position.z.floor() as i32));
-            let wet=self.wet_actors.sample(key,&self.world,position+Vec3::Y*1.7,self.weather.current,dt);
-            crate::wetness::apply(&mut mesh.vertices[first..],wet);
+        if let Some(session) = &self.playtest {
+            mesh.extend(remote_player::build_mesh(
+                &session.visual,
+                self.local_player_id,
+                &self.models,
+            ));
+        }
+        for (camp, position) in self.nearby_guides() {
+            let first = mesh.vertices.len();
+            let facing = self.camera.eye_position() - position;
+            let delta = facing.z.atan2(facing.x);
+            self.models.push_player_animated(
+                &mut mesh.vertices,
+                &mut mesh.indices,
+                crate::remote_player::Appearance {
+                    model: 1,
+                    hat: Some(2),
+                },
+                position,
+                delta,
+                crate::player_animation::Clip::Idle,
+                self.water_time,
+                None,
+            );
+            let _ = camp;
+            let key = crate::wetness::Key::Guide((
+                position.x.floor() as i32,
+                position.y.floor() as i32,
+                position.z.floor() as i32,
+            ));
+            let wet = self.wet_actors.sample(
+                key,
+                &self.world,
+                position + Vec3::Y * 1.7,
+                self.weather.current,
+                dt,
+            );
+            crate::wetness::apply(&mut mesh.vertices[first..], wet);
         }
         for npc in &self.npcs {
-            if Vec3::from_array(npc.position).distance_squared(self.player.position)<80.*80. {
-                let first=mesh.vertices.len();self.models.push_npc(&mut mesh.vertices,&mut mesh.indices,npc);
-                let wet=self.wet_actors.sample(crate::wetness::Key::Npc(npc.home),&self.world,Vec3::from_array(npc.position)+Vec3::Y*1.7,self.weather.current,dt);
-                crate::wetness::apply(&mut mesh.vertices[first..],wet);
+            if Vec3::from_array(npc.position).distance_squared(self.player.position) < 80. * 80. {
+                let first = mesh.vertices.len();
+                self.models
+                    .push_npc(&mut mesh.vertices, &mut mesh.indices, npc);
+                let wet = self.wet_actors.sample(
+                    crate::wetness::Key::Npc(npc.home),
+                    &self.world,
+                    Vec3::from_array(npc.position) + Vec3::Y * 1.7,
+                    self.weather.current,
+                    dt,
+                );
+                crate::wetness::apply(&mut mesh.vertices[first..], wet);
             }
         }
-        crate::shelter::Roofs::default().shade(&self.world,&mut mesh);
+        crate::shelter::Roofs::default().shade(&self.world, &mut mesh);
         self.entity_mesh.update(&self.device, &self.queue, &mesh);
-        let entry=self.player.crafting.hotbar.entry().filter(|e|!self.ui.automation.tools_suspended() && e.count(&self.player.crafting)>0);
-        let forward=self.camera.forward();let right=self.camera.right();let up=right.cross(forward);
-        let swing=(self.use_animation/0.28*std::f32::consts::PI).sin();
-        let camera_basis=glam::Mat3::from_cols(right,up,-forward);
+        let entry = self.player.crafting.hotbar.entry().filter(|e| {
+            !self.ui.automation.tools_suspended() && e.count(&self.player.crafting) > 0
+        });
+        let forward = self.camera.forward();
+        let right = self.camera.right();
+        let up = right.cross(forward);
+        let swing = (self.use_animation / 0.28 * std::f32::consts::PI).sin();
+        let camera_basis = glam::Mat3::from_cols(right, up, -forward);
         // Turn the original held pose AND its use motion around the vertical
         // axis at the grip: +Y rotation is counterclockwise viewed from above.
-        let turn=if entry.is_some() {glam::Mat3::from_rotation_y(std::f32::consts::FRAC_PI_2)}else{glam::Mat3::IDENTITY};
-        let basis=camera_basis*turn*glam::Mat3::from_rotation_z(-0.30-swing*0.6);
-        let motion=Vec3::new(-swing*0.12,0.0,-swing*0.08);
-        let origin=self.camera.eye_position()+camera_basis*(Vec3::new(0.32,-0.42,-0.65)+turn*motion);
-        let mut held=crate::held_item::mesh(entry,origin,basis,0.45);
-        if crate::torch::equipped(&self.player.crafting) && self.player.health>0. {
-            held.extend(crate::torch::mesh(self.camera.eye_position()+camera_basis*Vec3::new(-0.38,-0.45,-0.65),camera_basis,0.75,self.water_time));
+        let turn = if entry.is_some() {
+            glam::Mat3::from_rotation_y(std::f32::consts::FRAC_PI_2)
+        } else {
+            glam::Mat3::IDENTITY
+        };
+        let basis = camera_basis * turn * glam::Mat3::from_rotation_z(-0.30 - swing * 0.6);
+        let motion = Vec3::new(-swing * 0.12, 0.0, -swing * 0.08);
+        let origin = self.camera.eye_position()
+            + camera_basis * (Vec3::new(0.32, -0.42, -0.65) + turn * motion);
+        let mut held = crate::held_item::mesh(entry, origin, basis, 0.45);
+        if crate::torch::equipped(&self.player.crafting) && self.player.health > 0. {
+            held.extend(crate::torch::mesh(
+                self.camera.eye_position() + camera_basis * Vec3::new(-0.38, -0.45, -0.65),
+                camera_basis,
+                0.75,
+                self.water_time,
+            ));
         }
-        crate::shelter::Roofs::default().shade(&self.world,&mut held);
-        let wet=self.wet_actors.sample(crate::wetness::Key::Player(self.local_player_id),&self.world,self.camera.eye_position(),self.weather.current,dt);
-        crate::wetness::apply(&mut held.vertices,wet);
-        self.held_mesh.update(&self.device,&self.queue,&held);
-
+        crate::shelter::Roofs::default().shade(&self.world, &mut held);
+        let wet = self.wet_actors.sample(
+            crate::wetness::Key::Player(self.local_player_id),
+            &self.world,
+            self.camera.eye_position(),
+            self.weather.current,
+            dt,
+        );
+        crate::wetness::apply(&mut held.vertices, wet);
+        self.held_mesh.update(&self.device, &self.queue, &held);
 
         self.toasts.retain(|t| !t.is_expired());
         let is_host = matches!(self.net, NetRole::Host(_));
         let can_prompt = self.can_prompt();
         let generation_status: Option<String> = match &self.generation {
             GenerationState::Waiting {
-                kind, is_retry: true, ..
+                kind,
+                is_retry: true,
+                ..
             } => Some(format!(
                 "Retrying the {} with error feedback...",
                 generation_noun(*kind)
@@ -2399,25 +3176,38 @@ impl App {
                 kind,
                 is_retry: false,
                 ..
-            } => Some(format!("Interpreting, generating and checking a {}...", generation_noun(*kind))),
-            GenerationState::Idle => self.proposal_waiting.map(|sent| if sent.elapsed() > Duration::from_secs(30) {
-                "Host response is delayed; you can keep playing while waiting.".into()
-            } else { "Waiting for host validation...".into() }),
+            } => Some(format!(
+                "Interpreting, generating and checking a {}...",
+                generation_noun(*kind)
+            )),
+            GenerationState::Idle => self.proposal_waiting.map(|sent| {
+                if sent.elapsed() > Duration::from_secs(30) {
+                    "Host response is delayed; you can keep playing while waiting.".into()
+                } else {
+                    "Waiting for host validation...".into()
+                }
+            }),
         };
-        let mut crafting_players: Vec<_> = self.host_player_positions().iter().map(|p| p.pos).collect();
+        let mut crafting_players: Vec<_> =
+            self.host_player_positions().iter().map(|p| p.pos).collect();
         if let NetRole::Joined(client) = &self.net {
             crafting_players.push(self.player.position);
             crafting_players.extend(client.remote_players.values().map(|p| p.pos));
-            crafting_players.extend(client.creature_snapshot.iter().map(|c| Vec3::from_array(c.0)));
+            crafting_players.extend(
+                client
+                    .creature_snapshot
+                    .iter()
+                    .map(|c| Vec3::from_array(c.0)),
+            );
         }
         let lobby_code = match &self.net {
             NetRole::Host(host) => host.socket.lobby_code(),
             NetRole::Joined(client) => client.socket.lobby_code(),
         };
         let settings_was_open = self.ui.settings.open;
-        let spellbook_was_open=self.ui.spellbook.open;
-        let map_was_open=self.ui.map.open;
-        let automation_was_open=self.ui.automation.open;
+        let spellbook_was_open = self.ui.spellbook.open;
+        let map_was_open = self.ui.map.open;
+        let automation_was_open = self.ui.automation.open;
         self.update_enchantment_view();
         self.update_spell_hud();
         let (full_output, requests) = self.ui.draw(
@@ -2444,45 +3234,104 @@ impl App {
             lobby_code.as_deref(),
         );
         self.pending_egui_output = Some(full_output);
-        if spellbook_was_open!=self.ui.spellbook.open {self.sync_settings_input();}
-        if requests.open_spellbook {
-            self.console_open=false;self.chat_open=false;self.crafting_ui.open=false;
-            self.ui.inventory_open=false;self.ui.spellbook.open=true;self.sync_settings_input();
+        if spellbook_was_open != self.ui.spellbook.open {
+            self.sync_settings_input();
         }
-        if let Some(index)=requests.remember_index {
-            if matches!(self.net,NetRole::Host(_)) {
-                let result=self.scripting.modules.get(index).ok_or_else(||"Spell no longer exists".to_string())
-                    .and_then(|module|self.scripting.spellbook.remember(module,&self.local_nickname));
+        if requests.open_spellbook {
+            self.console_open = false;
+            self.chat_open = false;
+            self.crafting_ui.open = false;
+            self.ui.inventory_open = false;
+            self.ui.spellbook.open = true;
+            self.sync_settings_input();
+        }
+        if let Some(index) = requests.remember_index {
+            if matches!(self.net, NetRole::Host(_)) {
+                let result = self
+                    .scripting
+                    .modules
+                    .get(index)
+                    .ok_or_else(|| "Spell no longer exists".to_string())
+                    .and_then(|module| {
+                        self.scripting
+                            .spellbook
+                            .remember(module, &self.local_nickname)
+                    });
                 match result {
-                    Ok(id)=>{self.publish_spell_catalog();self.ui.spellbook.selected=Some(id);self.ui.spellbook.open=true;
-                        self.console_open=false;self.ui.spellbook.feedback="Remembered. Save the world with F5 to keep this spell.".into();self.sync_settings_input();}
-                    Err(error)=>self.notify_important(error),
+                    Ok(id) => {
+                        self.publish_spell_catalog();
+                        self.ui.spellbook.selected = Some(id);
+                        self.ui.spellbook.open = true;
+                        self.console_open = false;
+                        self.ui.spellbook.feedback =
+                            "Remembered. Save the world with F5 to keep this spell.".into();
+                        self.sync_settings_input();
+                    }
+                    Err(error) => self.notify_important(error),
                 }
             }
         }
-        if let Some(action)=requests.spellbook_action {self.spellbook_action(action);}
-        if let Some(index)=requests.attach_rule {self.attach_rule(index);}
-        if let Some(index)=requests.detach_rule {self.detach_rule(index);}
-        if map_was_open!=self.ui.map.open {self.sync_settings_input();}
-        if automation_was_open!=self.ui.automation.open {self.sync_settings_input();}
-        if let Some(action)=requests.automation {self.submit_automation(action);}
-        if let Some(action)=requests.camp_action {self.submit_camp_action(action);}
-        if let Some(block)=requests.eat_food {self.submit_eat(block);}
-        if requests.close_journal {self.sync_settings_input();}
-        if let Some(action)=requests.quest_action {self.submit_quest_action(action);}
-        if settings_was_open != self.ui.settings.open { self.sync_settings_input(); }
-        if requests.close_inventory {self.ui.inventory_open=false;self.sync_settings_input();}
+        if let Some(action) = requests.spellbook_action {
+            self.spellbook_action(action);
+        }
+        if let Some(index) = requests.attach_rule {
+            self.attach_rule(index);
+        }
+        if let Some(index) = requests.detach_rule {
+            self.detach_rule(index);
+        }
+        if map_was_open != self.ui.map.open {
+            self.sync_settings_input();
+        }
+        if automation_was_open != self.ui.automation.open {
+            self.sync_settings_input();
+        }
+        if let Some(action) = requests.automation {
+            self.submit_automation(action);
+        }
+        if let Some(action) = requests.camp_action {
+            self.submit_camp_action(action);
+        }
+        if let Some(block) = requests.eat_food {
+            self.submit_eat(block);
+        }
+        if requests.close_journal {
+            self.sync_settings_input();
+        }
+        if let Some(action) = requests.quest_action {
+            self.submit_quest_action(action);
+        }
+        if settings_was_open != self.ui.settings.open {
+            self.sync_settings_input();
+        }
+        if requests.close_inventory {
+            self.ui.inventory_open = false;
+            self.sync_settings_input();
+        }
         if let Some(action) = requests.crafting {
             self.submit_crafting(action);
         }
 
         if requests.invite_friends {
-            match &self.net { NetRole::Host(host) => host.socket.invite_friends(), NetRole::Joined(client) => client.socket.invite_friends() }
+            match &self.net {
+                NetRole::Host(host) => host.socket.invite_friends(),
+                NetRole::Joined(client) => client.socket.invite_friends(),
+            }
         }
-        if let Some(slot)=requests.select_slot.filter(|_|!self.ui.automation.tools_suspended() && (matches!(self.net,NetRole::Host(_)) || self.inventory_ready)) {self.player.crafting.hotbar.select(slot);self.publish_hotbar();}
-        if let Some(entry)=requests.assign_entry.filter(|_|!self.ui.automation.tools_suspended() && (matches!(self.net,NetRole::Host(_)) || self.inventory_ready)) {
-            if entry.is_none() || entry.is_some_and(|e|e.count(&self.player.crafting)>0) {
-                self.player.crafting.hotbar.assign(entry);self.publish_hotbar();
+        if let Some(slot) = requests.select_slot.filter(|_| {
+            !self.ui.automation.tools_suspended()
+                && (matches!(self.net, NetRole::Host(_)) || self.inventory_ready)
+        }) {
+            self.player.crafting.hotbar.select(slot);
+            self.publish_hotbar();
+        }
+        if let Some(entry) = requests.assign_entry.filter(|_| {
+            !self.ui.automation.tools_suspended()
+                && (matches!(self.net, NetRole::Host(_)) || self.inventory_ready)
+        }) {
+            if entry.is_none() || entry.is_some_and(|e| e.count(&self.player.crafting) > 0) {
+                self.player.crafting.hotbar.assign(entry);
+                self.publish_hotbar();
             }
         }
 
@@ -2509,21 +3358,42 @@ impl App {
         if let Some(idx) = requests.run_index {
             self.run_instant(idx);
         }
-        if let Some(idx) = requests.delete_index {
-            if let Some(name) = self.scripting.remove(idx) {
-                if self.last_generated_index == Some(idx) {
-                    self.last_generated_index = None;
+        if let Some(idx) = requests
+            .delete_index
+            .filter(|_| matches!(self.net, NetRole::Host(_)))
+        {
+            if let Some(name) = self.scripting.delete_rule(idx) {
+                self.last_generated_index = self.last_generated_index.and_then(|last| {
+                    if last == idx {
+                        None
+                    } else {
+                        Some(if last > idx { last - 1 } else { last })
+                    }
+                });
+                if self
+                    .ui
+                    .spellbook
+                    .selected
+                    .is_some_and(|id| self.scripting.spellbook.get(id).is_none())
+                {
+                    self.ui.spellbook.selected = None;
                 }
+                self.publish_spell_catalog();
+                self.send_enchantment_summaries(None);
                 self.notify_all(format!("Rule '{name}' deleted"));
             }
         }
         if let Some(prompt) = requests.submit_prompt {
-            if self.can_prompt() && self.proposal_waiting.is_none() && matches!(self.generation, GenerationState::Idle) {
+            if self.can_prompt()
+                && self.proposal_waiting.is_none()
+                && matches!(self.generation, GenerationState::Idle)
+            {
                 self.prompt_input.clear();
                 self.start_generation(prompt);
             }
         }
 
+        self.maintain_hotbars();
         self.title_timer += dt;
         self.frame_count += 1;
         if self.title_timer >= 0.5 {
@@ -2533,18 +3403,34 @@ impl App {
             let minute = ((self.time_of_day * 24.0 - hour as f32) * 60.0) as u32;
             let role_info = match &self.net {
                 NetRole::Host(host) => {
-                    format!("Hosting {} ({}/4 players)", host.socket.lobby_code().unwrap_or_else(||format!(":{}",host.port)), host.clients.len()+1)
+                    format!(
+                        "Hosting {} ({}/4 players)",
+                        host.socket
+                            .lobby_code()
+                            .unwrap_or_else(|| format!(":{}", host.port)),
+                        host.clients.len() + 1
+                    )
                 }
                 NetRole::Joined(client) => format!(
                     "Connected to {} as P{}",
                     client.server_addr, client.player_id
                 ),
             };
-            let block_info = self.player.crafting.hotbar.entry().map_or("Empty hand",|e|e.name());
+            let block_info = self
+                .player
+                .crafting
+                .hotbar
+                .entry()
+                .map_or("Empty hand", |e| e.name());
             let mining_info = match self.mining_target {
                 Some(pos) => {
                     let target = self.world.get_block(pos.0, pos.1, pos.2);
-                    format!(" | Mining {}: {}/{}", target.name(), self.mining_hits, target.hardness())
+                    format!(
+                        " | Mining {}: {}/{}",
+                        target.name(),
+                        self.mining_hits,
+                        target.hardness()
+                    )
                 }
                 None => String::new(),
             };
@@ -2608,7 +3494,13 @@ impl App {
         let formatted = format!("{name}: {text}");
         self.toasts.push(Toast::new(formatted.clone()));
         self.log_message(formatted, CHAT_MESSAGE_COLOR);
-        self.chat_bubbles.insert(player_id, remote_player::ChatBubble { text, started: Instant::now() });
+        self.chat_bubbles.insert(
+            player_id,
+            remote_player::ChatBubble {
+                text,
+                started: Instant::now(),
+            },
+        );
     }
 
     /// The host attributes chat by connection, never by parsing display names.
@@ -2616,7 +3508,15 @@ impl App {
         self.show_player_chat(player_id, &name, text.clone());
         if let NetRole::Host(host) = &mut self.net {
             for &peer in host.clients.keys() {
-                host.reliable.send(&host.socket,peer,ReliableMsg::PlayerChat { player_id, name:name.clone(), text:text.clone() });
+                host.reliable.send(
+                    &host.socket,
+                    peer,
+                    ReliableMsg::PlayerChat {
+                        player_id,
+                        name: name.clone(),
+                        text: text.clone(),
+                    },
+                );
             }
         }
     }
@@ -2630,8 +3530,8 @@ impl App {
             return Vec::new();
         };
         let mut players = vec![PlayerSnapshot {
-                finances: crate::scripting::InventoryBalances::from_account(&self.player.crafting),
-                resources: self.player.resources_snapshot(),
+            finances: crate::scripting::InventoryBalances::from_account(&self.player.crafting),
+            resources: self.player.resources_snapshot(),
             id: HOST_PLAYER_ID,
             pos: self.player.position,
             carrying_crystal: self.player.carrying_crystal,
@@ -2647,10 +3547,20 @@ impl App {
         }];
         for (&id, rp) in host.remote_players.iter() {
             players.push(PlayerSnapshot {
-                finances: host.clients.iter().find(|(_,pid)|**pid==id).and_then(|(peer,_)|self.guest_accounts.get(&peer.account_key(&rp.nickname))).map(crate::scripting::InventoryBalances::from_account).unwrap_or_default(),
-                resources: host.clients.iter().find(|(_, pid)| **pid == id)
+                finances: host
+                    .clients
+                    .iter()
+                    .find(|(_, pid)| **pid == id)
                     .and_then(|(peer, _)| self.guest_accounts.get(&peer.account_key(&rp.nickname)))
-                    .map(|a| a.resources).unwrap_or([0; crate::voxel::COLLECTIBLE_BLOCKS.len()]),
+                    .map(crate::scripting::InventoryBalances::from_account)
+                    .unwrap_or_default(),
+                resources: host
+                    .clients
+                    .iter()
+                    .find(|(_, pid)| **pid == id)
+                    .and_then(|(peer, _)| self.guest_accounts.get(&peer.account_key(&rp.nickname)))
+                    .map(|a| a.resources)
+                    .unwrap_or([0; crate::voxel::COLLECTIBLE_BLOCKS.len()]),
                 id,
                 pos: rp.pos,
                 carrying_crystal: rp.carrying_crystal,
@@ -2666,7 +3576,9 @@ impl App {
             });
         }
         #[cfg(feature = "dev-playtest")]
-        if let Some(agent)=self.playtest_player_snapshot() { players.push(agent); }
+        if let Some(agent) = self.playtest_player_snapshot() {
+            players.push(agent);
+        }
         players
     }
 
@@ -2674,8 +3586,12 @@ impl App {
     /// the in-game console), and it goes to the LLM along with the World
     /// API doc and an example module.
     fn start_generation(&mut self, user_request: String) {
-        if !self.can_prompt() { return; }
-        if user_request.trim().is_empty() || user_request.len() > crate::rule_sharing::MAX_PROMPT_BYTES {
+        if !self.can_prompt() {
+            return;
+        }
+        if user_request.trim().is_empty()
+            || user_request.len() > crate::rule_sharing::MAX_PROMPT_BYTES
+        {
             self.notify_important("Use a nonempty prompt of at most 2048 bytes.".into());
             return;
         }
@@ -2683,31 +3599,60 @@ impl App {
         // hard requirement -- it just tells the model which contract to
         // write; `poll_generation` validates the generated contract
         // after at most one corrective retry.
-        self.generation_attachment=None;
-        self.generation_original_prompt=None;
-        if self.ui.attach_generation && matches!(self.net,NetRole::Host(_)) {
+        self.generation_attachment = None;
+        self.generation_original_prompt = None;
+        if self.ui.attach_generation && matches!(self.net, NetRole::Host(_)) {
             match self.selected_enchantment_target() {
-                Ok(target)=>{self.generation_attachment=Some(target);self.generation_original_prompt=Some(user_request.clone());},
-                Err(error)=>{self.notify_important(error);return;}
+                Ok(target) => {
+                    self.generation_attachment = Some(target);
+                    self.generation_original_prompt = Some(user_request.clone());
+                }
+                Err(error) => {
+                    self.notify_important(error);
+                    return;
+                }
             }
         }
-        let kind = if self.generation_attachment.is_some() {PromptKind::Rule}else{classify_prompt(&user_request)};
-        let user_request=if let Some(target)=&self.generation_attachment {
-            let kind=match target.object {crate::enchantment::Object::Creature{..}=>"creature",crate::enchantment::Object::Block{..}=>"block",crate::enchantment::Object::Device{..}=>"device"};
+        let kind = if self.generation_attachment.is_some() {
+            PromptKind::Rule
+        } else {
+            classify_prompt(&user_request)
+        };
+        let user_request = if let Some(target) = &self.generation_attachment {
+            let kind = match target.object {
+                crate::enchantment::Object::Creature { .. } => "creature",
+                crate::enchantment::Object::Block { .. } => "block",
+                crate::enchantment::Object::Device { .. } => "device",
+            };
             format!("{user_request}\n[BOUND_OBJECT_RULE] [BOUND_TARGET:{kind}] Persistent single-object rule for {}. Use api.get_rule_target() in on_tick to read the bound target and creator_id; do not hard-code IDs or coordinates. Creature ID is target.id, not target.creature_id or target.entity_id. Use api.chase(target.id, player.x, player.y, player.z) only for kind='creature'. If there is no bound target, return. The engine stops the rule when this object disappears or is replaced.",target.label())
-        }else{user_request};
-        if user_request.len()>crate::rule_sharing::MAX_PROMPT_BYTES {
-            self.notify_important("Shorten this prompt slightly to leave room for the attachment context.".into());return;
+        } else {
+            user_request
+        };
+        if user_request.len() > crate::rule_sharing::MAX_PROMPT_BYTES {
+            self.notify_important(
+                "Shorten this prompt slightly to leave room for the attachment context.".into(),
+            );
+            return;
         }
-        if kind == PromptKind::Rule && self.player.crafting.mana < self.crafting_registry.mana_charge(crate::crafting::RULE_MANA) {
+        if kind == PromptKind::Rule
+            && self.player.crafting.mana
+                < self
+                    .crafting_registry
+                    .mana_charge(crate::crafting::RULE_MANA)
+        {
             self.notify_important(format!("Creating a rule requires {} mana. Mana recovers over time; convert elements in Crafting [C] to refill faster.",self.crafting_registry.mana_charge(crate::crafting::RULE_MANA)));
             return;
         }
         let noun = generation_noun(kind);
-        let displayed_request=self.generation_original_prompt.as_deref().unwrap_or(&user_request);
+        let displayed_request = self
+            .generation_original_prompt
+            .as_deref()
+            .unwrap_or(&user_request);
         log::info!("Generating a {noun} from: {displayed_request}");
         if matches!(self.net, NetRole::Host(_)) {
-            self.notify_all(format!("Host is generating a {noun}: \"{displayed_request}\""));
+            self.notify_all(format!(
+                "Host is generating a {noun}: \"{displayed_request}\""
+            ));
         } else {
             self.notify_important(format!("Generating a {noun} locally for host review..."));
         }
@@ -2723,45 +3668,94 @@ impl App {
     fn can_prompt(&self) -> bool {
         match &self.net {
             NetRole::Host(_) => true,
-            NetRole::Joined(client) => client.allow_guest_prompting && !client.lost_connection_logged,
+            NetRole::Joined(client) => {
+                client.allow_guest_prompting && !client.lost_connection_logged
+            }
         }
     }
 
     fn poll_proposals(&mut self) {
-        let NetRole::Host(host) = &self.net else { return; };
-        self.proposal_inbox.retain_peers(|peer| host.clients.contains_key(peer));
-        let Some((peer, result)) = self.proposal_inbox.poll() else { return; };
-        if !host.clients.contains_key(&peer) { return; }
+        let NetRole::Host(host) = &self.net else {
+            return;
+        };
+        self.proposal_inbox
+            .retain_peers(|peer| host.clients.contains_key(peer));
+        let Some((peer, result)) = self.proposal_inbox.poll() else {
+            return;
+        };
+        if !host.clients.contains_key(&peer) {
+            return;
+        }
         let result = if self.ui.settings.values.multiplayer.allow_guest_prompting {
             result
-        } else { Err("Guest prompting was disabled before validation finished.".into()) };
+        } else {
+            Err("Guest prompting was disabled before validation finished.".into())
+        };
         let result = result.and_then(|proposal| {
-            let NetRole::Host(host) = &self.net else { return Err("Session ended.".into()); };
-            let connected_account = host.clients.get(&peer).and_then(|id| host.remote_players.get(id))
+            let NetRole::Host(host) = &self.net else {
+                return Err("Session ended.".into());
+            };
+            let connected_account = host
+                .clients
+                .get(&peer)
+                .and_then(|id| host.remote_players.get(id))
                 .map(|player| peer.account_key(&player.nickname));
             if connected_account != crate::rule_sharing::caster_account(&proposal.source) {
                 return Err("The submitting player disconnected.".into());
             }
             let name = self.make_rule_name(&proposal.prompt);
-            let module = Module::load(name.clone(), proposal.prompt,
-                world_api_validate::tag_with_api_version(&proposal.source))?;
+            let module = Module::load(
+                name.clone(),
+                proposal.prompt,
+                world_api_validate::tag_with_api_version(&proposal.source),
+            )?;
             let charge = !module.is_instant;
             let key = connected_account.ok_or("Submitting account unavailable")?;
-            let mut charged = self.guest_accounts.get(&key).cloned().ok_or("Submitting account unavailable")?;
-            if charge {charged.spend_mana(self.crafting_registry.mana_charge(crate::crafting::RULE_MANA))?;}
+            let mut charged = self
+                .guest_accounts
+                .get(&key)
+                .cloned()
+                .ok_or("Submitting account unavailable")?;
+            if charge {
+                charged.spend_mana(
+                    self.crafting_registry
+                        .mana_charge(crate::crafting::RULE_MANA),
+                )?;
+            }
             let index = self.scripting.add_generated(module)?;
-            if charge {self.guest_accounts.insert(key,charged);self.sync_guest_mana();}
+            if charge {
+                self.guest_accounts.insert(key, charged);
+                self.sync_guest_mana();
+            }
             self.next_rule_id += 1;
             self.last_generated_index = Some(index);
-            Ok(format!("'{}' from {} is ready for host review. Nothing has been activated.", name, proposal.nickname))
+            Ok(format!(
+                "'{}' from {} is ready for host review. Nothing has been activated.",
+                name, proposal.nickname
+            ))
         });
         let accepted = result.is_ok();
         // Lua error strings are untrusted too; keep feedback within a network packet/UI row.
-        let message: String = result.unwrap_or_else(|error| error).chars().take(1024).collect();
+        let message: String = result
+            .unwrap_or_else(|error| error)
+            .chars()
+            .take(1024)
+            .collect();
         if let NetRole::Host(host) = &mut self.net {
-            host.reliable.send(&host.socket, peer, ReliableMsg::RuleProposalResult { accepted, message: message.clone() });
+            host.reliable.send(
+                &host.socket,
+                peer,
+                ReliableMsg::RuleProposalResult {
+                    accepted,
+                    message: message.clone(),
+                },
+            );
         }
-        if accepted { self.notify_all_important(message); } else { self.notify_important(format!("Guest proposal rejected: {message}")); }
+        if accepted {
+            self.notify_all_important(message);
+        } else {
+            self.notify_important(format!("Guest proposal rejected: {message}"));
+        }
     }
 
     /// Picks a short, meaningful name for a newly generated rule (e.g.
@@ -2826,7 +3820,13 @@ impl App {
         let validation_issues = world_api_validate::validate_source(&code);
         let load_result = if validation_issues.is_empty() {
             let tagged_code = world_api_validate::tag_with_api_version(&code);
-            Module::load(name.clone(), self.generation_original_prompt.clone().unwrap_or_else(||user_request.clone()), tagged_code)
+            Module::load(
+                name.clone(),
+                self.generation_original_prompt
+                    .clone()
+                    .unwrap_or_else(|| user_request.clone()),
+                tagged_code,
+            )
         } else {
             let joined = validation_issues
                 .iter()
@@ -2874,27 +3874,42 @@ impl App {
 
                 if let NetRole::Joined(client) = &mut self.net {
                     if !client.allow_guest_prompting {
-                        self.notify_important("The host disabled guest prompting. Nothing was submitted.".into());
+                        self.notify_important(
+                            "The host disabled guest prompting. Nothing was submitted.".into(),
+                        );
                         return;
                     }
                     if let Err(error) = crate::rule_sharing::validate_sizes(&user_request, &code) {
                         self.notify_important(error);
                         return;
                     }
-                    client.reliable.send(&client.socket, client.server_addr, ReliableMsg::RuleProposal {
-                        prompt: user_request, source: code,
-                    });
+                    client.reliable.send(
+                        &client.socket,
+                        client.server_addr,
+                        ReliableMsg::RuleProposal {
+                            prompt: user_request,
+                            source: code,
+                        },
+                    );
                     self.proposal_waiting = Some(Instant::now());
                     // Keep a local read-only copy so the author can inspect what was submitted.
-                    if let Ok(index) = self.scripting.add_generated(module) { self.last_generated_index = Some(index); }
-                    self.notify_important("Proposal sent. The host must review and activate it.".into());
+                    if let Ok(index) = self.scripting.add_generated(module) {
+                        self.last_generated_index = Some(index);
+                    }
+                    self.notify_important(
+                        "Proposal sent. The host must review and activate it.".into(),
+                    );
                     return;
                 }
                 let is_instant = module.is_instant;
                 let mut charged = self.player.crafting.clone();
                 if !is_instant {
-                    if let Err(error) = charged.spend_mana(self.crafting_registry.mana_charge(crate::crafting::RULE_MANA)) {
-                        self.notify_important(error);return;
+                    if let Err(error) = charged.spend_mana(
+                        self.crafting_registry
+                            .mana_charge(crate::crafting::RULE_MANA),
+                    ) {
+                        self.notify_important(error);
+                        return;
                     }
                 }
                 self.next_rule_id += 1;
@@ -2906,12 +3921,20 @@ impl App {
                     }
                 };
                 self.last_generated_index = Some(idx);
-                if !is_instant {self.scripting.modules[idx].attachment_candidate=self.generation_attachment.take();}
-                if !is_instant {self.player.crafting = charged;}
+                if !is_instant {
+                    self.scripting.modules[idx].attachment_candidate =
+                        self.generation_attachment.take();
+                }
+                if !is_instant {
+                    self.player.crafting = charged;
+                }
                 let (label, action) = if is_instant {
                     ("spell", "click Run to cast it")
                 } else if self.scripting.modules[idx].attachment_candidate.is_some() {
-                    ("attached rule", "review the target and click Attach + enable")
+                    (
+                        "attached rule",
+                        "review the target and click Attach + enable",
+                    )
                 } else {
                     ("rule", "click Enable to activate it")
                 };
@@ -2951,7 +3974,6 @@ impl App {
                 }
             }
             NetRole::Joined(_) => {} // Only the host publishes block edits.
-
         }
     }
 
@@ -2995,22 +4017,49 @@ impl App {
     /// doesn't ride the snapshot.
     fn apply_player_effect(&mut self, effect: PlayerEffect) {
         #[cfg(feature = "dev-playtest")]
-        if self.playtest_player_effect(&effect) { return; }
+        if self.playtest_player_effect(&effect) {
+            return;
+        }
         match effect {
-            PlayerEffect::AutomationState{state}=> {self.world.automation=*state;self.automation_timer=1.0;}
-            PlayerEffect::Inventory {player_id,balances,resources} => {
-                let account = if player_id==HOST_PLAYER_ID {&mut self.player.crafting} else {
-                    let NetRole::Host(host)=&self.net else {return;};
-                    let Some((peer,_))=host.clients.iter().find(|(_,id)|**id==player_id) else {return;};
-                    let Some(player)=host.remote_players.get(&player_id) else {return;};
-                    self.guest_accounts.entry(peer.account_key(&player.nickname)).or_default()
+            PlayerEffect::AutomationState { state } => {
+                self.world.automation = *state;
+                self.automation_timer = 1.0;
+            }
+            PlayerEffect::Inventory {
+                player_id,
+                balances,
+                resources,
+            } => {
+                let account = if player_id == HOST_PLAYER_ID {
+                    &mut self.player.crafting
+                } else {
+                    let NetRole::Host(host) = &self.net else {
+                        return;
+                    };
+                    let Some((peer, _)) = host.clients.iter().find(|(_, id)| **id == player_id)
+                    else {
+                        return;
+                    };
+                    let Some(player) = host.remote_players.get(&player_id) else {
+                        return;
+                    };
+                    self.guest_accounts
+                        .entry(peer.account_key(&player.nickname))
+                        .or_default()
                 };
-                account.resources=resources;account.elements=balances.elements;account.mana=balances.mana;account.gear=balances.items;
-                account.adventure=balances.adventure;
-                account.revision=account.revision.saturating_add(1);
+                account.resources = resources;
+                account.elements = balances.elements;
+                account.mana = balances.mana;
+                account.gear = balances.items;
+                account.adventure = balances.adventure;
+                account.revision = account.revision.saturating_add(1);
                 self.sync_guest_mana();
             }
-            PlayerEffect::GiveItem { player_id, block, amount } => {
+            PlayerEffect::GiveItem {
+                player_id,
+                block,
+                amount,
+            } => {
                 if player_id == HOST_PLAYER_ID {
                     self.player.add_resources(block, amount);
                     return;
@@ -3027,28 +4076,64 @@ impl App {
                     return;
                 };
                 if let Some(rp) = host.remote_players.get(&player_id) {
-                    let account = self.guest_accounts.entry(addr.account_key(&rp.nickname)).or_default();
-                    if let Some(i) = crate::voxel::COLLECTIBLE_BLOCKS.iter().position(|b| *b == block) {
+                    let account = self
+                        .guest_accounts
+                        .entry(addr.account_key(&rp.nickname))
+                        .or_default();
+                    if let Some(i) = crate::voxel::COLLECTIBLE_BLOCKS
+                        .iter()
+                        .position(|b| *b == block)
+                    {
                         account.resources[i] = account.resources[i].saturating_add(amount);
                         account.revision += 1;
                     }
-                    host.reliable.send(&host.socket, addr, ReliableMsg::CraftState { account: account.clone(), feedback: None });
+                    host.reliable.send(
+                        &host.socket,
+                        addr,
+                        ReliableMsg::CraftState {
+                            account: account.clone(),
+                            feedback: None,
+                        },
+                    );
                 }
             }
-            PlayerEffect::TakeItem { player_id, block, amount } => {
+            PlayerEffect::TakeItem {
+                player_id,
+                block,
+                amount,
+            } => {
                 if player_id == HOST_PLAYER_ID {
                     self.player.take_resources(block, amount);
                     return;
                 }
-                let NetRole::Host(host) = &mut self.net else { return; };
-                let Some((&peer, _)) = host.clients.iter().find(|(_, id)| **id == player_id) else { return; };
-                let Some(rp) = host.remote_players.get(&player_id) else { return; };
-                let account = self.guest_accounts.entry(peer.account_key(&rp.nickname)).or_default();
-                if let Some(i) = crate::voxel::COLLECTIBLE_BLOCKS.iter().position(|b| *b == block) {
+                let NetRole::Host(host) = &mut self.net else {
+                    return;
+                };
+                let Some((&peer, _)) = host.clients.iter().find(|(_, id)| **id == player_id) else {
+                    return;
+                };
+                let Some(rp) = host.remote_players.get(&player_id) else {
+                    return;
+                };
+                let account = self
+                    .guest_accounts
+                    .entry(peer.account_key(&rp.nickname))
+                    .or_default();
+                if let Some(i) = crate::voxel::COLLECTIBLE_BLOCKS
+                    .iter()
+                    .position(|b| *b == block)
+                {
                     if account.resources[i] >= amount {
                         account.resources[i] -= amount;
                         account.revision += 1;
-                        host.reliable.send(&host.socket, peer, ReliableMsg::CraftState { account: account.clone(), feedback: None });
+                        host.reliable.send(
+                            &host.socket,
+                            peer,
+                            ReliableMsg::CraftState {
+                                account: account.clone(),
+                                feedback: None,
+                            },
+                        );
                     }
                 }
             }
@@ -3065,7 +4150,10 @@ impl App {
                     }
                 }
             }
-            PlayerEffect::Poisoned { player_id, poisoned } => {
+            PlayerEffect::Poisoned {
+                player_id,
+                poisoned,
+            } => {
                 let changed = if player_id == HOST_PLAYER_ID {
                     let was = self.player.poisoned;
                     self.player.poisoned = poisoned;
@@ -3085,11 +4173,18 @@ impl App {
                 // Edge-triggered, not every call -- a rule re-asserting
                 // "still poisoned" every tick shouldn't spam a toast.
                 if changed {
-                    let verb = if poisoned { "poisoned" } else { "no longer poisoned" };
+                    let verb = if poisoned {
+                        "poisoned"
+                    } else {
+                        "no longer poisoned"
+                    };
                     self.notify_all(format!("P{player_id} is {verb}"));
                 }
             }
-            PlayerEffect::SpeedMultiplier { player_id, multiplier } => {
+            PlayerEffect::SpeedMultiplier {
+                player_id,
+                multiplier,
+            } => {
                 if player_id == HOST_PLAYER_ID {
                     self.player.set_speed_multiplier(multiplier);
                 } else if let NetRole::Host(host) = &mut self.net {
@@ -3099,7 +4194,10 @@ impl App {
                     }
                 }
             }
-            PlayerEffect::JumpMultiplier { player_id, multiplier } => {
+            PlayerEffect::JumpMultiplier {
+                player_id,
+                multiplier,
+            } => {
                 if player_id == HOST_PLAYER_ID {
                     self.player.set_jump_multiplier(multiplier);
                 } else if let NetRole::Host(host) = &mut self.net {
@@ -3139,7 +4237,9 @@ impl App {
                 host.reliable.send(
                     &host.socket,
                     addr,
-                    ReliableMsg::Teleport { pos: pos.to_array() },
+                    ReliableMsg::Teleport {
+                        pos: pos.to_array(),
+                    },
                 );
             }
         }
@@ -3152,8 +4252,11 @@ impl App {
     /// note that it's "only observable by polling ... .health from on_tick".
     fn apply_poison_ticks(&mut self) {
         #[cfg(feature = "dev-playtest")]
-        if let Some(session)=&mut self.playtest {
-            if session.actor.player.poisoned && session.script.finished.is_none() {session.actor.player.damage(POISON_DAMAGE_PER_TICK);session.external_event("Poison damage tick");}
+        if let Some(session) = &mut self.playtest {
+            if session.actor.player.poisoned && session.script.finished.is_none() {
+                session.actor.player.damage(POISON_DAMAGE_PER_TICK);
+                session.external_event("Poison damage tick");
+            }
         }
         if self.player.poisoned {
             self.player.damage(POISON_DAMAGE_PER_TICK);
@@ -3177,7 +4280,11 @@ impl App {
     fn update_oxygen(&mut self, dt: f32) {
         let host_submerged = is_in_water(&self.world, self.player.position);
         if host_submerged {
-            self.player.drain_oxygen(OXYGEN_DRAIN_PER_SEC * dt * crate::gear_catalog::oxygen_factor(&self.player.crafting));
+            self.player.drain_oxygen(
+                OXYGEN_DRAIN_PER_SEC
+                    * dt
+                    * crate::gear_catalog::oxygen_factor(&self.player.crafting),
+            );
             if self.player.oxygen <= 0.0 {
                 self.player.damage(DROWNING_DAMAGE_PER_SEC * dt);
             }
@@ -3191,9 +4298,12 @@ impl App {
         for (id, rp) in host.remote_players.iter_mut() {
             let submerged = is_in_water(&self.world, rp.pos);
             if submerged {
-                let factor=host.clients.iter().find(|(_,pid)|*pid==id)
-                    .and_then(|(peer,_)|self.guest_accounts.get(&peer.account_key(&rp.nickname)))
-                    .map_or(1.0,crate::gear_catalog::oxygen_factor);
+                let factor = host
+                    .clients
+                    .iter()
+                    .find(|(_, pid)| *pid == id)
+                    .and_then(|(peer, _)| self.guest_accounts.get(&peer.account_key(&rp.nickname)))
+                    .map_or(1.0, crate::gear_catalog::oxygen_factor);
                 rp.oxygen = (rp.oxygen - OXYGEN_DRAIN_PER_SEC * dt * factor).max(0.0);
                 if rp.oxygen <= 0.0 {
                     rp.health = (rp.health - DROWNING_DAMAGE_PER_SEC * dt).max(0.0);
@@ -3210,10 +4320,14 @@ impl App {
     /// the UI, checked again here since `requests.run_index` is plain user
     /// input the UI layer can't fully trust on its own).
     fn run_instant(&mut self, index: usize) {
-        self.run_instant_with_target(index,None);
+        self.run_instant_with_target(index, None);
     }
 
-    fn run_instant_with_target(&mut self, index: usize, remembered_target:Option<crate::spellbook::TargetRequirement>) {
+    fn run_instant_with_target(
+        &mut self,
+        index: usize,
+        remembered_target: Option<crate::spellbook::TargetRequirement>,
+    ) {
         if !matches!(self.net, NetRole::Host(_)) {
             return;
         }
@@ -3224,134 +4338,270 @@ impl App {
             return;
         }
         if !self.scripting.can_cast_immediately() {
-            self.notify_important("Rules are busy. Try casting again shortly; no mana spent.".into());return;
+            self.notify_important(
+                "Rules are busy. Try casting again shortly; no mana spent.".into(),
+            );
+            return;
         }
         let name = module.name.clone();
         // Authorship is retained in the Spellbook, but a remembered spell casts
         // as its current user. Legacy guest proposals keep their original caster.
-        let caster_account = if remembered_target.is_some() {None} else {crate::rule_sharing::caster_account(&module.source)};
+        let caster_account = if remembered_target.is_some() {
+            None
+        } else {
+            crate::rule_sharing::caster_account(&module.source)
+        };
         let players = self.host_player_positions();
         let caster_id = if let Some(ref account) = caster_account {
-            let NetRole::Host(host) = &self.net else { return; };
-            let Some(id) = host.clients.iter().find_map(|(peer, id)| host.remote_players.get(id)
-                .filter(|p| peer.account_key(&p.nickname) == *account).map(|_| *id)) else {
-                self.notify_important("The player who requested this spell is not connected.".into());
+            let NetRole::Host(host) = &self.net else {
+                return;
+            };
+            let Some(id) = host.clients.iter().find_map(|(peer, id)| {
+                host.remote_players
+                    .get(id)
+                    .filter(|p| peer.account_key(&p.nickname) == *account)
+                    .map(|_| *id)
+            }) else {
+                self.notify_important(
+                    "The player who requested this spell is not connected.".into(),
+                );
                 return;
             };
             id
-        } else { HOST_PLAYER_ID };
-        let Some(caster) = players.iter().find(|player| player.id == caster_id) else { return; };
+        } else {
+            HOST_PLAYER_ID
+        };
+        let Some(caster) = players.iter().find(|player| player.id == caster_id) else {
+            return;
+        };
         let caster_resources = caster.resources;
-        let cast_eye=caster.pos+Vec3::Y*1.62;
+        let cast_eye = caster.pos + Vec3::Y * 1.62;
         // Stage 1A uses the host's current aim. Guest proposals retain their
         // original untargeted execution until guest cast requests are implemented.
         let target_context = if caster_id == HOST_PLAYER_ID {
-            crate::spell_target::TargetContext::resolve(&self.world, &self.creatures,
-                self.camera.eye_position(), self.camera.forward())
-        } else { None };
-        if let Some(required)=remembered_target {
-            if !required.accepts(target_context.map(|c|c.target)) {
-                self.ui.spellbook.feedback=format!("Aim at a {} within 18 blocks. No mana spent.",required.label().to_lowercase());
+            crate::spell_target::TargetContext::resolve(
+                &self.world,
+                &self.creatures,
+                self.camera.eye_position(),
+                self.camera.forward(),
+            )
+        } else {
+            None
+        };
+        if let Some(required) = remembered_target {
+            if !required.accepts(target_context.map(|c| c.target)) {
+                self.ui.spellbook.feedback = format!(
+                    "Aim at a {} within 18 blocks. No mana spent.",
+                    required.label().to_lowercase()
+                );
                 return;
             }
         }
-        let balance = caster_account.as_ref().and_then(|key|self.guest_accounts.get(key)).unwrap_or(&self.player.crafting);
+        let balance = caster_account
+            .as_ref()
+            .and_then(|key| self.guest_accounts.get(key))
+            .unwrap_or(&self.player.crafting);
         let mut check = balance.clone();
-        if let Err(error) = check.spend_mana(self.crafting_registry.mana_charge(crate::crafting::INSTANT_MANA)) {
-            self.notify_important(error);return;
+        if let Err(error) = check.spend_mana(
+            self.crafting_registry
+                .mana_charge(crate::crafting::INSTANT_MANA),
+        ) {
+            self.notify_important(error);
+            return;
         }
         // Reserve the cast fee before Lua observes or spends the caster's mana.
-        let account = if let Some(ref key)=caster_account {self.guest_accounts.get_mut(key).unwrap()} else {&mut self.player.crafting};
-        account.mana-=self.crafting_registry.mana_charge(crate::crafting::INSTANT_MANA);
-        account.revision=account.revision.saturating_add(1);
-        let players=self.host_player_positions();
+        let account = if let Some(ref key) = caster_account {
+            self.guest_accounts.get_mut(key).unwrap()
+        } else {
+            &mut self.player.crafting
+        };
+        account.mana -= self
+            .crafting_registry
+            .mana_charge(crate::crafting::INSTANT_MANA);
+        account.revision = account.revision.saturating_add(1);
+        let players = self.host_player_positions();
         let outcome = if let Some(context) = target_context {
-            self.scripting.run_targeted_cast(index, &self.world, &mut self.creatures,
-                &players, &mut self.time_of_day, &mut self.weather, caster_id,
-                caster_resources, context)
-        } else { self.scripting.run_cast(
-            index,
-            &self.world,
-            &mut self.creatures,
-            &players,
-            &mut self.time_of_day,
-            &mut self.weather,
-            caster_id,
-            caster_resources,
-        ) };
+            self.scripting.run_targeted_cast(
+                index,
+                &self.world,
+                &mut self.creatures,
+                &players,
+                &mut self.time_of_day,
+                &mut self.weather,
+                caster_id,
+                caster_resources,
+                context,
+            )
+        } else {
+            self.scripting.run_cast(
+                index,
+                &self.world,
+                &mut self.creatures,
+                &players,
+                &mut self.time_of_day,
+                &mut self.weather,
+                caster_id,
+                caster_resources,
+            )
+        };
         self.apply_tick_outcome(outcome);
         if self.scripting.cast_succeeded(index, caster_id) {
-            let direction=if caster_id==HOST_PLAYER_ID {self.camera.forward()} else {Vec3::Z};
-            let origin=cast_eye+direction*0.6-Vec3::Y*0.3;
-            let target=target_context.map_or(cast_eye+direction*3.,|c|c.hit_position);
-            self.spell_fx.cast(origin,target);
-            if let NetRole::Host(host)=&mut self.net {
-                for &peer in host.clients.keys() {host.reliable.send(&host.socket,peer,ReliableMsg::SpellCastFx {origin:origin.to_array(),target:target.to_array()});}
+            let direction = if caster_id == HOST_PLAYER_ID {
+                self.camera.forward()
+            } else {
+                Vec3::Z
+            };
+            let origin = cast_eye + direction * 0.6 - Vec3::Y * 0.3;
+            let target = target_context.map_or(cast_eye + direction * 3., |c| c.hit_position);
+            self.spell_fx.cast(origin, target);
+            if let NetRole::Host(host) = &mut self.net {
+                for &peer in host.clients.keys() {
+                    host.reliable.send(
+                        &host.socket,
+                        peer,
+                        ReliableMsg::SpellCastFx {
+                            origin: origin.to_array(),
+                            target: target.to_array(),
+                        },
+                    );
+                }
             }
-            if caster_id==HOST_PLAYER_ID {self.use_animation=0.28;}
+            if caster_id == HOST_PLAYER_ID {
+                self.use_animation = 0.28;
+            }
             self.notify_all(format!("Host requested cast '{name}'"));
         } else {
-            let account = if let Some(key)=caster_account {self.guest_accounts.get_mut(&key).unwrap()} else {&mut self.player.crafting};
-            account.mana=account.mana.saturating_add(self.crafting_registry.mana_charge(crate::crafting::INSTANT_MANA));
-            account.revision=account.revision.saturating_add(1);
+            let account = if let Some(key) = caster_account {
+                self.guest_accounts.get_mut(&key).unwrap()
+            } else {
+                &mut self.player.crafting
+            };
+            account.mana = account.mana.saturating_add(
+                self.crafting_registry
+                    .mana_charge(crate::crafting::INSTANT_MANA),
+            );
+            account.revision = account.revision.saturating_add(1);
         }
         self.sync_guest_mana();
     }
 
-    fn spellbook_action(&mut self,action:crate::spellbook_ui::Action) {
+    fn spellbook_action(&mut self, action: crate::spellbook_ui::Action) {
         use crate::spellbook_ui::Action;
-        if let Action::Cast(id)=action {self.cast_remembered_spell(id);return;}
-        if !matches!(self.net,NetRole::Host(_)) {return;}
-        let result=match action {
-            Action::AllowGuests(id,allowed)=>self.scripting.spellbook.spells.iter_mut().find(|s|s.id==id)
-                .ok_or_else(||"Spell no longer exists".to_string()).and_then(|s|{
-                    s.revision=s.revision.checked_add(1).ok_or("Spell revision exhausted")?;
-                    s.allow_guests=allowed;Ok("Guest casting permission updated. Save with F5.".into())
+        if let Action::Cast(id) = action {
+            self.cast_remembered_spell(id);
+            return;
+        }
+        if !matches!(self.net, NetRole::Host(_)) {
+            return;
+        }
+        let result = match action {
+            Action::GenerateQuote(id) => {
+                if let Some(spell) = self.scripting.spellbook.get(id) {
+                    self.ui.spellbook.start_quote(spell, self.llm.base_url());
+                }
+                return;
+            }
+            Action::SetQuote(id, revision, quote) => self
+                .scripting
+                .spellbook
+                .set_flavor_quote(id, revision, &quote)
+                .map(|()| {
+                    "Quote saved to the spell. Save the world with F5 to keep it.".to_string()
                 }),
-            Action::Update(id,name,target)=>self.scripting.spellbook.update(id,name,target)
-                .map(|()|"Spell updated. Save the world with F5.".to_string()),
-            Action::Duplicate(id)=>self.scripting.spellbook.duplicate(id).map(|new_id|{
-                self.ui.spellbook.selected=Some(new_id);"Spell duplicated. Save the world with F5.".into()
+            Action::AllowGuests(id, allowed) => self
+                .scripting
+                .spellbook
+                .spells
+                .iter_mut()
+                .find(|s| s.id == id)
+                .ok_or_else(|| "Spell no longer exists".to_string())
+                .and_then(|s| {
+                    s.revision = s
+                        .revision
+                        .checked_add(1)
+                        .ok_or("Spell revision exhausted")?;
+                    s.allow_guests = allowed;
+                    Ok("Guest casting permission updated. Save with F5.".into())
+                }),
+            Action::Update(id, name, target) => self
+                .scripting
+                .spellbook
+                .update(id, name, target)
+                .map(|()| "Spell updated. Save the world with F5.".to_string()),
+            Action::Duplicate(id) => self.scripting.spellbook.duplicate(id).map(|new_id| {
+                self.ui.spellbook.selected = Some(new_id);
+                "Spell duplicated. Save the world with F5.".into()
             }),
-            Action::Delete(id)=>self.scripting.spellbook.delete(id).map(|()|{
-                self.scripting.spell_cooldowns.remove(&id);self.ui.spellbook.selected=None;
+            Action::Delete(id) => self.scripting.spellbook.delete(id).map(|()| {
+                self.scripting.spell_cooldowns.remove(&id);
+                self.ui.spellbook.selected = None;
                 "Spell deleted. Its previously cast effects remain in the world.".into()
             }),
-            Action::Cast(id)=>{self.cast_remembered_spell(id);return;}
+            Action::Cast(id) => {
+                self.cast_remembered_spell(id);
+                return;
+            }
         };
-        self.ui.spellbook.feedback=result.unwrap_or_else(|error|error);
+        self.ui.spellbook.feedback = result.unwrap_or_else(|error| error);
         self.publish_spell_catalog();
     }
 
-    fn cast_remembered_spell(&mut self,id:crate::spellbook::SpellId) {
-        if !matches!(self.net,NetRole::Host(_)) {
-            self.request_guest_spell(id);return;
+    fn cast_remembered_spell(&mut self, id: crate::spellbook::SpellId) {
+        if !matches!(self.net, NetRole::Host(_)) {
+            self.request_guest_spell(id);
+            return;
         }
-        let result=(||->Result<(usize,crate::spellbook::Spell),String>{
-            if !self.scripting.can_cast_immediately() {return Err("Rules are busy; try again. No mana spent.".into());}
-            let spell=self.scripting.spellbook.get(id).ok_or("Spell no longer exists")?.clone();
-            if !spell.ready() {return Err("This spell needs compatibility review".into());}
-            if self.player.health<=0. {return Err("Defeated players cannot cast".into());}
-            let cost=self.crafting_registry.mana_charge(spell.mana_cost);
-            if self.player.crafting.mana<cost {return Err(format!("This spell needs {cost} mana"));}
-            if let Some(last)=self.scripting.spell_cooldowns.get(&id) {
-                let remaining=spell.cooldown_seconds-last.elapsed().as_secs_f32();
-                if remaining>0.0 {return Err(format!("Ready in {remaining:.1} seconds. No mana spent."));}
+        let result = (|| -> Result<(usize, crate::spellbook::Spell), String> {
+            if !self.scripting.can_cast_immediately() {
+                return Err("Rules are busy; try again. No mana spent.".into());
             }
-            let module=spell.compiled()?;
-            let index=self.scripting.add_generated(module)?;
-            Ok((index,spell))
+            let spell = self
+                .scripting
+                .spellbook
+                .get(id)
+                .ok_or("Spell no longer exists")?
+                .clone();
+            if !spell.ready() {
+                return Err("This spell needs compatibility review".into());
+            }
+            if self.player.health <= 0. {
+                return Err("Defeated players cannot cast".into());
+            }
+            let cost = self.crafting_registry.mana_charge(spell.mana_cost);
+            if self.player.crafting.mana < cost {
+                return Err(format!("This spell needs {cost} mana"));
+            }
+            if let Some(last) = self.scripting.spell_cooldowns.get(&id) {
+                let remaining = spell.cooldown_seconds - last.elapsed().as_secs_f32();
+                if remaining > 0.0 {
+                    return Err(format!("Ready in {remaining:.1} seconds. No mana spent."));
+                }
+            }
+            let module = spell.compiled()?;
+            let index = self.scripting.add_generated(module)?;
+            Ok((index, spell))
         })();
-        let (index,spell)=match result {
-            Ok(value)=>value,Err(error)=>{self.ui.spellbook.feedback=error;return;}
+        let (index, spell) = match result {
+            Ok(value) => value,
+            Err(error) => {
+                self.ui.spellbook.feedback = error;
+                return;
+            }
         };
-        self.ui.spellbook.feedback="Cast failed; no mana spent.".into();
-        self.run_instant_with_target(index,Some(spell.target));
-        if self.scripting.cast_succeeded(index,HOST_PLAYER_ID) {
-            self.scripting.spell_cooldowns.insert(id,std::time::Instant::now());
-            self.ui.spellbook.feedback=format!("Cast {}.",spell.name);
-        } else if let Some(error)=self.scripting.modules.get(index).and_then(|m|m.error.as_ref()) {
-            self.ui.spellbook.feedback=format!("Cast failed: {error}. No mana spent.");
+        self.ui.spellbook.feedback = "Cast failed; no mana spent.".into();
+        self.run_instant_with_target(index, Some(spell.target));
+        if self.scripting.cast_succeeded(index, HOST_PLAYER_ID) {
+            self.scripting
+                .spell_cooldowns
+                .insert(id, std::time::Instant::now());
+            self.ui.spellbook.feedback = format!("Cast {}.", spell.name);
+        } else if let Some(error) = self
+            .scripting
+            .modules
+            .get(index)
+            .and_then(|m| m.error.as_ref())
+        {
+            self.ui.spellbook.feedback = format!("Cast failed: {error}. No mana spent.");
         }
         // The definition lives in Spellbook; the temporary execution module must
         // not become a second saved rule or continue running after a failed cast.
@@ -3398,9 +4648,23 @@ impl App {
             .collect();
         for id in stale {
             host.remote_players.remove(&id);
-            let peers: Vec<_> = host.clients.iter().filter(|(_,pid)| **pid==id).map(|(&peer,_)|peer).collect();
-            for peer in peers { host.clients.remove(&peer); host.reliable.forget_peer(peer); }
-            for &peer in host.clients.keys() { host.reliable.send(&host.socket,peer,ReliableMsg::PlayerLeft { player_id:id }); }
+            let peers: Vec<_> = host
+                .clients
+                .iter()
+                .filter(|(_, pid)| **pid == id)
+                .map(|(&peer, _)| peer)
+                .collect();
+            for peer in peers {
+                host.clients.remove(&peer);
+                host.reliable.forget_peer(peer);
+            }
+            for &peer in host.clients.keys() {
+                host.reliable.send(
+                    &host.socket,
+                    peer,
+                    ReliableMsg::PlayerLeft { player_id: id },
+                );
+            }
             log::info!("Player {id} timed out.");
         }
 
@@ -3409,7 +4673,7 @@ impl App {
             host.broadcast_timer = 0.0;
             let mut players: Vec<SnapshotPlayer> = vec![SnapshotPlayer {
                 animation: self.player_animation,
-                name:self.local_nickname.clone(),
+                name: self.local_nickname.clone(),
                 appearance: host.appearance,
                 id: HOST_PLAYER_ID,
                 pos: self.player.position.to_array(),
@@ -3420,15 +4684,29 @@ impl App {
                 speed_multiplier: self.player.speed_multiplier,
                 jump_multiplier: self.player.jump_multiplier,
                 oxygen: self.player.oxygen,
-                held: self.player.crafting.hotbar.entry().filter(|e|e.count(&self.player.crafting)>0), torch_lit:crate::torch::equipped(&self.player.crafting) && self.player.health>0.,
+                held: self
+                    .player
+                    .crafting
+                    .hotbar
+                    .entry()
+                    .filter(|e| e.count(&self.player.crafting) > 0),
+                torch_lit: crate::torch::equipped(&self.player.crafting) && self.player.health > 0.,
             }];
             for (&id, rp) in host.remote_players.iter_mut() {
-                if let Some(peer)=host.clients.iter().find_map(|(peer,pid)|(*pid==id).then_some(peer)) {
-                    if let Some(account)=self.guest_accounts.get(&peer.account_key(&rp.nickname)) {rp.held=account.hotbar.entry().filter(|e|e.count(account)>0);rp.torch_lit=crate::torch::equipped(account) && rp.health>0.;}
+                if let Some(peer) = host
+                    .clients
+                    .iter()
+                    .find_map(|(peer, pid)| (*pid == id).then_some(peer))
+                {
+                    if let Some(account) = self.guest_accounts.get(&peer.account_key(&rp.nickname))
+                    {
+                        rp.held = account.hotbar.entry().filter(|e| e.count(account) > 0);
+                        rp.torch_lit = crate::torch::equipped(account) && rp.health > 0.;
+                    }
                 }
                 players.push(SnapshotPlayer {
                     animation: rp.animation,
-                    name:rp.display_name.clone(),
+                    name: rp.display_name.clone(),
                     appearance: rp.appearance,
                     id,
                     pos: rp.pos.to_array(),
@@ -3439,17 +4717,23 @@ impl App {
                     speed_multiplier: rp.speed_multiplier,
                     jump_multiplier: rp.jump_multiplier,
                     oxygen: rp.oxygen,
-                    held: rp.held, torch_lit:rp.torch_lit,
+                    held: rp.held,
+                    torch_lit: rp.torch_lit,
                 });
             }
             let snapshot = UnreliableMsg::Snapshot {
-                loot:self.loot.drops.clone(),
+                loot: self.loot.drops.clone(),
                 allow_guest_prompting: self.ui.settings.values.multiplayer.allow_guest_prompting,
                 time_of_day: self.time_of_day,
                 weather: self.weather.current.to_u8(),
                 players,
                 creatures: self.creatures.snapshot(),
-                creature_vitals: self.creatures.snapshot_with_ids().into_iter().map(|c|(c.2,c.1,c.3)).collect(),
+                creature_vitals: self
+                    .creatures
+                    .snapshot_with_ids()
+                    .into_iter()
+                    .map(|c| (c.2, c.1, c.3))
+                    .collect(),
             };
             let bytes = encode(&Packet::Unreliable(snapshot));
             for addr in host.clients.keys() {
@@ -3470,29 +4754,67 @@ impl App {
                 }
                 match msg {
                     ReliableMsg::RuleProposal { prompt, source } => {
-                        let Some(player) = host.clients.get(&from).and_then(|id| host.remote_players.get(id)) else { return; };
-                        let result = self.proposal_inbox.submit(from,
+                        let Some(player) = host
+                            .clients
+                            .get(&from)
+                            .and_then(|id| host.remote_players.get(id))
+                        else {
+                            return;
+                        };
+                        let result = self.proposal_inbox.submit(
+                            from,
                             self.ui.settings.values.multiplayer.allow_guest_prompting,
-                            player.nickname.clone(), from.account_key(&player.nickname), prompt, source);
+                            player.nickname.clone(),
+                            from.account_key(&player.nickname),
+                            prompt,
+                            source,
+                        );
                         if let Err(message) = result {
-                            host.reliable.send(&host.socket, from, ReliableMsg::RuleProposalResult { accepted: false, message });
+                            host.reliable.send(
+                                &host.socket,
+                                from,
+                                ReliableMsg::RuleProposalResult {
+                                    accepted: false,
+                                    message,
+                                },
+                            );
                         }
                     }
                     ReliableMsg::Hello { nickname, protocol } => {
-                        if host.clients.contains_key(&from) { return; }
+                        if host.clients.contains_key(&from) {
+                            return;
+                        }
                         if let Some(reason) = net::join_rejection(protocol, host.clients.len()) {
-                            host.reliable.send(&host.socket, from, ReliableMsg::JoinRejected(reason.into()));
+                            host.reliable.send(
+                                &host.socket,
+                                from,
+                                ReliableMsg::JoinRejected(reason.into()),
+                            );
                             return;
                         }
-                        let nickname = sanitize_nickname(&host.socket.peer_name(from).unwrap_or(nickname));
-                        if matches!(from, Peer::Direct(_)) && host.remote_players.values().any(|p| p.nickname == nickname) {
-                            host.reliable.send(&host.socket, from, ReliableMsg::JoinRejected("Nickname already connected".into()));
+                        let nickname =
+                            sanitize_nickname(&host.socket.peer_name(from).unwrap_or(nickname));
+                        if matches!(from, Peer::Direct(_))
+                            && host.remote_players.values().any(|p| p.nickname == nickname)
+                        {
+                            host.reliable.send(
+                                &host.socket,
+                                from,
+                                ReliableMsg::JoinRejected("Nickname already connected".into()),
+                            );
                             return;
                         }
-                        let edits: Vec<_> = self.world.edits.iter().map(|(k,v)|(*k,*v)).collect();
+                        let edits: Vec<_> =
+                            self.world.edits.iter().map(|(k, v)| (*k, *v)).collect();
                         let edit_chunks = edits.len().div_ceil(net::EDITS_PER_CHUNK) as u32;
                         if edit_chunks > net::MAX_WORLD_CHUNKS {
-                            host.reliable.send(&host.socket, from, ReliableMsg::JoinRejected("World exceeds the supported multiplayer save size".into()));
+                            host.reliable.send(
+                                &host.socket,
+                                from,
+                                ReliableMsg::JoinRejected(
+                                    "World exceeds the supported multiplayer save size".into(),
+                                ),
+                            );
                             return;
                         }
                         let player_id = host.next_player_id;
@@ -3501,30 +4823,63 @@ impl App {
                         let spawn_x = self.player.position.x + (player_id as f32) * 2.0;
                         let spawn_z = self.player.position.z + 2.0;
                         let spawn = crate::adventure::surface_spawn_position(
-                            &mut self.world, spawn_x.floor() as i32, spawn_z.floor() as i32,
+                            &mut self.world,
+                            spawn_x.floor() as i32,
+                            spawn_z.floor() as i32,
                         );
-                        let appearance = remote_player::Appearance::choose(random_world_seed(),
-                            std::iter::once(host.appearance).chain(host.remote_players.values().map(|p| p.appearance)));
+                        let appearance = remote_player::Appearance::choose(
+                            random_world_seed(),
+                            std::iter::once(host.appearance)
+                                .chain(host.remote_players.values().map(|p| p.appearance)),
+                        );
                         let mut remote = RemotePlayer::new(spawn, 0.0, false, nickname.clone());
                         remote.appearance = appearance;
                         host.clients.insert(from, player_id);
-                        host.remote_players.insert(
+                        host.remote_players.insert(player_id, remote);
+                        for msg in net::welcome_messages(
                             player_id,
-                            remote,
-                        );
-                        for msg in net::welcome_messages(player_id,self.world.seed,self.world.generation.clone(),self.time_of_day,spawn.to_array(),edits,self.world.starter_camp)
-                            .expect("world size checked before admission") {
-                            host.reliable.send(&host.socket,from,msg);
+                            self.world.seed,
+                            self.world.generation.clone(),
+                            self.time_of_day,
+                            spawn.to_array(),
+                            edits,
+                            self.world.starter_camp,
+                        )
+                        .expect("world size checked before admission")
+                        {
+                            host.reliable.send(&host.socket, from, msg);
                         }
                         let key = from.account_key(&nickname);
                         // Migrate legacy nickname accounts without letting Direct users claim Steam balances.
-                        if matches!(from, Peer::Direct(_)) && !nickname.starts_with("steam:") && !nickname.starts_with("direct:") && !self.guest_accounts.contains_key(&key) {
-                            if let Some(old) = self.guest_accounts.remove(&nickname) { self.guest_accounts.insert(key.clone(), old); }
+                        if matches!(from, Peer::Direct(_))
+                            && !nickname.starts_with("steam:")
+                            && !nickname.starts_with("direct:")
+                            && !self.guest_accounts.contains_key(&key)
+                        {
+                            if let Some(old) = self.guest_accounts.remove(&nickname) {
+                                self.guest_accounts.insert(key.clone(), old);
+                            }
                         }
                         let account = self.guest_accounts.entry(key).or_default().clone();
-                        host.reliable.send(&host.socket, from, ReliableMsg::CraftRegistry((*self.crafting_registry).clone()));
-                        host.reliable.send(&host.socket, from, ReliableMsg::CraftState { account, feedback: None });
-                        self.spell_network.peers.insert(from,crate::spell_network::Session::new((random_world_seed() as u64)<<32 | random_world_seed() as u64));
+                        host.reliable.send(
+                            &host.socket,
+                            from,
+                            ReliableMsg::CraftRegistry((*self.crafting_registry).clone()),
+                        );
+                        host.reliable.send(
+                            &host.socket,
+                            from,
+                            ReliableMsg::CraftState {
+                                account,
+                                feedback: None,
+                            },
+                        );
+                        self.spell_network.peers.insert(
+                            from,
+                            crate::spell_network::Session::new(
+                                (random_world_seed() as u64) << 32 | random_world_seed() as u64,
+                            ),
+                        );
                         self.publish_spell_catalog();
                         self.send_enchantment_summaries(Some(from));
                         log::info!("Player {player_id} ('{nickname}') joined from {from}");
@@ -3535,34 +4890,53 @@ impl App {
                             host.remote_players.remove(&id);
                             host.reliable.forget_peer(from);
                             for &addr in host.clients.keys() {
-                                host.reliable.send(&host.socket, addr, ReliableMsg::PlayerLeft { player_id: id });
+                                host.reliable.send(
+                                    &host.socket,
+                                    addr,
+                                    ReliableMsg::PlayerLeft { player_id: id },
+                                );
                             }
                         }
                     }
                     ReliableMsg::CraftRequest { revision, action } => {
                         self.handle_crafting_request(from, revision, action);
                     }
-                    ReliableMsg::Hotbar(hotbar)=>self.handle_remote_hotbar(from,hotbar),
-                    ReliableMsg::CastSpell(request)=>self.handle_guest_spell(from,request),
-                    ReliableMsg::ItemAction(intent)=>self.perform_item_action(Some(from),intent),
-                    ReliableMsg::AutomationAction(action)=>self.perform_automation(Some(from),action),
-                    ReliableMsg::CampAction(action)=>self.perform_camp_action(Some(from),action),
-                    ReliableMsg::EatFood{block,revision}=>self.perform_eat(Some(from),block,revision),
-                    ReliableMsg::QuestAction(action)=>self.perform_quest_action(Some(from),action),
-                    ReliableMsg::ReadRecipeBook(sector)=>self.read_recipe_book(Some(from),sector),
+                    ReliableMsg::Hotbar(hotbar) => self.handle_remote_hotbar(from, hotbar),
+                    ReliableMsg::CastSpell(request) => self.handle_guest_spell(from, request),
+                    ReliableMsg::ItemAction(intent) => self.perform_item_action(Some(from), intent),
+                    ReliableMsg::AutomationAction(action) => {
+                        self.perform_automation(Some(from), action)
+                    }
+                    ReliableMsg::CampAction(action) => self.perform_camp_action(Some(from), action),
+                    ReliableMsg::EatFood { block, revision } => {
+                        self.perform_eat(Some(from), block, revision)
+                    }
+                    ReliableMsg::QuestAction(action) => {
+                        self.perform_quest_action(Some(from), action)
+                    }
+                    ReliableMsg::ReadRecipeBook(sector) => {
+                        self.read_recipe_book(Some(from), sector)
+                    }
                     // BlockEdit is host-to-client only. Never accept claimed destruction.
                     ReliableMsg::BlockEdit { .. } => {}
                     ReliableMsg::ChatMessage(text) => {
-                        let sender = host
-                            .clients
-                            .get(&from)
-                            .and_then(|player_id| host.remote_players.get(player_id).map(|rp|(*player_id,rp.display_name.clone())));
-                        if let (Some((player_id,nickname)), Some(text)) = (sender, net::chat_text(&text)) {
-                            self.broadcast_chat(player_id,nickname,text);
+                        let sender = host.clients.get(&from).and_then(|player_id| {
+                            host.remote_players
+                                .get(player_id)
+                                .map(|rp| (*player_id, rp.display_name.clone()))
+                        });
+                        if let (Some((player_id, nickname)), Some(text)) =
+                            (sender, net::chat_text(&text))
+                        {
+                            self.broadcast_chat(player_id, nickname, text);
                         }
                     }
                     ReliableMsg::DisplayName(name) => {
-                        if let Some(id)=host.clients.get(&from) {if let Some(p)=host.remote_players.get_mut(id) {p.display_name=sanitize_nickname(&name);}}
+                        if let Some(id) = host.clients.get(&from) {
+                            if let Some(p) = host.remote_players.get_mut(id) {
+                                p.display_name = sanitize_nickname(&name);
+                            }
+                        }
                     }
                     ReliableMsg::Interact { x, y, z } => {
                         // The host reads the block itself rather than
@@ -3585,9 +4959,15 @@ impl App {
                 }
             }
             Packet::Ack { id } => {
-                if let Some(rp) = host.clients.get(&from).and_then(|id|host.remote_players.get_mut(id)) { rp.last_seen = Instant::now(); }
+                if let Some(rp) = host
+                    .clients
+                    .get(&from)
+                    .and_then(|id| host.remote_players.get_mut(id))
+                {
+                    rp.last_seen = Instant::now();
+                }
                 host.reliable.ack(id, from);
-            },
+            }
             Packet::Unreliable(UnreliableMsg::PlayerState {
                 animation,
                 pos,
@@ -3599,7 +4979,13 @@ impl App {
                         let new_pos = Vec3::from_array(pos);
                         let dt = rp.last_seen.elapsed().as_secs_f32().max(0.001);
                         rp.last_seen = Instant::now();
-                        if !crate::adventure::accept_movement(rp.health,new_pos,self.recovery_arrivals.get(&player_id).copied()) {return;}
+                        if !crate::adventure::accept_movement(
+                            rp.health,
+                            new_pos,
+                            self.recovery_arrivals.get(&player_id).copied(),
+                        ) {
+                            return;
+                        }
                         self.recovery_arrivals.remove(&player_id);
                         rp.velocity = (new_pos - rp.pos) / dt;
                         rp.pos = new_pos;
@@ -3652,7 +5038,8 @@ impl App {
         {
             log::warn!("Lost connection to host.");
             client.lost_connection_logged = true;
-            self.crafting_ui.feedback = "Connection to host lost. Rejoin to recover authoritative inventory.".into();
+            self.crafting_ui.feedback =
+                "Connection to host lost. Rejoin to recover authoritative inventory.".into();
             self.return_to_menu = true;
         }
 
@@ -3685,49 +5072,113 @@ impl App {
                 match msg {
                     ReliableMsg::RuleProposalResult { accepted, message } => {
                         self.proposal_waiting = None;
-                        self.notify_important(format!("{}: {message}", if accepted { "Host accepted proposal for review" } else { "Proposal rejected" }));
+                        self.notify_important(format!(
+                            "{}: {message}",
+                            if accepted {
+                                "Host accepted proposal for review"
+                            } else {
+                                "Proposal rejected"
+                            }
+                        ));
                     }
-                    ReliableMsg::FoodResult(message) => {self.crafting_ui.feedback=message;}
+                    ReliableMsg::FoodResult(message) => {
+                        self.crafting_ui.feedback = message;
+                    }
                     ReliableMsg::CampResult(message) => {
-                        self.ui.journal.feedback=message.clone();self.toasts.push(Toast::important(message));
+                        self.ui.journal.feedback = message.clone();
+                        self.toasts.push(Toast::important(message));
                     }
-                    ReliableMsg::Npcs(npcs)=>{self.npcs=npcs.into_iter().filter(|n|n.valid()).take(crate::npc::MAX_VISIBLE).collect();}
-                    ReliableMsg::Recovered {pos} => {
-                        self.player.position=Vec3::from_array(pos);self.player.velocity=Vec3::ZERO;
-                        self.player.health=MAX_HEALTH;self.player.oxygen=MAX_OXYGEN;self.player.poisoned=false;
-                        self.player.speed_multiplier=1.;self.player.jump_multiplier=1.;self.camera.position=self.player.position;
-                        self.ui.journal.open=false;
-                        self.toasts.push(Toast::important("Recovered at camp. Inventory kept; 10 seconds of creature protection."));
+                    ReliableMsg::Npcs(npcs) => {
+                        self.npcs = npcs
+                            .into_iter()
+                            .filter(|n| n.valid())
+                            .take(crate::npc::MAX_VISIBLE)
+                            .collect();
+                    }
+                    ReliableMsg::Recovered { pos } => {
+                        self.player.position = Vec3::from_array(pos);
+                        self.player.velocity = Vec3::ZERO;
+                        self.player.health = MAX_HEALTH;
+                        self.player.oxygen = MAX_OXYGEN;
+                        self.player.poisoned = false;
+                        self.player.speed_multiplier = 1.;
+                        self.player.jump_multiplier = 1.;
+                        self.camera.position = self.player.position;
+                        self.ui.journal.open = false;
+                        self.toasts.push(Toast::important(
+                            "Recovered at camp. Inventory kept; 10 seconds of creature protection.",
+                        ));
                         self.sync_settings_input();
                     }
                     ReliableMsg::Goodbye => {
-                        self.crafting_ui.feedback = "Host ended the session. Return to the menu to join another game.".into();
+                        self.crafting_ui.feedback =
+                            "Host ended the session. Return to the menu to join another game."
+                                .into();
                         self.toasts.push(Toast::important("Host ended the session"));
                         self.return_to_menu = true;
                         client.lost_connection_logged = true;
                     }
 
                     ReliableMsg::CraftRegistry(registry) => {
-                        if registry.validate().is_ok() { self.crafting_registry = std::sync::Arc::new(registry); }
+                        if registry.validate().is_ok() {
+                            self.crafting_registry = std::sync::Arc::new(registry);
+                        }
                     }
                     ReliableMsg::DeathPuffs(positions) => {
-                        for pos in positions.into_iter().take(16).map(Vec3::from_array).filter(|p|p.is_finite()) {self.loot.puff(pos);}
+                        for pos in positions
+                            .into_iter()
+                            .take(16)
+                            .map(Vec3::from_array)
+                            .filter(|p| p.is_finite())
+                        {
+                            self.loot.puff(pos);
+                        }
                     }
-                    ReliableMsg::RecipeBookResult(result) => {
-                        match result {Ok(kind)=>self.open_recipe_book(kind),Err(e)=>self.toasts.push(Toast::new(e))}
+                    ReliableMsg::RecipeBookResult(result) => match result {
+                        Ok(kind) => self.open_recipe_book(kind),
+                        Err(e) => self.toasts.push(Toast::new(e)),
+                    },
+                    ReliableMsg::SpellCastFx { origin, target } => {
+                        self.spell_fx
+                            .cast(Vec3::from_array(origin), Vec3::from_array(target));
                     }
-                    ReliableMsg::SpellCastFx {origin,target} => {
-                        self.spell_fx.cast(Vec3::from_array(origin),Vec3::from_array(target));
+                    ReliableMsg::SpellCatalog {
+                        session,
+                        revision,
+                        spells,
+                    } => {
+                        self.receive_spell_catalog(session, revision, spells);
                     }
-                    ReliableMsg::SpellCatalog {session,revision,spells} => {self.receive_spell_catalog(session,revision,spells);}
-                    ReliableMsg::Enchantments{revision,summaries}=>{if revision>self.enchantment_revision && summaries.len()<=crate::world_api_gen::SCRIPT_MODULES_MAX {self.enchantment_revision=revision;self.enchantment_summaries=summaries;}}
-                    ReliableMsg::SpellResult {session,sequence,spell,remaining,message} => {
-                        if self.spell_network.session==Some(session) && self.spell_network.pending==Some((sequence,spell)) {
-                            self.spell_network.pending=None;
+                    ReliableMsg::Enchantments {
+                        revision,
+                        summaries,
+                    } => {
+                        if revision > self.enchantment_revision
+                            && summaries.len() <= crate::world_api_gen::SCRIPT_MODULES_MAX
+                        {
+                            self.enchantment_revision = revision;
+                            self.enchantment_summaries = summaries;
+                        }
+                    }
+                    ReliableMsg::SpellResult {
+                        session,
+                        sequence,
+                        spell,
+                        remaining,
+                        message,
+                    } => {
+                        if self.spell_network.session == Some(session)
+                            && self.spell_network.pending == Some((sequence, spell))
+                        {
+                            self.spell_network.pending = None;
                             if remaining.is_finite() && (0.0..=1.5).contains(&remaining) {
-                                self.spell_network.ready_at.insert(spell,Instant::now()+Duration::from_secs_f32(remaining));
+                                self.spell_network.ready_at.insert(
+                                    spell,
+                                    Instant::now() + Duration::from_secs_f32(remaining),
+                                );
                             }
-                            self.ui.spellbook.feedback=message.clone();self.toasts.push(Toast::new(message));
+                            self.ui.spellbook.feedback = message.clone();
+                            self.toasts.push(Toast::new(message));
                         }
                     }
                     ReliableMsg::LootCollected(contents) => {
@@ -3735,13 +5186,17 @@ impl App {
                         self.ui.show_pickup(contents);
                     }
                     ReliableMsg::CraftState { account, feedback } => {
-                        if account.revision >= self.player.crafting.revision || !self.inventory_ready {
-                            let local_hotbar=self.player.crafting.hotbar.clone();
-                            let keep_local=self.inventory_ready && local_hotbar.revision>account.hotbar.revision;
-                            self.player.crafting = account;
-                            if keep_local {self.player.crafting.hotbar=local_hotbar;}
-                            self.inventory_ready=true;
-                            self.player.carrying_crystal |= self.player.resource_count(BlockType::Crystal)>0;
+                        if let Some(pruned) = crate::equipment::receive_inventory(
+                            &mut self.player.crafting,
+                            account,
+                            self.inventory_ready,
+                        ) {
+                            self.inventory_ready = true;
+                            if pruned {
+                                self.publish_hotbar();
+                            }
+                            self.player.carrying_crystal |=
+                                self.player.resource_count(BlockType::Crystal) > 0;
                         }
                         if let Some(text) = feedback {
                             self.toasts.push(Toast::new(text.clone()));
@@ -3772,23 +5227,35 @@ impl App {
                         });
                         self.log_message(text, color);
                     }
-                    ReliableMsg::PlayerChat { player_id, name, text } => {
+                    ReliableMsg::PlayerChat {
+                        player_id,
+                        name,
+                        text,
+                    } => {
                         if let Some(text) = net::chat_text(&text) {
                             self.show_player_chat(player_id, &sanitize_nickname(&name), text);
                         }
                     }
-                    ReliableMsg::AutomationResult{ok,feedback}=> {
-                        self.ui.automation.feedback=feedback;
-                        if ok && self.ui.automation.build.is_some_and(|b|b.2.is_some()){self.ui.automation.build=None;}
+                    ReliableMsg::AutomationResult { ok, feedback } => {
+                        self.ui.automation.feedback = feedback;
+                        if ok && self.ui.automation.build.is_some_and(|b| b.2.is_some()) {
+                            self.ui.automation.build = None;
+                        }
                     }
                     ReliableMsg::AutomationState(chunk) => {
-                        let initial=!self.automation_transfer.has_snapshot();
-                        match self.automation_transfer.accept(chunk,&self.crafting_registry) {
-                            Ok(Some(state))=>{
-                                if initial {self.machine_feedback.synchronize(&state);}
-                                self.world.automation=state;
-                            },
-                            Ok(None)=>(),Err(e)=>log::warn!("Automation sync: {e}"),
+                        let initial = !self.automation_transfer.has_snapshot();
+                        match self
+                            .automation_transfer
+                            .accept(chunk, &self.crafting_registry)
+                        {
+                            Ok(Some(state)) => {
+                                if initial {
+                                    self.machine_feedback.synchronize(&state);
+                                }
+                                self.world.automation = state;
+                            }
+                            Ok(None) => (),
+                            Err(e) => log::warn!("Automation sync: {e}"),
                         }
                     }
                     ReliableMsg::GrantItem { block, amount } => {
@@ -3819,8 +5286,8 @@ impl App {
                     unreachable!()
                 };
                 client.creature_snapshot = creatures;
-                client.creature_vitals=creature_vitals;
-                self.loot.drops=loot.into_iter().take(48).collect();
+                client.creature_vitals = creature_vitals;
+                self.loot.drops = loot.into_iter().take(48).collect();
                 client.allow_guest_prompting = allow_guest_prompting;
                 let local_player_id = self.local_player_id;
                 let now = Instant::now();
@@ -3844,8 +5311,9 @@ impl App {
                         .remote_players
                         .entry(sp.id)
                         .and_modify(|rp| {
-                            rp.display_name=sanitize_nickname(&sp.name);
-                            rp.velocity = (Vec3::from_array(sp.pos) - rp.pos) / now.duration_since(rp.last_seen).as_secs_f32().max(0.001);
+                            rp.display_name = sanitize_nickname(&sp.name);
+                            rp.velocity = (Vec3::from_array(sp.pos) - rp.pos)
+                                / now.duration_since(rp.last_seen).as_secs_f32().max(0.001);
                             rp.appearance = sp.appearance;
                             rp.pos = Vec3::from_array(sp.pos);
                             rp.yaw = sp.yaw;
@@ -3855,7 +5323,8 @@ impl App {
                             rp.speed_multiplier = sp.speed_multiplier;
                             rp.jump_multiplier = sp.jump_multiplier;
                             rp.oxygen = sp.oxygen;
-                            rp.held = sp.held; rp.torch_lit=sp.torch_lit;
+                            rp.held = sp.held;
+                            rp.torch_lit = sp.torch_lit;
                             rp.receive_animation(sp.animation);
                             rp.last_seen = now;
                         })
@@ -3875,7 +5344,8 @@ impl App {
                             rp.speed_multiplier = sp.speed_multiplier;
                             rp.jump_multiplier = sp.jump_multiplier;
                             rp.oxygen = sp.oxygen;
-                            rp.held = sp.held; rp.torch_lit=sp.torch_lit;
+                            rp.held = sp.held;
+                            rp.torch_lit = sp.torch_lit;
                             rp.receive_animation(sp.animation);
                             rp
                         });
@@ -3891,100 +5361,238 @@ impl App {
 
         // The authoritative world needs spawn terrain around distant guests too.
         let remote_chunks: Vec<_> = match &self.net {
-            NetRole::Host(host) => host.remote_players.values()
+            NetRole::Host(host) => host
+                .remote_players
+                .values()
                 .filter(|p| p.pos.is_finite() && p.pos.abs().max_element() < 1_000_000.0)
-                .map(|p| chunk_of(p.pos)).collect(),
+                .map(|p| chunk_of(p.pos))
+                .collect(),
             NetRole::Joined(_) => Vec::new(),
         };
         #[cfg(feature = "dev-playtest")]
-        { self.ui.agent_nameplate = None; self.playtest_nameplate(); }
+        {
+            self.ui.agent_nameplate = None;
+            self.playtest_nameplate();
+        }
         self.ui.nameplates.clear();
-        self.ui.compass_yaw=self.camera.yaw;
-        self.ui.machine_compass=[None;5];
-        let machine=self.ui.automation.selected.and_then(|cell|self.world.automation.devices.get(&cell))
-            .map(|d|(d.cell,d.kind.height()))
-            .or_else(||self.ui.automation.build.and_then(|(kind,_,_)|raycast(&self.world,self.camera.eye_position(),self.camera.forward(),REACH).map(|hit|(hit.place,kind.height()))));
-        if let Some((cell,height))=machine.filter(|_|self.ui.automation.open || self.ui.automation.build.is_some()) {
-            let center=Vec3::new(cell.0 as f32+0.5,(cell.1+height) as f32+0.3,cell.2 as f32+0.5);
-            let size=self.window.inner_size();let scale=self.window.scale_factor() as f32;
-            let size=egui::vec2(size.width as f32/scale,size.height as f32/scale);
-            self.ui.machine_compass[0]=crate::compass::project(self.camera.view_proj(),center,size);
-            for (i,(_,direction)) in crate::compass::DIRECTIONS.iter().enumerate() {
-                let forward=Vec3::new(self.camera.yaw.cos(),0.,self.camera.yaw.sin());
-                let right=forward.cross(Vec3::Y);
-                self.ui.machine_compass[i+1]=self.ui.machine_compass[0].map(|p|p+egui::vec2(direction.dot(right)*48.,-direction.dot(forward)*34.));
+        self.ui.compass_yaw = self.camera.yaw;
+        self.ui.machine_compass = [None; 5];
+        let machine = self
+            .ui
+            .automation
+            .selected
+            .and_then(|cell| self.world.automation.devices.get(&cell))
+            .map(|d| (d.cell, d.kind.height()))
+            .or_else(|| {
+                self.ui.automation.build.and_then(|(kind, _, _)| {
+                    raycast(
+                        &self.world,
+                        self.camera.eye_position(),
+                        self.camera.forward(),
+                        REACH,
+                    )
+                    .map(|hit| (hit.place, kind.height()))
+                })
+            });
+        if let Some((cell, height)) =
+            machine.filter(|_| self.ui.automation.open || self.ui.automation.build.is_some())
+        {
+            let center = Vec3::new(
+                cell.0 as f32 + 0.5,
+                (cell.1 + height) as f32 + 0.3,
+                cell.2 as f32 + 0.5,
+            );
+            let size = self.window.inner_size();
+            let scale = self.window.scale_factor() as f32;
+            let size = egui::vec2(size.width as f32 / scale, size.height as f32 / scale);
+            self.ui.machine_compass[0] =
+                crate::compass::project(self.camera.view_proj(), center, size);
+            for (i, (_, direction)) in crate::compass::DIRECTIONS.iter().enumerate() {
+                let forward = Vec3::new(self.camera.yaw.cos(), 0., self.camera.yaw.sin());
+                let right = forward.cross(Vec3::Y);
+                self.ui.machine_compass[i + 1] = self.ui.machine_compass[0].map(|p| {
+                    p + egui::vec2(direction.dot(right) * 48., -direction.dot(forward) * 34.)
+                });
             }
         }
         self.ui.chat_bubbles.clear();
         let now = Instant::now();
-        self.chat_bubbles.retain(|_,bubble|bubble.opacity(now)>0.0);
-        let remote_players=match &self.net {NetRole::Host(host)=>&host.remote_players,NetRole::Joined(client)=>&client.remote_players};
-        let eye=self.camera.eye_position();let matrix=self.camera.view_proj();
-        let screen=self.window.inner_size();let scale=self.window.scale_factor() as f32;
-        for (&id,p) in remote_players {
-            let target=p.pos+Vec3::Y*2.15;let distance=eye.distance(target);
-            if id==self.local_player_id || distance>48.0 || crate::raycast::raycast(&self.world,eye,target-eye,(distance-0.3).max(0.0)).is_some() {continue;}
-            let clip=matrix*target.extend(1.0);if clip.w<=0.0 {continue;}
-            let ndc=clip.truncate()/clip.w;if ndc.x.abs()>1.0 || ndc.y.abs()>1.0 || !(0.0..=1.0).contains(&ndc.z) {continue;}
-            let screen_pos = egui::pos2((ndc.x+1.0)*0.5*screen.width as f32/scale,(1.0-ndc.y)*0.5*screen.height as f32/scale);
-            self.ui.nameplates.push((screen_pos,p.display_name.clone()));
+        self.chat_bubbles
+            .retain(|_, bubble| bubble.opacity(now) > 0.0);
+        let remote_players = match &self.net {
+            NetRole::Host(host) => &host.remote_players,
+            NetRole::Joined(client) => &client.remote_players,
+        };
+        let eye = self.camera.eye_position();
+        let matrix = self.camera.view_proj();
+        let screen = self.window.inner_size();
+        let scale = self.window.scale_factor() as f32;
+        for (&id, p) in remote_players {
+            let target = p.pos + Vec3::Y * 2.15;
+            let distance = eye.distance(target);
+            if id == self.local_player_id
+                || distance > 48.0
+                || crate::raycast::raycast(
+                    &self.world,
+                    eye,
+                    target - eye,
+                    (distance - 0.3).max(0.0),
+                )
+                .is_some()
+            {
+                continue;
+            }
+            let clip = matrix * target.extend(1.0);
+            if clip.w <= 0.0 {
+                continue;
+            }
+            let ndc = clip.truncate() / clip.w;
+            if ndc.x.abs() > 1.0 || ndc.y.abs() > 1.0 || !(0.0..=1.0).contains(&ndc.z) {
+                continue;
+            }
+            let screen_pos = egui::pos2(
+                (ndc.x + 1.0) * 0.5 * screen.width as f32 / scale,
+                (1.0 - ndc.y) * 0.5 * screen.height as f32 / scale,
+            );
+            self.ui
+                .nameplates
+                .push((screen_pos, p.display_name.clone()));
             if let Some(bubble) = self.chat_bubbles.get(&id) {
-                self.ui.chat_bubbles.push((screen_pos-egui::vec2(0.0,26.0),bubble.text.clone(),bubble.opacity(now)));
+                self.ui.chat_bubbles.push((
+                    screen_pos - egui::vec2(0.0, 26.0),
+                    bubble.text.clone(),
+                    bubble.opacity(now),
+                ));
             }
         }
-        for book in crate::lore_books::nearby(&self.world,self.player.position) {
-            let target=book.pos+Vec3::Y;let distance=eye.distance(target);
-            if distance>28. || crate::raycast::raycast(&self.world,eye,target-eye,(distance-0.3).max(0.)).is_some(){continue;}
-            let clip=matrix*target.extend(1.);if clip.w<=0. {continue;}
-            let ndc=clip.truncate()/clip.w;
-            if ndc.x.abs()>1. || ndc.y.abs()>1. || !(0.0..=1.0).contains(&ndc.z){continue;}
-            let pos=egui::pos2((ndc.x+1.)*0.5*screen.width as f32/scale,(1.-ndc.y)*0.5*screen.height as f32/scale);
-            self.ui.nameplates.push((pos,"Recipe book [F]".into()));
+        for book in crate::lore_books::nearby(&self.world, self.player.position) {
+            let target = book.pos + Vec3::Y;
+            let distance = eye.distance(target);
+            if distance > 28.
+                || crate::raycast::raycast(&self.world, eye, target - eye, (distance - 0.3).max(0.))
+                    .is_some()
+            {
+                continue;
+            }
+            let clip = matrix * target.extend(1.);
+            if clip.w <= 0. {
+                continue;
+            }
+            let ndc = clip.truncate() / clip.w;
+            if ndc.x.abs() > 1. || ndc.y.abs() > 1. || !(0.0..=1.0).contains(&ndc.z) {
+                continue;
+            }
+            let pos = egui::pos2(
+                (ndc.x + 1.) * 0.5 * screen.width as f32 / scale,
+                (1. - ndc.y) * 0.5 * screen.height as f32 / scale,
+            );
+            self.ui.nameplates.push((pos, "Recipe book [F]".into()));
         }
-        for (camp,p) in self.nearby_guides() {
-            let target=p+Vec3::Y*2.15;let distance=eye.distance(target);
-            if crate::raycast::raycast(&self.world,eye,target-eye,(distance-0.3).max(0.)).is_some() {continue;}
-            let clip=matrix*target.extend(1.);if clip.w<=0. {continue;}
-            let ndc=clip.truncate()/clip.w;
-            if ndc.x.abs()>1. || ndc.y.abs()>1. || !(0. ..=1.).contains(&ndc.z) {continue;}
-            let pos=egui::pos2((ndc.x+1.)*0.5*screen.width as f32/scale,(1.-ndc.y)*0.5*screen.height as f32/scale);
-            self.ui.nameplates.push((pos,format!("{} · Campkeeper",crate::adventure::guide_name(camp))));
+        for (camp, p) in self.nearby_guides() {
+            let target = p + Vec3::Y * 2.15;
+            let distance = eye.distance(target);
+            if crate::raycast::raycast(&self.world, eye, target - eye, (distance - 0.3).max(0.))
+                .is_some()
+            {
+                continue;
+            }
+            let clip = matrix * target.extend(1.);
+            if clip.w <= 0. {
+                continue;
+            }
+            let ndc = clip.truncate() / clip.w;
+            if ndc.x.abs() > 1. || ndc.y.abs() > 1. || !(0. ..=1.).contains(&ndc.z) {
+                continue;
+            }
+            let pos = egui::pos2(
+                (ndc.x + 1.) * 0.5 * screen.width as f32 / scale,
+                (1. - ndc.y) * 0.5 * screen.height as f32 / scale,
+            );
+            self.ui.nameplates.push((
+                pos,
+                format!("{} · Campkeeper", crate::adventure::guide_name(camp)),
+            ));
         }
         for npc in &self.npcs {
-            let target=Vec3::from_array(npc.position)+Vec3::Y*2.2;let distance=eye.distance(target);
-            if distance>80. || crate::raycast::raycast(&self.world,eye,target-eye,(distance-0.3).max(0.)).is_some() {continue;}
-            if let Some(pos)=crate::compass::project(matrix,target,egui::vec2(screen.width as f32/scale,screen.height as f32/scale)) {
-                self.ui.nameplates.push((pos,format!("{} · Quests [F]",crate::quests::NAMES[npc.kind as usize])));
+            let target = Vec3::from_array(npc.position) + Vec3::Y * 2.2;
+            let distance = eye.distance(target);
+            if distance > 80.
+                || crate::raycast::raycast(&self.world, eye, target - eye, (distance - 0.3).max(0.))
+                    .is_some()
+            {
+                continue;
+            }
+            if let Some(pos) = crate::compass::project(
+                matrix,
+                target,
+                egui::vec2(screen.width as f32 / scale, screen.height as f32 / scale),
+            ) {
+                self.ui.nameplates.push((
+                    pos,
+                    format!("{} · Quests [F]", crate::quests::NAMES[npc.kind as usize]),
+                ));
             }
         }
-        let mut centers = vec![(pcx,pcz)];
+        let mut centers = vec![(pcx, pcz)];
         centers.extend(remote_chunks.iter().copied());
-        let mut missing=Vec::new();
-        for &(center_x,center_z) in &centers {
-        for cx in center_x-RENDER_RADIUS..=center_x+RENDER_RADIUS {for cz in center_z-RENDER_RADIUS..=center_z+RENDER_RADIUS {
-            if !self.world.chunks.contains_key(&(cx,cz)){missing.push((cx,cz));}
-        }}}
+        let mut missing = Vec::new();
+        for &(center_x, center_z) in &centers {
+            for cx in center_x - RENDER_RADIUS..=center_x + RENDER_RADIUS {
+                for cz in center_z - RENDER_RADIUS..=center_z + RENDER_RADIUS {
+                    if !self.world.chunks.contains_key(&(cx, cz)) {
+                        missing.push((cx, cz));
+                    }
+                }
+            }
+        }
         missing.sort_unstable();
         missing.dedup();
-        missing.sort_unstable_by_key(|&(x,z)|(centers.iter().map(|&(cx,cz)|(i64::from(x)-i64::from(cx)).pow(2)+(i64::from(z)-i64::from(cz)).pow(2)).min().unwrap(),x,z));
-        let generation_start=Instant::now();
-        for (i,(cx,cz)) in missing.into_iter().enumerate() {
-            if i>0 && (i>=2 || generation_start.elapsed()>=CHUNK_GENERATION_BUDGET){break;}
-            self.world.ensure_chunk_loaded(cx,cz);
+        missing.sort_unstable_by_key(|&(x, z)| {
+            (
+                centers
+                    .iter()
+                    .map(|&(cx, cz)| {
+                        (i64::from(x) - i64::from(cx)).pow(2)
+                            + (i64::from(z) - i64::from(cz)).pow(2)
+                    })
+                    .min()
+                    .unwrap(),
+                x,
+                z,
+            )
+        });
+        let generation_start = Instant::now();
+        for (i, (cx, cz)) in missing.into_iter().enumerate() {
+            if i > 0 && (i >= 2 || generation_start.elapsed() >= CHUNK_GENERATION_BUDGET) {
+                break;
+            }
+            self.world.ensure_chunk_loaded(cx, cz);
         }
 
         let mut rebuilt = 0usize;
-        let mut dirty_keys: Vec<(i32, i32)> = self.world.chunks.iter()
-            .filter(|(&(x,z),c)|c.dirty && (x-pcx).abs()<=RENDER_RADIUS && (z-pcz).abs()<=RENDER_RADIUS)
-            .map(|(k,_)|*k).collect();
-        dirty_keys.sort_unstable_by_key(|&(x,z)|((x-pcx).pow(2)+(z-pcz).pow(2),x,z));
-        let mesh_start=Instant::now();
+        let mut dirty_keys: Vec<(i32, i32)> = self
+            .world
+            .chunks
+            .iter()
+            .filter(|(&(x, z), c)| {
+                c.dirty && (x - pcx).abs() <= RENDER_RADIUS && (z - pcz).abs() <= RENDER_RADIUS
+            })
+            .map(|(k, _)| *k)
+            .collect();
+        dirty_keys.sort_unstable_by_key(|&(x, z)| ((x - pcx).pow(2) + (z - pcz).pow(2), x, z));
+        let mesh_start = Instant::now();
         for key in dirty_keys {
-            if rebuilt>0 && (rebuilt>=MESH_BUDGET_PER_FRAME || mesh_start.elapsed()>=CHUNK_MESH_BUDGET){break;}
+            if rebuilt > 0
+                && (rebuilt >= MESH_BUDGET_PER_FRAME || mesh_start.elapsed() >= CHUNK_MESH_BUDGET)
+            {
+                break;
+            }
             let mesh_data = {
                 let chunk = self.world.chunks.get(&key).unwrap();
-                self.waterfalls.insert(key, crate::water::scan_chunk(&self.world,chunk));
-                self.campfires.insert(key, crate::campfire::positions(chunk));
+                self.waterfalls
+                    .insert(key, crate::water::scan_chunk(&self.world, chunk));
+                self.campfires
+                    .insert(key, crate::campfire::positions(chunk));
                 build_chunk_mesh(&self.world, chunk)
             };
             match upload_mesh(&self.device, &mesh_data) {
@@ -4006,8 +5614,12 @@ impl App {
             .world
             .chunks
             .keys()
-            .filter(|(cx, cz)| ((cx - pcx).abs() > UNLOAD_RADIUS || (cz - pcz).abs() > UNLOAD_RADIUS)
-                && !remote_chunks.iter().any(|(rx, rz)| (cx - rx).abs() <= UNLOAD_RADIUS && (cz - rz).abs() <= UNLOAD_RADIUS))
+            .filter(|(cx, cz)| {
+                ((cx - pcx).abs() > UNLOAD_RADIUS || (cz - pcz).abs() > UNLOAD_RADIUS)
+                    && !remote_chunks.iter().any(|(rx, rz)| {
+                        (cx - rx).abs() <= UNLOAD_RADIUS && (cz - rz).abs() <= UNLOAD_RADIUS
+                    })
+            })
             .copied()
             .collect();
         for key in unload {
@@ -4023,19 +5635,35 @@ impl App {
     /// the already free-running `water_time` clock -- so it never needs its
     /// own per-particle state, just a fixed (x, z, phase) offset from the
     /// camera picked once at load in `build_rain_particles`.
-    fn write_rain_vertices(&self, cam_pos: Vec3, raining: bool, falls: &[crate::water::Waterfall]) -> u32 {
+    fn write_rain_vertices(
+        &self,
+        cam_pos: Vec3,
+        raining: bool,
+        falls: &[crate::water::Waterfall],
+    ) -> u32 {
         let half_h = RAIN_HEIGHT * 0.5;
         let mut verts: Vec<RainVertex> = Vec::with_capacity(self.rain_particles.len() * 2);
-        let mut roofs=crate::shelter::Roofs::default();
-        for &(ox, oz, phase) in self.rain_particles.iter().take(if raining {self.rain_particles.len()} else {0}) {
+        let mut roofs = crate::shelter::Roofs::default();
+        for &(ox, oz, phase) in self.rain_particles.iter().take(if raining {
+            self.rain_particles.len()
+        } else {
+            0
+        }) {
             let y = (phase - self.water_time * RAIN_FALL_SPEED).rem_euclid(RAIN_HEIGHT) - half_h;
             // Fade out near the top/bottom of the volume so a streak
             // doesn't visibly pop in/out of existence as it wraps.
             let alpha = RAIN_ALPHA * (half_h - y.abs()).clamp(0.0, 1.0);
             let x = cam_pos.x + ox;
             let z = cam_pos.z + oz;
-            let Some((bottom,top))=roofs.rain_segment(&self.world,x,z,
-                cam_pos.y+y-RAIN_STREAK_LENGTH*0.5,cam_pos.y+y+RAIN_STREAK_LENGTH*0.5) else {continue;};
+            let Some((bottom, top)) = roofs.rain_segment(
+                &self.world,
+                x,
+                z,
+                cam_pos.y + y - RAIN_STREAK_LENGTH * 0.5,
+                cam_pos.y + y + RAIN_STREAK_LENGTH * 0.5,
+            ) else {
+                continue;
+            };
             verts.push(RainVertex {
                 position: [x, top, z],
                 alpha,
@@ -4046,10 +5674,16 @@ impl App {
             });
         }
         for fall in falls.iter().take(crate::water::MAX_VISIBLE_FALLS) {
-            let fade = ((64.0-fall.sound_position().distance(cam_pos))/16.0).clamp(0.0,1.0);
-            for (p,q,alpha) in fall.lines(self.water_time) {
-                verts.push(RainVertex {position:p.to_array(),alpha:alpha*fade});
-                verts.push(RainVertex {position:q.to_array(),alpha:alpha*fade});
+            let fade = ((64.0 - fall.sound_position().distance(cam_pos)) / 16.0).clamp(0.0, 1.0);
+            for (p, q, alpha) in fall.lines(self.water_time) {
+                verts.push(RainVertex {
+                    position: p.to_array(),
+                    alpha: alpha * fade,
+                });
+                verts.push(RainVertex {
+                    position: q.to_array(),
+                    alpha: alpha * fade,
+                });
             }
         }
         self.queue
@@ -4071,9 +5705,9 @@ impl App {
         let underwater = is_in_water(&self.world, cam_pos);
         let light_view_proj = light_view_proj(lighting.sun_dir, self.player.position);
         let view_proj = self.camera.view_proj();
-        let camera_frustum=crate::visibility::Frustum::new(view_proj);
-        let sun_frustum=crate::visibility::Frustum::new(light_view_proj);
-        let (render_cx,render_cz)=chunk_of(self.player.position);
+        let camera_frustum = crate::visibility::Frustum::new(view_proj);
+        let sun_frustum = crate::visibility::Frustum::new(light_view_proj);
+        let (render_cx, render_cz) = chunk_of(self.player.position);
         let fog_color = if self.weather.current == Weather::Mist {
             [
                 sky[0] * (1.0 - MIST_FOG_BLEND) + MIST_FOG_TINT[0] * MIST_FOG_BLEND,
@@ -4083,35 +5717,73 @@ impl App {
         } else {
             [sky[0], sky[1], sky[2]]
         };
-        let mut campfires:Vec<_>=self.campfires.values().flatten().copied()
-            .filter(|p|p.distance_squared(cam_pos)<48.0*48.0).collect();
-        campfires.sort_by(|a,b|a.distance_squared(cam_pos).total_cmp(&b.distance_squared(cam_pos)));
+        let mut campfires: Vec<_> = self
+            .campfires
+            .values()
+            .flatten()
+            .copied()
+            .filter(|p| p.distance_squared(cam_pos) < 48.0 * 48.0)
+            .collect();
+        campfires.sort_by(|a, b| {
+            a.distance_squared(cam_pos)
+                .total_cmp(&b.distance_squared(cam_pos))
+        });
         campfires.truncate(8);
         self.audio.update_campfires(&campfires);
         self.audio.update_auras(&self.world.automation);
-        let fire_effects=crate::campfire::effects(&campfires,cam_pos,self.water_time);
-        let mut local_lights=self.machine_feedback.lights(&campfires,cam_pos);
-        let remote=match &self.net {NetRole::Host(host)=>&host.remote_players,NetRole::Joined(client)=>&client.remote_players};
-        let mut torch_carriers:Vec<_>=remote.iter().filter(|(id,p)|**id!=self.local_player_id
-            && p.torch_lit && p.pos.distance_squared(cam_pos)<24.*24.)
-            .map(|(_,p)|p.pos+Vec3::Y*1.5).collect();
-        torch_carriers.sort_by(|a,b|b.distance_squared(cam_pos).total_cmp(&a.distance_squared(cam_pos)));
-        for position in torch_carriers.iter().copied().rev().take(3).collect::<Vec<_>>().into_iter().rev() {
-            local_lights.rotate_right(1);local_lights[0]=crate::torch::light(position);
+        let fire_effects = crate::campfire::effects(&campfires, cam_pos, self.water_time);
+        let mut local_lights = self.machine_feedback.lights(&campfires, cam_pos);
+        let remote = match &self.net {
+            NetRole::Host(host) => &host.remote_players,
+            NetRole::Joined(client) => &client.remote_players,
+        };
+        let mut torch_carriers: Vec<_> = remote
+            .iter()
+            .filter(|(id, p)| {
+                **id != self.local_player_id
+                    && p.torch_lit
+                    && p.pos.distance_squared(cam_pos) < 24. * 24.
+            })
+            .map(|(_, p)| p.pos + Vec3::Y * 1.5)
+            .collect();
+        torch_carriers.sort_by(|a, b| {
+            b.distance_squared(cam_pos)
+                .total_cmp(&a.distance_squared(cam_pos))
+        });
+        for position in torch_carriers
+            .iter()
+            .copied()
+            .rev()
+            .take(3)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+        {
+            local_lights.rotate_right(1);
+            local_lights[0] = crate::torch::light(position);
         }
         if crate::adventure::lantern_light(&self.player.crafting) {
             local_lights.rotate_right(1);
-            local_lights[0]=(cam_pos+self.camera.forward()*0.4).extend(-6.0).to_array();
+            local_lights[0] = (cam_pos + self.camera.forward() * 0.4)
+                .extend(-6.0)
+                .to_array();
         }
-        if crate::torch::equipped(&self.player.crafting) && self.player.health>0. {
-            let candidate=cam_pos-self.camera.right()*0.35+self.camera.forward()*0.4;
-            let position=if crate::light_visibility::clear_ray(&self.world,cam_pos,candidate) {candidate}else{cam_pos};
-            local_lights.rotate_right(1);local_lights[0]=crate::torch::light(position);
+        if crate::torch::equipped(&self.player.crafting) && self.player.health > 0. {
+            let candidate = cam_pos - self.camera.right() * 0.35 + self.camera.forward() * 0.4;
+            let position = if crate::light_visibility::clear_ray(&self.world, cam_pos, candidate) {
+                candidate
+            } else {
+                cam_pos
+            };
+            local_lights.rotate_right(1);
+            local_lights[0] = crate::torch::light(position);
             torch_carriers.push(position);
         }
         self.audio.update_torches(&torch_carriers);
-        self.light_visibility.update(&self.world,&local_lights,&self.queue);
-        self.campfire_mesh.update(&self.device,&self.queue,&fire_effects);
+        self.light_visibility
+            .update(&self.world, &local_lights, &self.queue);
+        self.campfire_mesh
+            .update(&self.device, &self.queue, &fire_effects);
         let uniform = CameraUniform {
             camp_lights: local_lights,
             view_proj: view_proj.to_cols_array_2d(),
@@ -4119,7 +5791,12 @@ impl App {
             inv_view_proj: view_proj.inverse().to_cols_array_2d(),
             camera_pos: [cam_pos.x, cam_pos.y, cam_pos.z, 1.0],
             fog_color: [fog_color[0], fog_color[1], fog_color[2], 1.0],
-            zenith_color: [zenith[0], zenith[1], zenith[2], 1.0],
+            zenith_color: [
+                zenith[0],
+                zenith[1],
+                zenith[2],
+                self.surface_weather.cloud_fullness,
+            ],
             sun_dir: [
                 lighting.sun_dir.x,
                 lighting.sun_dir.y,
@@ -4135,8 +5812,14 @@ impl App {
             weather_fx: [
                 self.lightning_flash,
                 clouds,
-                if underwater {1.0} else {0.0},
+                if underwater { 1.0 } else { 0.0 },
                 self.surface_weather.wetness,
+            ],
+            graphics: [
+                if self.ui.settings.values.graphics.water_fresnel { 1.0 } else { 0.0 },
+                0.0,
+                0.0,
+                0.0,
             ],
         };
         self.queue
@@ -4144,33 +5827,94 @@ impl App {
         self.queue.write_buffer(
             &self.shadow_light_buffer,
             0,
-            bytemuck::bytes_of(&LightUniform { view_proj: light_view_proj.to_cols_array_2d(), motion:[self.water_time,self.weather.current.wind_strength(),0.,0.] }),
+            bytemuck::bytes_of(&LightUniform {
+                view_proj: light_view_proj.to_cols_array_2d(),
+                motion: [
+                    self.water_time,
+                    self.weather.current.wind_strength(),
+                    0.,
+                    0.,
+                ],
+            }),
         );
 
-        let target = if self.cursor_grabbed && !self.ui.automation.tools_suspended() && self.ui.settings.values.gameplay.show_block_target {
+        let target = if self.cursor_grabbed
+            && !self.ui.automation.tools_suspended()
+            && self.ui.settings.values.gameplay.show_block_target
+        {
             raycast(&self.world, cam_pos, self.camera.forward(), REACH).map(|hit| {
-                let breakable = crate::equipment::can_mine(self.player.crafting.hotbar.entry(),self.world.get_block(hit.target.0,hit.target.1,hit.target.2),&self.player.crafting);
-                let mut account=self.player.crafting.clone();
-                let players=match &self.net {
-                    NetRole::Host(host)=>host.remote_players.values().map(|p|p.pos).collect::<Vec<_>>(),
-                    NetRole::Joined(client)=>client.remote_players.values().map(|p|p.pos).collect::<Vec<_>>(),
+                let breakable = crate::equipment::can_mine(
+                    self.player.crafting.hotbar.entry(),
+                    self.world
+                        .get_block(hit.target.0, hit.target.1, hit.target.2),
+                    &self.player.crafting,
+                );
+                let mut account = self.player.crafting.clone();
+                let players = match &self.net {
+                    NetRole::Host(host) => host
+                        .remote_players
+                        .values()
+                        .map(|p| p.pos)
+                        .collect::<Vec<_>>(),
+                    NetRole::Joined(client) => client
+                        .remote_players
+                        .values()
+                        .map(|p| p.pos)
+                        .collect::<Vec<_>>(),
                 };
-                let intent=crate::equipment::Intent{hotbar:account.hotbar.clone(),item:account.hotbar.entry(),target:Some(hit.target),direction:self.camera.forward().to_array(),action:crate::equipment::Action::Place};
-                let placeable=matches!(crate::equipment::block_action(&self.world,&mut account,&mut crate::equipment::Mining::default(),self.player.position,&players,&intent),Ok(Some(_)));
+                let intent = crate::equipment::Intent {
+                    hotbar: account.hotbar.clone(),
+                    item: account.hotbar.entry(),
+                    target: Some(hit.target),
+                    direction: self.camera.forward().to_array(),
+                    action: crate::equipment::Action::Place,
+                };
+                let placeable = matches!(
+                    crate::equipment::block_action(
+                        &self.world,
+                        &mut account,
+                        &mut crate::equipment::Mining::default(),
+                        self.player.position,
+                        &players,
+                        &intent
+                    ),
+                    Ok(Some(_))
+                );
                 (hit, breakable, placeable)
             })
-        } else { None };
+        } else {
+            None
+        };
         self.block_target.update(&self.queue, target);
 
-        self.wind.prepare(&self.queue,cam_pos,self.camera.right(),self.camera.right().cross(self.camera.forward()),&self.world,underwater,self.weather.current);
+        self.wind.prepare(
+            &self.queue,
+            cam_pos,
+            self.camera.right(),
+            self.camera.right().cross(self.camera.forward()),
+            &self.world,
+            underwater,
+            self.weather.current,
+        );
         let raining = self.weather.current.has_rain_particles() && !underwater;
-        let mut falls: Vec<_> = self.waterfalls.values().flatten().copied()
-            .filter(|f|f.sound_position().distance_squared(cam_pos)<64.0*64.0).collect();
-        falls.sort_by(|a,b|a.sound_position().distance_squared(cam_pos).total_cmp(&b.sound_position().distance_squared(cam_pos)));
+        let mut falls: Vec<_> = self
+            .waterfalls
+            .values()
+            .flatten()
+            .copied()
+            .filter(|f| f.sound_position().distance_squared(cam_pos) < 64.0 * 64.0)
+            .collect();
+        falls.sort_by(|a, b| {
+            a.sound_position()
+                .distance_squared(cam_pos)
+                .total_cmp(&b.sound_position().distance_squared(cam_pos))
+        });
         falls.truncate(crate::water::MAX_VISIBLE_FALLS);
         self.audio.update_waterfalls(&falls);
-        let rain_vertex_count = self.write_rain_vertices(cam_pos,raining,&falls);
-        let bird_vertex_count = if underwater { 0 } else if let Some(flock) = &self.bird_flock {
+        let rain_vertex_count = self.write_rain_vertices(cam_pos, raining, &falls);
+        let bird_vertex_count = if underwater {
+            0
+        } else if let Some(flock) = &self.bird_flock {
             let count = (flock.birds.len() * BIRD_VERTICES_PER_BIRD) as u32;
             self.write_bird_vertices();
             count
@@ -4193,7 +5937,10 @@ impl App {
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.shadow_view,
-                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
                     stencil_ops: None,
                 }),
                 occlusion_query_set: None,
@@ -4202,16 +5949,20 @@ impl App {
             shadow_pass.set_pipeline(&self.shadow_pipeline);
             shadow_pass.set_bind_group(0, &self.shadow_light_bind_group, &[]);
             shadow_pass.set_bind_group(1, &self.texture_bind_group, &[]);
-            for (&(cx,cz),mesh) in &self.chunk_meshes {
-                if !sun_frustum.chunk(cx,cz){continue;}
+            for (&(cx, cz), mesh) in &self.chunk_meshes {
+                if !sun_frustum.chunk(cx, cz) {
+                    continue;
+                }
                 shadow_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                shadow_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                shadow_pass
+                    .set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 shadow_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
             }
             if self.entity_mesh.index_count > 0 {
                 let mesh = &self.entity_mesh;
                 shadow_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                shadow_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                shadow_pass
+                    .set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 shadow_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
             }
         }
@@ -4220,7 +5971,7 @@ impl App {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: &self.water_reflections.scene,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -4256,8 +6007,15 @@ impl App {
             rpass.set_bind_group(1, &self.texture_bind_group, &[]);
             rpass.set_bind_group(2, &self.shadow_sample_bind_group, &[]);
             rpass.set_bind_group(3, &self.light_visibility.bind_group, &[]);
-            for (&(cx,cz),mesh) in &self.chunk_meshes {
-                if !crate::visibility::within_terrain_range((cx,cz),(render_cx,render_cz),RENDER_RADIUS) || !camera_frustum.chunk(cx,cz){continue;}
+            for (&(cx, cz), mesh) in &self.chunk_meshes {
+                if !crate::visibility::within_terrain_range(
+                    (cx, cz),
+                    (render_cx, render_cz),
+                    RENDER_RADIUS,
+                ) || !camera_frustum.chunk(cx, cz)
+                {
+                    continue;
+                }
                 rpass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                 rpass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 rpass.draw_indexed(0..mesh.index_count, 0, 0..1);
@@ -4270,10 +6028,10 @@ impl App {
             }
             // Fire/smoke use the main material pipeline but never cast sun shadows.
             if self.campfire_mesh.index_count > 0 {
-                let mesh=&self.campfire_mesh;
-                rpass.set_vertex_buffer(0,mesh.vertex_buffer.slice(..));
-                rpass.set_index_buffer(mesh.index_buffer.slice(..),wgpu::IndexFormat::Uint32);
-                rpass.draw_indexed(0..mesh.index_count,0,0..1);
+                let mesh = &self.campfire_mesh;
+                rpass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                rpass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                rpass.draw_indexed(0..mesh.index_count, 0, 0..1);
             }
             if rain_vertex_count > 0 {
                 rpass.set_pipeline(&self.rain_pipeline);
@@ -4287,21 +6045,46 @@ impl App {
                 rpass.set_vertex_buffer(0, self.bird_vertex_buffer.slice(..));
                 rpass.draw(0..bird_vertex_count, 0..1);
             }
-            self.wind.draw(&mut rpass,&self.camera_bind_group);
+            self.wind.draw(&mut rpass, &self.camera_bind_group);
             self.block_target.draw(&mut rpass, &self.camera_bind_group);
         }
 
+        self.water_reflections.draw(&mut encoder, &view, &self.camera_bind_group);
+
         if self.cursor_grabbed {
             // Separate depth so the local view model cannot clip through nearby terrain.
-            let mut pass=encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label:Some("held item pass"),
-                color_attachments:&[Some(wgpu::RenderPassColorAttachment {view:&view,resolve_target:None,ops:wgpu::Operations{load:wgpu::LoadOp::Load,store:wgpu::StoreOp::Store}})],
-                depth_stencil_attachment:Some(wgpu::RenderPassDepthStencilAttachment{view:&self.depth_view,depth_ops:Some(wgpu::Operations{load:wgpu::LoadOp::Clear(1.0),store:wgpu::StoreOp::Store}),stencil_ops:None}),
-                occlusion_query_set:None,timestamp_writes:None,
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("held item pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                occlusion_query_set: None,
+                timestamp_writes: None,
             });
-            pass.set_pipeline(&self.render_pipeline);pass.set_bind_group(0,&self.camera_bind_group,&[]);pass.set_bind_group(1,&self.texture_bind_group,&[]);pass.set_bind_group(2,&self.shadow_sample_bind_group,&[]);
-            pass.set_bind_group(3,&self.light_visibility.bind_group,&[]);
-            pass.set_vertex_buffer(0,self.held_mesh.vertex_buffer.slice(..));pass.set_index_buffer(self.held_mesh.index_buffer.slice(..),wgpu::IndexFormat::Uint32);pass.draw_indexed(0..self.held_mesh.index_count,0,0..1);
+            pass.set_pipeline(&self.render_pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_bind_group(1, &self.texture_bind_group, &[]);
+            pass.set_bind_group(2, &self.shadow_sample_bind_group, &[]);
+            pass.set_bind_group(3, &self.light_visibility.bind_group, &[]);
+            pass.set_vertex_buffer(0, self.held_mesh.vertex_buffer.slice(..));
+            pass.set_index_buffer(
+                self.held_mesh.index_buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            pass.draw_indexed(0..self.held_mesh.index_count, 0, 0..1);
         }
 
         if let Some(full_output) = self.pending_egui_output.take() {
@@ -4322,10 +6105,19 @@ impl App {
     }
 
     pub fn save(&self) {
-        let goodbye = encode(&Packet::Reliable { id: u64::MAX, msg: ReliableMsg::Goodbye });
+        let goodbye = encode(&Packet::Reliable {
+            id: u64::MAX,
+            msg: ReliableMsg::Goodbye,
+        });
         match &self.net {
-            NetRole::Host(host) => for &peer in host.clients.keys() { let _ = host.socket.send_to(&goodbye,peer); },
-            NetRole::Joined(client) => { let _ = client.socket.send_to(&goodbye,client.server_addr); }
+            NetRole::Host(host) => {
+                for &peer in host.clients.keys() {
+                    let _ = host.socket.send_to(&goodbye, peer);
+                }
+            }
+            NetRole::Joined(client) => {
+                let _ = client.socket.send_to(&goodbye, client.server_addr);
+            }
         }
         if matches!(self.net, NetRole::Host(_)) {
             if let Err(error) = save_world(
@@ -4335,7 +6127,9 @@ impl App {
                 self.time_of_day,
                 self.scripting.save_entries(),
                 &self.crafting_save(),
-            ) { log::error!("{error}"); }
+            ) {
+                log::error!("{error}");
+            }
         }
     }
 
@@ -4354,11 +6148,9 @@ impl App {
 /// prints it and exits).
 type JoinedSession = (Transport, Peer, PlayerId, World, Vec3, f32, ReliableChannel);
 
-fn join_handshake(
-    target: JoinTarget,
-    nickname: &str,
-) -> Result<JoinedSession, String> {
-    let settings = crate::settings::Settings::load(std::path::Path::new("settings.json")).unwrap_or_default();
+fn join_handshake(target: JoinTarget, nickname: &str) -> Result<JoinedSession, String> {
+    let settings =
+        crate::settings::Settings::load(std::path::Path::new("settings.json")).unwrap_or_default();
     let (socket, server_addr) = Transport::join(target, settings.multiplayer.steam_app_id)?;
     let mut reliable = ReliableChannel::new();
     let hello_id = reliable.send(
@@ -4384,14 +6176,25 @@ fn join_handshake(
         reliable.resend_due(&socket);
         match socket.recv_from(&mut buf) {
             Ok((n, from)) if from == server_addr => {
-                if let Some(Packet::Reliable { id, msg: ReliableMsg::JoinRejected(reason) }) = decode(&buf[..n]) {
+                if let Some(Packet::Reliable {
+                    id,
+                    msg: ReliableMsg::JoinRejected(reason),
+                }) = decode(&buf[..n])
+                {
                     ReliableChannel::ack_reply(&socket, server_addr, id);
                     return Err(reason);
                 }
                 if let Some(Packet::Reliable { id, msg }) = decode(&buf[..n]) {
-                    if !matches!(msg, ReliableMsg::Welcome {..} | ReliableMsg::WorldEditsChunk {..}) { continue; }
+                    if !matches!(
+                        msg,
+                        ReliableMsg::Welcome { .. } | ReliableMsg::WorldEditsChunk { .. }
+                    ) {
+                        continue;
+                    }
                     ReliableChannel::ack_reply(&socket, server_addr, id);
-                    if !reliable.mark_seen(server_addr,id) { continue; }
+                    if !reliable.mark_seen(server_addr, id) {
+                        continue;
+                    }
                     if let Some(initial) = transfer.accept(msg)? {
                         reliable.forget(hello_id);
                         let mut world = World::new(initial.seed);
@@ -4399,7 +6202,15 @@ fn join_handshake(
                         world.starter_camp = initial.starter_camp;
                         world.edits.extend(initial.edits);
                         world.rebuild_redstone_positions();
-                        return Ok((socket,server_addr,initial.player_id,world,Vec3::from_array(initial.spawn),initial.time_of_day,reliable));
+                        return Ok((
+                            socket,
+                            server_addr,
+                            initial.player_id,
+                            world,
+                            Vec3::from_array(initial.spawn),
+                            initial.time_of_day,
+                            reliable,
+                        ));
                     }
                 }
             }
@@ -4434,7 +6245,11 @@ fn create_atlas_bind_group(
     let image = image::load_from_memory(ATLAS_BYTES)
         .expect("embedded atlas.png should decode")
         .to_rgba8();
-    let mips=crate::texture_mips::atlas(&image,crate::voxel::atlas_tiles::ATLAS_COLS,crate::voxel::atlas_tiles::ATLAS_ROWS);
+    let mips = crate::texture_mips::atlas(
+        &image,
+        crate::voxel::atlas_tiles::ATLAS_COLS,
+        crate::voxel::atlas_tiles::ATLAS_ROWS,
+    );
     let (width, height) = image.dimensions();
     let size = wgpu::Extent3d {
         width,
@@ -4452,24 +6267,28 @@ fn create_atlas_bind_group(
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    for (level,image) in mips.iter().enumerate() {
-    let (width,height)=image.dimensions();
-    let size=wgpu::Extent3d{width,height,depth_or_array_layers:1};
-    queue.write_texture(
-        wgpu::ImageCopyTexture {
-            texture: &texture,
-            mip_level: level as u32,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        &image,
-        wgpu::ImageDataLayout {
-            offset: 0,
-            bytes_per_row: Some(4 * width),
-            rows_per_image: Some(height),
-        },
-        size,
-    );
+    for (level, image) in mips.iter().enumerate() {
+        let (width, height) = image.dimensions();
+        let size = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &texture,
+                mip_level: level as u32,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &image,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * width),
+                rows_per_image: Some(height),
+            },
+            size,
+        );
     }
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -4524,7 +6343,11 @@ fn create_atlas_bind_group(
             wgpu::ImageCopyTexture {
                 texture: &creature_texture,
                 mip_level: 0,
-                origin: wgpu::Origin3d { x: 0, y: 0, z: layer_idx as u32 },
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: 0,
+                    z: layer_idx as u32,
+                },
                 aspect: wgpu::TextureAspect::All,
             },
             &pixels,
@@ -4533,7 +6356,11 @@ fn create_atlas_bind_group(
                 bytes_per_row: Some(4 * CREATURE_TEXTURE_SIZE),
                 rows_per_image: Some(CREATURE_TEXTURE_SIZE),
             },
-            wgpu::Extent3d { width: CREATURE_TEXTURE_SIZE, height: CREATURE_TEXTURE_SIZE, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: CREATURE_TEXTURE_SIZE,
+                height: CREATURE_TEXTURE_SIZE,
+                depth_or_array_layers: 1,
+            },
         );
     }
     let creature_view = creature_texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -4606,10 +6433,17 @@ struct ShadowResources {
 /// Sets up everything needed for a simple single-cascade directional
 /// shadow map: a depth texture rendered from the sun's point of view each
 /// frame, and the resources the main pass needs to sample it back.
-fn create_shadow_resources(device: &wgpu::Device, atlas_bgl:&wgpu::BindGroupLayout) -> ShadowResources {
+fn create_shadow_resources(
+    device: &wgpu::Device,
+    atlas_bgl: &wgpu::BindGroupLayout,
+) -> ShadowResources {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("shadow map"),
-        size: wgpu::Extent3d { width: SHADOW_MAP_SIZE, height: SHADOW_MAP_SIZE, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: SHADOW_MAP_SIZE,
+            height: SHADOW_MAP_SIZE,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -4627,31 +6461,47 @@ fn create_shadow_resources(device: &wgpu::Device, atlas_bgl:&wgpu::BindGroupLayo
     });
     let light_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("shadow light bgl"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
             },
-            count: None,
-        }, wgpu::BindGroupLayoutEntry {
-            binding:1,visibility:wgpu::ShaderStages::FRAGMENT,
-            ty:wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),count:None,
-        }],
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
     });
-    let alpha_sampler=device.create_sampler(&wgpu::SamplerDescriptor {
-        label:Some("filtered shadow cutouts"),
-        mag_filter:wgpu::FilterMode::Linear,min_filter:wgpu::FilterMode::Linear,mipmap_filter:wgpu::FilterMode::Linear,
-        address_mode_u:wgpu::AddressMode::ClampToEdge,address_mode_v:wgpu::AddressMode::ClampToEdge,
+    let alpha_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("filtered shadow cutouts"),
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::FilterMode::Linear,
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
         ..Default::default()
     });
     let light_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("shadow light bind group"),
         layout: &light_bgl,
-        entries: &[wgpu::BindGroupEntry { binding: 0, resource: light_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry {binding:1,resource:wgpu::BindingResource::Sampler(&alpha_sampler)}],
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: light_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&alpha_sampler),
+            },
+        ],
     });
 
     let shadow_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -4659,15 +6509,21 @@ fn create_shadow_resources(device: &wgpu::Device, atlas_bgl:&wgpu::BindGroupLayo
         source: wgpu::ShaderSource::Wgsl({
             #[cfg(test)]
             if std::env::var_os("VOXEL_SHADOW_LEGACY").is_some() {
-                std::fs::read_to_string("target/shadow-caster-before.wgsl").expect("saved pre-fix shadow caster").into()
-            } else {include_str!("shadow.wgsl").into()}
+                std::fs::read_to_string("target/shadow-caster-before.wgsl")
+                    .expect("saved pre-fix shadow caster")
+                    .into()
+            } else {
+                include_str!("shadow.wgsl").into()
+            }
             #[cfg(not(test))]
-            {include_str!("shadow.wgsl").into()}
+            {
+                include_str!("shadow.wgsl").into()
+            }
         }),
     });
     let shadow_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("shadow pipeline layout"),
-        bind_group_layouts: &[&light_bgl,atlas_bgl],
+        bind_group_layouts: &[&light_bgl, atlas_bgl],
         push_constant_ranges: &[],
     });
     // Reuse terrain/model vertices for matching wind and alpha-cutout shadows.
@@ -4675,8 +6531,16 @@ fn create_shadow_resources(device: &wgpu::Device, atlas_bgl:&wgpu::BindGroupLayo
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("shadow pipeline"),
         layout: Some(&shadow_pipeline_layout),
-        vertex: wgpu::VertexState { module: &shadow_shader, entry_point: "vs_main", buffers: &[shadow_vertex_layout] },
-        fragment: Some(wgpu::FragmentState {module:&shadow_shader,entry_point:"fs_main",targets:&[]}),
+        vertex: wgpu::VertexState {
+            module: &shadow_shader,
+            entry_point: "vs_main",
+            buffers: &[shadow_vertex_layout],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shadow_shader,
+            entry_point: "fs_main",
+            targets: &[],
+        }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
             strip_index_format: None,
@@ -4737,12 +6601,25 @@ fn create_shadow_resources(device: &wgpu::Device, atlas_bgl:&wgpu::BindGroupLayo
         label: Some("shadow sample bind group"),
         layout: &sample_bgl,
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
         ],
     });
 
-    ShadowResources { pipeline, view, light_buffer, light_bind_group, sample_bgl, sample_bind_group }
+    ShadowResources {
+        pipeline,
+        view,
+        light_buffer,
+        light_bind_group,
+        sample_bgl,
+        sample_bind_group,
+    }
 }
 
 fn create_depth_view(
@@ -4760,7 +6637,7 @@ fn create_depth_view(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Depth32Float,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
     texture.create_view(&wgpu::TextureViewDescriptor::default())
@@ -4827,7 +6704,9 @@ mod join_tests {
     #[test]
     fn actual_join_handshake_loads_chunked_saved_world() {
         let host = Transport::direct("127.0.0.1:0").unwrap();
-        let Peer::Direct(address) = host.local_peer() else { unreachable!() };
+        let Peer::Direct(address) = host.local_peer() else {
+            unreachable!()
+        };
         let server = std::thread::spawn(move || {
             let mut reliable = ReliableChannel::new();
             let mut admitted = false;
@@ -4836,19 +6715,36 @@ mod join_tests {
             while Instant::now() < deadline {
                 if let Ok((n, peer)) = host.recv_from(&mut bytes) {
                     match decode(&bytes[..n]) {
-                        Some(Packet::Reliable { id, msg: ReliableMsg::Hello { protocol, .. } }) => {
-                            assert_eq!(protocol,net::PROTOCOL_VERSION);
-                            ReliableChannel::ack_reply(&host,peer,id);
+                        Some(Packet::Reliable {
+                            id,
+                            msg: ReliableMsg::Hello { protocol, .. },
+                        }) => {
+                            assert_eq!(protocol, net::PROTOCOL_VERSION);
+                            ReliableChannel::ack_reply(&host, peer, id);
                             if !admitted {
                                 admitted = true;
-                                let edits = (0..5000).map(|x| ((x,40,1), BlockType::Stone)).collect();
-                                for msg in net::welcome_messages(1,123,Default::default(),0.7,[2.,70.,2.],edits,None).unwrap() {
-                                    reliable.send(&host,peer,msg);
+                                let edits =
+                                    (0..5000).map(|x| ((x, 40, 1), BlockType::Stone)).collect();
+                                for msg in net::welcome_messages(
+                                    1,
+                                    123,
+                                    Default::default(),
+                                    0.7,
+                                    [2., 70., 2.],
+                                    edits,
+                                    None,
+                                )
+                                .unwrap()
+                                {
+                                    reliable.send(&host, peer, msg);
                                 }
                             }
                         }
-                        Some(Packet::Ack { id }) => reliable.ack(id,peer),
-                        Some(Packet::Reliable { msg: ReliableMsg::Goodbye, .. }) => return,
+                        Some(Packet::Ack { id }) => reliable.ack(id, peer),
+                        Some(Packet::Reliable {
+                            msg: ReliableMsg::Goodbye,
+                            ..
+                        }) => return,
                         _ => {}
                     }
                 }
@@ -4857,16 +6753,25 @@ mod join_tests {
             }
             panic!("join did not finish");
         });
-        let (socket,peer,id,mut world,spawn,time,_) = join_handshake(JoinTarget::Direct(address),"Test").unwrap();
-        assert_eq!(id,1);
-        assert_eq!(world.seed,123);
-        assert_eq!(world.edits.len(),5000);
-        let (cx,cz)=world_to_chunk(4999,1);
-        world.ensure_chunk_loaded(cx,cz);
-        assert_eq!(world.get_block(4999,40,1),BlockType::Stone);
-        assert_eq!(spawn,Vec3::new(2.,70.,2.));
-        assert_eq!(time,0.7);
-        socket.send_to(&encode(&Packet::Reliable {id:999,msg:ReliableMsg::Goodbye}),peer).unwrap();
+        let (socket, peer, id, mut world, spawn, time, _) =
+            join_handshake(JoinTarget::Direct(address), "Test").unwrap();
+        assert_eq!(id, 1);
+        assert_eq!(world.seed, 123);
+        assert_eq!(world.edits.len(), 5000);
+        let (cx, cz) = world_to_chunk(4999, 1);
+        world.ensure_chunk_loaded(cx, cz);
+        assert_eq!(world.get_block(4999, 40, 1), BlockType::Stone);
+        assert_eq!(spawn, Vec3::new(2., 70., 2.));
+        assert_eq!(time, 0.7);
+        socket
+            .send_to(
+                &encode(&Packet::Reliable {
+                    id: 999,
+                    msg: ReliableMsg::Goodbye,
+                }),
+                peer,
+            )
+            .unwrap();
         server.join().unwrap();
     }
 }
@@ -4876,28 +6781,38 @@ mod underwater_tests {
     use super::*;
     #[test]
     fn underwater_view_uses_eyes_and_clears_above_surface() {
-        let mut world=World::new(42);
-        let mut chunk=crate::voxel::chunk::Chunk::new(0,0);
-        chunk.set_local(2,18,2,BlockType::Water);
-        chunk.set_local(2,17,2,BlockType::Water);
-        world.chunks.insert((0,0),chunk);
-        let mut camera=Camera::new(Vec3::new(2.5,17.0,2.5),1.0);
-        assert!(is_in_water(&world,camera.eye_position()));
-        camera.position.y=17.5;
-        assert!(is_in_water(&world,camera.position));
-        assert!(!is_in_water(&world,camera.eye_position()),"wading must not tint the view");
-        camera.position.x=3.5;
-        assert!(!is_in_water(&world,camera.eye_position()));
+        let mut world = World::new(42);
+        let mut chunk = crate::voxel::chunk::Chunk::new(0, 0);
+        chunk.set_local(2, 18, 2, BlockType::Water);
+        chunk.set_local(2, 17, 2, BlockType::Water);
+        world.chunks.insert((0, 0), chunk);
+        let mut camera = Camera::new(Vec3::new(2.5, 17.0, 2.5), 1.0);
+        assert!(is_in_water(&world, camera.eye_position()));
+        camera.position.y = 17.5;
+        assert!(is_in_water(&world, camera.position));
+        assert!(
+            !is_in_water(&world, camera.eye_position()),
+            "wading must not tint the view"
+        );
+        camera.position.x = 3.5;
+        assert!(!is_in_water(&world, camera.eye_position()));
     }
     #[test]
     #[ignore = "requires a GPU adapter; validates terrain and underwater sky shaders"]
     fn validate_underwater_shaders() {
-        let instance=wgpu::Instance::default();
-        let adapter=pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
-        let (device,_)=pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(),None)).unwrap();
+        let instance = wgpu::Instance::default();
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .unwrap();
+        let (device, _) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
+                .unwrap();
         device.push_error_scope(wgpu::ErrorFilter::Validation);
-        for source in [include_str!("shader.wgsl"),include_str!("sky.wgsl")] {
-            device.create_shader_module(wgpu::ShaderModuleDescriptor {label:Some("underwater validation"),source:wgpu::ShaderSource::Wgsl(source.into())});
+        for source in [include_str!("shader.wgsl"), include_str!("sky.wgsl")] {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("underwater validation"),
+                source: wgpu::ShaderSource::Wgsl(source.into()),
+            });
         }
         assert!(pollster::block_on(device.pop_error_scope()).is_none());
     }

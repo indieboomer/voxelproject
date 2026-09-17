@@ -9,7 +9,7 @@ use crate::voxel::block::BlockType;
 pub type PlayerId = u32;
 pub type WorldEdit = ((i32, i32, i32), BlockType);
 pub const MAX_PLAYERS: usize = 4;
-pub const PROTOCOL_VERSION: u32 = 45;
+pub const PROTOCOL_VERSION: u32 = 47;
 pub const HOST_PLAYER_ID: PlayerId = 0;
 pub const DEFAULT_PORT: u16 = 7878;
 pub const RELIABLE_RESEND_INTERVAL: Duration = Duration::from_millis(200);
@@ -123,31 +123,65 @@ pub enum ReliableMsg {
         pos: [f32; 3],
     },
     // Append variants so older Hello messages still reach protocol-version rejection.
-    RuleProposal { prompt: String, source: String },
-    RuleProposalResult { accepted: bool, message: String },
-    DeathPuffs(Vec<[f32;3]>),
+    RuleProposal {
+        prompt: String,
+        source: String,
+    },
+    RuleProposalResult {
+        accepted: bool,
+        message: String,
+    },
+    DeathPuffs(Vec<[f32; 3]>),
     DisplayName(String),
     /// Host -> collector only. Inventory balances travel separately in CraftState.
-    LootCollected(Vec<(BlockType,u32)>),
+    LootCollected(Vec<(BlockType, u32)>),
     /// Host-attributed chat for both scrollback and the speaker's overhead bubble.
-    PlayerChat { player_id: PlayerId, name: String, text: String },
+    PlayerChat {
+        player_id: PlayerId,
+        name: String,
+        text: String,
+    },
     AutomationAction(crate::automation::Action),
     AutomationState(crate::automation_net::Chunk),
-    AutomationResult {ok:bool,feedback:String},
+    AutomationResult {
+        ok: bool,
+        feedback: String,
+    },
     CampAction(crate::adventure::Action),
     CampResult(String),
-    Recovered {pos:[f32;3]},
+    Recovered {
+        pos: [f32; 3],
+    },
     QuestAction(crate::quests::Action),
     Npcs(Vec<crate::npc::Npc>),
-    ReadRecipeBook((i32,i32,u8)),
-    RecipeBookResult(Result<u8,String>),
-    EatFood{block:BlockType,revision:u64},
+    ReadRecipeBook((i32, i32, u8)),
+    RecipeBookResult(Result<u8, String>),
+    EatFood {
+        block: BlockType,
+        revision: u64,
+    },
     FoodResult(String),
-    SpellCastFx { origin: [f32;3], target: [f32;3] },
-    SpellCatalog { session:u64, revision:u64, spells:Vec<crate::spell_network::Summary> },
+    SpellCastFx {
+        origin: [f32; 3],
+        target: [f32; 3],
+    },
+    SpellCatalog {
+        session: u64,
+        revision: u64,
+        spells: Vec<crate::spell_network::Summary>,
+    },
     CastSpell(crate::spell_network::Request),
-    SpellResult { session:u64, sequence:u64, spell:u64, remaining:f32, message:String },
-    Enchantments {revision:u64,summaries:Vec<crate::enchantment::Summary>},
+    SpellResult {
+        session: u64,
+        sequence: u64,
+        spell: u64,
+        remaining: f32,
+        message: String,
+    },
+    Enchantments {
+        revision: u64,
+        summaries: Vec<crate::enchantment::Summary>,
+    },
 }
 
 /// One player's position/status as carried in a `Snapshot` -- see
@@ -195,7 +229,7 @@ pub enum UnreliableMsg {
         /// `creature::Creatures::snapshot`/`AnimClip::to_u8` for what the
         /// two anim fields mean.
         creatures: Vec<([f32; 3], u8, f32, u8, f32)>,
-        creature_vitals: Vec<([f32;3],u8,f32)>,
+        creature_vitals: Vec<([f32; 3], u8, f32)>,
     },
 }
 
@@ -349,7 +383,11 @@ pub fn join_rejection(protocol: u32, guests: usize) -> Option<&'static str> {
 pub const MAX_CHAT_LEN: usize = 512;
 
 pub fn chat_text(text: &str) -> Option<String> {
-    let text: String = text.chars().filter(|c| !c.is_control()).take(MAX_CHAT_LEN).collect();
+    let text: String = text
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_CHAT_LEN)
+        .collect();
     let text = text.trim();
     if text.is_empty() {
         None
@@ -439,10 +477,16 @@ mod tests {
 
     #[test]
     fn loot_collection_feedback_round_trips() {
-        let contents=crate::loot::rewards(CreatureKind::StoneGolem);
-        let packet=Packet::Reliable {id:19,msg:ReliableMsg::LootCollected(contents.clone())};
+        let contents = crate::loot::rewards(CreatureKind::StoneGolem);
+        let packet = Packet::Reliable {
+            id: 19,
+            msg: ReliableMsg::LootCollected(contents.clone()),
+        };
         match decode(&encode(&packet)).unwrap() {
-            Packet::Reliable {id:19,msg:ReliableMsg::LootCollected(received)} => assert_eq!(received,contents),
+            Packet::Reliable {
+                id: 19,
+                msg: ReliableMsg::LootCollected(received),
+            } => assert_eq!(received, contents),
             other => panic!("unexpected loot feedback: {other:?}"),
         }
     }
@@ -485,11 +529,20 @@ mod tests {
     #[test]
     fn snapshot_round_trips_through_encode_decode() {
         let player = SnapshotPlayer {
-            torch_lit:true,
-            animation: crate::player_animation::Animation { clip:crate::player_animation::Clip::Work, time:0.4, sequence:7 },
-            name:"Sir Turnip".into(),
-            appearance: crate::remote_player::Appearance { model: 3, hat: Some(2) },
-            held: Some(crate::equipment::Entry::Gear(crate::equipment::Gear::Pickaxe)),
+            torch_lit: true,
+            animation: crate::player_animation::Animation {
+                clip: crate::player_animation::Clip::Work,
+                time: 0.4,
+                sequence: 7,
+            },
+            name: "Sir Turnip".into(),
+            appearance: crate::remote_player::Appearance {
+                model: 3,
+                hat: Some(2),
+            },
+            held: Some(crate::equipment::Entry::Gear(
+                crate::equipment::Gear::Pickaxe,
+            )),
             id: 7,
             pos: [1.0, 2.0, 3.0],
             yaw: 1.57,
@@ -501,8 +554,8 @@ mod tests {
             oxygen: 42.0,
         };
         let packet = Packet::Unreliable(UnreliableMsg::Snapshot {
-            creature_vitals:vec![([4.,5.,6.],1,4.)],
-            loot:vec![],
+            creature_vitals: vec![([4., 5., 6.], 1, 4.)],
+            loot: vec![],
             allow_guest_prompting: true,
             time_of_day: 0.42,
             weather: Weather::Rain.to_u8(),
@@ -519,7 +572,7 @@ mod tests {
         let decoded = decode(&bytes).expect("a just-encoded packet must decode");
         match decoded {
             Packet::Unreliable(UnreliableMsg::Snapshot {
-                loot:_,
+                loot: _,
                 allow_guest_prompting,
                 time_of_day,
                 weather,
@@ -528,7 +581,7 @@ mod tests {
                 creature_vitals,
             }) => {
                 assert!(allow_guest_prompting);
-                assert_eq!(creature_vitals,vec![([4.,5.,6.],1,4.)]);
+                assert_eq!(creature_vitals, vec![([4., 5., 6.], 1, 4.)]);
                 assert_eq!(time_of_day, 0.42);
                 assert_eq!(weather, Weather::Rain.to_u8());
                 assert_eq!(players, vec![player]);
@@ -737,7 +790,8 @@ pub fn parse_args() -> LaunchConfig {
     }
 
     LaunchConfig {
-        world_name: "world".into(),        connect,
+        world_name: "world".into(),
+        connect,
         port,
         llm_url,
         fresh: false,
@@ -751,31 +805,103 @@ mod multiplayer_tests {
     use super::*;
     #[test]
     fn camp_request_and_saved_reward_round_trip_over_local_transport() {
-        let host=Transport::direct("127.0.0.1:0").unwrap();
-        let guest=Transport::direct("127.0.0.1:0").unwrap();
-        let camp=(8,40,8);
-        let mut world=crate::voxel::World::new(42);world.ensure_chunk_loaded(0,0);
-        for x in 4..13 {for z in 4..13 {
-            world.set_block(x,39,z,BlockType::Stone);
-            for y in 40..44 {world.set_block(x,y,z,BlockType::Air);}
-        }}
-        world.set_block(8,40,8,BlockType::Campfire);
-        world.starter_camp = Some(camp);
-        let mut account=crate::crafting::Account::default();
-        for (block,n) in [(BlockType::OakWood,6),(BlockType::Stone,4)] {
-            let i=crate::voxel::COLLECTIBLE_BLOCKS.iter().position(|b|*b==block).unwrap();account.resources[i]=n;
+        let host = Transport::direct("127.0.0.1:0").unwrap();
+        let guest = Transport::direct("127.0.0.1:0").unwrap();
+        let camp = (8, 40, 8);
+        let mut world = crate::voxel::World::new(42);
+        world.ensure_chunk_loaded(0, 0);
+        for x in 4..13 {
+            for z in 4..13 {
+                world.set_block(x, 39, z, BlockType::Stone);
+                for y in 40..44 {
+                    world.set_block(x, y, z, BlockType::Air);
+                }
+            }
         }
-        let action=crate::adventure::Action::Claim{camp};
-        guest.send_to(&encode(&Packet::Reliable{id:1,msg:ReliableMsg::CampAction(action)}),host.local_peer()).unwrap();
-        let (Packet::Reliable{id,msg:ReliableMsg::CampAction(action)},peer)=receive(&host) else {panic!("camp action");};
-        let mut channel=ReliableChannel::new();assert!(channel.mark_seen(peer,id));
-        let message=crate::adventure::transact(&world,&mut account,crate::adventure::feet((8,40,5)),100.,false,action).unwrap();
-        assert!(!channel.mark_seen(peer,id),"duplicate request must not execute twice");
-        channel.send(&host,peer,ReliableMsg::CraftState{account:account.clone(),feedback:Some(message)});
-        let (Packet::Reliable{msg:ReliableMsg::CraftState{account:received,..},..},_)=receive(&guest) else {panic!("account");};
-        assert_eq!(received,account);assert_eq!(received.adventure.stage,1);
-        channel.send(&host,peer,ReliableMsg::Recovered{pos:[8.5,40.,6.5]});
-        assert!(matches!(receive(&guest).0,Packet::Reliable{msg:ReliableMsg::Recovered{pos:[8.5,40.,6.5]},..}));
+        world.set_block(8, 40, 8, BlockType::Campfire);
+        world.starter_camp = Some(camp);
+        let mut account = crate::crafting::Account::default();
+        for (block, n) in [(BlockType::OakWood, 6), (BlockType::Stone, 4)] {
+            let i = crate::voxel::COLLECTIBLE_BLOCKS
+                .iter()
+                .position(|b| *b == block)
+                .unwrap();
+            account.resources[i] = n;
+        }
+        let action = crate::adventure::Action::Claim { camp };
+        guest
+            .send_to(
+                &encode(&Packet::Reliable {
+                    id: 1,
+                    msg: ReliableMsg::CampAction(action),
+                }),
+                host.local_peer(),
+            )
+            .unwrap();
+        let (
+            Packet::Reliable {
+                id,
+                msg: ReliableMsg::CampAction(action),
+            },
+            peer,
+        ) = receive(&host)
+        else {
+            panic!("camp action");
+        };
+        let mut channel = ReliableChannel::new();
+        assert!(channel.mark_seen(peer, id));
+        let message = crate::adventure::transact(
+            &world,
+            &mut account,
+            crate::adventure::feet((8, 40, 5)),
+            100.,
+            false,
+            action,
+        )
+        .unwrap();
+        assert!(
+            !channel.mark_seen(peer, id),
+            "duplicate request must not execute twice"
+        );
+        channel.send(
+            &host,
+            peer,
+            ReliableMsg::CraftState {
+                account: account.clone(),
+                feedback: Some(message),
+            },
+        );
+        let (
+            Packet::Reliable {
+                msg:
+                    ReliableMsg::CraftState {
+                        account: received, ..
+                    },
+                ..
+            },
+            _,
+        ) = receive(&guest)
+        else {
+            panic!("account");
+        };
+        assert_eq!(received, account);
+        assert_eq!(received.adventure.stage, 1);
+        channel.send(
+            &host,
+            peer,
+            ReliableMsg::Recovered {
+                pos: [8.5, 40., 6.5],
+            },
+        );
+        assert!(matches!(
+            receive(&guest).0,
+            Packet::Reliable {
+                msg: ReliableMsg::Recovered {
+                    pos: [8.5, 40., 6.5]
+                },
+                ..
+            }
+        ));
     }
     fn receive(socket: &Transport) -> (Packet, Peer) {
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -850,14 +976,15 @@ mod multiplayer_tests {
                 panic!("chat")
             };
             assert!(members.contains(&peer));
-            let expected_player_id = members.iter().position(|p|*p==peer).unwrap() as PlayerId+1;
+            let expected_player_id =
+                members.iter().position(|p| *p == peer).unwrap() as PlayerId + 1;
             for guest in &guests {
                 reliable.send(
                     &host,
                     guest.local_peer(),
                     ReliableMsg::PlayerChat {
-                        player_id:expected_player_id,
-                        name:"Guest".into(),
+                        player_id: expected_player_id,
+                        name: "Guest".into(),
                         text: chat_text(&text).unwrap(),
                     },
                 );
@@ -879,8 +1006,8 @@ mod multiplayer_tests {
                     panic!("relay")
                 };
                 assert_eq!(text, "hello friends");
-                assert_eq!(player_id,expected_player_id);
-                assert_eq!(name,"Guest");
+                assert_eq!(player_id, expected_player_id);
+                assert_eq!(name, "Guest");
                 assert_eq!(peer, host.local_peer());
                 ReliableChannel::ack_reply(guest, peer, id);
                 let (Packet::Ack { id }, peer) = receive(&host) else {
@@ -936,14 +1063,29 @@ mod multiplayer_tests {
             .map(|x| ((x, 50, 0), BlockType::Stone))
             .collect();
         let generation = crate::worldgen::WorldGeneration {
-            description: "Sandy islands".into(), shape: crate::worldgen::Shape::Islands,
-            creatures: [("sheep".into(),1000), ("cow".into(),0)].into_iter().collect(),
-            surface: crate::worldgen::Surface::Sand, trees: 0, ..Default::default()
+            description: "Sandy islands".into(),
+            shape: crate::worldgen::Shape::Islands,
+            creatures: [("sheep".into(), 1000), ("cow".into(), 0)]
+                .into_iter()
+                .collect(),
+            surface: crate::worldgen::Surface::Sand,
+            trees: 0,
+            ..Default::default()
         };
-        let mut messages = welcome_messages(3, 42, generation.clone(), 0.5, [1., 2., 3.], edits.clone(), Some((4, 30, 5))).unwrap();
+        let mut messages = welcome_messages(
+            3,
+            42,
+            generation.clone(),
+            0.5,
+            [1., 2., 3.],
+            edits.clone(),
+            Some((4, 30, 5)),
+        )
+        .unwrap();
         let header = messages.remove(0);
         let header = match decode(&encode(&Packet::Reliable { id: 2, msg: header })).unwrap() {
-            Packet::Reliable { msg, .. } => msg, _ => unreachable!(),
+            Packet::Reliable { msg, .. } => msg,
+            _ => unreachable!(),
         };
         let mut transfer = WorldTransfer::default();
         for msg in messages.into_iter().rev() {

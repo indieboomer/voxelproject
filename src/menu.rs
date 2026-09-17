@@ -235,12 +235,15 @@ impl MenuApp {
             }
         }
         let mut action = None;
-        let joining = matches!(self.screen, Screen::Join | Screen::Nickname(PendingAction::Join(_)));
+        let joining = matches!(
+            self.screen,
+            Screen::Join | Screen::Nickname(PendingAction::Join(_))
+        );
         if joining || self.ui.settings.open {
             self.ui.settings.poll_name(&self.llm_url);
         }
         if joining && self.nickname_input.trim().is_empty() {
-            self.nickname_input=self.ui.settings.values.player_name.clone();
+            self.nickname_input = self.ui.settings.values.player_name.clone();
         }
         let saved_player_name = self.ui.settings.values.player_name.clone();
         let mut error = self.error.clone();
@@ -252,7 +255,7 @@ impl MenuApp {
         let mut world_description = std::mem::take(&mut self.world_description);
         let mut world_job = self.world_job.take();
         let llm_url = self.llm_url.clone();
-        let name_status=self.ui.settings.name_status.clone();
+        let name_status = self.ui.settings.name_status.clone();
         if let Some((nickname, receiver)) = &world_job {
             let result = match receiver.try_recv() {
                 Ok(result) => Some(result),
@@ -498,13 +501,24 @@ impl MenuApp {
         self.world_name = world_name;
         self.world_description = world_description;
         self.world_job = world_job;
-        if let Some(action)=&mut action {
-            let nickname=match action {MenuAction::NewWorld{nickname,..}|MenuAction::LoadWorld{nickname,..}|MenuAction::Join{nickname,..}=>Some(nickname),_=>None};
-            if let Some(nickname)=nickname {
-                self.ui.settings.values.player_name=crate::fantasy_name::clean(nickname);
-                if self.ui.settings.values.connection_name.is_empty() {self.ui.settings.values.connection_name=nickname.clone();}
-                *nickname=self.ui.settings.values.connection_name.clone();
-                let _=self.ui.settings.values.save(std::path::Path::new("settings.json"));
+        if let Some(action) = &mut action {
+            let nickname = match action {
+                MenuAction::NewWorld { nickname, .. }
+                | MenuAction::LoadWorld { nickname, .. }
+                | MenuAction::Join { nickname, .. } => Some(nickname),
+                _ => None,
+            };
+            if let Some(nickname) = nickname {
+                self.ui.settings.values.player_name = crate::fantasy_name::clean(nickname);
+                if self.ui.settings.values.connection_name.is_empty() {
+                    self.ui.settings.values.connection_name = nickname.clone();
+                }
+                *nickname = self.ui.settings.values.connection_name.clone();
+                let _ = self
+                    .ui
+                    .settings
+                    .values
+                    .save(std::path::Path::new("settings.json"));
             }
         }
 

@@ -6,8 +6,8 @@ pub mod chunk;
 pub mod mesher;
 pub mod noise;
 pub mod resource_catalog;
-pub mod world;
 pub mod terrain;
+pub mod world;
 
 pub use block::{BlockType, COLLECTIBLE_BLOCKS};
 pub use chunk::{CHUNK_X, CHUNK_Z};

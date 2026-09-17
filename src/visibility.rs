@@ -43,10 +43,14 @@ mod tests {
     use super::*;
     #[test]
     fn creatures_share_terrain_boundary_after_travel() {
-        for center in [(0,0),(-100,83),(1000,-900)] {
-            assert!(within_terrain_range((center.0+5,center.1-5),center,5));
-            assert!(!within_terrain_range((center.0+6,center.1),center,5));
-            assert!(!within_terrain_range((center.0,center.1-6),center,5));
+        for center in [(0, 0), (-100, 83), (1000, -900)] {
+            assert!(within_terrain_range(
+                (center.0 + 5, center.1 - 5),
+                center,
+                5
+            ));
+            assert!(!within_terrain_range((center.0 + 6, center.1), center, 5));
+            assert!(!within_terrain_range((center.0, center.1 - 6), center, 5));
         }
     }
     #[test]

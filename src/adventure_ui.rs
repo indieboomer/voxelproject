@@ -94,28 +94,69 @@ impl Journal {
         self.open = open;
         request
     }
-    fn quest_rows(&mut self,ui:&mut egui::Ui,a:&Account) {
-        ui.heading(format!("Travelers' contracts: {} / 20",a.adventure.quests.completed.count_ones()));
+    fn quest_rows(&mut self, ui: &mut egui::Ui, a: &Account) {
+        ui.heading(format!(
+            "Travelers' contracts: {} / 20",
+            a.adventure.quests.completed.count_ones()
+        ));
         ui.label("Objectives track your adventures automatically. Return to the named giver to claim 20 mana per quest. Deliveries consume supplies.");
         for npc in 0..6u8 {
-            if self.npc.is_some_and(|n|n!=npc) {continue;}
-            egui::CollapsingHeader::new(crate::quests::NAMES[npc as usize]).default_open(self.npc==Some(npc)).show(ui,|ui| {
-                ui.label(crate::quests::GREETINGS[npc as usize]);
-                for (id,q) in crate::quests::QUESTS.iter().enumerate().filter(|(_,q)|q.npc==npc) {
-                    ui.separator();let done=a.adventure.quests.done(id);let n=crate::quests::progress(a,id);
-                    ui.label(RichText::new(format!("{}{}",if done {"Completed: "}else{""},q.title)).strong());
-                    ui.label(q.objective);
-                    if !done {
-                        ui.add(egui::ProgressBar::new(n as f32/q.target as f32).text(format!("{n}/{}",q.target)));
-                        if ui.add_enabled(self.npc==Some(npc) && n>=q.target && self.quest_request.is_none(),egui::Button::new("Complete quest (+20 mana)")).clicked() {
-                            self.quest_request=Some(crate::quests::Action::Claim{npc,quest:id as u8});
+            if self.npc.is_some_and(|n| n != npc) {
+                continue;
+            }
+            egui::CollapsingHeader::new(crate::quests::NAMES[npc as usize])
+                .default_open(self.npc == Some(npc))
+                .show(ui, |ui| {
+                    ui.label(crate::quests::GREETINGS[npc as usize]);
+                    for (id, q) in crate::quests::QUESTS
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, q)| q.npc == npc)
+                    {
+                        ui.separator();
+                        let done = a.adventure.quests.done(id);
+                        let n = crate::quests::progress(a, id);
+                        ui.label(
+                            RichText::new(format!(
+                                "{}{}",
+                                if done { "Completed: " } else { "" },
+                                q.title
+                            ))
+                            .strong(),
+                        );
+                        ui.label(q.objective);
+                        if !done {
+                            ui.add(
+                                egui::ProgressBar::new(n as f32 / q.target as f32)
+                                    .text(format!("{n}/{}", q.target)),
+                            );
+                            if ui
+                                .add_enabled(
+                                    self.npc == Some(npc)
+                                        && n >= q.target
+                                        && self.quest_request.is_none(),
+                                    egui::Button::new("Complete quest (+20 mana)"),
+                                )
+                                .clicked()
+                            {
+                                self.quest_request = Some(crate::quests::Action::Claim {
+                                    npc,
+                                    quest: id as u8,
+                                });
+                            }
+                            if id == 15
+                                && self.npc == Some(4)
+                                && ui.button("Light campfire (3 wood + 2 stone)").clicked()
+                            {
+                                self.quest_request = Some(crate::quests::Action::LightCampfire);
+                            }
                         }
-                        if id==15 && self.npc==Some(4) && ui.button("Light campfire (3 wood + 2 stone)").clicked() {self.quest_request=Some(crate::quests::Action::LightCampfire);}
                     }
-                }
-            });
+                });
         }
-        if self.npc.is_none() {ui.small("One traveler starts near camp. Explore to meet more roughly every 100 blocks on dry land. Look at one and press F.");}
+        if self.npc.is_none() {
+            ui.small("One traveler starts near camp. Explore to meet more roughly every 100 blocks on dry land. Look at one and press F.");
+        }
         ui.separator();
     }
     pub fn hud(&self, ctx: &egui::Context, player: &Player, waypoint: Option<glam::Vec3>) {

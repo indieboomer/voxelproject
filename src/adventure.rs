@@ -20,7 +20,9 @@ pub struct Progress {
 }
 impl Progress {
     pub fn valid(&self) -> bool {
-        self.recipe_books <= 15 && self.quests.valid() && self.stage <= 3
+        self.recipe_books <= 15
+            && self.quests.valid()
+            && self.stage <= 3
             && self.home.is_none_or(|(x, y, z)| {
                 x.unsigned_abs() < 1_000_000
                     && z.unsigned_abs() < 1_000_000
@@ -55,9 +57,17 @@ impl Progress {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum Action {
-    Rest { camp: Cell },
-    Claim { camp: Cell },
-    Cook { camp: Cell, amount: u32, revision: u64 },
+    Rest {
+        camp: Cell,
+    },
+    Claim {
+        camp: Cell,
+    },
+    Cook {
+        camp: Cell,
+        amount: u32,
+        revision: u64,
+    },
 }
 impl Action {
     pub fn camp(self) -> Cell {
@@ -92,8 +102,12 @@ pub fn ready(account: &Account) -> bool {
     }
 }
 pub fn clear_feet(world: &World, p: Cell) -> bool {
-    if !(1..crate::voxel::chunk::CHUNK_Y-2).contains(&p.1)
-        || p.0.unsigned_abs()>=1_000_000 || p.2.unsigned_abs()>=1_000_000 {return false;}
+    if !(1..crate::voxel::chunk::CHUNK_Y - 2).contains(&p.1)
+        || p.0.unsigned_abs() >= 1_000_000
+        || p.2.unsigned_abs() >= 1_000_000
+    {
+        return false;
+    }
     world.get_block(p.0, p.1 - 1, p.2).is_solid()
         && (0..=1).all(|dy| world.get_block(p.0, p.1 + dy, p.2) == BlockType::Air)
 }
@@ -130,13 +144,17 @@ pub fn restore_starter_camp(world: &mut World) {
     let mut original = World::new(world.seed);
     original.generation = world.generation.clone();
     let spawn = cell(surface_spawn_position(&mut original, 0, 0));
-    world.starter_camp = world.edits.iter()
+    world.starter_camp = world
+        .edits
+        .iter()
         .filter(|(_, b)| **b == BlockType::Campfire)
         .map(|(&p, _)| p)
-        .filter(|p| (i64::from(p.0)-i64::from(spawn.0)).abs() <= 24
-            && (i64::from(p.2)-i64::from(spawn.2)).abs() <= 24
-            && (i64::from(p.1)-i64::from(spawn.1)).abs() <= 5)
-        .min_by_key(|p| ((p.0-spawn.0).pow(2)+(p.2-spawn.2).pow(2), *p));
+        .filter(|p| {
+            (i64::from(p.0) - i64::from(spawn.0)).abs() <= 24
+                && (i64::from(p.2) - i64::from(spawn.2)).abs() <= 24
+                && (i64::from(p.1) - i64::from(spawn.1)).abs() <= 5
+        })
+        .min_by_key(|p| ((p.0 - spawn.0).pow(2) + (p.2 - spawn.2).pow(2), *p));
 }
 pub fn guide_name(camp: Cell) -> &'static str {
     match (camp.0.wrapping_mul(31) ^ camp.2).rem_euclid(4) {
@@ -186,9 +204,13 @@ pub fn transact(
     }
     let mut next = account.clone();
     let message = match action {
-        Action::Cook {amount,revision,..} => {
-            if revision!=account.revision {return Err("Inventory changed; try cooking again".into());}
-            crate::food::cook(&mut next,amount)?;
+        Action::Cook {
+            amount, revision, ..
+        } => {
+            if revision != account.revision {
+                return Err("Inventory changed; try cooking again".into());
+            }
+            crate::food::cook(&mut next, amount)?;
             format!("Cooked {amount} meat. Eat it in inventory [I] to restore health.")
         }
         Action::Rest { .. } => {
@@ -397,10 +419,15 @@ mod tests {
     fn keepers_staff_about_one_in_five_camps_and_always_the_start() {
         for seed in [1, 42, 2026] {
             let mut w = World::new(seed);
-            let count = (-100..100).flat_map(|x| (-100..100).map(move |z| (x*7, 40, z*7)))
-                .filter(|p| has_keeper(&w, *p)).count();
+            let count = (-100..100)
+                .flat_map(|x| (-100..100).map(move |z| (x * 7, 40, z * 7)))
+                .filter(|p| has_keeper(&w, *p))
+                .count();
             assert!((7600..8400).contains(&count), "seed {seed}: {count}/40000");
-            let camp = (0..100).map(|x| (x,40,0)).find(|p| !has_keeper(&w,*p)).unwrap();
+            let camp = (0..100)
+                .map(|x| (x, 40, 0))
+                .find(|p| !has_keeper(&w, *p))
+                .unwrap();
             w.starter_camp = Some(camp);
             assert!(has_keeper(&w, camp));
         }
@@ -409,29 +436,49 @@ mod tests {
     fn unattended_fire_allows_cooking_and_rest_but_not_claims() {
         let (mut w, mut a, p) = fixture();
         w.starter_camp = None;
-        w.seed = (0..100).find(|seed| crate::voxel::noise::block_rand(CAMP.0,CAMP.1,CAMP.2,*seed,0xCA91)>=0.2).unwrap();
+        w.seed = (0..100)
+            .find(|seed| {
+                crate::voxel::noise::block_rand(CAMP.0, CAMP.1, CAMP.2, *seed, 0xCA91) >= 0.2
+            })
+            .unwrap();
         assert!(guide_position(&w, CAMP).is_none());
-        assert!(transact(&w,&mut a,p,50.,false,Action::Claim{camp:CAMP}).is_err());
-        assert_eq!(count(&a,BlockType::OakWood),6);
-        transact(&w,&mut a,p,50.,false,Action::Rest{camp:CAMP}).unwrap();
-        resource(&mut a,BlockType::Meat,1).unwrap();
-        let revision=a.revision;
-        transact(&w,&mut a,p,50.,false,Action::Cook{camp:CAMP,amount:1,revision}).unwrap();
-        assert_eq!(count(&a,BlockType::CookedMeat),1);
+        assert!(transact(&w, &mut a, p, 50., false, Action::Claim { camp: CAMP }).is_err());
+        assert_eq!(count(&a, BlockType::OakWood), 6);
+        transact(&w, &mut a, p, 50., false, Action::Rest { camp: CAMP }).unwrap();
+        resource(&mut a, BlockType::Meat, 1).unwrap();
+        let revision = a.revision;
+        transact(
+            &w,
+            &mut a,
+            p,
+            50.,
+            false,
+            Action::Cook {
+                camp: CAMP,
+                amount: 1,
+                revision,
+            },
+        )
+        .unwrap();
+        assert_eq!(count(&a, BlockType::CookedMeat), 1);
     }
     #[test]
     fn old_save_recovers_original_camp_independently_of_later_fires() {
         let mut w = World::new(42);
         let spawn = surface_spawn_position(&mut w, 0, 0);
         let camp = starter_camp(&mut w, spawn).unwrap();
-        w.set_block(camp.0,camp.1,camp.2,BlockType::Campfire);
-        w.set_block(500,40,500,BlockType::Campfire);
+        w.set_block(camp.0, camp.1, camp.2, BlockType::Campfire);
+        w.set_block(500, 40, 500, BlockType::Campfire);
         restore_starter_camp(&mut w);
-        assert_eq!(w.starter_camp,Some(camp));
-        w.set_block(camp.0,camp.1,camp.2,BlockType::Air);
+        assert_eq!(w.starter_camp, Some(camp));
+        w.set_block(camp.0, camp.1, camp.2, BlockType::Air);
         restore_starter_camp(&mut w);
-        assert_eq!(w.starter_camp,Some(camp), "breaking the fire must not move its saved role");
-        assert!(guide_position(&w,camp).is_none());
+        assert_eq!(
+            w.starter_camp,
+            Some(camp),
+            "breaking the fire must not move its saved role"
+        );
+        assert!(guide_position(&w, camp).is_none());
     }
     #[test]
     fn ordinary_new_worlds_have_an_unobstructed_starter_camp() {
@@ -455,18 +502,40 @@ mod tests {
     }
     #[test]
     fn camp_cooking_commits_once_without_mana_and_requires_existing_fire() {
-        let (mut w,mut a,p)=fixture();
-        resource(&mut a,BlockType::Meat,64).unwrap();a.mana=0;
-        let rev=a.revision;
-        let action=Action::Cook{camp:CAMP,amount:64,revision:rev};
-        transact(&w,&mut a,p,50.,false,action).unwrap();
-        assert_eq!(count(&a,BlockType::Meat),0);assert_eq!(count(&a,BlockType::CookedMeat),64);
-        assert_eq!(a.mana,0);assert_eq!(a.revision,rev+1);
-        let before=a.clone();assert!(transact(&w,&mut a,p,50.,false,action).is_err());assert_eq!(a,before);
-        resource(&mut a,BlockType::Meat,1).unwrap();
-        w.set_block(CAMP.0,CAMP.1,CAMP.2,BlockType::Air);
-        let before=a.clone();
-        assert!(transact(&w,&mut a,p,50.,false,Action::Cook{camp:CAMP,amount:1,revision:before.revision}).is_err());assert_eq!(a,before);
+        let (mut w, mut a, p) = fixture();
+        resource(&mut a, BlockType::Meat, 64).unwrap();
+        a.mana = 0;
+        let rev = a.revision;
+        let action = Action::Cook {
+            camp: CAMP,
+            amount: 64,
+            revision: rev,
+        };
+        transact(&w, &mut a, p, 50., false, action).unwrap();
+        assert_eq!(count(&a, BlockType::Meat), 0);
+        assert_eq!(count(&a, BlockType::CookedMeat), 64);
+        assert_eq!(a.mana, 0);
+        assert_eq!(a.revision, rev + 1);
+        let before = a.clone();
+        assert!(transact(&w, &mut a, p, 50., false, action).is_err());
+        assert_eq!(a, before);
+        resource(&mut a, BlockType::Meat, 1).unwrap();
+        w.set_block(CAMP.0, CAMP.1, CAMP.2, BlockType::Air);
+        let before = a.clone();
+        assert!(transact(
+            &w,
+            &mut a,
+            p,
+            50.,
+            false,
+            Action::Cook {
+                camp: CAMP,
+                amount: 1,
+                revision: before.revision
+            }
+        )
+        .is_err());
+        assert_eq!(a, before);
     }
     #[test]
     fn contracts_commit_once_and_preserve_inventory_on_failure() {
@@ -527,7 +596,15 @@ mod tests {
             (p + Vec3::X * 20., 100., false),
             (Vec3::NAN, 100., false),
         ] {
-            for action in [Action::Rest { camp: CAMP }, Action::Claim { camp: CAMP }, Action::Cook { camp:CAMP,amount:1,revision:before.revision }] {
+            for action in [
+                Action::Rest { camp: CAMP },
+                Action::Claim { camp: CAMP },
+                Action::Cook {
+                    camp: CAMP,
+                    amount: 1,
+                    revision: before.revision,
+                },
+            ] {
                 assert!(transact(&w, &mut a, pos, hp, danger, action).is_err());
                 assert_eq!(a, before);
             }
@@ -581,8 +658,12 @@ mod tests {
     }
     #[test]
     fn surface_spawn_avoids_water_and_obstructions() {
-        for shape in [crate::worldgen::Shape::Mainland, crate::worldgen::Shape::Islands,
-            crate::worldgen::Shape::Flat, crate::worldgen::Shape::Mountains] {
+        for shape in [
+            crate::worldgen::Shape::Mainland,
+            crate::worldgen::Shape::Islands,
+            crate::worldgen::Shape::Flat,
+            crate::worldgen::Shape::Mountains,
+        ] {
             let mut w = World::new(42);
             w.generation.shape = shape;
             let first = surface_spawn_position(&mut w, 0, 0);
@@ -601,8 +682,11 @@ mod tests {
     #[test]
     fn recovery_moves_out_of_buried_camp_and_keeper_disappears_with_fire() {
         let (mut w, _, _) = fixture();
-        w.set_block(8,crate::voxel::chunk::CHUNK_Y-1,6,BlockType::Stone);
-        assert!(!clear_feet(&w,(8,crate::voxel::chunk::CHUNK_Y,6)),"out-of-world recovery feet cannot be saved");
+        w.set_block(8, crate::voxel::chunk::CHUNK_Y - 1, 6, BlockType::Stone);
+        assert!(
+            !clear_feet(&w, (8, crate::voxel::chunk::CHUNK_Y, 6)),
+            "out-of-world recovery feet cannot be saved"
+        );
         let home = (8, 40, 6);
         assert!(guide_position(&w, CAMP).is_some());
         assert_eq!(respawn_position(&mut w, Some(home)), feet(home));

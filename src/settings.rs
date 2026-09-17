@@ -17,9 +17,21 @@ pub struct Settings {
     /// Stable direct-session account key; display-name edits do not move inventory.
     pub connection_name: String,
     pub gameplay: Gameplay,
+    pub graphics: Graphics,
     pub appearance: Appearance,
     pub multiplayer: Multiplayer,
     pub aiapi: AiApi,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Graphics {
+    pub water_fresnel: bool,
+}
+impl Default for Graphics {
+    fn default() -> Self {
+        Self { water_fresnel: true }
+    }
 }
 
 /// Local-only credentials. Retained in normal builds so saving preferences does
@@ -34,8 +46,10 @@ pub struct AiApi {
 }
 impl std::fmt::Debug for AiApi {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AiApi").field("api_key", &"[redacted]")
-            .field("model", &self.model).finish()
+        f.debug_struct("AiApi")
+            .field("api_key", &"[redacted]")
+            .field("model", &self.model)
+            .finish()
     }
 }
 
@@ -58,6 +72,15 @@ impl Default for Gameplay {
 #[serde(default)]
 pub struct Appearance {
     pub ui_theme: UiTheme,
+    pub spell_artwork: SpellArtwork,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpellArtwork {
+    #[default]
+    Default,
+    Pixelized,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,7 +112,13 @@ impl Settings {
         match std::fs::read(path) {
             Ok(bytes) => {
                 // Serde type errors can contain the offending value, including a secret.
-                serde_json::from_slice(&bytes).map_err(|e| format!("Cannot read settings: invalid JSON or field type at line {}, column {}", e.line(), e.column()))
+                serde_json::from_slice(&bytes).map_err(|e| {
+                    format!(
+                        "Cannot read settings: invalid JSON or field type at line {}, column {}",
+                        e.line(),
+                        e.column()
+                    )
+                })
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(format!("Cannot read settings: {e}")),
@@ -113,7 +142,7 @@ pub struct SettingsPanel {
     pub playtest_scenario: crate::playtest::Scenario,
     #[cfg(feature = "dev-playtest")]
     pub playtest_in_game: bool,
-    name_job: Option<std::sync::mpsc::Receiver<Result<String,String>>>,
+    name_job: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     pub name_status: String,
     pub open: bool,
     pub values: Settings,
@@ -121,20 +150,35 @@ pub struct SettingsPanel {
 }
 
 impl SettingsPanel {
-    pub fn poll_name(&mut self,url:&str) {
-        if let Some(job)=&self.name_job {
-            if let Ok(result)=job.try_recv() {
-                self.name_job=None;
+    pub fn poll_name(&mut self, url: &str) {
+        if let Some(job) = &self.name_job {
+            if let Ok(result) = job.try_recv() {
+                self.name_job = None;
                 if self.values.player_name.trim().is_empty() {
-                    self.values.player_name=match result {Ok(name)=>{self.name_status="AI name suggestion ready".into();name},Err(_)=>{self.name_status="Local AI unavailable; using a fantasy fallback".into();crate::fantasy_name::fallback()}};
-                    let _=self.values.save(Path::new("settings.json"));
+                    self.values.player_name = match result {
+                        Ok(name) => {
+                            self.name_status = "AI name suggestion ready".into();
+                            name
+                        }
+                        Err(_) => {
+                            self.name_status =
+                                "Local AI unavailable; using a fantasy fallback".into();
+                            crate::fantasy_name::fallback()
+                        }
+                    };
+                    let _ = self.values.save(Path::new("settings.json"));
                 }
             }
         }
         if self.values.player_name.trim().is_empty() && self.name_job.is_none() {
-            let (tx,rx)=std::sync::mpsc::channel();let url=url.to_string();
-            std::thread::spawn(move || {let _=tx.send(crate::fantasy_name::request(&url));});
-            self.name_job=Some(rx);self.name_status="Asking local AI for a fantasy name… You can also type your own.".into();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let url = url.to_string();
+            std::thread::spawn(move || {
+                let _ = tx.send(crate::fantasy_name::request(&url));
+            });
+            self.name_job = Some(rx);
+            self.name_status =
+                "Asking local AI for a fantasy name… You can also type your own.".into();
         }
     }
     pub fn new(ctx: &egui::Context) -> Self {
@@ -143,8 +187,9 @@ impl SettingsPanel {
             Err(e) => (Settings::default(), e),
         };
         crate::ui_theme::apply(ctx, values.appearance.ui_theme);
+        crate::spell_art::apply_style(ctx, values.appearance.spell_artwork);
         Self {
-            name_job:None,
+            name_job: None,
             #[cfg(feature = "dev-playtest")]
             playtest_request: false,
             #[cfg(feature = "dev-playtest")]
@@ -153,7 +198,7 @@ impl SettingsPanel {
             playtest_scenario: Default::default(),
             #[cfg(feature = "dev-playtest")]
             playtest_in_game: false,
-            name_status:String::new(),
+            name_status: String::new(),
             open: false,
             values,
             message,
@@ -216,6 +261,10 @@ impl SettingsPanel {
                 ui.checkbox(&mut self.values.multiplayer.allow_guest_prompting, "When hosting: allow guests to prompt");
                 ui.small("Applies immediately while hosting. Guests use their local AI; you review and activate their proposals.");
                 ui.separator();
+                ui.heading("Graphics");
+                ui.checkbox(&mut self.values.graphics.water_fresnel, "Water Fresnel reflections");
+                ui.small("Disabling this removes the angle-based boost while keeping water reflections active.");
+                ui.separator();
                 ui.heading("Gameplay");
                 ui.checkbox(&mut self.values.gameplay.mana_free, "Mana-free actions (testing)");
                 ui.small("Applies to everyone when you host. Joined games use the host's setting. Materials are still required.");
@@ -224,6 +273,12 @@ impl SettingsPanel {
                 ui.small("Build preview appears for an active resource when placement is valid.");
                 ui.separator();
                 ui.heading("Appearance");
+                ui.label("Spell artwork");
+                ui.horizontal_wrapped(|ui| {
+                    ui.selectable_value(&mut self.values.appearance.spell_artwork,SpellArtwork::Default,"Default");
+                    ui.selectable_value(&mut self.values.appearance.spell_artwork,SpellArtwork::Pixelized,"Pixelized");
+                });
+                ui.small("Applies immediately to spell cards, Rules, inventory and hotbar on this device.");
                 ui.label("UI style");
                 ui.horizontal_wrapped(|ui| {
                     ui.selectable_value(
@@ -267,6 +322,7 @@ impl SettingsPanel {
                 ui.small("Esc / F10 to close");
             });
         if previous != self.values {
+            crate::spell_art::apply_style(ctx, self.values.appearance.spell_artwork);
             if previous.appearance.ui_theme != self.values.appearance.ui_theme {
                 crate::ui_theme::apply(ctx, self.values.appearance.ui_theme);
             }
@@ -290,13 +346,22 @@ mod tests {
     fn ai_credentials_survive_preferences_save_and_are_redacted_from_debug_and_errors() {
         let mut settings: Settings = serde_json::from_str(r#"{"aiapi":{"OPENAI_API_KEY":"local-test-secret","OPENAI_PLAYTEST_MODEL":"test-model"}}"#).unwrap();
         settings.player_name = "Changed preference".into();
-        let path = std::env::temp_dir().join(format!("voxel-ai-settings-test-{}.json", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "voxel-ai-settings-test-{}.json",
+            std::process::id()
+        ));
         settings.save(&path).unwrap();
         let loaded = Settings::load(&path).unwrap();
         assert_eq!(loaded.aiapi, settings.aiapi);
         assert!(!format!("{loaded:?}").contains("local-test-secret"));
-        std::fs::write(&path, br#"{"aiapi":{"OPENAI_API_KEY":{"secret":"local-test-secret"}}}"#).unwrap();
-        assert!(!Settings::load(&path).unwrap_err().contains("local-test-secret"));
+        std::fs::write(
+            &path,
+            br#"{"aiapi":{"OPENAI_API_KEY":{"secret":"local-test-secret"}}}"#,
+        )
+        .unwrap();
+        assert!(!Settings::load(&path)
+            .unwrap_err()
+            .contains("local-test-secret"));
         std::fs::remove_file(path).unwrap();
     }
     use super::*;
@@ -304,15 +369,23 @@ mod tests {
     fn missing_fields_and_future_sections_are_compatible() {
         let values: Settings = serde_json::from_str(r#"{"audio":{"volume":42}}"#).unwrap();
         assert_eq!(values.appearance.ui_theme, UiTheme::Generic);
+        assert_eq!(values.appearance.spell_artwork, SpellArtwork::Default);
         assert!(values.gameplay.show_block_target);
         assert!(!values.gameplay.mana_free);
-        let testing:Settings=serde_json::from_str(r#"{"gameplay":{"mana_free":true}}"#).unwrap();
+        let testing: Settings = serde_json::from_str(r#"{"gameplay":{"mana_free":true}}"#).unwrap();
         assert!(testing.gameplay.mana_free);
-        assert_eq!(serde_json::from_str::<Settings>(&serde_json::to_string(&testing).unwrap()).unwrap(),testing);
+        assert_eq!(
+            serde_json::from_str::<Settings>(&serde_json::to_string(&testing).unwrap()).unwrap(),
+            testing
+        );
         assert!(!values.multiplayer.allow_guest_prompting);
-        let shared: Settings = serde_json::from_str(r#"{"multiplayer":{"allow_guest_prompting":true}}"#).unwrap();
+        let shared: Settings =
+            serde_json::from_str(r#"{"multiplayer":{"allow_guest_prompting":true}}"#).unwrap();
         assert!(shared.multiplayer.allow_guest_prompting);
-        assert_eq!(serde_json::from_str::<Settings>(&serde_json::to_string(&shared).unwrap()).unwrap(), shared);
+        assert_eq!(
+            serde_json::from_str::<Settings>(&serde_json::to_string(&shared).unwrap()).unwrap(),
+            shared
+        );
         let disabled: Settings =
             serde_json::from_str(r#"{"gameplay":{"show_block_target":false}}"#).unwrap();
         assert!(!disabled.gameplay.show_block_target);
@@ -326,6 +399,7 @@ mod tests {
         let fantasy = Settings {
             appearance: Appearance {
                 ui_theme: UiTheme::Fantasy,
+                spell_artwork: SpellArtwork::Pixelized,
             },
             ..Settings::default()
         };
@@ -343,6 +417,7 @@ mod tests {
         let fantasy = Settings {
             appearance: Appearance {
                 ui_theme: UiTheme::Fantasy,
+                spell_artwork: SpellArtwork::Pixelized,
             },
             ..Settings::default()
         };

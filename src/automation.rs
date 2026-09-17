@@ -98,12 +98,18 @@ impl Kind {
         Self::ALL.into_iter().find(|k| k.id() == s)
     }
     pub fn height(self) -> i32 {
-        match self { Self::Lantern => 3, Self::DarkAltar | Self::Shrine => 2, _ => 1 }
+        match self {
+            Self::Lantern => 3,
+            Self::DarkAltar | Self::Shrine => 2,
+            _ => 1,
+        }
     }
     pub fn sustained(self) -> bool {
         matches!(self, Self::Lantern | Self::DarkAltar | Self::Shrine)
     }
-    pub fn chargeable(self) -> bool { self == Self::Vessel || self.sustained() }
+    pub fn chargeable(self) -> bool {
+        self == Self::Vessel || self.sustained()
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -392,7 +398,9 @@ impl Device {
     }
     pub fn new(kind: Kind, cell: Cell, rotation: u8) -> Self {
         let mut config = Config::default();
-        if kind == Kind::Chest { config.eject_contents = false; }
+        if kind == Kind::Chest {
+            config.eject_contents = false;
+        }
         if kind == Kind::Splitter {
             config.outputs = vec![Face::East, Face::North, Face::South];
         }
@@ -536,16 +544,13 @@ pub fn valid_item(id: &str) -> bool {
         return BlockType::from_name(name).is_some_and(|b| COLLECTIBLE_BLOCKS.contains(&b));
     }
     if let Some(name) = id.strip_prefix("item:") {
-        return crate::equipment::Gear::ALL.iter().any(|g|g.id()==name);
+        return crate::equipment::Gear::ALL.iter().any(|g| g.id() == name);
     }
     id.strip_prefix("creature:")
         .is_some_and(|name| crate::crafting::creature_kind(name).is_some())
 }
 fn valid_inventory(items: &Inventory) -> bool {
-    items.len() <= 512
-        && items
-            .iter()
-            .all(|(id, n)| valid_item(id) && *n > 0 )
+    items.len() <= 512 && items.iter().all(|(id, n)| valid_item(id) && *n > 0)
 }
 pub fn count(items: &Inventory) -> u32 {
     items.values().fold(0u32, |a, b| a.saturating_add(*b))
@@ -572,7 +577,9 @@ pub fn valid_cell(p: Cell) -> bool {
 }
 
 pub fn validate_account(account: &Account, b: &Balance, recipes: &Registry) -> Result<(), String> {
-    if !account.adventure.valid() { return Err("Invalid adventure progress".into()); }
+    if !account.adventure.valid() {
+        return Err("Invalid adventure progress".into());
+    }
     if account.packed_devices.len() > 8
         || account.production_goods.len() > 13
         || account
@@ -592,22 +599,29 @@ pub fn validate_account(account: &Account, b: &Balance, recipes: &Registry) -> R
 
 impl State {
     pub fn ensure_device_ids(&mut self) {
-        self.next_device_id=self.next_device_id.max(1);
-        for d in self.devices.values() {self.next_device_id=self.next_device_id.max(d.persistent_id.saturating_add(1));}
-        let mut seen=std::collections::HashSet::new();
+        self.next_device_id = self.next_device_id.max(1);
+        for d in self.devices.values() {
+            self.next_device_id = self.next_device_id.max(d.persistent_id.saturating_add(1));
+        }
+        let mut seen = std::collections::HashSet::new();
         for d in self.devices.values_mut() {
-            if d.persistent_id==0 || !seen.insert(d.persistent_id) {
-                d.persistent_id=self.next_device_id;
-                self.next_device_id=self.next_device_id.saturating_add(1);
+            if d.persistent_id == 0 || !seen.insert(d.persistent_id) {
+                d.persistent_id = self.next_device_id;
+                self.next_device_id = self.next_device_id.saturating_add(1);
                 seen.insert(d.persistent_id);
             }
         }
     }
     /// Multi-block props are stored once, at their base. Resolve any occupied voxel.
     pub fn device_at(&self, p: Cell) -> Option<&Device> {
-        if !valid_cell(p) { return None; }
-        (0..3).find_map(|dy| self.devices.get(&(p.0, p.1-dy, p.2))
-            .filter(|d| dy < d.kind.height()))
+        if !valid_cell(p) {
+            return None;
+        }
+        (0..3).find_map(|dy| {
+            self.devices
+                .get(&(p.0, p.1 - dy, p.2))
+                .filter(|d| dy < d.kind.height())
+        })
     }
     pub fn validate(&self, b: &Balance, recipes: &Registry) -> Result<(), String> {
         if self.devices.len() > b.max_devices {
@@ -624,7 +638,7 @@ impl State {
                 || !valid_cell((p.0, p.1 + d.kind.height() - 1, p.2))
                 || d.powered_ticks > b.def(d.kind).duration_ticks
                 || (!d.kind.sustained() && d.powered_ticks != 0)
-                || (1..d.kind.height()).any(|dy| self.devices.contains_key(&(p.0,p.1+dy,p.2)))
+                || (1..d.kind.height()).any(|dy| self.devices.contains_key(&(p.0, p.1 + dy, p.2)))
             {
                 return Err("Invalid stored device".into());
             }
@@ -767,9 +781,9 @@ pub fn apply(
     }
     let eye = feet + Vec3::Y * 1.62;
     let delta = center(p) - eye;
-    if crate::raycast::raycast(world, eye, delta, delta.length()).is_some_and(|hit|
-        hit.target != p && state.device_at(hit.target).is_none_or(|d| d.cell != p))
-    {
+    if crate::raycast::raycast(world, eye, delta, delta.length()).is_some_and(|hit| {
+        hit.target != p && state.device_at(hit.target).is_none_or(|d| d.cell != p)
+    }) {
         return Err("Device is obstructed".into());
     }
     let mut next = state.clone();
@@ -787,8 +801,10 @@ pub fn apply(
             if *rotation > 3
                 || next.devices.len() >= b.max_devices
                 || (0..kind.height()).any(|dy| {
-                    let q=(p.0,p.1+dy,p.2);
-                    !valid_cell(q) || next.device_at(q).is_some() || world.get_block(q.0,q.1,q.2) != BlockType::Air
+                    let q = (p.0, p.1 + dy, p.2);
+                    !valid_cell(q)
+                        || next.device_at(q).is_some()
+                        || world.get_block(q.0, q.1, q.2) != BlockType::Air
                 })
             {
                 return Err("Occupied cell or device limit".into());
@@ -816,14 +832,21 @@ pub fn apply(
                 for (item, n) in &b.def(*kind).cost {
                     account_take(&mut funds, item, *n)?;
                 }
-                { let mut d = Device::new(*kind, p, *rotation);
-                    if kind.sustained() { d.mana = b.def(*kind).mana_capacity.min(30); }
-                    d }
+                {
+                    let mut d = Device::new(*kind, p, *rotation);
+                    if kind.sustained() {
+                        d.mana = b.def(*kind).mana_capacity.min(30);
+                    }
+                    d
+                }
             };
             device.cell = p;
             next.ensure_device_ids();
-            device.persistent_id=next.next_device_id;
-            next.next_device_id=next.next_device_id.checked_add(1).ok_or("Device identity limit")?;
+            device.persistent_id = next.next_device_id;
+            next.next_device_id = next
+                .next_device_id
+                .checked_add(1)
+                .ok_or("Device identity limit")?;
             device.rotation = *rotation;
             if matches!(device.kind, Kind::Chest | Kind::Smelter) {
                 device.last_ejection_tick = next.tick;
@@ -919,7 +942,11 @@ fn account_slot<'a>(account: &'a mut Account, id: &str) -> Result<&'a mut u32, S
         return Ok(&mut account.resources[i]);
     }
     if let Some(name) = id.strip_prefix("item:") {
-        let i=crate::equipment::Gear::ALL.iter().find(|g|g.id()==name).ok_or("Unknown item")?.to_owned() as usize;
+        let i = crate::equipment::Gear::ALL
+            .iter()
+            .find(|g| g.id() == name)
+            .ok_or("Unknown item")?
+            .to_owned() as usize;
         return Ok(&mut account.gear[i]);
     }
     if valid_item(id) {

@@ -147,7 +147,13 @@ mod tests {
             .automation
             .devices
             .insert(p, Device::new(Kind::Chest, p, 0));
-        world.automation.devices.get_mut(&p).unwrap().config.eject_contents = true;
+        world
+            .automation
+            .devices
+            .get_mut(&p)
+            .unwrap()
+            .config
+            .eject_contents = true;
         world.automation.tick = 10;
         (
             world,

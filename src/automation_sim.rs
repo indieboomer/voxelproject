@@ -70,7 +70,9 @@ impl State {
                     device.activity = if device.powered_ticks > 0 {
                         device.powered_ticks -= 1;
                         Activity::Working
-                    } else { Activity::InsufficientMana };
+                    } else {
+                        Activity::InsufficientMana
+                    };
                 }
             } else {
                 produce(device, b, recipes, blocked[&p]);
@@ -357,10 +359,14 @@ fn produce(d: &mut Device, b: &Balance, recipes: &Registry, blocked: bool) {
             return;
         }
         let batch = d.batch.take().unwrap();
-        if d.kind==Kind::Dissipator && batch.ingredients.get("element:death").copied().unwrap_or(0)>0 {
-            d.quest_production[1]=d.quest_production[1].saturating_add(1);
+        if d.kind == Kind::Dissipator
+            && batch.ingredients.get("element:death").copied().unwrap_or(0) > 0
+        {
+            d.quest_production[1] = d.quest_production[1].saturating_add(1);
         }
-        d.quest_production[2]=d.quest_production[2].saturating_add(u64::from(batch.output.get("creature:sheep").copied().unwrap_or(0)));
+        d.quest_production[2] = d.quest_production[2].saturating_add(u64::from(
+            batch.output.get("creature:sheep").copied().unwrap_or(0),
+        ));
         d.feedback(0);
         for (id, n) in batch.output {
             add(&mut d.output, &id, n);
@@ -521,7 +527,7 @@ fn smelt(d: &mut Device, b: &Balance, recipes: &Registry) {
         }
         take(&mut d.items, &ore, 1);
         add(&mut d.output, metal, 1);
-        d.quest_production[0]=d.quest_production[0].saturating_add(1);
+        d.quest_production[0] = d.quest_production[0].saturating_add(1);
         d.feedback(0);
         d.feedback(1);
         made = true;
@@ -546,7 +552,11 @@ impl Clock {
         self.advance_with(dt, state, b, recipes, |_| {})
     }
     pub fn advance_with(
-        &mut self, dt: f32, state: &mut State, b: &Balance, recipes: &Registry,
+        &mut self,
+        dt: f32,
+        state: &mut State,
+        b: &Balance,
+        recipes: &Registry,
         mut apply: impl FnMut(&[(Cell, Kind)]),
     ) -> usize {
         if !dt.is_finite() || dt <= 0.0 {

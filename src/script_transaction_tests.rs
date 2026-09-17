@@ -1,17 +1,23 @@
 use super::*;
 
 fn shaping_fixture() -> Fixture {
-    let mut f=Fixture::new();
-    for x in -1..=0 { f.world.chunks.insert((x,0),crate::voxel::chunk::Chunk::new(x,0)); }
+    let mut f = Fixture::new();
+    for x in -1..=0 {
+        f.world
+            .chunks
+            .insert((x, 0), crate::voxel::chunk::Chunk::new(x, 0));
+    }
     f
 }
 
 #[test]
 fn creature_magic_reads_staged_changes_respects_walls_and_rolls_back() {
-    let mut f=shaping_fixture();
-    f.creatures=Creatures::new();f.creatures.spawn_one(CreatureKind::Sheep,Vec3::new(4.,30.,4.),1);
-    let before=f.creatures.snapshot_with_ids();
-    let body=r#"
+    let mut f = shaping_fixture();
+    f.creatures = Creatures::new();
+    f.creatures
+        .spawn_one(CreatureKind::Sheep, Vec3::new(4., 30., 4.), 1);
+    let before = f.creatures.snapshot_with_ids();
+    let body = r#"
         assert(api.apply_creature_status(1,'slow',10))
         assert(api.apply_creature_status(1,'stun',3))
         assert(api.get_creature(1).slow_seconds==10 and api.get_creature(1).stun_seconds==3)
@@ -24,49 +30,76 @@ fn creature_magic_reads_staged_changes_respects_walls_and_rolls_back() {
         local c=api.get_creature(1);assert(c.x>4 and c.x<6.4)
         assert(api.apply_creature_status(1,'stun',0));assert(api.get_creature(1).stun_seconds==0)
     "#;
-    let mut failed=module("on_cast",&format!("{body}\nerror('rollback')"));f.invoke(&mut failed,"on_cast");
-    assert!(failed.error.as_ref().unwrap().contains("rollback"),"{:?}",failed.error);
-    assert_eq!(f.creatures.snapshot_with_ids(),before);assert!(f.creatures.magic_statuses.is_empty());
-    let mut m=module("on_cast",body);f.invoke(&mut m,"on_cast");assert!(m.error.is_none(),"{:?}",m.error);
-    assert_eq!(f.creatures.magic_statuses[&1].slow,10.);
-    assert!(f.creatures.snapshot_with_ids()[0].2[0]>4.);
+    let mut failed = module("on_cast", &format!("{body}\nerror('rollback')"));
+    f.invoke(&mut failed, "on_cast");
+    assert!(
+        failed.error.as_ref().unwrap().contains("rollback"),
+        "{:?}",
+        failed.error
+    );
+    assert_eq!(f.creatures.snapshot_with_ids(), before);
+    assert!(f.creatures.magic_statuses.is_empty());
+    let mut m = module("on_cast", body);
+    f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_none(), "{:?}", m.error);
+    assert_eq!(f.creatures.magic_statuses[&1].slow, 10.);
+    assert!(f.creatures.snapshot_with_ids()[0].2[0] > 4.);
 }
 
 #[test]
 fn world_shaping_documented_examples_execute_the_requested_behaviors() {
-    let platform=include_str!("../world_api/examples/stone_platform.lua");
-    let rain=include_str!("../world_api/examples/rain_softens_soil.lua");
-    let shrine=include_str!("../world_api/examples/crystal_healing_shrine.lua");
-    for source in [platform,rain,shrine] {
+    let platform = include_str!("../world_api/examples/stone_platform.lua");
+    let rain = include_str!("../world_api/examples/rain_softens_soil.lua");
+    let shrine = include_str!("../world_api/examples/crystal_healing_shrine.lua");
+    for source in [platform, rain, shrine] {
         assert!(crate::world_api_validate::validate_source(source).is_empty());
-        Module::load("example".into(),"example".into(),source.into()).unwrap();
+        Module::load("example".into(), "example".into(), source.into()).unwrap();
     }
-    let mut f=shaping_fixture();f.players[0].pos=Vec3::new(8.,30.,8.);
-    let mut m=Module::load("platform".into(),"platform".into(),platform.into()).unwrap();
-    let (out,_)=f.invoke(&mut m,"on_cast");
-    assert!(m.error.is_none(),"{:?}",m.error);assert_eq!(out.block_edits.len(),25);
-    assert!(out.block_edits.iter().all(|&(_,y,_,b)| y==29 && b==BlockType::Stone));
+    let mut f = shaping_fixture();
+    f.players[0].pos = Vec3::new(8., 30., 8.);
+    let mut m = Module::load("platform".into(), "platform".into(), platform.into()).unwrap();
+    let (out, _) = f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_none(), "{:?}", m.error);
+    assert_eq!(out.block_edits.len(), 25);
+    assert!(out
+        .block_edits
+        .iter()
+        .all(|&(_, y, _, b)| y == 29 && b == BlockType::Stone));
 
-    f.world.set_block(8,29,8,BlockType::Soil);f.world.set_block(9,29,8,BlockType::Soil);
-    f.world.set_block(9,31,8,BlockType::Stone);f.weather.set(Weather::Rain);
-    let mut m=Module::load("rain".into(),"rain".into(),rain.into()).unwrap();m.enabled=true;
-    let (out,_)=f.invoke(&mut m,"on_tick");assert!(m.error.is_none(),"{:?}",m.error);
-    assert_eq!(out.block_edits,vec![(8,29,8,BlockType::Mud)]);
+    f.world.set_block(8, 29, 8, BlockType::Soil);
+    f.world.set_block(9, 29, 8, BlockType::Soil);
+    f.world.set_block(9, 31, 8, BlockType::Stone);
+    f.weather.set(Weather::Rain);
+    let mut m = Module::load("rain".into(), "rain".into(), rain.into()).unwrap();
+    m.enabled = true;
+    let (out, _) = f.invoke(&mut m, "on_tick");
+    assert!(m.error.is_none(), "{:?}", m.error);
+    assert_eq!(out.block_edits, vec![(8, 29, 8, BlockType::Mud)]);
     f.weather.set(Weather::Sunny);
-    assert!(f.invoke(&mut m,"on_tick").0.block_edits.is_empty());
+    assert!(f.invoke(&mut m, "on_tick").0.block_edits.is_empty());
 
-    f.creatures.damage(1,6.);f.players[0].finances.elements[crate::crafting::Element::Life as usize]=1;
+    f.creatures.damage(1, 6.);
+    f.players[0].finances.elements[crate::crafting::Element::Life as usize] = 1;
     let source=shrine.replace("function on_tick(api) end", "function on_cast(api,event) on_interact(api,{kind='crystal',x=1,y=30,z=0,player_id=event.player_id}) end");
-    let mut m=Module::load("shrine".into(),"shrine".into(),source).unwrap();
-    let (out,_)=f.invoke(&mut m,"on_cast");assert!(m.error.is_none(),"{:?}",m.error);
-    assert_eq!(f.creatures.snapshot_with_ids().into_iter().find(|c|c.0==1).unwrap().3,10.);
+    let mut m = Module::load("shrine".into(), "shrine".into(), source).unwrap();
+    let (out, _) = f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_none(), "{:?}", m.error);
+    assert_eq!(
+        f.creatures
+            .snapshot_with_ids()
+            .into_iter()
+            .find(|c| c.0 == 1)
+            .unwrap()
+            .3,
+        10.
+    );
     assert!(out.player_effects.iter().any(|e|matches!(e,PlayerEffect::Inventory{balances,..} if balances.elements[crate::crafting::Element::Life as usize]==0)));
 }
 
 #[test]
 fn world_shaping_queries_read_staged_materials_roofs_and_players() {
-    let mut f=shaping_fixture();
-    let body=r#"
+    let mut f = shaping_fixture();
+    let body = r#"
         local p=api.get_player(event.player_id); assert(p and p.id==event.player_id)
         assert(api.get_player(900)==nil and api.get_creature(900)==nil)
         assert(api.teleport_player(p.id,2,20,2)); assert(api.get_player(p.id).y==20)
@@ -88,40 +121,55 @@ fn world_shaping_queries_read_staged_materials_roofs_and_players() {
         assert(#api.find_blocks('ore',8,10,8,1)==7)
         assert(api.get_block(8,10,8)=='coal' and api.get_block(9,11,8)=='air')
     "#;
-    let mut m=module("on_cast",body);
-    let (out,_)=f.invoke(&mut m,"on_cast");
-    assert!(m.error.is_none(),"{:?}",m.error);assert_eq!(out.block_edits.len(),25);
-    let mut m=module("on_cast",&format!("{body}\nerror('rollback')"));
-    let (out,_)=f.invoke(&mut m,"on_cast");
-    assert!(m.error.is_some());assert!(out.block_edits.is_empty() && out.player_effects.is_empty());
+    let mut m = module("on_cast", body);
+    let (out, _) = f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_none(), "{:?}", m.error);
+    assert_eq!(out.block_edits.len(), 25);
+    let mut m = module("on_cast", &format!("{body}\nerror('rollback')"));
+    let (out, _) = f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_some());
+    assert!(out.block_edits.is_empty() && out.player_effects.is_empty());
 }
 
 #[test]
 fn world_shaping_is_atomic_and_shares_existing_edit_limits() {
-    let mut f=shaping_fixture();
-    let mut m=module("on_tick",r#"
+    let mut f = shaping_fixture();
+    let mut m = module(
+        "on_tick",
+        r#"
         assert(api.fill_box(0,10,0,7,10,3,'stone')==32)
         assert(api.fill_box(0,10,0,7,10,3,'stone')==0)
         assert(api.fill_box(10,10,10,10,10,10,'stone')==nil)
         assert(not api.replace_block(10,10,10,'stone'))
-    "#);
-    let (out,_)=f.invoke(&mut m,"on_tick");
-    assert!(m.error.is_none(),"{:?}",m.error);assert_eq!(out.block_edits.len(),32);
-    let mut m=module("on_cast",r#"
+    "#,
+    );
+    let (out, _) = f.invoke(&mut m, "on_tick");
+    assert!(m.error.is_none(), "{:?}", m.error);
+    assert_eq!(out.block_edits.len(), 32);
+    let mut m = module(
+        "on_cast",
+        r#"
         assert(api.fill_box(0,10,0,9,12,9,'stone')==300)
         assert(api.fill_sphere(12,12,12,0,'gold_ore')==nil)
         assert(api.get_block(12,12,12)=='air')
-    "#);
-    let (out,_)=f.invoke(&mut m,"on_cast");
-    assert!(m.error.is_none(),"{:?}",m.error);assert_eq!(out.block_edits.len(),300);
+    "#,
+    );
+    let (out, _) = f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_none(), "{:?}", m.error);
+    assert_eq!(out.block_edits.len(), 300);
 }
 
 #[test]
 fn world_shaping_rejects_protected_unloaded_and_invalid_regions_without_partial_edits() {
-    let mut f=shaping_fixture();
-    f.world.set_block(4,10,4,BlockType::Bedrock);
-    f.world.automation.devices.insert((8,10,8),crate::automation::Device::new(crate::automation::Kind::Chest,(8,10,8),0));
-    let mut m=module("on_cast",r#"
+    let mut f = shaping_fixture();
+    f.world.set_block(4, 10, 4, BlockType::Bedrock);
+    f.world.automation.devices.insert(
+        (8, 10, 8),
+        crate::automation::Device::new(crate::automation::Kind::Chest, (8, 10, 8), 0),
+    );
+    let mut m = module(
+        "on_cast",
+        r#"
         assert(api.fill_box(3,10,4,4,10,4,'stone')==nil)
         assert(api.fill_box(7,10,8,8,10,8,'stone')==nil)
         assert(api.fill_box(15,10,1,16,10,1,'stone')==nil)
@@ -133,90 +181,142 @@ fn world_shaping_rejects_protected_unloaded_and_invalid_regions_without_partial_
         assert(api.fill_box(0,-1,0,0,0,0,'stone')==nil)
         assert(api.get_block(3,10,4)=='air' and api.get_block(7,10,8)=='air')
         assert(api.fill_box(0,10,0,9,12,9,'stone','air')==298)
-    "#);
-    let (out,_)=f.invoke(&mut m,"on_cast");
-    assert!(m.error.is_none(),"{:?}",m.error);
-    assert_eq!(out.block_edits.len(),298);
+    "#,
+    );
+    let (out, _) = f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_none(), "{:?}", m.error);
+    assert_eq!(out.block_edits.len(), 298);
 }
 
 #[test]
 fn world_shaping_native_limits_cannot_be_caught_and_abort_prior_writes() {
-    let mut f=shaping_fixture();
-    let mut m=module("on_cast",r#"
+    let mut f = shaping_fixture();
+    let mut m = module(
+        "on_cast",
+        r#"
         assert(api.fill_box(0,10,0,7,10,3,'stone')==32)
         pcall(function() api.fill_box(0,10,0,15,25,15,'stone') end)
         api.broadcast('must not commit')
-    "#);
-    let (out,_)=f.invoke(&mut m,"on_cast");
-    assert!(m.error.is_some());assert!(out.block_edits.is_empty() && out.broadcasts.is_empty());
-    for call in ["api.fill_sphere(0,10,0,0/0,'stone')",
-        "api.fill_box(1000001,10,0,1000001,10,0,'stone')", "api.heal_creature(1,1/0)"] {
-        let mut m=module("on_cast",call);let (out,_)=f.invoke(&mut m,"on_cast");
-        assert!(m.error.is_some(),"{call}");assert!(out.block_edits.is_empty());
+    "#,
+    );
+    let (out, _) = f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_some());
+    assert!(out.block_edits.is_empty() && out.broadcasts.is_empty());
+    for call in [
+        "api.fill_sphere(0,10,0,0/0,'stone')",
+        "api.fill_box(1000001,10,0,1000001,10,0,'stone')",
+        "api.heal_creature(1,1/0)",
+    ] {
+        let mut m = module("on_cast", call);
+        let (out, _) = f.invoke(&mut m, "on_cast");
+        assert!(m.error.is_some(), "{call}");
+        assert!(out.block_edits.is_empty());
     }
 }
 
 #[test]
 fn creature_healing_reads_own_writes_rolls_back_and_survives_save_restore() {
-    let mut f=shaping_fixture();
-    f.creatures.damage(1,5.);
-    let before=f.creatures.snapshot_with_ids();
-    let body=r#"
+    let mut f = shaping_fixture();
+    f.creatures.damage(1, 5.);
+    let before = f.creatures.snapshot_with_ids();
+    let body = r#"
         local c=api.get_creature(1); assert(c.health<c.max_health)
         assert(api.heal_creature(1,2)); assert(api.get_creature(1).health==c.health+2)
         assert(api.heal_creature(1,999)); assert(api.get_creature(1).health==c.max_health)
         assert(not api.heal_creature(999,1) and not api.heal_creature(1,-1))
         api.destroy(2); assert(api.get_creature(2)==nil and not api.heal_creature(2,99))
     "#;
-    let mut m=module("on_cast",&format!("{body}\nerror('rollback')"));f.invoke(&mut m,"on_cast");
-    assert!(m.error.is_some());assert_eq!(f.creatures.snapshot_with_ids(),before);
-    let mut m=module("on_cast",body);f.invoke(&mut m,"on_cast");assert!(m.error.is_none(),"{:?}",m.error);
-    let saved=f.creatures.snapshot_with_ids();
-    let mut restored=Creatures::new();restored.restore_saved(&saved,1);
-    let c=restored.snapshot_with_ids().into_iter().find(|c|c.0==1).unwrap();assert_eq!(c.3,c.4);
+    let mut m = module("on_cast", &format!("{body}\nerror('rollback')"));
+    f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_some());
+    assert_eq!(f.creatures.snapshot_with_ids(), before);
+    let mut m = module("on_cast", body);
+    f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_none(), "{:?}", m.error);
+    let saved = f.creatures.snapshot_with_ids();
+    let mut restored = Creatures::new();
+    restored.restore_saved(&saved, 1);
+    let c = restored
+        .snapshot_with_ids()
+        .into_iter()
+        .find(|c| c.0 == 1)
+        .unwrap();
+    assert_eq!(c.3, c.4);
 }
 
 #[test]
 fn documented_wayfinder_ward_uses_current_progress_and_selection() {
-    let source=include_str!("../docs/examples/wayfinder_crystal_ward.lua");
+    let source = include_str!("../docs/examples/wayfinder_crystal_ward.lua");
     assert!(crate::world_api_validate::validate_source(source).is_empty());
-    let mut f=Fixture::new();f.players[0].finances.adventure.stage=3;
-    f.players[0].finances.held=Some(crate::equipment::Entry::Resource(BlockType::Crystal));
-    f.resources[COLLECTIBLE_BLOCKS.iter().position(|b|*b==BlockType::Crystal).unwrap()]=1;
-    let mut m=Module::load("wayfinder ward".into(),"Protect experienced crystal holders from goblins".into(),source.into()).unwrap();m.enabled=true;
-    f.invoke(&mut m,"on_tick");assert!(m.error.is_none(),"{:?}",m.error);
+    let mut f = Fixture::new();
+    f.players[0].finances.adventure.stage = 3;
+    f.players[0].finances.held = Some(crate::equipment::Entry::Resource(BlockType::Crystal));
+    f.resources[COLLECTIBLE_BLOCKS
+        .iter()
+        .position(|b| *b == BlockType::Crystal)
+        .unwrap()] = 1;
+    let mut m = Module::load(
+        "wayfinder ward".into(),
+        "Protect experienced crystal holders from goblins".into(),
+        source.into(),
+    )
+    .unwrap();
+    m.enabled = true;
+    f.invoke(&mut m, "on_tick");
+    assert!(m.error.is_none(), "{:?}", m.error);
     assert!(f.creatures.attack_policies.values().flatten().any(|p|matches!(p,crate::creature::AttackPolicy::ProtectPlayer(0,k) if *k==CreatureKind::Goblin as u8)));
-    f.players[0].finances.held=None;
-    f.invoke(&mut m,"on_tick");assert!(f.creatures.attack_policies.is_empty());
+    f.players[0].finances.held = None;
+    f.invoke(&mut m, "on_tick");
+    assert!(f.creatures.attack_policies.is_empty());
 }
 
 #[test]
 fn equipped_spell_survives_staged_mana_changes() {
-    let mut f=Fixture::new();
-    let mut account=crate::crafting::Account::default();
+    let mut f = Fixture::new();
+    let mut account = crate::crafting::Account::default();
     account.known_spells.push(42);
-    account.hotbar.assign(Some(crate::equipment::Entry::Spell(42)));
-    f.players[0].finances=InventoryBalances::from_account(&account);
-    let mut m=module("on_cast",r#"
+    account
+        .hotbar
+        .assign(Some(crate::equipment::Entry::Spell(42)));
+    f.players[0].finances = InventoryBalances::from_account(&account);
+    let mut m = module(
+        "on_cast",
+        r#"
         assert(api.get_equipped_item(0)=='spell:42')
         assert(api.give_mana(0,1))
         assert(api.get_equipped_item(0)=='spell:42')
-    "#);
-    f.invoke(&mut m,"on_cast");assert!(m.error.is_none(),"{:?}",m.error);
+    "#,
+    );
+    f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_none(), "{:?}", m.error);
     account.known_spells.clear();
-    f.players[0].finances=InventoryBalances::from_account(&account);
-    let mut m=module("on_cast","assert(api.get_equipped_item(0)==nil)");
-    f.invoke(&mut m,"on_cast");assert!(m.error.is_none(),"{:?}",m.error);
+    f.players[0].finances = InventoryBalances::from_account(&account);
+    let mut m = module("on_cast", "assert(api.get_equipped_item(0)==nil)");
+    f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_none(), "{:?}", m.error);
 }
 
 #[test]
 fn journal_and_equipment_queries_preserve_progress_across_staged_inventory_changes() {
-    let mut f=Fixture::new();
-    f.players[0].finances.adventure=crate::adventure::Progress{stage:2,home:Some((4,30,8)),explored_depths:true,recoveries:3,..Default::default()};
-    f.players[0].finances.held=Some(crate::equipment::Entry::Resource(BlockType::Crystal));
-    let crystal=COLLECTIBLE_BLOCKS.iter().position(|b|*b==BlockType::Crystal).unwrap();f.players[0].resources[crystal]=1;f.resources[crystal]=1;
-    let mut guest=f.players[0];guest.id=7;f.players.push(guest);
-    let body=r#"
+    let mut f = Fixture::new();
+    f.players[0].finances.adventure = crate::adventure::Progress {
+        stage: 2,
+        home: Some((4, 30, 8)),
+        explored_depths: true,
+        recoveries: 3,
+        ..Default::default()
+    };
+    f.players[0].finances.held = Some(crate::equipment::Entry::Resource(BlockType::Crystal));
+    let crystal = COLLECTIBLE_BLOCKS
+        .iter()
+        .position(|b| *b == BlockType::Crystal)
+        .unwrap();
+    f.players[0].resources[crystal] = 1;
+    f.resources[crystal] = 1;
+    let mut guest = f.players[0];
+    guest.id = 7;
+    f.players.push(guest);
+    let body = r#"
         for _,id in ipairs({0,7}) do
             local journal=api.get_player_journal(id)
             assert(journal.stage==2 and journal.explored_depths and journal.recoveries==3)
@@ -234,19 +334,32 @@ fn journal_and_equipment_queries_preserve_progress_across_staged_inventory_chang
         end
         assert(api.get_player_journal(99)==nil and api.get_equipped_item(99)==nil)
     "#;
-    let mut m=module("on_cast",body);let (out,_)=f.invoke(&mut m,"on_cast");
-    assert!(m.error.is_none(),"{:?}",m.error);
-    assert!(out.player_effects.iter().any(|e|matches!(e,PlayerEffect::Inventory{balances,..} if balances.adventure.recoveries==3)));
-    let mut m=module("on_cast",&format!("{body}\nerror('rollback')"));let (out,_)=f.invoke(&mut m,"on_cast");
-    assert!(m.error.is_some());assert!(out.player_effects.is_empty());
+    let mut m = module("on_cast", body);
+    let (out, _) = f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_none(), "{:?}", m.error);
+    assert!(out.player_effects.iter().any(
+        |e| matches!(e,PlayerEffect::Inventory{balances,..} if balances.adventure.recoveries==3)
+    ));
+    let mut m = module("on_cast", &format!("{body}\nerror('rollback')"));
+    let (out, _) = f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_some());
+    assert!(out.player_effects.is_empty());
 }
 
 #[test]
 fn inventory_economy_reads_staged_balances_for_host_and_guest_and_rolls_back() {
-    let mut f=Fixture::new();
-    f.players[0].finances=InventoryBalances {mana:100,elements:[0;5],items:crate::gear_catalog::starter_counts(),..Default::default()};
-    let mut guest=f.players[0];guest.id=7;guest.resources=[0;COLLECTIBLE_BLOCKS.len()];f.players.push(guest);
-    let body=r#"
+    let mut f = Fixture::new();
+    f.players[0].finances = InventoryBalances {
+        mana: 100,
+        elements: [0; 5],
+        items: crate::gear_catalog::starter_counts(),
+        ..Default::default()
+    };
+    let mut guest = f.players[0];
+    guest.id = 7;
+    guest.resources = [0; COLLECTIBLE_BLOCKS.len()];
+    f.players.push(guest);
+    let body = r#"
         for _,id in ipairs({0,7}) do
             assert(api.give_item(id,'iron',3)); assert(api.give_item(id,'oak_wood',2))
             assert(api.craft_item(id,'pickaxe')); assert(api.get_item_count(id,'pickaxe')==2)
@@ -271,19 +384,34 @@ fn inventory_economy_reads_staged_balances_for_host_and_guest_and_rolls_back() {
         assert(api.get_mana(99)==nil and api.get_item_count(7,'bow')==nil)
         assert(not api.give_element(7,'light',1) and not api.give_mana(7,0))
     "#;
-    let mut m=module("on_cast",body);
-    let (out,_)=f.invoke(&mut m,"on_cast");assert!(m.error.is_none(),"{:?}",m.error);
-    assert!(out.player_effects.iter().any(|e|matches!(e,PlayerEffect::Inventory{player_id:7,..})));
-    let mut m=module("on_cast",&format!("{body}\nerror('rollback')"));
-    let (out,_)=f.invoke(&mut m,"on_cast");assert!(m.error.is_some());assert!(out.player_effects.is_empty());
+    let mut m = module("on_cast", body);
+    let (out, _) = f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_none(), "{:?}", m.error);
+    assert!(out
+        .player_effects
+        .iter()
+        .any(|e| matches!(e, PlayerEffect::Inventory { player_id: 7, .. })));
+    let mut m = module("on_cast", &format!("{body}\nerror('rollback')"));
+    let (out, _) = f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_some());
+    assert!(out.player_effects.is_empty());
 }
 
 #[test]
 fn inventory_uses_configured_registry_and_rejects_overflow() {
-    let mut f=Fixture::new();
-    f.players[0].finances=InventoryBalances{mana:u32::MAX,elements:[2,0,0,0,0],items:[0;21],..Default::default()};
-    let mut registry=crate::crafting::Registry::parse(include_str!("../data/crafting.json")).unwrap();registry.conversion_rate=3;
-    let mut m=module("on_cast",r#"
+    let mut f = Fixture::new();
+    f.players[0].finances = InventoryBalances {
+        mana: u32::MAX,
+        elements: [2, 0, 0, 0, 0],
+        items: [0; 21],
+        ..Default::default()
+    };
+    let mut registry =
+        crate::crafting::Registry::parse(include_str!("../data/crafting.json")).unwrap();
+    registry.conversion_rate = 3;
+    let mut m = module(
+        "on_cast",
+        r#"
         assert(not api.give_mana(0,1))
         assert(not api.convert_elements_to_mana(0,'earth',2))
         assert(api.get_element_count(0,'earth')==2)
@@ -291,81 +419,163 @@ fn inventory_uses_configured_registry_and_rejects_overflow() {
         assert(api.convert_elements_to_mana(0,'earth',2))
         assert(api.get_mana(0)==4294967295 and api.get_element_count(0,'earth')==0)
         assert(not api.decompose_item(0,'sword'))
-    "#);
+    "#,
+    );
     m.lua.set_app_data(std::sync::Arc::new(registry));
-    let (_,_) = f.invoke(&mut m,"on_cast");assert!(m.error.is_none(),"{:?}",m.error);
+    let (_, _) = f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_none(), "{:?}", m.error);
 }
 
 #[test]
 fn inventory_balances_flow_between_committed_callbacks() {
-    let mut f=Fixture::new();
-    let mut guest=f.players[0];guest.id=7;guest.finances=InventoryBalances{mana:10,..Default::default()};f.players.push(guest);
-    let mut host=ScriptHost::new();
+    let mut f = Fixture::new();
+    let mut guest = f.players[0];
+    guest.id = 7;
+    guest.finances = InventoryBalances {
+        mana: 10,
+        ..Default::default()
+    };
+    f.players.push(guest);
+    let mut host = ScriptHost::new();
     host.modules.push(module("on_tick","assert(api.give_mana(7,2)); assert(api.give_item(7,'axe',1)); assert(api.give_element(7,'life',3))"));
     host.modules.push(module("on_tick","assert(api.get_player_inventory(7).mana==12); assert(api.has_item(7,'axe')); assert(api.get_element_count(7,'life')==3); assert(api.take_item(7,'axe',1)); assert(api.take_mana(7,2))"));
-    for m in &mut host.modules {m.enabled=true;assert!(crate::world_api_validate::validate_source(&m.source).is_empty());}
-    let out=host.run_tick(&f.world,&mut f.creatures,&f.players,&mut f.time,&mut f.weather,&[],&[],f.resources);
-    assert!(out.crashes.is_empty(),"{:?}",out.crashes);
-    let last=out.player_effects.iter().rev().find_map(|e|match e {PlayerEffect::Inventory{player_id:7,balances,..}=>Some(balances),_=>None}).unwrap();
-    assert_eq!(last.mana,10);assert_eq!(last.items[0],0);assert_eq!(last.elements[3],3);
+    for m in &mut host.modules {
+        m.enabled = true;
+        assert!(crate::world_api_validate::validate_source(&m.source).is_empty());
+    }
+    let out = host.run_tick(
+        &f.world,
+        &mut f.creatures,
+        &f.players,
+        &mut f.time,
+        &mut f.weather,
+        &[],
+        &[],
+        f.resources,
+    );
+    assert!(out.crashes.is_empty(), "{:?}", out.crashes);
+    let last = out
+        .player_effects
+        .iter()
+        .rev()
+        .find_map(|e| match e {
+            PlayerEffect::Inventory {
+                player_id: 7,
+                balances,
+                ..
+            } => Some(balances),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(last.mana, 10);
+    assert_eq!(last.items[0], 0);
+    assert_eq!(last.elements[3], 3);
 }
 
 #[test]
 fn nearby_campfire_search_uses_edited_ground_avoids_players_and_rolls_back() {
-    let mut f=environment_fixture();
-    f.players[0].pos=Vec3::new(8.5,32.0,8.5);
-    let mut guest=f.players[0];guest.id=7;guest.pos=Vec3::new(10.5,32.0,8.5);f.players.push(guest);
-    let chunk=f.world.chunks.get_mut(&(0,0)).unwrap();
-    for x in 0..16 {for z in 0..16 {
-        chunk.set_local(x,31,z,BlockType::Stone);
-        chunk.set_local(x,32,z,BlockType::ShortGrass);
-    }}
-    let mut m=module("on_cast",r#"
+    let mut f = environment_fixture();
+    f.players[0].pos = Vec3::new(8.5, 32.0, 8.5);
+    let mut guest = f.players[0];
+    guest.id = 7;
+    guest.pos = Vec3::new(10.5, 32.0, 8.5);
+    f.players.push(guest);
+    let chunk = f.world.chunks.get_mut(&(0, 0)).unwrap();
+    for x in 0..16 {
+        for z in 0..16 {
+            chunk.set_local(x, 31, z, BlockType::Stone);
+            chunk.set_local(x, 32, z, BlockType::ShortGrass);
+        }
+    }
+    let mut m = module(
+        "on_cast",
+        r#"
         local fire=api.place_campfire_near_player(0,6)
         assert(fire and fire.y==32 and fire.burning)
         for _,p in ipairs(api.players()) do
             assert((p.x-fire.x-0.5)^2+(p.z-fire.z-0.5)^2>=4)
         end
         assert(api.get_block(fire.x,fire.y,fire.z)=='campfire')
-    "#);
-    let (out,_)=f.invoke(&mut m,"on_cast");assert!(m.error.is_none(),"{:?}",m.error);
-    assert_eq!(out.block_edits.len(),1);
-    let mut bad=module("on_cast","assert(api.place_campfire_near_player(0,6)); error('rollback')");
-    let (out,_)=f.invoke(&mut bad,"on_cast");assert!(bad.error.is_some());assert!(out.block_edits.is_empty());
-    for x in 0..16 {for z in 0..16 {f.world.chunks.get_mut(&(0,0)).unwrap().set_local(x,32,z,BlockType::Water);}}
+    "#,
+    );
+    let (out, _) = f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_none(), "{:?}", m.error);
+    assert_eq!(out.block_edits.len(), 1);
+    let mut bad = module(
+        "on_cast",
+        "assert(api.place_campfire_near_player(0,6)); error('rollback')",
+    );
+    let (out, _) = f.invoke(&mut bad, "on_cast");
+    assert!(bad.error.is_some());
+    assert!(out.block_edits.is_empty());
+    for x in 0..16 {
+        for z in 0..16 {
+            f.world
+                .chunks
+                .get_mut(&(0, 0))
+                .unwrap()
+                .set_local(x, 32, z, BlockType::Water);
+        }
+    }
     let mut m=module("on_cast","assert(api.place_campfire_near_player(0,6)==nil); assert(api.place_campfire_near_player(99,2)==nil)");
-    let (out,_)=f.invoke(&mut m,"on_cast");assert!(m.error.is_none(),"{:?}",m.error);assert!(out.block_edits.is_empty());
+    let (out, _) = f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_none(), "{:?}", m.error);
+    assert!(out.block_edits.is_empty());
 }
 
-fn environment_fixture()->Fixture {
-    let mut f=Fixture::new();
-    let mut chunk=crate::voxel::chunk::Chunk::new(0,0);
-    for x in 0..16 {for z in 0..16 {chunk.set_local(x,24,z,BlockType::Stone);}}
-    for x in 5..=11 {for z in 5..=11 {for y in 30..=32 {chunk.set_local(x,y,z,BlockType::Water);}}}
+fn environment_fixture() -> Fixture {
+    let mut f = Fixture::new();
+    let mut chunk = crate::voxel::chunk::Chunk::new(0, 0);
+    for x in 0..16 {
+        for z in 0..16 {
+            chunk.set_local(x, 24, z, BlockType::Stone);
+        }
+    }
+    for x in 5..=11 {
+        for z in 5..=11 {
+            for y in 30..=32 {
+                chunk.set_local(x, y, z, BlockType::Water);
+            }
+        }
+    }
     // Isolated source above a lower receiving pool.
-    chunk.set_local(2,35,2,BlockType::Water);
-    chunk.set_local(3,28,2,BlockType::Water);
-    f.world.chunks.insert((0,0),chunk);
+    chunk.set_local(2, 35, 2, BlockType::Water);
+    chunk.set_local(3, 28, 2, BlockType::Water);
+    f.world.chunks.insert((0, 0), chunk);
     f
 }
 
 #[test]
 fn documented_environment_examples_load_and_execute() {
-    let docs=include_str!("../docs/prompting.md");
-    assert_eq!(docs.split("```lua\n").skip(1).count(),4);
-    for (i,part) in docs.split("```lua\n").skip(1).enumerate() {
-        let source=part.split("```").next().unwrap();
-        let mut m=Module::load(format!("documented-{i}"),"documentation".into(),source.into()).unwrap();
-        let mut f=environment_fixture();
-        let callback=if source.contains("function on_tick") {"on_tick"}else{"on_cast"};
-        for _ in 0..11 {f.invoke(&mut m,callback);assert!(m.error.is_none(),"example {i}: {:?}",m.error);}
+    let docs = include_str!("../docs/prompting.md");
+    assert_eq!(docs.split("```lua\n").skip(1).count(), 4);
+    for (i, part) in docs.split("```lua\n").skip(1).enumerate() {
+        let source = part.split("```").next().unwrap();
+        let mut m = Module::load(
+            format!("documented-{i}"),
+            "documentation".into(),
+            source.into(),
+        )
+        .unwrap();
+        let mut f = environment_fixture();
+        let callback = if source.contains("function on_tick") {
+            "on_tick"
+        } else {
+            "on_cast"
+        };
+        for _ in 0..11 {
+            f.invoke(&mut m, callback);
+            assert!(m.error.is_none(), "example {i}: {:?}", m.error);
+        }
     }
 }
 
 #[test]
 fn environment_api_reads_staged_edits_and_properties_and_spawns_safe_fish() {
-    let mut f=environment_fixture();
-    let mut m=module("on_cast",r#"
+    let mut f = environment_fixture();
+    let mut m = module(
+        "on_cast",
+        r#"
         assert(api.campfire_light_radius==8 and api.fish_spawn_clearance==3)
         assert(api.place_campfire(3,25,12))
         assert(not api.place_campfire(3,25,12))
@@ -392,27 +602,42 @@ fn environment_api_reads_staged_edits_and_properties_and_spawns_safe_fish() {
         assert(falls[1].flow_x==1 and falls[1].sound_radius==48)
         api.replace_block(3,32,2,'stone')
         assert(#api.get_waterfalls(2,35,2)==0)
-    "#);
-    let (out,_)=f.invoke(&mut m,"on_cast");
-    assert!(m.error.is_none(),"{:?}",m.error);
-    assert!(out.block_edits.iter().any(|b|b.3==BlockType::Campfire));
-    assert_eq!(f.creatures.snapshot_with_ids().iter().filter(|c|c.1==CreatureKind::Fish.to_u8()).count(),1);
+    "#,
+    );
+    let (out, _) = f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_none(), "{:?}", m.error);
+    assert!(out.block_edits.iter().any(|b| b.3 == BlockType::Campfire));
+    assert_eq!(
+        f.creatures
+            .snapshot_with_ids()
+            .iter()
+            .filter(|c| c.1 == CreatureKind::Fish.to_u8())
+            .count(),
+        1
+    );
 }
 
 #[test]
 fn environment_actions_roll_back_and_scans_cannot_evade_native_budget() {
-    let mut f=environment_fixture();
-    let initial=f.creatures.snapshot_with_ids().len();
+    let mut f = environment_fixture();
+    let initial = f.creatures.snapshot_with_ids().len();
     let mut m=module("on_cast","assert(api.place_campfire(3,25,12)); assert(api.spawn_fish(8.5,31.5,8.5)); error('rollback')");
-    let (out,_)=f.invoke(&mut m,"on_cast");
-    assert!(m.error.is_some());assert!(out.block_edits.is_empty());
-    assert_eq!(f.creatures.snapshot_with_ids().len(),initial);
+    let (out, _) = f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_some());
+    assert!(out.block_edits.is_empty());
+    assert_eq!(f.creatures.snapshot_with_ids().len(), initial);
     let mut m=module("on_cast","api.broadcast('rollback'); for i=1,10 do pcall(function() api.find_campfires(0,25,0,12) end) end");
-    let (out,_)=f.invoke(&mut m,"on_cast");
+    let (out, _) = f.invoke(&mut m, "on_cast");
     assert!(m.error.as_deref().unwrap().contains("native work budget"));
     assert!(out.broadcasts.is_empty());
-    for call in ["api.get_water(0/0,0,0)","api.spawn_fish('1e100',0,0)","api.get_waterfalls(2000000,0,0)"] {
-        let mut m=module("on_cast",call);f.invoke(&mut m,"on_cast");assert!(m.error.is_some());
+    for call in [
+        "api.get_water(0/0,0,0)",
+        "api.spawn_fish('1e100',0,0)",
+        "api.get_waterfalls(2000000,0,0)",
+    ] {
+        let mut m = module("on_cast", call);
+        f.invoke(&mut m, "on_cast");
+        assert!(m.error.is_some());
     }
 }
 
@@ -472,10 +697,14 @@ struct Fixture {
 
 #[test]
 fn automation_lua_changes_are_visible_in_callback_and_rollback_on_error() {
-    use crate::automation::{Device,Kind};
-    let mut fixture=Fixture::new();
-    fixture.world.automation.devices.insert((2,1,0),Device::new(Kind::Workshop,(2,1,0),0));
-    let body=r#"
+    use crate::automation::{Device, Kind};
+    let mut fixture = Fixture::new();
+    fixture
+        .world
+        .automation
+        .devices
+        .insert((2, 1, 0), Device::new(Kind::Workshop, (2, 1, 0), 0));
+    let body = r#"
         assert(#api.get_devices() == 1)
         assert(api.configure_device(2,1,0,{recipe="stone"}))
         assert(api.set_device_enabled(2,1,0,false))
@@ -483,30 +712,43 @@ fn automation_lua_changes_are_visible_in_callback_and_rollback_on_error() {
         assert(d.recipe == "stone" and not d.enabled)
         assert(not api.replace_block(2,1,0,"air"))
     "#;
-    let mut failing=module("on_tick",&format!("{body}\nerror('rollback')"));
-    let (outcome,_)=fixture.invoke(&mut failing,"on_tick");
+    let mut failing = module("on_tick", &format!("{body}\nerror('rollback')"));
+    let (outcome, _) = fixture.invoke(&mut failing, "on_tick");
     assert!(outcome.player_effects.is_empty());
-    assert!(fixture.world.automation.devices[&(2,1,0)].config.enabled);
-    let mut successful=module("on_tick",body);
-    let (outcome,_)=fixture.invoke(&mut successful,"on_tick");
+    assert!(fixture.world.automation.devices[&(2, 1, 0)].config.enabled);
+    let mut successful = module("on_tick", body);
+    let (outcome, _) = fixture.invoke(&mut successful, "on_tick");
     assert!(outcome.player_effects.iter().any(|effect|matches!(effect,PlayerEffect::AutomationState{state} if state.devices[&(2,1,0)].config.recipe=="stone" && !state.devices[&(2,1,0)].config.enabled)));
 }
 
 #[test]
 fn automation_lua_placement_pays_resources_and_failed_callback_refunds() {
-    let mut fixture=Fixture::new();
-    let body=format!(r#"
+    let mut fixture = Fixture::new();
+    let body = format!(
+        r#"
         assert(api.place_device({},"signal",2,1,0,0))
         assert(api.get_device(2,1,0).kind == "signal")
         assert(not api.place_device({},"signal",2,1,0,0))
-    "#,HOST_PLAYER_ID,HOST_PLAYER_ID);
-    let mut failed=module("on_cast",&format!("{body}\nerror('rollback')"));
-    let (outcome,_)=fixture.invoke(&mut failed,"on_cast");assert!(outcome.player_effects.is_empty());
-    let mut success=module("on_cast",&body);
-    let (outcome,_)=fixture.invoke(&mut success,"on_cast");
-    let stone=COLLECTIBLE_BLOCKS.iter().position(|b|*b==BlockType::Stone).unwrap();
-    assert!(outcome.player_effects.iter().any(|e|matches!(e,PlayerEffect::Inventory{resources,..} if resources[stone]==4)));
-    assert!(outcome.player_effects.iter().any(|e|matches!(e,PlayerEffect::AutomationState{state} if state.devices.len()==1)));
+    "#,
+        HOST_PLAYER_ID, HOST_PLAYER_ID
+    );
+    let mut failed = module("on_cast", &format!("{body}\nerror('rollback')"));
+    let (outcome, _) = fixture.invoke(&mut failed, "on_cast");
+    assert!(outcome.player_effects.is_empty());
+    let mut success = module("on_cast", &body);
+    let (outcome, _) = fixture.invoke(&mut success, "on_cast");
+    let stone = COLLECTIBLE_BLOCKS
+        .iter()
+        .position(|b| *b == BlockType::Stone)
+        .unwrap();
+    assert!(outcome
+        .player_effects
+        .iter()
+        .any(|e| matches!(e,PlayerEffect::Inventory{resources,..} if resources[stone]==4)));
+    assert!(outcome
+        .player_effects
+        .iter()
+        .any(|e| matches!(e,PlayerEffect::AutomationState{state} if state.devices.len()==1)));
 }
 
 impl Fixture {
@@ -892,10 +1134,15 @@ fn guest_inventory_queries_are_transactional_and_distinguish_absence_from_invali
     let mut f = Fixture::new();
     let mut guest = f.players[0];
     guest.id = 7;
-    let crystal = COLLECTIBLE_BLOCKS.iter().position(|b| *b == BlockType::Crystal).unwrap();
+    let crystal = COLLECTIBLE_BLOCKS
+        .iter()
+        .position(|b| *b == BlockType::Crystal)
+        .unwrap();
     guest.resources[crystal] = 2;
     f.players.push(guest);
-    let mut m = module("on_cast", r#"
+    let mut m = module(
+        "on_cast",
+        r#"
         assert(api.get_resource_count(7, 'crystal') == 2)
         assert(api.has_resource(7, 'crystal'))
         assert(api.has_item(7, 'crystal', 3) == false)
@@ -914,14 +1161,29 @@ fn guest_inventory_queries_are_transactional_and_distinguish_absence_from_invali
         assert(api.has_item(7, 'crystal', 4))
         assert(api.get_inventory(7).crystal == 4)
         assert(api.get_resource_count(0, 'crystal') == 0)
-    "#);
+    "#,
+    );
     let (out, _) = f.invoke(&mut m, "on_cast");
     assert!(m.error.is_none(), "{:?}", m.error);
-    assert_eq!(out.player_effects, [
-        PlayerEffect::TakeItem { player_id: 7, block: BlockType::Crystal, amount: 2 },
-        PlayerEffect::GiveItem { player_id: 7, block: BlockType::Crystal, amount: 4 },
-    ]);
-    let mut failed=module("on_cast", "api.take_item(7, 'crystal', 2); error('rollback')");
+    assert_eq!(
+        out.player_effects,
+        [
+            PlayerEffect::TakeItem {
+                player_id: 7,
+                block: BlockType::Crystal,
+                amount: 2
+            },
+            PlayerEffect::GiveItem {
+                player_id: 7,
+                block: BlockType::Crystal,
+                amount: 4
+            },
+        ]
+    );
+    let mut failed = module(
+        "on_cast",
+        "api.take_item(7, 'crystal', 2); error('rollback')",
+    );
     let (out, _) = f.invoke(&mut failed, "on_cast");
     assert!(failed.error.is_some());
     assert!(out.player_effects.is_empty());

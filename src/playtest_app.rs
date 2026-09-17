@@ -269,9 +269,12 @@ impl App {
         }
         let screen = self.window.inner_size();
         let scale = self.window.scale_factor() as f32;
-        self.ui.agent_nameplate = Some((egui::pos2(
-            (ndc.x + 1.0) * 0.5 * screen.width as f32 / scale,
-            (1.0 - ndc.y) * 0.5 * screen.height as f32 / scale,
-        ), session.overhead_status()));
+        self.ui.agent_nameplate = Some((
+            egui::pos2(
+                (ndc.x + 1.0) * 0.5 * screen.width as f32 / scale,
+                (1.0 - ndc.y) * 0.5 * screen.height as f32 / scale,
+            ),
+            session.overhead_status(),
+        ));
     }
 }

@@ -10,15 +10,30 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $projectRoot = Split-Path -Parent $PSScriptRoot
-if (!$RuntimeDirectory) { $RuntimeDirectory = Join-Path $projectRoot 'llm-runtime' }
-$RuntimeDirectory = [IO.Path]::GetFullPath($RuntimeDirectory)
 # Keep this name aligned with src/llm_server.rs; other GGUF files are not shipped.
 $modelName = 'qwen2.5-coder-7b-instruct-q4_k_m.gguf'
+if (!$PSBoundParameters.ContainsKey('RuntimeDirectory')) {
+    # llm-runtime is the current location. Accept the older `steam` layout when
+    # it is the only runtime directory containing the model, so existing local
+    # setups do not fail just because the package script was updated.
+    $runtimeCandidates = @(
+        (Join-Path $projectRoot 'llm-runtime'),
+        (Join-Path $projectRoot 'steam')
+    )
+    $RuntimeDirectory = $runtimeCandidates |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_ "models/$modelName") -PathType Leaf } |
+        Select-Object -First 1
+    if (!$RuntimeDirectory) { $RuntimeDirectory = $runtimeCandidates[0] }
+}
+$RuntimeDirectory = [IO.Path]::GetFullPath($RuntimeDirectory)
 function Require-File([string]$Path) {
     if (!(Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Required file is missing: $Path" }
 }
 if (!$NoAI) {
-    Require-File (Join-Path $RuntimeDirectory "models/$modelName")
+    $modelPath = Join-Path $RuntimeDirectory "models/$modelName"
+    if (!(Test-Path -LiteralPath $modelPath -PathType Leaf)) {
+        throw "The bundled AI model was not found at '$modelPath'. Place $modelName in '$RuntimeDirectory/models', pass -RuntimeDirectory to select its folder, or use -NoAI to package without local spell generation."
+    }
     foreach ($name in @('llama-server.exe', 'llama.dll', 'ggml.dll', 'ggml-base.dll')) {
         Require-File (Join-Path $RuntimeDirectory "server/$name")
     }

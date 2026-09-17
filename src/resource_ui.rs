@@ -32,23 +32,41 @@ pub fn icon(ui: &mut egui::Ui, block: BlockType) {
 
 pub fn description(block: BlockType) -> String {
     let info = crate::voxel::resource_catalog::info(block);
-    let creature_loot=(0..=12).any(|kind|crate::loot::rewards(crate::creature::CreatureKind::from_u8(kind)).iter().any(|(b,_)|*b==block));
-    let source = match (info.source,creature_loot) {
-        ("loot",_) => "Creature loot",
-        ("cooked",_) => "Campfire cooking",
-        ("crafted",true) => "Crafting + creature loot",
-        (_,true) => "Natural/craftable + creature loot",
-        ("crafted",false) => "Crafting only",
-        ("both",false) => "Natural + craftable",
+    let creature_loot = (0..=12).any(|kind| {
+        crate::loot::rewards(crate::creature::CreatureKind::from_u8(kind))
+            .iter()
+            .any(|(b, _)| *b == block)
+    });
+    let source = match (info.source, creature_loot) {
+        ("loot", _) => "Creature loot",
+        ("cooked", _) => "Campfire cooking",
+        ("crafted", true) => "Crafting + creature loot",
+        (_, true) => "Natural/craftable + creature loot",
+        ("crafted", false) => "Crafting only",
+        ("both", false) => "Natural + craftable",
         _ => "Natural",
     };
-    let mut description=format!(
+    let mut description = format!(
         "{} | {source}\n{}\n{} hits to gather",
         info.category,
-        if creature_loot {"Also recovered from defeated creatures"} else {info.location},
+        if creature_loot {
+            "Also recovered from defeated creatures"
+        } else {
+            info.location
+        },
         block.hardness()
     );
-    if let Some(healing)=crate::food::healing(block) {description.push_str(&format!("\nEat in inventory [I]: restores {healing:.0} health."));}
-    if crate::food::inventory_only(block) {description=format!("Food | {source}\n{}\nEat in inventory [I]: restores {:.0} health.",info.location,crate::food::healing(block).unwrap());}
+    if let Some(healing) = crate::food::healing(block) {
+        description.push_str(&format!(
+            "\nEat in inventory [I]: restores {healing:.0} health."
+        ));
+    }
+    if crate::food::inventory_only(block) {
+        description = format!(
+            "Food | {source}\n{}\nEat in inventory [I]: restores {:.0} health.",
+            info.location,
+            crate::food::healing(block).unwrap()
+        );
+    }
     description
 }

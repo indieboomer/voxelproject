@@ -41,13 +41,18 @@ Aim at a campfire and press **F** to cook raw meat individually or in batches of
 ## Hotbar use and authority
 
 During gameplay, **1–9** selects a slot and the **mouse wheel** cycles assigned
-slots, including depleted assignments. New accounts assign axe, pickaxe and sword
+slots with available entries. New accounts assign axe, pickaxe and sword
 to slots 1–3. Clearing a slot leaves its inventory intact and enables empty hands.
-Existing depleted assignments become usable again when their stack is replenished.
+When a stack reaches zero, equipment is no longer owned, or a spell becomes
+unavailable, all its hotbar bindings are cleared automatically. The selected slot
+stays selected and becomes empty; replenishing the stack does not restore its old
+bindings. Reassign it from inventory if desired. This also applies after loading
+a save and to authoritative guest inventory updates.
 
 Resources place blocks; compatible tools mine; weapons use their equipment action.
-Empty hands gather explicitly hand-pickable plants. A depleted resource assignment
-does not count as an empty hand. Axes handle wood/plants and pickaxes handle
+Empty hands gather explicitly hand-pickable plants. Pending actions referencing
+depleted stacks are rejected; cleanup leaves the slot empty for the next action.
+Axes handle wood/plants and pickaxes handle
 stone/ore/soil; specialist equipment supplies additional categories. Bow and longbow
 are currently disabled by `Gear::enabled` in `src/equipment.rs`.
 
@@ -68,7 +73,12 @@ left-click to cast at your aim. Spell slots show a rune and the selected spell's
 name. They consume mana rather than items; right-click does nothing.
 
 Bindings save with the world, follow renames, and clear when the spell is deleted.
+Host spell cards have a Delete button. Deleting a source module from Rules also
+deletes its remembered cards (including renamed and duplicated copies), using
+the saved source and original prompt rather than the display name. Other spells
+with the same name remain. Deleting a card alone leaves its Rules module available.
 Spells needing compatibility review remain visible but cannot be assigned or cast.
+Their hotbar bindings are cleared too; low mana or cooldown alone does not clear a slot.
 K still opens the full Spellbook for inspection, rename, duplicate, delete and casting.
 Successful casts show short purple-and-gold particles, also visible to guests.
 The HUD shows the target, mana cost, cooldown and readiness. The host can enable

@@ -37,7 +37,9 @@ pub struct Transfer {
     chunks: BTreeMap<u32, Vec<Device>>,
 }
 impl Transfer {
-    pub fn has_snapshot(&self)->bool {self.complete>0}
+    pub fn has_snapshot(&self) -> bool {
+        self.complete > 0
+    }
     pub fn accept(
         &mut self,
         chunk: Chunk,
@@ -88,31 +90,50 @@ mod tests {
     use super::*;
     #[test]
     fn full_catalog_chests_fit_packets_and_replicate_large_counts() {
-        let mut state=State::default();
+        let mut state = State::default();
         for x in 0..4 {
-            let p=(x,30,0);let mut chest=Device::new(Kind::Chest,p,0);
-            for block in crate::voxel::COLLECTIBLE_BLOCKS {chest.items.insert(format!("resource:{}",block.id()),2_000_000);}
-            state.devices.insert(p,chest);
+            let p = (x, 30, 0);
+            let mut chest = Device::new(Kind::Chest, p, 0);
+            for block in crate::voxel::COLLECTIBLE_BLOCKS {
+                chest
+                    .items
+                    .insert(format!("resource:{}", block.id()), 2_000_000);
+            }
+            state.devices.insert(p, chest);
         }
-        let recipes=crate::crafting::Registry::load().unwrap();
-        let mut transfer=Transfer::default();let mut received=None;
-        for chunk in chunks(&state,1) {
-            let bytes=crate::net::encode(&crate::net::Packet::Reliable{id:1,msg:crate::net::ReliableMsg::AutomationState(chunk)});
-            assert!(bytes.len()<crate::transport::MAX_PACKET_BYTES);
-            let crate::net::Packet::Reliable {msg:crate::net::ReliableMsg::AutomationState(chunk),..}=crate::net::decode(&bytes).unwrap() else {panic!("snapshot")};
-            received=transfer.accept(chunk,&recipes).unwrap().or(received);
+        let recipes = crate::crafting::Registry::load().unwrap();
+        let mut transfer = Transfer::default();
+        let mut received = None;
+        for chunk in chunks(&state, 1) {
+            let bytes = crate::net::encode(&crate::net::Packet::Reliable {
+                id: 1,
+                msg: crate::net::ReliableMsg::AutomationState(chunk),
+            });
+            assert!(bytes.len() < crate::transport::MAX_PACKET_BYTES);
+            let crate::net::Packet::Reliable {
+                msg: crate::net::ReliableMsg::AutomationState(chunk),
+                ..
+            } = crate::net::decode(&bytes).unwrap()
+            else {
+                panic!("snapshot")
+            };
+            received = transfer.accept(chunk, &recipes).unwrap().or(received);
         }
-        assert_eq!(received.unwrap(),state);
+        assert_eq!(received.unwrap(), state);
     }
     #[test]
     fn clients_commit_complete_snapshots_despite_reordering_and_duplicates() {
         let recipes = crate::crafting::Registry::load().unwrap();
         let mut state = State::default();
-        for (x,kind) in Kind::ALL.into_iter().enumerate() {
-            let p=(x as i32,30,0);
-            let mut d=Device::new(kind,p,0);
-            if kind.sustained() {d.powered_ticks=5;d.activity=Activity::Working;d.mana=12;}
-            state.devices.insert(p,d);
+        for (x, kind) in Kind::ALL.into_iter().enumerate() {
+            let p = (x as i32, 30, 0);
+            let mut d = Device::new(kind, p, 0);
+            if kind.sustained() {
+                d.powered_ticks = 5;
+                d.activity = Activity::Working;
+                d.mana = 12;
+            }
+            state.devices.insert(p, d);
         }
         let mut receiver = Transfer::default();
         let packets = chunks(&state, 1);
