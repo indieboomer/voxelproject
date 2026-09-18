@@ -9,6 +9,7 @@ mod automation_ui;
 mod block_target;
 mod camera;
 mod campfire;
+mod campfire_ui;
 mod beehive;
 mod compass;
 mod crafting;

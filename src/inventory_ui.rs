@@ -287,7 +287,7 @@ impl Inventory {
                     egui::ScrollArea::vertical().id_source("inventory_resources").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible).max_height(height).min_scrolled_height(height).show(&mut columns[1], |ui| {
                         if resources.is_empty() {ui.label("No resources yet. Gather plants by hand or use your tools to mine.");}
                         for e in resources { self.row(ui,e,account); }
-                        for item in ["harvest:wool", "harvest:egg", "harvest:cooked_egg", "harvest:milk", "harvest:cooked_milk", "harvest:honey", "harvest:cooked_honey", "harvest:cooked_pumpkin", "harvest:cooked_mushroom", "harvest:cooked_glowcap", "harvest:fired_mushroom", "harvest:fired_glowcap"] {
+                        for item in ["harvest:wool", "harvest:egg", "harvest:cooked_egg", "harvest:milk", "harvest:cooked_milk", "harvest:honey", "harvest:cooked_honey", "harvest:cooked_pumpkin", "harvest:cooked_mushroom", "harvest:cooked_glowcap", "harvest:fired_mushroom", "harvest:fired_glowcap", crate::food::CAMPFIRE_DISH, crate::food::CAMPFIRE_HERBAL_DISH] {
                             if let Some(&count) = account.production_goods.get(item) {
                                 ui.horizontal(|ui| { crate::equipment_ui::harvest_icon(ui, item); ui.label(format!("{} ×{count}", crate::food::harvest_name(item))); if crate::food::harvest_healing(item).is_some_and(|h| h > 0.) || matches!(item, "harvest:glowcap" | "harvest:cooked_glowcap") { if ui.button("Eat").clicked() { requests.eat_harvest = Some(item.into()); } } });
                             }

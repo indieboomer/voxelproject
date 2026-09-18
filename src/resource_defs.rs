@@ -25,7 +25,7 @@ pub fn definition(block: BlockType) -> ResourceDefinition {
         Meat => ResourceDefinition { edible: true, raw_health_change: 8, cooked_health_change: 0, cookable: true, cooked_resource: Some(CookedMeat), ..EMPTY },
         CookedMeat => ResourceDefinition { edible: true, raw_health_change: 25, cooked_health_change: 25, ..EMPTY },
         Pumpkin => ResourceDefinition { edible: true, raw_health_change: 10, cooked_health_change: 20, cookable: true, plantable: true, renewable_source: true, ..EMPTY },
-        WildHerbs => ResourceDefinition { edible: true, raw_health_change: 5, cooked_health_change: 5, renewable_source: true, ..EMPTY },
+        WildHerbs => ResourceDefinition { edible: true, raw_health_change: 5, cooked_health_change: 5, cookable: true, renewable_source: true, ..EMPTY },
         BrownMushroom => ResourceDefinition { edible: true, raw_health_change: 6, cooked_health_change: 8, cookable: true, renewable_source: true, ..EMPTY },
         Glowcap => ResourceDefinition { edible: true, raw_health_change: 0, cooked_health_change: 0, cookable: true, renewable_source: true, ..EMPTY },
         OakWood | BirchWood | SpruceWood => ResourceDefinition { fuel_value: 1, ..EMPTY },

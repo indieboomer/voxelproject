@@ -69,11 +69,23 @@ pub enum Action {
         revision: u64,
     },
     CookHarvest { camp: Cell, item: String, amount: u32, revision: u64 },
+    CookBatch { camp: Cell, ingredients: Vec<String>, revision: u64 },
 }
 impl Action {
     pub fn camp(&self) -> Cell {
         match self {
-            Self::Rest { camp } | Self::Claim { camp } | Self::Cook { camp, .. } | Self::CookHarvest { camp, .. } => *camp,
+            Self::Rest { camp } | Self::Claim { camp } | Self::Cook { camp, .. } | Self::CookHarvest { camp, .. } | Self::CookBatch { camp, .. } => *camp,
+        }
+    }
+
+    /// Cooking is queued by the UI and submitted after its timer completes.
+    /// Refresh the optimistic inventory revision immediately before submission.
+    pub fn with_revision(self, revision: u64) -> Self {
+        match self {
+            Self::Cook { camp, amount, .. } => Self::Cook { camp, amount, revision },
+            Self::CookHarvest { camp, item, amount, .. } => Self::CookHarvest { camp, item, amount, revision },
+            Self::CookBatch { camp, ingredients, .. } => Self::CookBatch { camp, ingredients, revision },
+            other => other,
         }
     }
 }
@@ -218,6 +230,11 @@ pub fn transact(
             if revision != account.revision { return Err("Inventory changed; try cooking again".into()); }
             if item == "pumpkin" { crate::food::cook_pumpkin(&mut next, amount)?; } else if item == "brown_mushroom" { crate::food::cook_mushroom(&mut next, BlockType::BrownMushroom, amount)?; } else if item == "glowcap" { crate::food::cook_mushroom(&mut next, BlockType::Glowcap, amount)?; } else { crate::food::cook_harvest(&mut next, &item, amount)?; }
             format!("Cooked {amount} {item}.")
+        }
+        Action::CookBatch { ingredients, revision, .. } => {
+            if revision != account.revision { return Err("Inventory changed; try cooking again".into()); }
+            let dish = crate::food::cook_batch(&mut next, &ingredients)?;
+            format!("Cooked {dish} from {} ingredients.", ingredients.len())
         }
         Action::Rest { .. } => {
             next.adventure.home =

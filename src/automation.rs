@@ -537,7 +537,7 @@ pub fn element_id(index: usize) -> &'static str {
     ][index.min(4)]
 }
 pub fn valid_item(id: &str) -> bool {
-    if id.strip_prefix("harvest:").is_some_and(|v| matches!(v, "wool" | "egg" | "milk" | "honey" | "cooked_egg" | "cooked_milk" | "cooked_honey" | "cooked_pumpkin" | "cooked_mushroom" | "cooked_glowcap" | "fired_mushroom" | "fired_glowcap")) { return true; }
+    if id.strip_prefix("harvest:").is_some_and(|v| matches!(v, "wool" | "egg" | "milk" | "honey" | "cooked_egg" | "cooked_milk" | "cooked_honey" | "cooked_pumpkin" | "cooked_mushroom" | "cooked_glowcap" | "fired_mushroom" | "fired_glowcap" | "campfire_dish" | "campfire_herbal_dish")) { return true; }
     if id.strip_prefix("spell:").is_some_and(|v| v.parse::<u64>().is_ok_and(|n| n > 0)) { return true; }
     if (0..5).any(|i| element_id(i) == id) {
         return true;
@@ -587,7 +587,7 @@ pub fn validate_account(account: &Account, b: &Balance, recipes: &Registry) -> R
         || account
             .production_goods
             .iter()
-            .any(|(id, n)| !id.starts_with("creature:") || !valid_item(id) || *n > 1_000_000)
+            .any(|(id, n)| !valid_item(id) || *n > 1_000_000)
     {
         return Err("Invalid packed inventory".into());
     }

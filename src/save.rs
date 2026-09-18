@@ -685,6 +685,8 @@ mod tests {
             .host
             .production_goods
             .insert("creature:sheep".into(), 2);
+        crafting.host.production_goods.insert("harvest:campfire_dish".into(), 1);
+        crafting.host.production_goods.insert("harvest:campfire_herbal_dish".into(), 1);
         crafting.machine_loot.push(crate::loot::Drop {
             pos: [3.0, 30.3, 0.0],
             contents: vec![(crate::voxel::BlockType::Stone, 2)],

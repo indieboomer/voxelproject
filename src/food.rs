@@ -6,12 +6,14 @@ use crate::{
 };
 
 pub const MAX_COOK_BATCH: u32 = 64;
-pub fn harvest_name(item: &str) -> String { match item { "harvest:milk" => "Milk", "harvest:wool" => "Wool", "harvest:cooked_milk" => "Cooked Milk", "harvest:cooked_egg" => "Fried Egg", "harvest:cooked_honey" => "Melted Honey", "harvest:egg" => "Egg", "harvest:honey" => "Honey", "harvest:cooked_pumpkin" => "Cooked Pumpkin", "harvest:cooked_mushroom" | "harvest:fired_mushroom" => "Cooked Mushroom", "harvest:cooked_glowcap" | "harvest:fired_glowcap" => "Cooked Glowcap", _ => item.strip_prefix("harvest:").unwrap_or(item) }.into() }
+pub const CAMPFIRE_DISH: &str = "harvest:campfire_dish";
+pub const CAMPFIRE_HERBAL_DISH: &str = "harvest:campfire_herbal_dish";
+pub fn harvest_name(item: &str) -> String { match item { "harvest:milk" => "Milk", "harvest:wool" => "Wool", "harvest:cooked_milk" => "Cooked Milk", "harvest:cooked_egg" => "Fried Egg", "harvest:cooked_honey" => "Melted Honey", "harvest:egg" => "Egg", "harvest:honey" => "Honey", "harvest:cooked_pumpkin" => "Cooked Pumpkin", "harvest:cooked_mushroom" | "harvest:fired_mushroom" => "Cooked Mushroom", "harvest:cooked_glowcap" | "harvest:fired_glowcap" => "Cooked Glowcap", CAMPFIRE_DISH => "Campfire Dish", CAMPFIRE_HERBAL_DISH => "Herbal Purifying Stew", _ => item.strip_prefix("harvest:").unwrap_or(item) }.into() }
 pub fn harvest_healing(item: &str) -> Option<f32> {
-    Some(match item { "harvest:egg" => 0., "harvest:cooked_egg" => 8., "harvest:milk" => 4., "harvest:cooked_milk" => 12., "harvest:honey" => 12., "harvest:cooked_honey" => 8., "harvest:cooked_pumpkin" => 20., "harvest:cooked_mushroom" | "harvest:fired_mushroom" => 8., "harvest:glowcap" | "harvest:cooked_glowcap" | "harvest:fired_glowcap" => 0., _ => return None })
+    Some(match item { "harvest:egg" => 0., "harvest:cooked_egg" => 8., "harvest:milk" => 4., "harvest:cooked_milk" => 12., "harvest:honey" => 12., "harvest:cooked_honey" => 8., "harvest:cooked_pumpkin" => 20., "harvest:cooked_mushroom" | "harvest:fired_mushroom" => 8., "harvest:glowcap" | "harvest:cooked_glowcap" | "harvest:fired_glowcap" => 0., CAMPFIRE_DISH => 24., CAMPFIRE_HERBAL_DISH => 24., _ => return None })
 }
 pub fn harvest_satiety(item: &str) -> f32 {
-    match item { "harvest:egg" => 0., "harvest:cooked_egg" => 12., "harvest:milk" => 10., "harvest:cooked_milk" => 18., "harvest:honey" => 16., "harvest:cooked_honey" => 10., "harvest:cooked_pumpkin" => 30., "harvest:cooked_mushroom" => 12., _ => 0. }
+    match item { "harvest:egg" => 0., "harvest:cooked_egg" => 12., "harvest:milk" => 10., "harvest:cooked_milk" => 18., "harvest:honey" => 16., "harvest:cooked_honey" => 10., "harvest:cooked_pumpkin" => 30., "harvest:cooked_mushroom" => 12., CAMPFIRE_DISH | CAMPFIRE_HERBAL_DISH => 24., _ => 0. }
 }
 pub fn cook_harvest(account: &mut Account, item: &str, amount: u32) -> Result<(), String> {
     if !(1..=MAX_COOK_BATCH).contains(&amount) { return Err("Cook between 1 and 64 items at a time".into()); }
@@ -23,6 +25,39 @@ pub fn cook_harvest(account: &mut Account, item: &str, amount: u32) -> Result<()
     if raw_count == amount { account.production_goods.remove(item); } else { account.production_goods.insert(item.into(), raw_count - amount); }
     account.production_goods.insert(cooked.into(), new_count);
     Ok(())
+}
+
+/// Consume a small mixed batch and place the locally generated campfire dish in
+/// the player's production inventory. The transaction is performed on the
+/// cloned account by the adventure layer, so a failed ingredient check is
+/// atomic.
+pub fn cook_batch(account: &mut Account, ingredients: &[String]) -> Result<&'static str, String> {
+    if !(1..=4).contains(&ingredients.len()) { return Err("A dish needs 1 to 4 ingredients".into()); }
+    let purifying = ingredients.iter().any(|ingredient| ingredient == "block:WildHerbs");
+    for ingredient in ingredients {
+        if let Some(block_name) = ingredient.strip_prefix("block:") {
+            let block = match block_name {
+                "Meat" => BlockType::Meat,
+                "Pumpkin" => BlockType::Pumpkin,
+                "BrownMushroom" => BlockType::BrownMushroom,
+                "Glowcap" => BlockType::Glowcap,
+                "WildHerbs" => BlockType::WildHerbs,
+                _ => return Err("That ingredient cannot be cooked".into()),
+            };
+            let index = COLLECTIBLE_BLOCKS.iter().position(|candidate| *candidate == block).ok_or("Ingredient unavailable")?;
+            account.resources[index] = account.resources[index].checked_sub(1).ok_or("Not enough ingredients")?;
+        } else if ingredient.starts_with("harvest:") {
+            let count = account.production_goods.get(ingredient).copied().unwrap_or(0);
+            if count == 0 { return Err(format!("Not enough {}", harvest_name(ingredient))); }
+            if count == 1 { account.production_goods.remove(ingredient); } else { account.production_goods.insert(ingredient.clone(), count - 1); }
+        } else {
+            return Err("That ingredient cannot be cooked".into());
+        }
+    }
+    let dish = if purifying { CAMPFIRE_HERBAL_DISH } else { CAMPFIRE_DISH };
+    let current = account.production_goods.get(dish).copied().unwrap_or(0);
+    account.production_goods.insert(dish.into(), current.checked_add(1).ok_or("Dish stack is full")?);
+    Ok(dish)
 }
 pub fn cook_pumpkin(account: &mut Account, amount: u32) -> Result<(), String> {
     if !(1..=MAX_COOK_BATCH).contains(&amount) { return Err("Cook between 1 and 64 pumpkins at a time".into()); }
@@ -78,7 +113,7 @@ pub fn eat(
         return Err("Inventory changed; try eating again".into());
     }
     let amount = healing(block).ok_or("This resource cannot be eaten")?;
-    if !health.is_finite() || health <= 0. {
+    if !health.is_finite() || health <= 0. || health >= MAX_HEALTH {
         return Err("Recover before eating".into());
     }
     let i = index(block);

@@ -77,6 +77,7 @@ pub struct UiRequests {
     pub camp_action: Option<crate::adventure::Action>,
     pub quest_action: Option<crate::quests::Action>,
     pub close_journal: bool,
+    pub close_campfire: bool,
     pub automation: Option<crate::automation::Action>,
     pub close_inventory: bool,
     pub invite_friends: bool,
@@ -107,6 +108,7 @@ pub struct Ui {
     pub compass_yaw: f32,
     pub machine_compass: [Option<egui::Pos2>; 5],
     pub journal: crate::adventure_ui::Journal,
+    pub campfire: crate::campfire_ui::Panel,
     pub automation: crate::automation_ui::Panel,
     pickup_rows: Vec<(crate::voxel::BlockType, u32)>,
     pickup_started: Instant,
@@ -166,6 +168,7 @@ impl Ui {
             attach_generation: false,
             pickup_rows: Vec::new(),
             journal: Default::default(),
+            campfire: Default::default(),
             automation: Default::default(),
             pickup_started: Instant::now(),
             nameplates: Vec::new(),
@@ -333,6 +336,11 @@ impl Ui {
                 );
                 requests.spellbook_action=self.spellbook.draw(ctx,&scripting.spellbook,is_host,
                     registry.mana_charge(crate::crafting::INSTANT_MANA)==0);
+                return;
+            }
+            if self.campfire.open {
+                requests.camp_action = self.campfire.draw(ctx, player, world);
+                requests.close_campfire = !self.campfire.open;
                 return;
             }
             if self.journal.open {

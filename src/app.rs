@@ -2062,6 +2062,13 @@ impl App {
                     }
                     return;
                 }
+                if self.ui.campfire.open {
+                    if !key_event.repeat && code == KeyCode::Escape {
+                        self.ui.campfire.open = false;
+                        self.sync_settings_input();
+                    }
+                    return;
+                }
                 if code == KeyCode::KeyJ && !key_event.repeat && self.cursor_grabbed {
                     self.ui.journal.open = true;
                     self.ui.journal.camp = None;
@@ -2225,6 +2232,7 @@ impl App {
             }
             WindowEvent::MouseInput { state, button, .. }
                 if !self.ui.spellbook.open
+                    && !self.ui.campfire.open
                     && !self.ui.journal.open
                     && !self.ui.automation.open
                     && !self.ui.map.open
@@ -2267,6 +2275,7 @@ impl App {
         self.input.release_all();
         self.input.end_frame();
         let gameplay = !self.ui.spellbook.open
+                && !self.ui.campfire.open
                 && !self.ui.map.open
                 && !self.ui.inventory_open
                 && !self.ui.settings.open
@@ -2836,10 +2845,9 @@ impl App {
                         );
                     }
                 }
-                self.ui.journal.camp = Some(camp);
-                self.ui.journal.npc = None;
-                self.ui.journal.open = true;
-                self.ui.journal.feedback.clear();
+                self.ui.campfire.camp = Some(camp);
+                self.ui.campfire.open = true;
+                self.ui.campfire.feedback.clear();
                 self.sync_settings_input();
             }
         }
@@ -3445,6 +3453,9 @@ impl App {
             self.submit_eat_harvest(item);
         }
         if requests.close_journal {
+            self.sync_settings_input();
+        }
+        if requests.close_campfire {
             self.sync_settings_input();
         }
         if let Some(action) = requests.quest_action {
@@ -5342,7 +5353,7 @@ impl App {
                         self.crafting_ui.feedback = message;
                     }
                     ReliableMsg::CampResult(message) => {
-                        self.ui.journal.feedback = message.clone();
+                        self.ui.campfire.feedback = message.clone();
                         self.toasts.push(Toast::important(message));
                     }
                     ReliableMsg::Npcs(npcs) => {

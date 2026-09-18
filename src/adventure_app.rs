@@ -88,7 +88,7 @@ impl App {
         }
     }
     pub(super) fn submit_camp_action(&mut self, action: Action) {
-        self.ui.journal.feedback = "Using the campfire…".into();
+        self.ui.campfire.feedback = "Using the campfire…".into();
         if let NetRole::Joined(client) = &mut self.net {
             client.reliable.send(
                 &client.socket,
@@ -158,7 +158,7 @@ impl App {
                     .send(&host.socket, peer, ReliableMsg::CampResult(message));
             }
         } else {
-            self.ui.journal.feedback = message.clone();
+            self.ui.campfire.feedback = message.clone();
             self.notify_important(message);
         }
     }
