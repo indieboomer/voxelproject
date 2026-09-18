@@ -13,11 +13,11 @@ impl App {
             let Some(rp) = host.remote_players.get(&id) else { return; };
             (id, rp.health, Some(peer.account_key(&rp.nickname)))
         } else { (self.local_player_id, self.player.health, None) };
-        let Some(heal) = crate::food::harvest_healing(&item).filter(|v| *v > 0.) else { self.notify_important("Raw eggs are not nutritious; cook them first".into()); return; };
+        let Some(heal) = crate::food::harvest_healing(&item).filter(|v| *v > 0. || matches!(item.as_str(), "harvest:glowcap" | "harvest:cooked_glowcap" | "harvest:fired_glowcap")) else { self.notify_important("Raw eggs are not nutritious; cook them first".into()); return; };
         let account = if let Some(key) = key { self.guest_accounts.entry(key).or_default() } else { &mut self.player.crafting };
         let result: Result<f32, String> = if account.revision != revision { Err("Inventory changed; try again".into()) } else if account.production_goods.get(&item).copied().unwrap_or(0) == 0 { Err("You do not have that food".into()) } else { account.production_goods.get_mut(&item).map(|n| *n -= 1); if account.production_goods.get(&item) == Some(&0) { account.production_goods.remove(&item); } account.revision = account.revision.saturating_add(1); Ok(heal.min((MAX_HEALTH - health).max(0.))) };
-        let message = result.as_ref().map_or_else(|e| e.clone(), |n| format!("Ate food: restored {n:.0} health"));
-        if let Ok(delta) = result { self.apply_player_effect(PlayerEffect::Health { player_id: id, delta }); let satiety = crate::food::harvest_satiety(&item); if from.is_none() { self.player.restore_satiety(satiety); } else if let NetRole::Host(host) = &mut self.net { if let Some(p) = host.remote_players.get_mut(&id) { p.satiety = (p.satiety + satiety).min(crate::player::MAX_SATIETY); } } }
+        let message = result.as_ref().map_or_else(|e| e.clone(), |n| if matches!(item.as_str(), "harvest:glowcap" | "harvest:cooked_glowcap" | "harvest:fired_glowcap") { "Ate a poisonous glowing mushroom".into() } else { format!("Ate food: restored {n:.0} health") });
+        if let Ok(delta) = result { self.apply_player_effect(PlayerEffect::Health { player_id: id, delta }); if matches!(item.as_str(), "harvest:glowcap" | "harvest:cooked_glowcap" | "harvest:fired_glowcap") { self.apply_player_effect(PlayerEffect::Poisoned { player_id: id, poisoned: true }); } let satiety = crate::food::harvest_satiety(&item); if from.is_none() { self.player.restore_satiety(satiety); } else if let NetRole::Host(host) = &mut self.net { if let Some(p) = host.remote_players.get_mut(&id) { p.satiety = (p.satiety + satiety).min(crate::player::MAX_SATIETY); } } }
         if let Some(peer) = from { if let NetRole::Host(host) = &mut self.net { let account = self.guest_accounts.get(&peer.account_key(&host.remote_players.get(&host.clients[&peer]).unwrap().nickname)).cloned().unwrap_or_default(); host.reliable.send(&host.socket, peer, ReliableMsg::CraftState { account, feedback: None }); host.reliable.send(&host.socket, peer, ReliableMsg::FoodResult(message)); } } else { self.crafting_ui.feedback = message; }
     }
 
@@ -80,6 +80,7 @@ impl App {
                 player_id: id,
                 delta,
             });
+            if block == BlockType::Glowcap { self.apply_player_effect(PlayerEffect::Poisoned { player_id: id, poisoned: true }); }
             let satiety = crate::food::satiety(block);
             if let Some(peer) = from {
                 if let NetRole::Host(host) = &mut self.net {

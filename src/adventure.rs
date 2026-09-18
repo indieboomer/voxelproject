@@ -216,7 +216,7 @@ pub fn transact(
         }
         Action::CookHarvest { item, amount, revision, .. } => {
             if revision != account.revision { return Err("Inventory changed; try cooking again".into()); }
-            if item == "pumpkin" { crate::food::cook_pumpkin(&mut next, amount)?; } else { crate::food::cook_harvest(&mut next, &item, amount)?; }
+            if item == "pumpkin" { crate::food::cook_pumpkin(&mut next, amount)?; } else if item == "brown_mushroom" { crate::food::cook_mushroom(&mut next, BlockType::BrownMushroom, amount)?; } else if item == "glowcap" { crate::food::cook_mushroom(&mut next, BlockType::Glowcap, amount)?; } else { crate::food::cook_harvest(&mut next, &item, amount)?; }
             format!("Cooked {amount} {item}.")
         }
         Action::Rest { .. } => {

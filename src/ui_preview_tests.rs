@@ -34,6 +34,7 @@ fn render_ui_previews() {
             "spellbook",
             "spellbook_guest",
             "enchantment",
+            "spell_workshop",
         ] {
             if std::env::var("UI_PREVIEW_PANEL").is_ok_and(|filter| filter != panel) {
                 continue;
@@ -187,6 +188,30 @@ fn render_ui_previews() {
             });
             let mut settings = crate::settings::SettingsPanel::new(&ctx);
             let mut spellbook = crate::spellbook::Spellbook::default();
+            let mut workshop = crate::scripting::ScriptHost::new();
+            let mut workshop_prompt = "Make bluebells grow around this tree when it rains, and slowly disappear when it is dry.".to_string();
+            let mut workshop_enchant = true;
+            let mut workshop_viewing = None;
+            let mut workshop_selected = None;
+            if panel == "spell_workshop" {
+                for (name, prompt, instant) in [
+                    ("Rain Bluebells", "Bluebells grow around the target when it rains.", false),
+                    ("Fireball", "Explodes with fire, damaging nearby enemies.", true),
+                    ("Ice Burst", "Freezes water and slows nearby enemies.", true),
+                    ("Healing Aura", "Restores health over time for nearby allies.", false),
+                    ("Growing Tree", "Creates a tree at the target location.", true),
+                    ("Tame Wolves", "Wolves do not attack players carrying a crystal.", false),
+                ].into_iter().rev() {
+                    let source = if instant { include_str!("../modules/target_heal.lua") }
+                        else { "-- world_api_version: 1\nfunction on_tick(dt) end" };
+                    let module = crate::scripting::Module::load(name.into(), prompt.into(), source.into()).unwrap();
+                    workshop.modules.push(module);
+                }
+                workshop.modules.last_mut().unwrap().attachment_candidate = Some(crate::enchantment::Reference {
+                    world_id: "preview".into(), world_revision: 0,
+                    object: crate::enchantment::Object::Block { cell: (-5, 30, 3), material: crate::voxel::BlockType::OakWood, generation: 0 },
+                });
+            }
             let mut spell_panel = crate::spellbook_ui::Panel::default();
             if matches!(
                 panel,
@@ -278,6 +303,12 @@ fn render_ui_previews() {
                         }
                         if panel=="enchantment" {
                             crate::enchantment::hud(ctx,"Sheep #42 · 10/10 health",&["Crystal follower · Active".into(),"Rain ward · Disabled".into()]);
+                        }
+                        if panel == "spell_workshop" {
+                            crate::spell_workshop::draw(ctx, &mut workshop_prompt, &mut workshop_enchant,
+                                "Oak tree · -5, 30, 3", true, true, &workshop, Some(5),
+                                Some("Generating spell code..."), &registry, &mut workshop_viewing, &mut workshop_selected,
+                                &mut crate::ui::UiRequests::default());
                         }
                         else if matches!(panel,"spellbook"|"spellbook_guest") {spell_panel.draw(ctx,&spellbook,panel=="spellbook",false);}
                         else if matches!(panel,"journal"|"cooking") {journal.draw(ctx,&player);}

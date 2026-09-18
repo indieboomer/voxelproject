@@ -77,6 +77,8 @@ pub fn harvest_icon(ui: &mut egui::Ui, item: &str) {
         "harvest:milk" | "harvest:cooked_milk" => { p.rect_filled(r.shrink(6.),2.,egui::Color32::from_rgb(240,245,250)); p.line_segment([r.left_center()+egui::vec2(7.,0.),r.right_center()-egui::vec2(7.,0.)],egui::Stroke::new(2_f32,egui::Color32::from_rgb(120,180,230))); }
         "harvest:egg" | "harvest:cooked_egg" => { p.circle_filled(c,7.,egui::Color32::from_rgb(246,235,190)); p.circle_filled(c+egui::vec2(2.,-2.),2.,egui::Color32::from_rgb(245,175,70)); }
         "harvest:honey" | "harvest:cooked_honey" => { p.circle_filled(c,8.,egui::Color32::from_rgb(236,165,35)); for i in 0..3 { p.line_segment([c+egui::vec2(-6.,-4.+i as f32*4.),c+egui::vec2(6.,-4.+i as f32*4.)],egui::Stroke::new(1_f32,egui::Color32::from_rgb(120,75,20))); } }
+        "harvest:cooked_mushroom" => { p.circle_filled(c+egui::vec2(0.,3.),7.,egui::Color32::from_rgb(180,105,65)); p.rect_filled(egui::Rect::from_center_size(c+egui::vec2(0.,7.),egui::vec2(4.,8.)),1.,egui::Color32::from_rgb(225,190,140)); }
+        "harvest:cooked_glowcap" => { p.circle_filled(c+egui::vec2(0.,3.),7.,egui::Color32::from_rgb(90,45,150)); p.circle_filled(c+egui::vec2(-3.,1.),2.,egui::Color32::from_rgb(180,100,255)); p.circle_filled(c+egui::vec2(3.,4.),2.,egui::Color32::from_rgb(180,100,255)); }
         "harvest:cooked_pumpkin" => { p.circle_filled(c,8.,egui::Color32::from_rgb(225,105,25)); p.line_segment([c+egui::vec2(0.,-7.),c+egui::vec2(0.,7.)],egui::Stroke::new(1_f32,egui::Color32::from_rgb(120,55,10))); }
         _ => {}
     }

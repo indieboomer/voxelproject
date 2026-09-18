@@ -144,15 +144,21 @@ impl Panel {
                 if balance().def(d.kind).item_capacity>0 {
                 ui.separator();
                 if d.kind==Kind::Chest {ui.label(format!("Stored: {} (no slot limit)",d.item_count()));} else {ui.label(format!("Stored matter: {}/{}",d.item_count(),balance().def(d.kind).item_capacity));}
-                for (id,n) in &d.items {ui.small(format!("Input/storage: {id} ×{n}"));}
-                for (id,n) in &d.output {ui.small(format!("Output: {id} ×{n}"));}
+                for (id,n) in &d.items {ui.small(format!("Input/storage: {} ×{n}", if id.starts_with("harvest:") { crate::food::harvest_name(id) } else { id.clone() }));}
+                for (id,n) in &d.output {ui.small(format!("Output: {} ×{n}", if id.starts_with("harvest:") { crate::food::harvest_name(id) } else { id.clone() }));}
                 let mut choices:Vec<String>=(0..5).map(|i|element_id(i).into()).collect();
                 choices.extend(crate::voxel::COLLECTIBLE_BLOCKS.iter().map(|b|format!("resource:{}",b.id())));
                 choices.extend(crate::equipment::Gear::available().map(|g|format!("item:{}",g.id())));
                 choices.extend(account.production_goods.keys().cloned());choices.extend(d.items.keys().cloned());choices.extend(d.output.keys().cloned());
                 choices.extend(account.spell_cards.iter().map(|id| format!("spell:{id}")));
                 choices.sort();choices.dedup();
-                egui::ComboBox::from_label("Transfer matter").selected_text(&self.item).show_ui(ui,|ui|{for item in choices {ui.selectable_value(&mut self.item,item.clone(),item);}});
+                let selected_item_name = if self.item.starts_with("harvest:") { crate::food::harvest_name(&self.item) } else { self.item.clone() };
+                egui::ComboBox::from_label("Transfer matter").selected_text(selected_item_name).show_ui(ui,|ui|{
+                    for item in choices {
+                        let label = if item.starts_with("harvest:") { crate::food::harvest_name(&item) } else { item.clone() };
+                        ui.selectable_value(&mut self.item,item,label);
+                    }
+                });
                 ui.horizontal(|ui| {
                     ui.add(egui::DragValue::new(&mut self.amount).clamp_range(1..=256));
                     if ui.button("Deposit").clicked(){command=Some(Action::Deposit{cell:p,item:self.item.clone(),amount:self.amount});}

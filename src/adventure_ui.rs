@@ -73,6 +73,7 @@ impl Journal {
                     }
                     let pumpkin = adventure::count(account, crate::voxel::BlockType::Pumpkin);
                     if pumpkin > 0 { let batch = pumpkin.min(crate::food::MAX_COOK_BATCH); ui.horizontal(|ui| { ui.label(format!("Pumpkin: {pumpkin}")); if ui.button(format!("Cook {batch}" )).clicked() { request = Some(Action::CookHarvest { camp, item: "pumpkin".into(), amount: batch, revision: account.revision }); } }); }
+                    for (block, label) in [(crate::voxel::BlockType::BrownMushroom, "brown_mushroom"), (crate::voxel::BlockType::Glowcap, "glowcap")] { let count = adventure::count(account, block); if count > 0 { let batch=count.min(crate::food::MAX_COOK_BATCH); ui.horizontal(|ui| { ui.label(format!("{}: {count}", block.name())); if ui.button(format!("Cook {batch}" )).clicked() { request=Some(Action::CookHarvest { camp, item: label.into(), amount: batch, revision: account.revision }); } }); } }
                     ui.separator();
                 }
                 ui.label(RichText::new(format!("{} / 3 contracts · {}",account.adventure.stage,account.adventure.title())).strong());

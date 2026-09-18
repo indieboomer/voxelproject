@@ -1320,7 +1320,18 @@ fn beehive_model() -> &'static AnimatedModel {
 }
 pub fn beehive_mesh(positions: &[glam::Vec3]) -> crate::voxel::mesher::MeshData {
     let mut mesh = crate::voxel::mesher::MeshData { vertices: vec![], indices: vec![] };
-    for &pos in positions { push_model(&mut mesh.vertices, &mut mesh.indices, beehive_model(), crate::creature::CreatureKind::Sheep, "", 0., pos, 0.); }
+    for &pos in positions {
+        let start = mesh.vertices.len();
+        push_model(&mut mesh.vertices, &mut mesh.indices, beehive_model(), crate::creature::CreatureKind::Sheep, "", 0., pos, 0.);
+        for vertex in &mut mesh.vertices[start..] {
+            let local = glam::Vec3::from_array(vertex.position) - pos;
+            let rotated = glam::Vec3::new(local.x, -local.z, local.y);
+            vertex.position = (pos + rotated).to_array();
+            let normal = glam::Vec3::from_array(vertex.normal);
+            vertex.normal = glam::Vec3::new(normal.x, -normal.z, normal.y).to_array();
+            vertex.color = [0.72, 0.38, 0.10];
+        }
+    }
     mesh
 }
 /// Supplied torch's looping flame animation, cached at 16 frames per cycle.

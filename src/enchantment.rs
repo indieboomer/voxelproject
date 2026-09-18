@@ -239,7 +239,7 @@ pub fn hud(ctx: &egui::Context, target: &str, rules: &[String]) {
                         ui.small(rule);
                     }
                     if rules.len() > 3 {
-                        ui.small(format!("+{} more in Rules", rules.len() - 3));
+                        ui.small(format!("+{} more in Spell Workshop", rules.len() - 3));
                     }
                 });
         });

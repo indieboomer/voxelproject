@@ -62,6 +62,7 @@ mod spell_network;
 mod spell_target;
 mod spellbook;
 mod spellbook_ui;
+mod spell_workshop;
 mod status_effects;
 #[cfg(feature = "steam")]
 mod steam_transport;

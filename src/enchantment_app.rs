@@ -34,7 +34,7 @@ impl App {
                 .get(index)
                 .ok_or("Rule no longer exists")?;
             if module.is_instant || module.attachment.is_some() {
-                return Err("Choose an unattached continuous rule".into());
+                return Err("Choose a permanent spell without an enchantment target".into());
             }
             let reference = if let Some(candidate) = &module.attachment_candidate {
                 candidate.clone()
@@ -42,7 +42,7 @@ impl App {
                 self.selected_enchantment_target()?
             };
             if !reference.available(&self.world, &self.creatures)? {
-                return Err("Target is unloaded; return to it before attaching".into());
+                return Err("Target is unloaded; return to it before enchanting".into());
             }
             let id = self.world.identity.next_creation.max(1);
             self.world.identity.next_creation =
@@ -58,7 +58,7 @@ impl App {
                 },
             )?;
             Ok(format!(
-                "Rule attached to {}. Save with F5. It stops if the target disappears.",
+                "Enchantment activated on {}. Save with F5. It stops if the target disappears.",
                 reference.label()
             ))
         })();
@@ -77,7 +77,7 @@ impl App {
         {
             self.scripting.detach_at(index);
             self.notify_important(
-                "Rule detached and disabled. Previous world changes remain. Save with F5.".into(),
+                "Enchantment removed and spell disabled. Previous world changes remain. Save with F5.".into(),
             );
             self.send_enchantment_summaries(None);
         }

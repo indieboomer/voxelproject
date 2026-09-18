@@ -69,6 +69,7 @@ pub struct UiRequests {
     pub remember_index: Option<usize>,
     pub spellbook_action: Option<crate::spellbook_ui::Action>,
     pub open_spellbook: bool,
+    pub close_workshop: bool,
     pub attach_rule: Option<usize>,
     pub detach_rule: Option<usize>,
     pub eat_food: Option<crate::voxel::BlockType>,
@@ -125,6 +126,7 @@ pub struct Ui {
     viewing_index: Option<usize>,
     pub map: crate::map_ui::Map,
     pub inventory_open: bool,
+    pub workshop_selected: Option<usize>,
     last_hotbar: Option<(usize, Option<crate::equipment::Entry>)>,
     selected_until: Instant,
     inventory: crate::inventory_ui::Inventory,
@@ -181,6 +183,7 @@ impl Ui {
             viewing_index: None,
             map: Default::default(),
             inventory_open: false,
+            workshop_selected: None,
             last_hotbar: None,
             selected_until: Instant::now(),
             inventory: Default::default(),
@@ -325,6 +328,9 @@ impl Ui {
                 return;
             }
             if self.spellbook.open {
+                requests.select_slot = crate::equipment_ui::hotbar_with_spells(
+                    ctx, &player.crafting, true, true, false, &scripting.spellbook,
+                );
                 requests.spellbook_action=self.spellbook.draw(ctx,&scripting.spellbook,is_host,
                     registry.mana_charge(crate::crafting::INSTANT_MANA)==0);
                 return;
@@ -345,104 +351,14 @@ impl Ui {
                 crate::enchantment::hud(ctx,&self.aimed_object,&self.aimed_enchantments);
             }
 
-            egui::Window::new("Rules")
-                .default_open(!scripting.modules.is_empty())
-                .default_width(420.0)
-                .max_width(ctx.screen_rect().width() * 0.46)
-                .max_height(ctx.screen_rect().height() * 0.30)
-                .vscroll(true)
-                .anchor(egui::Align2::LEFT_TOP, [8.0, 56.0])
-                .resizable(false)
-                .collapsible(true)
-                .show(ctx, |ui| {
-                    if ui.button("Spellbook (K)").clicked() {requests.open_spellbook=true;}
-                    if !self.aimed_object.is_empty() {
-                        ui.strong(format!("Target: {}",self.aimed_object));
-                        if is_host {ui.small("Attach stops callbacks on target loss. Previous changes remain; packing ends device attachments.");}
-                        for text in &self.aimed_enchantments {ui.small(text);}
-                    }
-                    if scripting.modules.is_empty() {
-                        ui.label("No rules or spells loaded. Press ~ to describe one.");
-                    }
-                    for (i, m) in scripting.modules.iter().enumerate() {
-                        let (status, status_color) = if m.is_instant {
-                            ("SPELL", egui::Color32::from_rgb(180, 140, 230))
-                        } else if m.error.is_some() {
-                            ("ERR", egui::Color32::from_rgb(220, 90, 90))
-                        } else if m.enabled {
-                            ("ON", egui::Color32::from_rgb(100, 200, 100))
-                        } else {
-                            ("OFF", IMPORTANT_TOAST_COLOR)
-                        };
-                        let is_recent = Some(i) == recent_index;
-                        let marker = if is_recent { "-> " } else { "" };
-                        ui.horizontal_wrapped(|ui| {
-                            crate::spell_art::image(ui,m.artwork,egui::vec2(40.,40.));
-                            ui.colored_label(status_color, format!("{marker}{} [{status}]", m.name));
-                            let version_label = match m.api_version() {
-                                Some(v) => format!("api v{v}"),
-                                None => "api version unknown".to_string(),
-                            };
-                            ui.weak(version_label);
-                            let view_label = if viewing_index == Some(i) { "Hide Code" } else { "View Code" };
-                            if ui.small_button(view_label).clicked() {
-                                viewing_index = if viewing_index == Some(i) { None } else { Some(i) };
-                            }
-                            if is_host {
-                                if m.is_instant {
-                                    if ui.small_button("Remember").clicked() {requests.remember_index=Some(i);}
-                                    if ui.small_button(format!("Run ({} mana)",registry.mana_charge(crate::crafting::INSTANT_MANA))).clicked() {
-                                        requests.run_index = Some(i);
-                                    }
-                                } else {
-                                    if m.attachment.is_none() {
-                                        if ui.small_button("Attach + enable").clicked() {requests.attach_rule=Some(i);}
-                                    }else if ui.small_button("Detach").clicked() {requests.detach_rule=Some(i);}
-                                    let label = if m.enabled { "Disable" } else { "Enable" };
-                                    if ui.add_enabled(m.attachment_candidate.is_none(),egui::Button::new(label).small()).clicked() {
-                                        requests.toggle_index = Some(i);
-                                    }
-                                }
-                                if ui.small_button("Delete").clicked() {
-                                    requests.delete_index = Some(i);
-                                }
-                            }
-                        });
-                        if let Some(binding)=&m.attachment {
-                            ui.small(format!("Attached to {} · {}",binding.target.label(),binding.lost.as_deref().unwrap_or("Stops if target disappears; prior changes remain")));
-                        }else if let Some(target)=&m.attachment_candidate {
-                            ui.small(format!("Review attachment to {}. Stops on target loss; prior changes remain.",target.label()));
-                        }
-                        // Spell it out for something that just came out of
-                        // generation -- easy to miss otherwise, since the
-                        // toast announcing it fades after a few seconds. A
-                        // spell has no enabled state to flag, so it's always
-                        // worth pointing at Run while still "recent".
-                        if is_recent && m.error.is_none() && is_host {
-                            if m.is_instant {
-                                ui.colored_label(
-                                    IMPORTANT_TOAST_COLOR,
-                                    "New -- click Run above to cast it",
-                                );
-                            } else if !m.enabled {
-                                ui.colored_label(
-                                    IMPORTANT_TOAST_COLOR,
-                                    if m.attachment_candidate.is_some() {"New -- review the target, then Attach + enable"}else{"New -- click Enable above to activate it"},
-                                );
-                            }
-                        }
-                        if let Some(err) = &m.error {
-                            ui.colored_label(egui::Color32::from_rgb(220, 90, 90), err);
-                        }
-                    }
-                });
-
             let active=player.crafting.hotbar.active.min(8);
             let entry=player.crafting.hotbar.entry();
             if self.last_hotbar!=Some((active,entry)) {
                 self.last_hotbar=Some((active,entry));self.selected_until=Instant::now()+Duration::from_secs(2);
             }
-            requests.select_slot=crate::equipment_ui::hotbar_with_spells(ctx,&player.crafting,self.inventory_open,self.inventory_open || Instant::now()<self.selected_until,self.automation.tools_suspended(),&scripting.spellbook);
+            if !console_open {
+                requests.select_slot=crate::equipment_ui::hotbar_with_spells(ctx,&player.crafting,self.inventory_open || self.spellbook.open,self.inventory_open || self.spellbook.open || Instant::now()<self.selected_until,self.automation.tools_suspended(),&scripting.spellbook);
+            }
             if !self.inventory_open && !self.automation.tools_suspended() {
                 if let Some((text,ready))=&self.spell_hud {
                     crate::equipment_ui::spell_hud(ctx,text,*ready);
@@ -466,7 +382,7 @@ impl Ui {
                 match scripting.modules.get(vi) {
                     Some(m) => {
                         let mut open = true;
-                        egui::Window::new(format!("Rule Source: {}", m.name))
+                        egui::Window::new(format!("Spell Source: {}", m.name))
                             .resizable(true)
                             .collapsible(false)
                             .default_width(560.0)
@@ -557,45 +473,10 @@ impl Ui {
             }
 
             if console_open {
-                egui::Window::new("Rule Console")
-                    .anchor(egui::Align2::CENTER_TOP, [0.0, 80.0])
-                    .resizable(false)
-                    .collapsible(false)
-                    .show(ctx, |ui| {
-                        ui.set_min_width(420.0);
-                        if can_prompt {
-                            ui.label("Describe a rule, or an instant action, then press Enter:");
-                            if is_host {
-                                ui.strong(format!("Locked target: {}",if self.aimed_object.is_empty(){"None — close, aim, and reopen the console"}else{&self.aimed_object}));
-                                ui.small("Target selected when the console opened. Close and reopen to choose another object.");
-                                ui.checkbox(&mut self.attach_generation,"Persistent rule attached to the aimed object");
-                                if self.attach_generation {
-                                    ui.small("Review code, then Attach + enable in Rules. Target loss stops callbacks; existing world changes remain. Packing ends device attachments.");
-                                }
-                            }
-                            ui.small(format!("New rule: {} mana on successful creation. Instant: {} mana per successful cast. Failed generation/casts are free.",registry.mana_charge(crate::crafting::RULE_MANA),registry.mana_charge(crate::crafting::INSTANT_MANA)));
-                            if !is_host { ui.small("Generated on this device; sent to the host for review and activation."); }
-                            let response = ui.text_edit_singleline(prompt_input);
-                            if !response.has_focus() && !response.lost_focus() {
-                                response.request_focus();
-                            }
-                            let submitted = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                            if submitted && !prompt_input.trim().is_empty() {
-                                requests.submit_prompt = Some(prompt_input.trim().to_string());
-                            }
-                            if let Some(status) = generation_status {
-                                ui.label(status);
-                                if ui.button("Cancel generation").clicked() {
-                                    requests.cancel_generation = true;
-                                }
-                            }
-                        } else {
-                            ui.label("Guest prompting is disabled by the host.");
-                        }
-                        ui.label("Esc to close");
-                    });
+                crate::spell_workshop::draw(ctx, prompt_input, &mut self.attach_generation,
+                    &self.aimed_object, is_host, can_prompt, scripting, recent_index,
+                    generation_status, registry, &mut viewing_index, &mut self.workshop_selected, &mut requests);
             }
-
             if quit_dialog_open {
                 egui::Window::new("Quit to Main Menu?")
                     .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])

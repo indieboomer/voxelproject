@@ -6,15 +6,16 @@ use crate::{
 };
 
 pub const MAX_COOK_BATCH: u32 = 64;
+pub fn harvest_name(item: &str) -> String { match item { "harvest:milk" => "Milk", "harvest:wool" => "Wool", "harvest:cooked_milk" => "Cooked Milk", "harvest:cooked_egg" => "Fried Egg", "harvest:cooked_honey" => "Melted Honey", "harvest:egg" => "Egg", "harvest:honey" => "Honey", "harvest:cooked_pumpkin" => "Cooked Pumpkin", "harvest:cooked_mushroom" | "harvest:fired_mushroom" => "Cooked Mushroom", "harvest:cooked_glowcap" | "harvest:fired_glowcap" => "Cooked Glowcap", _ => item.strip_prefix("harvest:").unwrap_or(item) }.into() }
 pub fn harvest_healing(item: &str) -> Option<f32> {
-    Some(match item { "harvest:egg" => 0., "harvest:cooked_egg" => 8., "harvest:milk" => 4., "harvest:cooked_milk" => 12., "harvest:honey" => 12., "harvest:cooked_honey" => 8., "harvest:cooked_pumpkin" => 20., _ => return None })
+    Some(match item { "harvest:egg" => 0., "harvest:cooked_egg" => 8., "harvest:milk" => 4., "harvest:cooked_milk" => 12., "harvest:honey" => 12., "harvest:cooked_honey" => 8., "harvest:cooked_pumpkin" => 20., "harvest:cooked_mushroom" | "harvest:fired_mushroom" => 8., "harvest:glowcap" | "harvest:cooked_glowcap" | "harvest:fired_glowcap" => 0., _ => return None })
 }
 pub fn harvest_satiety(item: &str) -> f32 {
-    match item { "harvest:egg" => 0., "harvest:cooked_egg" => 12., "harvest:milk" => 10., "harvest:cooked_milk" => 18., "harvest:honey" => 16., "harvest:cooked_honey" => 10., "harvest:cooked_pumpkin" => 30., _ => 0. }
+    match item { "harvest:egg" => 0., "harvest:cooked_egg" => 12., "harvest:milk" => 10., "harvest:cooked_milk" => 18., "harvest:honey" => 16., "harvest:cooked_honey" => 10., "harvest:cooked_pumpkin" => 30., "harvest:cooked_mushroom" => 12., _ => 0. }
 }
 pub fn cook_harvest(account: &mut Account, item: &str, amount: u32) -> Result<(), String> {
     if !(1..=MAX_COOK_BATCH).contains(&amount) { return Err("Cook between 1 and 64 items at a time".into()); }
-    let cooked = match item { "harvest:egg" => "harvest:cooked_egg", "harvest:milk" => "harvest:cooked_milk", "harvest:honey" => "harvest:cooked_honey", _ => return Err("This resource cannot be cooked".into()) };
+    let cooked = match item { "harvest:egg" => "harvest:cooked_egg", "harvest:milk" => "harvest:cooked_milk", "harvest:honey" => "harvest:cooked_honey", "harvest:mushroom" => "harvest:cooked_mushroom", "harvest:glowcap" => "harvest:cooked_glowcap", _ => return Err("This resource cannot be cooked".into()) };
     let raw_count = account.production_goods.get(item).copied().unwrap_or(0);
     if raw_count < amount { return Err("Not enough raw ingredients".into()); }
     let cooked_count = account.production_goods.get(cooked).copied().unwrap_or(0);
@@ -30,6 +31,16 @@ pub fn cook_pumpkin(account: &mut Account, amount: u32) -> Result<(), String> {
     let cooked = account.production_goods.get("harvest:cooked_pumpkin").copied().unwrap_or(0).checked_add(amount).ok_or("Cooked stack is full")?;
     account.resources[raw] = remaining;
     account.production_goods.insert("harvest:cooked_pumpkin".into(), cooked);
+    Ok(())
+}
+pub fn cook_mushroom(account: &mut Account, block: BlockType, amount: u32) -> Result<(), String> {
+    if !(1..=MAX_COOK_BATCH).contains(&amount) { return Err("Cook between 1 and 64 mushrooms at a time".into()); }
+    if !matches!(block, BlockType::BrownMushroom | BlockType::Glowcap) { return Err("This mushroom cannot be cooked".into()); }
+    let raw = crate::voxel::COLLECTIBLE_BLOCKS.iter().position(|b| *b == block).ok_or("Mushroom resource unavailable")?;
+    let remaining = account.resources[raw].checked_sub(amount).ok_or("Not enough mushrooms")?;
+    account.resources[raw] = remaining;
+    let id = if block == BlockType::Glowcap { "harvest:cooked_glowcap" } else { "harvest:cooked_mushroom" };
+    account.production_goods.insert(id.into(), account.production_goods.get(id).copied().unwrap_or(0).checked_add(amount).ok_or("Cooked stack is full")?);
     Ok(())
 }
 pub fn healing(block: BlockType) -> Option<f32> {

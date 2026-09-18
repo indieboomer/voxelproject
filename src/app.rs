@@ -2021,6 +2021,15 @@ impl App {
                     return;
                 };
                 if self.ui.spellbook.open {
+                    if !key_event.repeat {
+                        if let Some(slot) = match code {
+                            KeyCode::Digit1 => Some(0), KeyCode::Digit2 => Some(1), KeyCode::Digit3 => Some(2),
+                            KeyCode::Digit4 => Some(3), KeyCode::Digit5 => Some(4), KeyCode::Digit6 => Some(5),
+                            KeyCode::Digit7 => Some(6), KeyCode::Digit8 => Some(7), KeyCode::Digit9 => Some(8), _ => None,
+                        } {
+                            self.assign_selected_spell_to_hotbar(slot);
+                        }
+                    }
                     if code == KeyCode::F5 && !key_event.repeat {
                         self.input.save_requested = true;
                     }
@@ -2029,6 +2038,17 @@ impl App {
                         self.sync_settings_input();
                     }
                     return;
+                }
+
+                if self.console_open && !key_event.repeat {
+                    if let Some(slot) = match code {
+                        KeyCode::Digit1 => Some(0), KeyCode::Digit2 => Some(1), KeyCode::Digit3 => Some(2),
+                        KeyCode::Digit4 => Some(3), KeyCode::Digit5 => Some(4), KeyCode::Digit6 => Some(5),
+                        KeyCode::Digit7 => Some(6), KeyCode::Digit8 => Some(7), KeyCode::Digit9 => Some(8), _ => None,
+                    } {
+                        self.assign_selected_spell_to_hotbar(slot);
+                        return;
+                    }
                 }
                 if code == KeyCode::KeyK && !key_event.repeat && self.cursor_grabbed {
                     self.ui.spellbook.open = true;
@@ -2299,6 +2319,40 @@ impl App {
     fn close_console(&mut self) {
         self.console_open = false;
         self.grab_cursor(true);
+    }
+
+    /// Number keys in Spellbook/Spell Workshop bind the currently selected
+    /// eligible spell to that hotbar slot. Enchantments use the same binding
+    /// affordance; their cast/activation behavior remains a later decision.
+    fn assign_selected_spell_to_hotbar(&mut self, slot: usize) {
+        let workshop_spell = || self.ui.workshop_selected.and_then(|index| {
+            self.scripting.modules.get(index).and_then(|module| {
+                self.scripting.spellbook.spells.iter().find(|spell| spell.source == module.source).map(|spell| spell.id)
+            })
+        });
+        let selected = if self.console_open {
+            workshop_spell().or(self.ui.spellbook.selected)
+        } else {
+            self.ui.spellbook.selected
+        }.or_else(|| {
+            self.last_generated_index.and_then(|index| {
+                self.scripting.modules.get(index).and_then(|module| {
+                    self.scripting.spellbook.spells.iter().find(|spell| spell.source == module.source).map(|spell| spell.id)
+                })
+            })
+        });
+        let Some(id) = selected else { return; };
+        let Some(spell) = self.scripting.spellbook.get(id) else { return; };
+        let eligible = spell.target != crate::spellbook::TargetRequirement::Optional
+            || spell.compiled().is_ok_and(|module| module.is_instant);
+        if !spell.ready() || !eligible || slot >= 9 {
+            return;
+        }
+        let entry = crate::equipment::Entry::Spell(id);
+        self.player.crafting.hotbar.select(slot);
+        let remove_selected = self.player.crafting.hotbar.slots[slot] == Some(entry);
+        self.player.crafting.hotbar.assign(if remove_selected { None } else { Some(entry) });
+        self.publish_hotbar();
     }
 
     fn open_chat(&mut self) {
@@ -3325,6 +3379,9 @@ impl App {
         if spellbook_was_open != self.ui.spellbook.open {
             self.sync_settings_input();
         }
+        if requests.close_workshop {
+            self.close_console();
+        }
         if requests.open_spellbook {
             self.console_open = false;
             self.chat_open = false;
@@ -3480,7 +3537,6 @@ impl App {
                 && self.proposal_waiting.is_none()
                 && matches!(self.generation, GenerationState::Idle)
             {
-                self.prompt_input.clear();
                 self.start_generation(prompt);
             }
         }
@@ -3537,7 +3593,7 @@ impl App {
                 None => String::new(),
             };
             self.window.set_title(&format!(
-                "Voxel Project | {:02}:{:02} | {} | Block: {} | FPS: {:.0}{} | ~ rules/generate, T chat, F5 save, F11 fullscreen, Esc quit",
+                "Voxel Project | {:02}:{:02} | {} | Block: {} | FPS: {:.0}{} | ~ Spell Workshop, T chat, F5 save, F11 fullscreen, Esc quit",
                 hour,
                 minute,
                 role_info,
@@ -3874,7 +3930,7 @@ impl App {
             }
             self.next_rule_id += 1;
             self.last_generated_index = Some(index);
-            format!("Host approved '{name}'. Review it in Rules before activating it.")
+            format!("Host approved '{name}'. Review it in Spell Workshop before activating it.")
         };
         if let NetRole::Host(host) = &mut self.net {
             host.reliable.send(&host.socket, peer, ReliableMsg::RuleProposalResult { accepted: approve, message: message.clone() });
@@ -4056,15 +4112,15 @@ impl App {
                     ("spell", "click Run to cast it")
                 } else if self.scripting.modules[idx].attachment_candidate.is_some() {
                     (
-                        "attached rule",
-                        "review the target and click Attach + enable",
+                        "enchantment",
+                        "review the target and click Enchant + enable",
                     )
                 } else {
                     ("rule", "click Enable to activate it")
                 };
-                log::info!("Generated {label} module '{name}' from prompt (open the Rules panel and {action})");
+                log::info!("Generated {label} module '{name}' from prompt (open Spell Workshop [~] and {action})");
                 self.notify_all_important(format!(
-                    "New {label} generated: '{name}' -- open the Rules panel and {action}"
+                    "New {label} generated: '{name}' -- open Spell Workshop [~] and {action}"
                 ));
             }
             Err(err) if !is_retry => {

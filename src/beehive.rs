@@ -14,15 +14,15 @@ pub fn nearby(world: &World, center: Vec3) -> Vec<Vec3> {
             BlockType::CherryWood => (true, BlockType::CherryLeaves),
             _ => (false, BlockType::Air),
         };
-        let leaf = (-2..=2).flat_map(|dx| (-2..=2).map(move |dz| (dx, dz)))
-            .find(|(dx, dz)| world.get_block(x + dx, y + 3, z + dz) == leaves);
+        let leaf = (3..=8).flat_map(|dy| (-2..=2).flat_map(move |dx| (-2..=2).map(move |dz| (dx, dy, dz))))
+            .find(|(dx, dy, dz)| world.get_block(x + dx, y + dy, z + dz) == leaves);
         // Roughly one hive for every five mature oak, birch, or cherry trees.
         // The first leaf found is replaced visually by the hive model.
         // found is replaced visually by the hive model at the canopy edge.
         if trunk && leaf.is_some()
             && crate::voxel::noise::block_rand(x, y, z, world.seed, 0xbee5) < 0.20 {
-            let (dx, dz) = leaf.unwrap();
-            out.push(Vec3::new(x as f32 + dx as f32 + 0.5, y as f32 + 3.0, z as f32 + dz as f32 + 0.5));
+            let (dx, dy, dz) = leaf.unwrap();
+            out.push(Vec3::new(x as f32 + dx as f32 + 0.5, y as f32 + dy as f32, z as f32 + dz as f32 + 0.5));
         }
     }}
     out
