@@ -217,8 +217,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // already models for free. No phases (waxing/waning) are rendered --
     // deliberate for this stage of the project, not a missing feature.
     let moon_dot = max(dot(dir, -sun_dir), 0.0);
-    let moon = pow(moon_dot, 2000.0) * 1.2 + pow(moon_dot, 64.0) * 0.08;
-    color += vec3<f32>(0.85, 0.88, 0.95) * moon * night_amount * sky_visibility;
+    // Reuse the sun's tangent axes: they also span the opposite moon plane.
+    let moon_uv = vec2<f32>(dot(dir, sun_right), dot(dir, sun_up)) / max(moon_dot, 0.001);
+    let moon_square = abs(moon_uv) - vec2<f32>(0.027);
+    let moon_edge = length(max(moon_square, vec2<f32>(0.0))) + min(max(moon_square.x, moon_square.y), 0.0);
+    let moon_softness = max(fwidth(moon_edge), 0.0008);
+    let moon_core = 1.0 - smoothstep(-moon_softness, moon_softness, moon_edge);
+    let moon_glow = exp(-max(moon_edge, 0.0) / 0.035) * 0.45;
+    let moon_halo = pow(moon_dot, 24.0) * 0.35;
+    let moon_visible = smoothstep(0.0, 0.1, moon_dot) * night_amount * sky_visibility;
+    color = mix(color, vec3<f32>(0.85, 0.91, 1.0) * 1.2, moon_core * moon_visible);
+    color += vec3<f32>(0.22, 0.45, 1.0) * (moon_glow + moon_halo) * (1.0 - moon_core) * moon_visible;
 
     // Stars: a sparse hash-thresholded field, only above the horizon and
     // only once night has properly set in, twinkling faintly via a slow
