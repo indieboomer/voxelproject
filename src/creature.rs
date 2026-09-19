@@ -1482,36 +1482,17 @@ impl Creatures {
         dir: Vec3,
         reach: f32,
     ) -> Option<(u32, f32)> {
-        let mut best = None;
-        let mut distance = reach;
-        for (_, (id, kind, pos, facing)) in self
-            .ecs
-            .query::<(&CreatureId, &Kind, &Pos, &Facing)>()
-            .iter()
-        {
-            let hit = if kind.0.is_dragon() {
-                dragon::body_hit(eye - pos.0, dir, facing.0, reach)
-            } else {
-                let center = pos.0
-                    + Vec3::Y
-                        * if kind.0 == CreatureKind::Fish {
-                            0.0
-                        } else {
-                            0.65
-                        };
-                let t = (center - eye).dot(dir);
-                (t >= 0.0 && (eye + dir * t).distance(center) < 0.8).then_some(t)
-            };
-            if let Some(t) = hit {
-                if t < distance && crate::raycast::raycast(world, eye, dir, t).is_none() {
-                    best = Some((id.0, t));
-                    distance = t;
-                }
-            }
-        }
-        best
+        aimed_bodies(world, eye, dir, reach, self.ecs
+            .query::<(&CreatureId, &Kind, &Pos, &Facing)>().iter()
+            .map(|(_, (id, kind, pos, facing))| (id.0, kind.0, pos.0, facing.0)))
     }
 
+    pub fn targeting_snapshot(&self) -> Vec<crate::spell_target::CreatureBody> {
+        self.ecs.query::<(&CreatureId, &Kind, &Pos, &Facing)>().iter()
+            .map(|(_, (id, kind, pos, facing))| crate::spell_target::CreatureBody {
+                id: id.0, kind: kind.0.to_u8(), position: pos.0.to_array(), facing: facing.0,
+            }).collect()
+    }
     /// Positions + kinds + facing + anim clip/time for broadcasting to
     /// clients over the network, so a creature turns and animates the same
     /// way on every screen. The kind byte's low nibble identifies the
@@ -3034,4 +3015,29 @@ mod tests {
             "expected a cow to eventually queue an ambient_call event within 30s"
         );
     }
+}
+
+/// Shared body geometry for authoritative picking and read-only client previews.
+pub fn aimed_bodies(
+    world: &World, eye: Vec3, dir: Vec3, reach: f32,
+    bodies: impl IntoIterator<Item = (u32, CreatureKind, Vec3, f32)>,
+) -> Option<(u32, f32)> {
+    let mut best = None;
+    let mut distance = reach;
+    for (id, kind, pos, facing) in bodies {
+        let hit = if kind.is_dragon() {
+            dragon::body_hit(eye - pos, dir, facing, reach)
+        } else {
+            let center = pos + Vec3::Y * if kind == CreatureKind::Fish { 0.0 } else { 0.65 };
+            let t = (center - eye).dot(dir);
+            (t >= 0.0 && (eye + dir * t).distance(center) < 0.8).then_some(t)
+        };
+        if let Some(t) = hit {
+            if t < distance && crate::raycast::raycast(world, eye, dir, t).is_none() {
+                best = Some((id, t));
+                distance = t;
+            }
+        }
+    }
+    best
 }

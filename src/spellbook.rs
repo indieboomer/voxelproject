@@ -6,11 +6,43 @@ pub type SpellId = u64;
 pub const MAX_SPELLS: usize = 64;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SpellType {
+    #[default]
+    Instant,
+    Enchantment,
+}
+impl SpellType {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Instant => "Instant",
+            Self::Enchantment => "Enchantment",
+        }
+    }
+}
+
+pub const ENCHANTMENT_TAG: &str = "-- spell_type: enchantment";
+pub fn is_enchantment_source(source: &str) -> bool {
+    source.lines().any(|line| line.trim() == ENCHANTMENT_TAG)
+}
+pub fn target_requirement(source: &str) -> TargetRequirement {
+    match source
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("-- spell_target: "))
+    {
+        Some("creature") => TargetRequirement::Creature,
+        Some("block") => TargetRequirement::Block,
+        Some("device") => TargetRequirement::Device,
+        _ => TargetRequirement::Optional,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TargetRequirement {
     #[default]
     Optional,
     Creature,
     Block,
+    Device,
 }
 impl TargetRequirement {
     pub fn label(self) -> &'static str {
@@ -18,6 +50,7 @@ impl TargetRequirement {
             Self::Optional => "Spell-defined",
             Self::Creature => "Creature",
             Self::Block => "Block",
+            Self::Device => "Device",
         }
     }
     pub fn accepts(self, target: Option<crate::spell_target::Target>) -> bool {
@@ -27,6 +60,7 @@ impl TargetRequirement {
             (Self::Optional, _)
                 | (Self::Creature, Some(Target::Creature { .. }))
                 | (Self::Block, Some(Target::Block { .. }))
+                | (Self::Device, Some(Target::Block { .. }))
         )
     }
 }
@@ -46,6 +80,8 @@ impl Default for Validation {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Spell {
+    #[serde(default)]
+    pub spell_type: SpellType,
     #[serde(default)]
     pub allow_guests: bool,
     pub id: SpellId,
@@ -71,6 +107,39 @@ pub struct Spell {
     pub validation: Validation,
 }
 impl Spell {
+    pub fn can_run_directly(&self) -> bool {
+        self.spell_type == SpellType::Instant
+    }
+    pub fn accepts_target(
+        &self,
+        world: &crate::voxel::World,
+        target: Option<crate::spell_target::Target>,
+    ) -> bool {
+        if self.spell_type == SpellType::Enchantment && target.is_none() {
+            return false;
+        }
+        if !self.target.accepts(target) {
+            return false;
+        }
+        if let Some(crate::spell_target::Target::Block { position, .. }) = target {
+            let device = world.automation.device_at(position).is_some();
+            if self.target == TargetRequirement::Device {
+                return device;
+            }
+            if self.spell_type == SpellType::Enchantment && self.target == TargetRequirement::Block
+            {
+                return !device;
+            }
+        }
+        true
+    }
+    pub fn target_label(&self) -> &'static str {
+        if self.spell_type == SpellType::Enchantment && self.target == TargetRequirement::Optional {
+            "Creature, block or device"
+        } else {
+            self.target.label()
+        }
+    }
     pub fn artwork(&self) -> crate::spell_art::Recipe {
         self.artwork.filter(|r| r.supported()).unwrap_or_else(|| {
             crate::spell_art::Recipe::from_source(&self.source, &self.description)
@@ -126,8 +195,9 @@ impl Spellbook {
     }
 
     pub fn remember(&mut self, module: &Module, author: &str) -> Result<SpellId, String> {
-        if !module.is_instant {
-            return Err("Only instant spells can be remembered".into());
+        let enchantment = is_enchantment_source(&module.source);
+        if module.attachment.is_some() || (!module.is_instant && !enchantment) {
+            return Err("Remember an Instant or Enchantment template".into());
         }
         if let Some(existing) = self
             .spells
@@ -150,16 +220,13 @@ impl Spellbook {
             .take(512)
             .collect();
         // Explicit metadata only; do not guess target requirements from prompt words.
-        let target = match module
-            .source
-            .lines()
-            .find_map(|l| l.strip_prefix("-- spell_target: "))
-        {
-            Some("creature") => TargetRequirement::Creature,
-            Some("block") => TargetRequirement::Block,
-            _ => TargetRequirement::Optional,
-        };
+        let target = target_requirement(&module.source);
         let spell = Spell {
+            spell_type: if enchantment {
+                SpellType::Enchantment
+            } else {
+                SpellType::Instant
+            },
             flavor_quote: crate::spell_flavor::from_source(&module.source),
             artwork: Some(module.artwork),
             allow_guests: false,
@@ -177,13 +244,18 @@ impl Spellbook {
                 .into(),
             interpretation,
             target,
-            mana_cost: crate::crafting::INSTANT_MANA,
+            mana_cost: if enchantment {
+                crate::crafting::RULE_MANA
+            } else {
+                crate::crafting::INSTANT_MANA
+            },
             cooldown_seconds: 1.5,
             range: crate::spell_target::CAST_RANGE,
             icon: match target {
                 TargetRequirement::Optional => 0,
                 TargetRequirement::Creature => 1,
                 TargetRequirement::Block => 2,
+                TargetRequirement::Device => 3,
             },
             validation: Validation::default(),
         };
@@ -365,7 +437,12 @@ fn validate_definition(spell: &Spell) -> Result<Module, String> {
     {
         return Err("Invalid spell metadata or source size".into());
     }
-    if spell.mana_cost != crate::crafting::INSTANT_MANA
+    let expected_cost = if spell.spell_type == SpellType::Enchantment {
+        crate::crafting::RULE_MANA
+    } else {
+        crate::crafting::INSTANT_MANA
+    };
+    if spell.mana_cost != expected_cost
         || spell.range != crate::spell_target::CAST_RANGE
         || spell.cooldown_seconds != 1.5
     {
@@ -384,8 +461,18 @@ fn validate_definition(spell: &Spell) -> Result<Module, String> {
         spell.original_prompt.clone(),
         spell.source.clone(),
     )?;
-    if !module.is_instant {
-        return Err("Remembered spells must define on_cast, not on_tick".into());
+    if spell.spell_type == SpellType::Enchantment {
+        if module.is_instant
+            || !is_enchantment_source(&spell.source)
+            || !spell.source.contains("get_rule_target")
+        {
+            return Err(
+                "Enchantment templates require a persistent rule using api.get_rule_target()"
+                    .into(),
+            );
+        }
+    } else if !module.is_instant || is_enchantment_source(&spell.source) {
+        return Err("Instant spells must define on_cast, not an enchantment rule".into());
     }
     Ok(module)
 }

@@ -186,6 +186,9 @@ fn render_weather_previews() {
     let reflection_preview = std::env::var_os("VOXEL_REFLECTION_PREVIEW").is_some();
     let dof_preview = std::env::var_os("VOXEL_DOF_PREVIEW").is_some();
     let ray_preview = std::env::var("VOXEL_RAYS_PREVIEW").ok();
+    let preview_daytime = std::env::var("VOXEL_PREVIEW_DAYTIME")
+        .ok().and_then(|s| s.parse::<f32>().ok())
+        .filter(|t| t.is_finite() && (0.0..1.0).contains(t)).unwrap_or(0.14);
     if dof_preview {
         // Actual atlas materials at arm's reach, with distant terrain visible
         // alongside them. Same meshes and lighting for the on/off comparison.
@@ -213,7 +216,7 @@ fn render_weather_previews() {
     let machine_preview = std::env::var_os("VOXEL_MACHINE_PREVIEW").is_some() || aura_preview;
     let mut target = if reflection_preview { Vec3::new(4.5, 8.0, 9.0) } else { Vec3::new(3.0, 7.0, 0.0) };
     if dof_preview { target = Vec3::new(0.5, 8.5, 3.0); }
-    if ray_preview.is_some() { target = Vec3::new(-3.,8.,-4.) + crate::daynight::sky_lighting(0.14).sun_dir*12.; }
+    if ray_preview.is_some() { target = Vec3::new(-3.,8.,-4.) + crate::daynight::sky_lighting(preview_daytime).sun_dir*12.; }
     let landscape_preview = std::env::var("VOXEL_LANDSCAPE_PREVIEW").ok();
     if let Some(mode) = &landscape_preview {
         world = World::new(42);
@@ -658,7 +661,7 @@ fn render_weather_previews() {
         if camp_preview || std::env::var_os("VOXEL_MACHINE_NIGHT_PREVIEW").is_some() {
             0.75
         } else {
-            0.14
+            preview_daytime
         },
     );
     let light_vp = light_view_proj(lighting.sun_dir, eye);

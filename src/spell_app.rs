@@ -1,6 +1,50 @@
 use super::*;
 use crate::spell_network::{Request, Summary};
 impl App {
+    pub(super) fn aimed_spell_context(&self) -> Option<crate::spell_target::TargetContext> {
+        let eye = self.camera.eye_position();
+        let facing = self.camera.forward();
+        if matches!(self.net, NetRole::Joined(_)) {
+            crate::spell_target::TargetContext::resolve_replica(&self.world, &self.spell_network.creature_targets, eye, facing)
+        } else {
+            crate::spell_target::TargetContext::resolve(&self.world, &self.creatures, eye, facing)
+        }
+    }
+    pub(super) fn cast_host_enchantment(&mut self, id: u64) {
+        let result = (|| -> Result<(), String> {
+            let spell = self.scripting.spellbook.get(id).ok_or("Spell no longer exists")?.clone();
+            if let Some(last) = self.scripting.spell_cooldowns.get(&id) {
+                let remaining = spell.cooldown_seconds - last.elapsed().as_secs_f32();
+                if remaining > 0.0 { return Err(format!("Cooldown {remaining:.1}s")); }
+            }
+            let eye = self.camera.eye_position();
+            let context = crate::spell_target::TargetContext::resolve(&self.world, &self.creatures, eye, self.camera.forward());
+            let target = self.scripting.cast_enchantment(
+                &mut self.world, &self.creatures, &mut self.player.crafting, &self.crafting_registry,
+                crate::enchantment::Cast { spell_id: id, caster_id: HOST_PLAYER_ID,
+                    owner: "host".into(), eye, alive: self.player.health > 0., guest: false, context },
+            )?;
+            self.scripting.spell_cooldowns.insert(id, Instant::now());
+            let hit = context.unwrap().hit_position;
+            self.enchantment_cast_fx(eye, hit);
+            self.ui.spellbook.feedback = format!("Enchanted {} with {}.", target.label(), spell.name);
+            Ok(())
+        })();
+        if let Err(error) = result { self.ui.spellbook.feedback = format!("{error}. No mana spent."); }
+        self.send_enchantment_summaries(None);
+    }
+
+    fn enchantment_cast_fx(&mut self, origin: Vec3, target: Vec3) {
+        self.spell_fx.cast(origin, target);
+        self.use_animation = 0.28;
+        if let NetRole::Host(host) = &mut self.net {
+            for &peer in host.clients.keys() {
+                host.reliable.send(&host.socket, peer, ReliableMsg::SpellCastFx {
+                    origin: origin.to_array(), target: target.to_array(),
+                });
+            }
+        }
+    }
     /// Host-authoritative physical card transfer. Only the spell ID crosses
     /// the network; source and metadata always come from the host spellbook.
     pub(super) fn transfer_spell_card(&mut self, from: Option<Peer>, spell_id: u64, target: String) {
@@ -50,12 +94,7 @@ impl App {
             self.ui.spell_hud = Some(("Spell unavailable".into(), false));
             return;
         };
-        let context = crate::spell_target::TargetContext::resolve(
-            &self.world,
-            &self.creatures,
-            self.camera.eye_position(),
-            self.camera.forward(),
-        );
+        let context = self.aimed_spell_context();
         let target = context.map_or_else(
             || "No target".to_string(),
             |c| match c.target {
@@ -85,6 +124,8 @@ impl App {
             || crate::equipment::Entry::Spell(id).count(&self.player.crafting) == 0
         {
             "Unavailable".into()
+        } else if !spell.can_run_directly() && !self.player.crafting.has_spell_card(id) {
+            "Not allowed: you need this spell card".into()
         } else if self.player.health <= 0. {
             "Defeated".into()
         } else if self.spell_network.pending.is_some() {
@@ -93,8 +134,9 @@ impl App {
             format!("Cooldown {remaining:.1}s")
         } else if self.player.crafting.mana < cost {
             "Not enough mana".into()
-        } else if !spell.target.accepts(context.map(|c| c.target)) {
-            format!("Aim at {} (18 blocks)", spell.target.label().to_lowercase())
+        } else if !spell.accepts_target(&self.world, context.map(|c| c.target)) {
+            if context.is_none() { "No target within 18 blocks".into() }
+            else { format!("Invalid target: requires {}", spell.target_label()) }
         } else if matches!(self.net, NetRole::Host(_)) && !self.scripting.can_cast_immediately() {
             "Rules busy".into()
         } else {
@@ -197,19 +239,19 @@ impl App {
                 .checked_add(1)
                 .ok_or("Reconnect to reset cast sequence")?;
             let facing = self.camera.forward();
-            let context = crate::spell_target::TargetContext::resolve(
-                &self.world,
-                &self.creatures,
-                self.camera.eye_position(),
-                facing,
-            );
-            if !spell.target.accepts(context.map(|c| c.target)) {
+            let context = self.aimed_spell_context();
+            if !spell.accepts_target(&self.world, context.map(|c| c.target)) {
                 return Err(format!(
                     "Aim at a {} within 18 blocks",
-                    spell.target.label().to_lowercase()
+                    spell.target_label().to_lowercase()
                 ));
             }
             Ok(Request {
+                device_id: context.and_then(|c| match c.target {
+                    crate::spell_target::Target::Block { position, .. } => self.world.automation.device_at(position).map(|d| d.persistent_id),
+                    _ => None,
+                }),
+                world_revision: self.spell_network.world_revision,
                 session,
                 sequence: self.spell_network.sequence,
                 spell: id,
@@ -293,6 +335,14 @@ impl App {
             if account.mana < cost {
                 return Err(format!("This spell needs {cost} mana"));
             }
+            if spell.spell_type == crate::spellbook::SpellType::Enchantment {
+                let account = self.guest_accounts.get_mut(&key).unwrap();
+                self.scripting.cast_enchantment(
+                    &mut self.world, &self.creatures, account, &self.crafting_registry,
+                    crate::enchantment::Cast { spell_id: spell.id, caster_id, owner: key.clone(),
+                        eye, alive, guest: true, context },
+                )?;
+            } else {
             let index = self.scripting.add_generated(spell.compiled()?)?;
             let account = self.guest_accounts.get_mut(&key).unwrap();
             account.mana -= cost;
@@ -336,6 +386,7 @@ impl App {
                 account.revision = account.revision.saturating_add(1);
                 return Err(format!("{error}. No mana spent."));
             }
+            }
             self.spell_network
                 .guest_cooldowns
                 .insert(cooldown_key, Instant::now());
@@ -376,5 +427,6 @@ impl App {
             );
         }
         self.sync_guest_mana();
+        self.send_enchantment_summaries(None);
     }
 }

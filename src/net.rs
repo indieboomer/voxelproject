@@ -9,7 +9,7 @@ use crate::voxel::block::BlockType;
 pub type PlayerId = u32;
 pub type WorldEdit = ((i32, i32, i32), BlockType);
 pub const MAX_PLAYERS: usize = 4;
-pub const PROTOCOL_VERSION: u32 = 48;
+pub const PROTOCOL_VERSION: u32 = 49;
 pub const HOST_PLAYER_ID: PlayerId = 0;
 pub const DEFAULT_PORT: u16 = 7878;
 pub const RELIABLE_RESEND_INTERVAL: Duration = Duration::from_millis(200);
@@ -230,6 +230,8 @@ pub enum UnreliableMsg {
         carrying_crystal: bool,
     },
     Snapshot {
+        world_revision: u64,
+        creature_targets: Vec<crate::spell_target::CreatureBody>,
         loot: Vec<crate::loot::Drop>,
         allow_guest_prompting: bool,
         time_of_day: f32,
@@ -565,6 +567,8 @@ mod tests {
             satiety: 7.0,
         };
         let packet = Packet::Unreliable(UnreliableMsg::Snapshot {
+            world_revision: 4,
+            creature_targets: vec![],
             creature_vitals: vec![([4., 5., 6.], 1, 4.)],
             loot: vec![],
             allow_guest_prompting: true,
@@ -583,6 +587,8 @@ mod tests {
         let decoded = decode(&bytes).expect("a just-encoded packet must decode");
         match decoded {
             Packet::Unreliable(UnreliableMsg::Snapshot {
+                world_revision,
+                creature_targets,
                 loot: _,
                 allow_guest_prompting,
                 time_of_day,
@@ -592,6 +598,8 @@ mod tests {
                 creature_vitals,
             }) => {
                 assert!(allow_guest_prompting);
+                assert_eq!(world_revision, 4);
+                assert!(creature_targets.is_empty());
                 assert_eq!(creature_vitals, vec![([4., 5., 6.], 1, 4.)]);
                 assert_eq!(time_of_day, 0.42);
                 assert_eq!(weather, Weather::Rain.to_u8());

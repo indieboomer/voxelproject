@@ -2,6 +2,11 @@
 
 ## Plan assessment
 
+The Enchantment workflow now uses reusable Spellbook templates: generate without
+a selected object, Remember, assign a hotbar slot, then aim and left-click to
+create a persistent attachment. Enchantments have no Workshop/Spellbook Run action.
+See [the player flow, authority and migration notes](ENCHANTMENTS.md).
+
 [The active plan](../SPELLCASTING_PLAN.md) separates reusable casts from persistent
 enchantments. Phase 1 can reuse the existing Lua sandbox, callback transactions,
 creature queries/healing/damage, block edits, inventory authority and cast fees.

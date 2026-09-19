@@ -71,16 +71,24 @@ animation is described in [player animations](PLAYER_ANIMATIONS.md).
 
 ## Spells
 
-The third inventory column lists remembered spells. Select a spell, then press
-1–9 or click a hotbar slot to assign it. Close inventory, select that slot and
-left-click to cast at your aim. Spell slots show a rune and the selected spell's
-name. They consume mana rather than items; right-click does nothing.
+Assign spells from **Spellbook** (`K`) or a remembered result in **Spell Workshop**
+(`~`), rather than inventory. Select the card, then press **1–9**; Spellbook also
+offers numbered slot buttons. Assigning replaces the slot; assigning the same
+spell there again clears it. Close the panel, select the slot and left-click to
+cast at your aim. Slots show the spell artwork and selected name. They consume
+mana rather than items; right-click does nothing.
+
+[Enchantment spells](ENCHANTMENTS.md) are reusable templates, marked Enchantment.
+They attach only through an aimed hotbar cast, never through Run in a panel.
+The target is chosen at cast time; remembering and selecting have no world effect.
 
 Bindings save with the world, follow renames, and clear when the spell is deleted.
 Host spell cards have a Delete button. Deleting a source module from Rules also
 deletes its remembered cards (including renamed and duplicated copies), using
 the saved source and original prompt rather than the display name. Other spells
 with the same name remain. Deleting a card alone leaves its Rules module available.
+Deleting an attached instance is separate: it leaves the remembered template and
+other instances intact. Deleting a template leaves its existing attachments intact.
 Spells needing compatibility review remain visible but cannot be assigned or cast.
 Their hotbar bindings are cleared too; low mana or cooldown alone does not clear a slot.
 K still opens the full Spellbook for inspection, rename, duplicate, delete and casting.

@@ -4,6 +4,20 @@ use egui::{Color32, RichText};
 
 const GOLD: Color32 = Color32::from_rgb(236, 192, 99);
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Kind { #[default] Auto, Instant, Permanent, Enchantment }
+impl Kind {
+    pub fn prepare(self, prompt: &str) -> (crate::llm::PromptKind, String) {
+        use crate::llm::PromptKind;
+        match self {
+            Self::Auto => (crate::llm::classify_prompt(prompt), prompt.into()),
+            Self::Instant => (PromptKind::Instant, prompt.into()),
+            Self::Permanent => (PromptKind::Rule, prompt.into()),
+            Self::Enchantment => (PromptKind::Rule, format!("{prompt}\n[BOUND_OBJECT_RULE] Reusable enchantment template. No object is selected yet. In on_tick use api.get_rule_target(); return if nil. The target is chosen on each hotbar cast. Never hard-code a concrete object ID or coordinates. Use target.kind (creature, block, device); creature identity is target.id. Guard unsupported kinds. Include -- spell_target: creature, block, device, or any to declare supported targets. The engine stops an instance when its object disappears or is replaced.")),
+        }
+    }
+}
+
 fn frame() -> egui::Frame {
     egui::Frame::none()
         .fill(Color32::from_rgb(18, 24, 33))
@@ -38,8 +52,7 @@ fn heading(ui: &mut egui::Ui, title: &str, id: &str, hint: &str) {
 pub fn draw(
     ctx: &egui::Context,
     prompt: &mut String,
-    enchant: &mut bool,
-    target: &str,
+    spell_kind: &mut Kind,
     is_host: bool,
     can_prompt: bool,
     scripting: &ScriptHost,
@@ -96,33 +109,33 @@ pub fn draw(
                             egui::TextEdit::multiline(prompt).hint_text("Make bluebells grow around this tree when it rains...").desired_width(f32::INFINITY));
                     });
                     ui.add_space(8.0);
-                    heading(ui, "2. TARGET (OPTIONAL)", "target_help",
-                        "The target is selected when you open the workshop. Close it, aim at an object, and reopen to choose another target. Instant spells can use a target without becoming enchantments.");
+                    heading(ui, "2. SPELL TYPE", "target_help",
+                        "Enchantments are reusable spells. Remember one, assign it to the hotbar, then aim and left-click to attach an instance. No target is needed here.");
                     frame().show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
-                        ui.label(RichText::new("Target locked").color(GOLD));
-                        ui.label(if target.is_empty() { "No target selected" } else { target });
-                        ui.horizontal_wrapped(|ui| {
-                            ui.add_enabled(is_host && (!target.is_empty() || *enchant) && status.is_none(),
-                                egui::Checkbox::new(enchant, "Enchant this object"));
-                            help(ui, "enchantment_help", "An enchantment binds a permanent spell to this object. Review the code, then choose Enchant + enable. Losing the object stops future effects; earlier world changes remain. Packing a device ends its enchantments.");
-                        });
+                        ui.add_enabled_ui(status.is_none(), |ui| { ui.horizontal_wrapped(|ui| {
+                            for (kind, label) in [(Kind::Auto, "Auto"), (Kind::Instant, "Instant"), (Kind::Permanent, "Permanent"), (Kind::Enchantment, "Enchantment")] {
+                                ui.selectable_value(spell_kind, kind, label);
+                            }
+                        }); });
+                        if *spell_kind == Kind::Enchantment {
+                            ui.small("Remember, assign to hotbar, then aim and left-click. Target chosen when casting.");
+                        }
                     });
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if ui.add_enabled(status.is_none(), egui::Button::new("Clear").min_size(egui::vec2(80.0, 38.0))).clicked() {
                             prompt.clear();
-                            *enchant = false;
+                            *spell_kind = Kind::Auto;
                         }
-                        let ready = can_prompt && status.is_none() && !prompt.trim().is_empty()
-                            && (!*enchant || (is_host && !target.is_empty()));
+                        let ready = can_prompt && status.is_none() && !prompt.trim().is_empty();
                         let generate = ui.add_enabled(ready,
                             egui::Button::new(RichText::new("Generate Spell").strong())
                                 .fill(Color32::from_rgb(27, 86, 44)).min_size(egui::vec2(150.0, 38.0))).clicked();
                         if ready && (generate || ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Enter))) {
                             requests.submit_prompt = Some(prompt.trim().to_owned());
                         }
-                        help(ui, "generate_help", &format!("Creation costs {} mana on success. Instant spells cost {} mana per successful cast. Failed generation and casts are free. Generated spells need review before activation. Guest spells are sent to the host for approval.", registry.mana_charge(crate::crafting::RULE_MANA), registry.mana_charge(crate::crafting::INSTANT_MANA)));
+                        help(ui, "generate_help", &format!("Permanent rules cost {} mana to create. Enchantment templates are free to generate and remember; each successful attachment costs {} mana. Instant spells cost {} mana per successful cast. Failed generation and casts are free. Guest spells are sent to the host for approval.", registry.mana_charge(crate::crafting::RULE_MANA), registry.mana_charge(crate::crafting::RULE_MANA), registry.mana_charge(crate::crafting::INSTANT_MANA)));
                     });
                     ui.add_space(10.0);
                     heading(ui, "3. STATUS", "status_help", "Generation and validation updates appear here. Review the resulting spell in the list before running or enabling it. Errors are shown on the affected spell.");
@@ -141,7 +154,7 @@ pub fn draw(
                             else { ui.label("Ready to review in your created spells."); }
                         } else {
                             ui.strong("Ready to create");
-                            ui.label("Write a prompt, choose an optional target, and generate your spell.");
+                            ui.label("Write a prompt, choose a spell type, and generate your spell.");
                         }
                     });
                 });
@@ -167,7 +180,7 @@ pub fn draw(
                                         let description = module.source.lines().find_map(|line| line.strip_prefix(crate::llm::intent::SUMMARY_PREFIX))
                                             .unwrap_or(&module.prompt);
                                         ui.add(egui::Label::new(RichText::new(description).small()).wrap(true));
-                                        let (kind, color) = if module.attachment.is_some() || module.attachment_candidate.is_some() {
+                                        let (kind, color) = if module.attachment.is_some() || crate::spellbook::is_enchantment_source(&module.source) {
                                             ("Enchantment", Color32::LIGHT_BLUE)
                                         } else if module.is_instant { ("Instant", Color32::from_rgb(206, 163, 240)) }
                                         else { ("Permanent", Color32::LIGHT_GREEN) };
@@ -179,15 +192,17 @@ pub fn draw(
                                         ui.small(format!("Mana cost: {}", registry.mana_charge(crate::crafting::INSTANT_MANA)));
                                     }
                                     if is_host {
-                                        if module.is_instant {
+                                        if crate::spellbook::is_enchantment_source(&module.source) && module.attachment.is_none() {
+                                            ui.small(format!("Targets: {}", crate::spellbook::target_requirement(&module.source).label()));
+                                            ui.small(format!("Mana per attachment: {}", registry.mana_charge(crate::crafting::RULE_MANA)));
+                                            if ui.button("Remember").clicked() { requests.remember_index = Some(i); }
+                                        } else if module.is_instant {
                                             if ui.button("Run").clicked() { requests.run_index = Some(i); }
                                             if ui.button("Remember").clicked() { requests.remember_index = Some(i); }
                                         } else {
                                             let label = if module.enabled { "ON · Disable" } else { "OFF · Enable" };
-                                            if ui.add_enabled(module.attachment_candidate.is_none(), egui::Button::new(label)).clicked() { requests.toggle_index = Some(i); }
-                                            if module.attachment.is_none() {
-                                                if ui.add_enabled(module.attachment_candidate.is_some() || !target.is_empty(), egui::Button::new("Enchant + enable")).clicked() { requests.attach_rule = Some(i); }
-                                            } else if ui.button("Remove enchantment").clicked() { requests.detach_rule = Some(i); }
+                                            if ui.button(label).clicked() { requests.toggle_index = Some(i); }
+                                            if module.attachment.is_some() && ui.button("Remove enchantment").clicked() { requests.detach_rule = Some(i); }
                                         }
                                     } else { ui.small(if module.enabled { "ON" } else { "OFF" }); }
                                     if ui.small_button(if *viewing == Some(i) { "Hide Code" } else { "View Code" }).clicked() {
@@ -198,8 +213,6 @@ pub fn draw(
                                 if let Some(binding) = &module.attachment {
                                     ui.small(format!("Enchanting {}", binding.target.label()));
                                     if let Some(lost) = &binding.lost { ui.colored_label(Color32::LIGHT_RED, lost); }
-                                } else if let Some(target) = &module.attachment_candidate {
-                                    ui.small(format!("Review enchantment target: {}", target.label()));
                                 }
                                 if let Some(error) = &module.error { ui.colored_label(Color32::LIGHT_RED, error); }
                             }).response;

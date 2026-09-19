@@ -9,6 +9,7 @@ use std::{
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Summary {
+    pub spell_type: crate::spellbook::SpellType,
     pub id: SpellId,
     pub revision: u32,
     pub name: String,
@@ -25,6 +26,7 @@ pub struct Summary {
 impl Summary {
     pub fn from_spell(s: &Spell) -> Self {
         Self {
+            spell_type: s.spell_type,
             id: s.id,
             revision: s.revision,
             flavor_quote: crate::spell_flavor::clean(&s.flavor_quote),
@@ -48,13 +50,19 @@ impl Summary {
             || self.name.len() > 320
             || self.description.len() > 320
             || self.author.len() > 96
-            || self.mana_cost != crate::crafting::INSTANT_MANA
+            || self.mana_cost
+                != if self.spell_type == crate::spellbook::SpellType::Enchantment {
+                    crate::crafting::RULE_MANA
+                } else {
+                    crate::crafting::INSTANT_MANA
+                }
             || self.cooldown_seconds != 1.5
             || self.range != crate::spell_target::CAST_RANGE
         {
             return None;
         }
         Some(Spell {
+            spell_type: self.spell_type,
             id: self.id,
             revision: self.revision,
             name: self.name,
@@ -91,6 +99,10 @@ pub fn guest_book(book: &Spellbook) -> Spellbook {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Request {
+    pub device_id: Option<u64>,
+    /// Revision observed in the host snapshot prevents enchanting a replacement
+    /// at identical block coordinates while a guest request is in flight.
+    pub world_revision: u64,
     pub session: u64,
     pub sequence: u64,
     pub spell: SpellId,
@@ -131,6 +143,8 @@ impl Session {
 }
 #[derive(Default)]
 pub struct State {
+    pub world_revision: u64,
+    pub creature_targets: Vec<crate::spell_target::CreatureBody>,
     pub peers: HashMap<crate::transport::Peer, Session>,
     pub guest_cooldowns: HashMap<(String, SpellId), Instant>,
     pub catalog_revision: u64,
@@ -147,6 +161,11 @@ pub fn resolve_request(
     creatures: &crate::creature::Creatures,
     eye: glam::Vec3,
 ) -> Result<Option<TargetContext>, String> {
+    if spell.spell_type == crate::spellbook::SpellType::Enchantment
+        && r.world_revision != world.identity.revision
+    {
+        return Err("World changed; aim again. No mana spent.".into());
+    }
     if !spell.ready() || !spell.allow_guests || spell.id != r.spell || spell.revision != r.revision
     {
         return Err("Spell changed or permission was removed".into());
@@ -156,7 +175,21 @@ pub fn resolve_request(
         return Err("Invalid cast direction".into());
     }
     let context = TargetContext::resolve(world, creatures, eye, facing);
-    if context.map(|c| c.target) != r.target || !spell.target.accepts(context.map(|c| c.target)) {
+    if spell.spell_type == crate::spellbook::SpellType::Enchantment {
+        let device_id = context.and_then(|c| match c.target {
+            Target::Block { position, .. } => world
+                .automation
+                .device_at(position)
+                .map(|d| d.persistent_id),
+            _ => None,
+        });
+        if device_id != r.device_id {
+            return Err("Device was replaced; aim again".into());
+        }
+    }
+    if context.map(|c| c.target) != r.target
+        || !spell.accepts_target(world, context.map(|c| c.target))
+    {
         return Err("Target changed, obstructed or out of range. Aim again.".into());
     }
     Ok(context)
@@ -194,6 +227,8 @@ mod tests {
             .unwrap()
             .target;
         let request = Request {
+            device_id: None,
+            world_revision: world.identity.revision,
             session: 77,
             sequence: 1,
             spell: id,

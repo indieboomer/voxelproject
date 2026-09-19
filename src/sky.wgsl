@@ -1,5 +1,5 @@
-// Renders the sky background: a horizon-to-zenith gradient, a glowing sun
-// disc, a pale moon at night, and faint stars -- drawn as the very first
+// Renders the sky background: a horizon-to-zenith gradient, a glowing square
+// sun, a pale moon at night, and faint stars -- drawn as the very first
 // thing in the main pass (a single fullscreen triangle, no depth test) so
 // every other draw call simply paints over it wherever real geometry
 // exists. Replaces what used to be one flat clear color.
@@ -188,11 +188,28 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let sun_visibility = smoothstep(-0.2, 0.05, sun_height);
     let night_amount = 1.0 - sun_visibility;
 
-    // Sun: a small sharp core plus a much softer, wider halo.
+    // Sun: a softly edged square in a world-oriented tangent plane, with
+    // a warm glow following its edges and a wider atmospheric halo.
     let sun_dot = max(dot(dir, sun_dir), 0.0);
-    let sun_core = pow(sun_dot, 800.0) * 6.0;
-    let sun_halo = pow(sun_dot, 32.0) * 0.6;
-    color += vec3<f32>(1.0, 0.92, 0.75) * (sun_core + sun_halo) * sun_visibility * sky_visibility;
+    let golden_hour = 1.0 - smoothstep(0.0, 0.4, sun_height);
+    let sun_size = mix(1.0, 1.4, golden_hour);
+    let sun_axis = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), abs(sun_dir.y) > 0.99);
+    let sun_right = normalize(cross(sun_axis, sun_dir));
+    let sun_up = cross(sun_dir, sun_right);
+    let sun_uv = vec2<f32>(dot(dir, sun_right), dot(dir, sun_up)) / max(sun_dot, 0.001);
+    let square = abs(sun_uv) - vec2<f32>(0.027 * sun_size);
+    let sun_edge = length(max(square, vec2<f32>(0.0))) + min(max(square.x, square.y), 0.0);
+    let sun_softness = max(fwidth(sun_edge), 0.0008);
+    let sun_core = 1.0 - smoothstep(-sun_softness, sun_softness, sun_edge);
+    let sun_glow = exp(-max(sun_edge, 0.0) / (0.022 * sun_size)) * 0.85;
+    let sun_halo = pow(sun_dot, 48.0) * 0.35;
+    let sun_front = smoothstep(0.0, 0.1, sun_dot);
+    let sun_color = mix(vec3<f32>(1.0, 0.96, 0.84), vec3<f32>(1.0, 0.16, 0.015), golden_hour);
+    let halo_color = mix(vec3<f32>(1.0, 0.76, 0.38), vec3<f32>(1.0, 0.38, 0.08), golden_hour);
+    let sun_visible = sun_front * sun_visibility * sky_visibility;
+    // Composite the core so bright horizon haze cannot wash its orange to white.
+    color = mix(color, sun_color * mix(3.0, 1.15, golden_hour), sun_core * sun_visible);
+    color += halo_color * (sun_glow + sun_halo) * (1.0 - sun_core) * sun_visible;
 
     // Moon: the same trick mirrored to -sun_dir -- astronomically that's
     // also correct for "always full": a full moon is one directly opposite

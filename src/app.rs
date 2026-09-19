@@ -31,7 +31,7 @@ use crate::camera::Camera;
 use crate::creature::Creatures;
 use crate::daynight::{sky_lighting, DAY_LENGTH_SECS};
 use crate::input::Input;
-use crate::llm::{classify_prompt, derive_rule_name, LlmClient, PendingGeneration, PromptKind};
+use crate::llm::{derive_rule_name, LlmClient, PendingGeneration, PromptKind};
 use crate::model::Models;
 use crate::net::{
     self, decode, encode, LaunchConfig, NotifyKind, Packet, PlayerId, ReliableChannel, ReliableMsg,
@@ -766,8 +766,7 @@ pub struct App {
     loot: crate::loot::Effects,
     spell_fx: crate::spell_fx::Effects,
     spell_network: crate::spell_network::State,
-    generation_attachment: Option<crate::enchantment::Reference>,
-    console_attachment: Result<crate::enchantment::Reference, String>,
+    generation_enchantment: bool,
     enchantment_summaries: Vec<crate::enchantment::Summary>,
     enchantment_revision: u64,
     generation_original_prompt: Option<String>,
@@ -1919,9 +1918,8 @@ impl App {
             ),
             spell_fx: crate::spell_fx::Effects::default(),
             spell_network: crate::spell_network::State::default(),
-            generation_attachment: None,
+            generation_enchantment: false,
             enchantment_summaries: Vec::new(),
-            console_attachment: Err("Open the console while aiming at an object.".into()),
             enchantment_revision: 0,
             generation_original_prompt: None,
             mana_timer: 0.0,
@@ -1943,7 +1941,9 @@ impl App {
             // Migrate older saves: every validated spell remembered by the
             // host starts with one physical card in the host inventory.
             for spell in app.scripting.spellbook.spells.iter().filter(|s| s.ready()) {
-                let _ = app.player.crafting.add_spell_card(spell.id);
+                if !app.guest_accounts.values().any(|a| a.has_spell_card(spell.id)) {
+                    let _ = app.player.crafting.add_spell_card(spell.id);
+                }
             }
             let book = crate::spell_network::guest_book(&app.scripting.spellbook);
             for account in app.guest_accounts.values_mut() {
@@ -2319,7 +2319,6 @@ impl App {
             return;
         }
         self.update_enchantment_view();
-        self.console_attachment = self.capture_enchantment_target();
         self.console_open = true;
         self.input.release_all();
         self.sync_settings_input();
@@ -2331,8 +2330,8 @@ impl App {
     }
 
     /// Number keys in Spellbook/Spell Workshop bind the currently selected
-    /// eligible spell to that hotbar slot. Enchantments use the same binding
-    /// affordance; their cast/activation behavior remains a later decision.
+    /// eligible spell to that hotbar slot. Enchantments attach only when cast
+    /// through the gameplay primary action, never while assigning the slot.
     fn assign_selected_spell_to_hotbar(&mut self, slot: usize) {
         let workshop_spell = || self.ui.workshop_selected.and_then(|index| {
             self.scripting.modules.get(index).and_then(|module| {
@@ -2352,8 +2351,7 @@ impl App {
         });
         let Some(id) = selected else { return; };
         let Some(spell) = self.scripting.spellbook.get(id) else { return; };
-        let eligible = spell.target != crate::spellbook::TargetRequirement::Optional
-            || spell.compiled().is_ok_and(|module| module.is_instant);
+        let eligible = crate::equipment::Entry::Spell(id).count(&self.player.crafting) > 0;
         if !spell.ready() || !eligible || slot >= 9 {
             return;
         }
@@ -2971,6 +2969,14 @@ impl App {
             self.lua_tick_timer += dt;
             if self.lua_tick_timer >= LUA_TICK_INTERVAL {
                 self.lua_tick_timer = 0.0;
+                if let NetRole::Host(host) = &self.net {
+                    self.scripting.refresh_enchantment_owners(|owner| {
+                        if owner == "host" { return Some(HOST_PLAYER_ID); }
+                        host.clients.iter().find_map(|(peer, id)| {
+                            host.remote_players.get(id).filter(|p| peer.account_key(&p.nickname) == owner).map(|_| *id)
+                        })
+                    });
+                }
                 let players = self.host_player_positions();
                 let outcome = self.scripting.run_tick(
                     &self.world,
@@ -3428,9 +3434,7 @@ impl App {
         if let Some(action) = requests.spellbook_action {
             self.spellbook_action(action);
         }
-        if let Some(index) = requests.attach_rule {
-            self.attach_rule(index);
-        }
+
         if let Some(index) = requests.detach_rule {
             self.detach_rule(index);
         }
@@ -3768,42 +3772,16 @@ impl App {
         // hard requirement -- it just tells the model which contract to
         // write; `poll_generation` validates the generated contract
         // after at most one corrective retry.
-        self.generation_attachment = None;
-        self.generation_original_prompt = None;
-        if self.ui.attach_generation && matches!(self.net, NetRole::Host(_)) {
-            match self.selected_enchantment_target() {
-                Ok(target) => {
-                    self.generation_attachment = Some(target);
-                    self.generation_original_prompt = Some(user_request.clone());
-                }
-                Err(error) => {
-                    self.notify_important(error);
-                    return;
-                }
-            }
-        }
-        let kind = if self.generation_attachment.is_some() {
-            PromptKind::Rule
-        } else {
-            classify_prompt(&user_request)
-        };
-        let user_request = if let Some(target) = &self.generation_attachment {
-            let kind = match target.object {
-                crate::enchantment::Object::Creature { .. } => "creature",
-                crate::enchantment::Object::Block { .. } => "block",
-                crate::enchantment::Object::Device { .. } => "device",
-            };
-            format!("{user_request}\n[BOUND_OBJECT_RULE] [BOUND_TARGET:{kind}] Persistent single-object rule for {}. Use api.get_rule_target() in on_tick to read the bound target and creator_id; do not hard-code IDs or coordinates. Creature ID is target.id, not target.creature_id or target.entity_id. Use api.chase(target.id, player.x, player.y, player.z) only for kind='creature'. If there is no bound target, return. The engine stops the rule when this object disappears or is replaced.",target.label())
-        } else {
-            user_request
-        };
+        self.generation_enchantment = self.ui.workshop_kind == crate::spell_workshop::Kind::Enchantment;
+        self.generation_original_prompt = Some(user_request.clone());
+        let (kind, user_request) = self.ui.workshop_kind.prepare(&user_request);
         if user_request.len() > crate::rule_sharing::MAX_PROMPT_BYTES {
             self.notify_important(
                 "Shorten this prompt slightly to leave room for the attachment context.".into(),
             );
             return;
         }
-        if kind == PromptKind::Rule
+        if kind == PromptKind::Rule && !self.generation_enchantment
             && self.player.crafting.mana
                 < self
                     .crafting_registry
@@ -3920,7 +3898,7 @@ impl App {
         let message = if !approve {
             "Host rejected the guest rule proposal.".to_string()
         } else {
-            let charge = !pending.module.is_instant;
+            let charge = !pending.module.is_instant && !crate::spellbook::is_enchantment_source(&pending.module.source);
             let mut charged = self.guest_accounts.get(&pending.account_key).cloned();
             if charge {
                 let Some(ref mut account) = charged else {
@@ -4011,6 +3989,7 @@ impl App {
         let validation_issues = world_api_validate::validate_source(&code);
         let load_result = if validation_issues.is_empty() {
             let tagged_code = world_api_validate::tag_with_api_version(&code);
+            let tagged_code = if self.generation_enchantment { format!("{tagged_code}\n{}", crate::spellbook::ENCHANTMENT_TAG) } else { tagged_code };
             Module::load(
                 name.clone(),
                 self.generation_original_prompt
@@ -4078,8 +4057,8 @@ impl App {
                         &client.socket,
                         client.server_addr,
                         ReliableMsg::RuleProposal {
-                            prompt: user_request,
-                            source: code,
+                            prompt: module.prompt.clone(),
+                            source: module.source.clone(),
                         },
                     );
                     self.proposal_waiting = Some(Instant::now());
@@ -4094,7 +4073,7 @@ impl App {
                 }
                 let is_instant = module.is_instant;
                 let mut charged = self.player.crafting.clone();
-                if !is_instant {
+                if !is_instant && !self.generation_enchantment {
                     if let Err(error) = charged.spend_mana(
                         self.crafting_registry
                             .mana_charge(crate::crafting::RULE_MANA),
@@ -4112,19 +4091,16 @@ impl App {
                     }
                 };
                 self.last_generated_index = Some(idx);
-                if !is_instant {
-                    self.scripting.modules[idx].attachment_candidate =
-                        self.generation_attachment.take();
-                }
-                if !is_instant {
+
+                if !is_instant && !self.generation_enchantment {
                     self.player.crafting = charged;
                 }
                 let (label, action) = if is_instant {
                     ("spell", "click Run to cast it")
-                } else if self.scripting.modules[idx].attachment_candidate.is_some() {
+                } else if self.generation_enchantment {
                     (
                         "enchantment",
-                        "review the target and click Enchant + enable",
+                        "click Remember, assign to the hotbar, then aim and left-click",
                     )
                 } else {
                     ("rule", "click Enable to activate it")
@@ -4732,7 +4708,16 @@ impl App {
 
     fn spellbook_action(&mut self, action: crate::spellbook_ui::Action) {
         use crate::spellbook_ui::Action;
+        if let Action::Assign(id, slot) = action {
+            self.ui.spellbook.selected = Some(id);
+            self.assign_selected_spell_to_hotbar(slot);
+            return;
+        }
         if let Action::Cast(id) = action {
+            if self.scripting.spellbook.get(id).is_some_and(|s| !s.can_run_directly()) {
+                self.ui.spellbook.feedback = "Assign this enchantment to the hotbar, then aim and left-click.".into();
+                return;
+            }
             self.cast_remembered_spell(id);
             return;
         }
@@ -4799,7 +4784,7 @@ impl App {
                 self.cast_remembered_spell(id);
                 return;
             }
-            Action::Transfer(_, _) => unreachable!(),
+            Action::Transfer(_, _) | Action::Assign(_, _) => unreachable!(),
         };
         self.ui.spellbook.feedback = result.unwrap_or_else(|error| error);
         self.publish_spell_catalog();
@@ -4808,6 +4793,10 @@ impl App {
     fn cast_remembered_spell(&mut self, id: crate::spellbook::SpellId) {
         if !matches!(self.net, NetRole::Host(_)) {
             self.request_guest_spell(id);
+            return;
+        }
+        if self.scripting.spellbook.get(id).is_some_and(|s| !s.can_run_directly()) {
+            self.cast_host_enchantment(id);
             return;
         }
         let result = (|| -> Result<(usize, crate::spellbook::Spell), String> {
@@ -4983,6 +4972,8 @@ impl App {
                 });
             }
             let snapshot = UnreliableMsg::Snapshot {
+                world_revision: self.world.identity.revision,
+                creature_targets: self.creatures.targeting_snapshot(),
                 loot: self.loot.drops.clone(),
                 allow_guest_prompting: self.ui.settings.values.multiplayer.allow_guest_prompting,
                 time_of_day: self.time_of_day,
@@ -5540,6 +5531,8 @@ impl App {
             }
             Packet::Ack { id } => client.reliable.ack(id, client.server_addr),
             Packet::Unreliable(UnreliableMsg::Snapshot {
+                world_revision,
+                creature_targets,
                 loot,
                 allow_guest_prompting,
                 time_of_day,
@@ -5548,6 +5541,8 @@ impl App {
                 creatures,
                 creature_vitals,
             }) => {
+                self.spell_network.world_revision = world_revision;
+                self.spell_network.creature_targets = creature_targets;
                 self.time_of_day = time_of_day;
                 self.weather.current = Weather::from_u8(weather);
                 let NetRole::Joined(client) = &mut self.net else {
@@ -6113,6 +6108,14 @@ impl App {
             && !self.ui.automation.tools_suspended()
             && self.ui.settings.values.gameplay.show_block_target
         {
+            if let Some(crate::equipment::Entry::Spell(_)) = self.player.crafting.hotbar.entry() {
+                self.aimed_spell_context().and_then(|context| {
+                    if let crate::spell_target::Target::Block { .. } = context.target {
+                        raycast(&self.world, cam_pos, self.camera.forward(), crate::spell_target::CAST_RANGE)
+                            .map(|hit| (hit, self.ui.spell_hud.as_ref().is_some_and(|(_, ready)| *ready), false))
+                    } else { None }
+                })
+            } else {
             raycast(&self.world, cam_pos, self.camera.forward(), REACH).map(|hit| {
                 let breakable = crate::equipment::can_mine(
                     self.player.crafting.hotbar.entry(),
@@ -6153,6 +6156,7 @@ impl App {
                 );
                 (hit, breakable, placeable)
             })
+            }
         } else {
             None
         };

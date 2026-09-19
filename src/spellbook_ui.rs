@@ -30,7 +30,7 @@ fn card(ui: &mut egui::Ui, spell: &crate::spellbook::Spell, selected: bool, mana
     crate::spell_art::image(&mut child, spell.artwork(), Vec2::splat(100.0));
     let p = ui.painter();
     p.rect_stroke(art, 3.0, egui::Stroke::new(1.0_f32, gold));
-    let kind = if spell.target == TargetRequirement::Optional { "INSTANT" } else { "ENCHANTMENT" };
+    let kind = spell.spell_type.label();
     p.text(rect.min + egui::vec2(9.0, 145.0), egui::Align2::LEFT_TOP, kind, egui::FontId::proportional(10.0), tint);
     let mut job = egui::text::LayoutJob::simple(spell.description.clone(), egui::FontId::proportional(12.0), Color32::from_rgb(235, 225, 201), width - 18.0);
     job.wrap.max_rows = 3;
@@ -39,16 +39,16 @@ fn card(ui: &mut egui::Ui, spell: &crate::spellbook::Spell, selected: bool, mana
     let button_rect = egui::Rect::from_min_size(rect.min + egui::vec2(8.0, height - 32.0), egui::vec2(width - 16.0, 24.0));
     let button = ui.interact(button_rect, response.id.with("cast"), egui::Sense::click());
     p.rect_filled(button_rect, 3.0, if button.hovered() { Color32::from_rgb(41, 76, 106) } else { Color32::from_rgb(25, 46, 69) });
-    p.text(button_rect.center(), egui::Align2::CENTER_CENTER, if spell.target == TargetRequirement::Optional { "▶  Run" } else { "Target" }, egui::FontId::proportional(13.0), Color32::WHITE);
+    p.text(button_rect.center(), egui::Align2::CENTER_CENTER, if spell.can_run_directly() { "▶  Run" } else { "Use from hotbar" }, egui::FontId::proportional(13.0), Color32::WHITE);
     (response.on_hover_text(format!("{}\n{} mana", spell.name, if mana_free { 0 } else { spell.mana_cost })), false)
 }
 
-pub enum Action { GenerateQuote(SpellId), SetQuote(SpellId, u32, String), Update(SpellId, String, TargetRequirement), Duplicate(SpellId), Delete(SpellId), Cast(SpellId), AllowGuests(SpellId, bool), Transfer(SpellId, String) }
+pub enum Action { Assign(SpellId, usize), GenerateQuote(SpellId), SetQuote(SpellId, u32, String), Update(SpellId, String, TargetRequirement), Duplicate(SpellId), Delete(SpellId), Cast(SpellId), AllowGuests(SpellId, bool), Transfer(SpellId, String) }
 
 #[derive(Default)]
 pub struct Panel {
     pub open: bool, pub selected: Option<SpellId>, search: String, filter: String,
-    name: String, target: TargetRequirement,
+    name: String, target: TargetRequirement, editing_id: Option<SpellId>,
     pub feedback: String, trade_target: String, quote_job: Option<QuoteJob>, view_code: Option<SpellId>,
 }
 struct QuoteJob { id: SpellId, revision: u32, receiver: std::sync::mpsc::Receiver<Result<String, String>> }
@@ -71,29 +71,36 @@ impl Panel {
     }
     pub fn draw(&mut self, ctx: &egui::Context, book: &Spellbook, is_host: bool, mana_free: bool) -> Option<Action> {
         if !self.open { return None; }
+        if self.editing_id != self.selected {
+            if let Some(spell) = self.selected.and_then(|id| book.get(id)) {
+                self.name = spell.name.clone(); self.target = spell.target;
+            }
+            self.editing_id = self.selected;
+        }
         let mut open = true; let mut close_requested = false; let mut action = None; let screen = ctx.screen_rect();
         egui::Window::new("Spellbook").open(&mut open).anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .fixed_size(egui::vec2((screen.width() - 36.0).min(1320.0), (screen.height() - 36.0).min(860.0))).resizable(false).collapsible(false).show(ctx, |ui| {
             ui.visuals_mut().override_text_color = Some(Color32::from_rgb(235, 226, 207));
             ui.horizontal(|ui| { ui.label(RichText::new("SPELLBOOK").size(27.0).strong().color(GOLD)); ui.label("Your collection of spells. Remember, organize and use them to shape the world."); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { if ui.small_button("×").clicked() { close_requested = true; } ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("Search spells...").desired_width(220.0)); }); });
             ui.separator();
-            let count = |kind: &str| book.spells.iter().filter(|s| kind == "All" || (kind == "Instant" && s.target == TargetRequirement::Optional) || (kind != "Instant" && s.target != TargetRequirement::Optional)).count();
-            ui.horizontal(|ui| { for kind in ["All", "Instant", "Persistent", "Attached"] { if ui.selectable_label(self.filter == kind || (self.filter.is_empty() && kind == "All"), format!("{} ({})", kind, count(kind))).clicked() { self.filter = kind.into(); } } });
+            let count = |kind: &str| book.spells.iter().filter(|s| kind == "All" || (kind == "Instant" && s.can_run_directly()) || (kind != "Instant" && !s.can_run_directly())).count();
+            ui.horizontal(|ui| { for kind in ["All", "Instant", "Enchantment"] { if ui.selectable_label(self.filter == kind || (self.filter.is_empty() && kind == "All"), format!("{} ({})", kind, count(kind))).clicked() { self.filter = kind.into(); } } });
             let query = self.search.to_lowercase(); let filter = if self.filter.is_empty() { "All" } else { self.filter.as_str() };
-            let visible: Vec<_> = book.spells.iter().filter(|spell| { let text_match = query.is_empty() || format!("{} {} {}", spell.name, spell.description, spell.original_prompt).to_lowercase().contains(&query); let type_match = filter == "All" || (filter == "Instant" && spell.target == TargetRequirement::Optional) || (filter != "Instant" && filter != "All" && spell.target != TargetRequirement::Optional); text_match && type_match }).collect();
+            let visible: Vec<_> = book.spells.iter().filter(|spell| { let text_match = query.is_empty() || format!("{} {} {}", spell.name, spell.description, spell.original_prompt).to_lowercase().contains(&query); let type_match = filter == "All" || (filter == "Instant" && spell.can_run_directly()) || (filter != "Instant" && filter != "All" && !spell.can_run_directly()); text_match && type_match }).collect();
             ui.columns(2, |columns| {
-                egui::ScrollArea::vertical().id_source("spell_card_grid").auto_shrink([false, false]).show(&mut columns[0], |ui| { let n = ((ui.available_width() + 10.0) / 190.0).floor().max(1.0) as usize; let w = ((ui.available_width() - 10.0 * (n - 1) as f32) / n as f32).max(150.0); for row in visible.chunks(n) { ui.horizontal(|ui| { ui.spacing_mut().item_spacing.x = 10.0; for spell in row { let (response, delete) = card(ui, spell, self.selected == Some(spell.id), mana_free, w, is_host); if delete { action = Some(Action::Delete(spell.id)); } else if response.clicked() { self.selected = Some(spell.id); } } }); ui.add_space(10.0); } if visible.is_empty() { ui.label(if book.spells.is_empty() { "Your collection awaits its first spell. Generate one in Spell Workshop." } else { "No spells match this search or filter." }); } });
+                egui::ScrollArea::vertical().id_source("spell_card_grid").auto_shrink([false, false]).show(&mut columns[0], |ui| { let n = ((ui.available_width() + 10.0) / 190.0).floor().max(1.0) as usize; let w = ((ui.available_width() - 10.0 * (n - 1) as f32) / n as f32).max(150.0); for row in visible.chunks(n) { ui.horizontal(|ui| { ui.spacing_mut().item_spacing.x = 10.0; for spell in row { let (response, delete) = card(ui, spell, self.selected == Some(spell.id), mana_free, w, is_host); if delete { action = Some(Action::Delete(spell.id)); } else if response.clicked() { self.selected = Some(spell.id); self.name = spell.name.clone(); self.target = spell.target; } } }); ui.add_space(10.0); } if visible.is_empty() { ui.label(if book.spells.is_empty() { "Your collection awaits its first spell. Generate one in Spell Workshop." } else { "No spells match this search or filter." }); } });
                 egui::ScrollArea::vertical().id_source("spell_detail").auto_shrink([false, false]).show(&mut columns[1], |ui| {
                     if let Some(spell) = self.selected.and_then(|id| book.get(id)) { panel().show(ui, |ui| {
-                        ui.horizontal(|ui| { crate::spell_art::image(ui, spell.artwork(), Vec2::splat(150.0)); ui.vertical(|ui| { ui.heading(RichText::new(&spell.name).color(GOLD)); ui.colored_label(if spell.target == TargetRequirement::Optional { Color32::from_rgb(164, 239, 170) } else { Color32::LIGHT_BLUE }, if spell.target == TargetRequirement::Optional { "INSTANT" } else { "ENCHANTMENT" }); ui.label(format!("Mana cost  {}", if mana_free { 0 } else { spell.mana_cost })); if spell.ready() && ui.button("▶  Run spell").clicked() { action = Some(Action::Cast(spell.id)); } if spell.target != TargetRequirement::Optional { let _ = ui.button("Target"); } }); });
-                        if !spell.flavor_quote.is_empty() { ui.label(RichText::new(format!("“{}”", spell.flavor_quote)).italics()); } ui.separator(); ui.label(&spell.description);
+                        ui.horizontal(|ui| { crate::spell_art::image(ui, spell.artwork(), Vec2::splat(150.0)); ui.vertical(|ui| { ui.heading(RichText::new(&spell.name).color(GOLD)); ui.colored_label(if spell.can_run_directly() { Color32::from_rgb(164, 239, 170) } else { Color32::LIGHT_BLUE }, if spell.can_run_directly() { "INSTANT" } else { "ENCHANTMENT" }); ui.label(format!("Mana cost  {}", if mana_free { 0 } else { spell.mana_cost })); if spell.ready() && spell.can_run_directly() && ui.button("▶  Run spell").clicked() { action = Some(Action::Cast(spell.id)); } if !spell.can_run_directly() { ui.label("Aim and left-click from the hotbar"); } }); });
+                        if !spell.flavor_quote.is_empty() { ui.label(RichText::new(format!("“{}”", spell.flavor_quote)).italics()); } ui.separator(); ui.label(&spell.description); ui.label(format!("Targets: {}", spell.target_label())); ui.small("Press 1-9 or click a slot to assign; repeat to remove. Assigning replaces that slot."); ui.horizontal_wrapped(|ui| { for slot in 0..9 { if ui.add_enabled(spell.ready(), egui::Button::new((slot+1).to_string())).clicked() { action = Some(Action::Assign(spell.id, slot)); } } });
                         ui.collapsing("Original Prompt", |ui| { ui.label(&spell.original_prompt); });
                         ui.collapsing("Advanced Info", |ui| { ui.label(format!("Spell ID: {}  ·  Revision {}  ·  Author: {}  ·  API {}", spell.id, spell.revision, spell.author, spell.api_version)); match &spell.validation { Validation::Ready { checked_api } => { ui.colored_label(Color32::LIGHT_GREEN, format!("Validated against API {checked_api}")); }, Validation::Review { reason } => { ui.colored_label(Color32::LIGHT_RED, reason); } } });
                         ui.horizontal_wrapped(|ui| { if ui.button("View Code").clicked() { self.view_code = Some(spell.id); } if is_host && ui.button("Duplicate").clicked() { action = Some(Action::Duplicate(spell.id)); } if is_host && ui.button(RichText::new("Delete").color(Color32::LIGHT_RED)).clicked() { action = Some(Action::Delete(spell.id)); } });
-                        if is_host { ui.collapsing("Manage spell", |ui| { ui.horizontal(|ui| { ui.label("Name"); ui.text_edit_singleline(&mut self.name); }); egui::ComboBox::from_id_source("spell_target_requirement").selected_text(self.target.label()).show_ui(ui, |ui| { for target in [TargetRequirement::Optional, TargetRequirement::Creature, TargetRequirement::Block] { ui.selectable_value(&mut self.target, target, target.label()); } }); if ui.button("Save changes").clicked() { action = Some(Action::Update(spell.id, self.name.clone(), self.target)); } if ui.add_enabled(self.quote_job.is_none(), egui::Button::new("Generate quote (local AI)")).clicked() { action = Some(Action::GenerateQuote(spell.id)); } let mut allowed = spell.allow_guests; if ui.checkbox(&mut allowed, "Allow guests to cast").changed() { action = Some(Action::AllowGuests(spell.id, allowed)); } ui.horizontal(|ui| { ui.label("Give card to"); ui.text_edit_singleline(&mut self.trade_target); if ui.add_enabled(!self.trade_target.trim().is_empty(), egui::Button::new("Give card")).clicked() { action = Some(Action::Transfer(spell.id, self.trade_target.trim().to_owned())); } }); }); }
+                        if is_host { ui.collapsing("Manage spell", |ui| { ui.horizontal(|ui| { ui.label("Name"); ui.text_edit_singleline(&mut self.name); }); egui::ComboBox::from_id_source("spell_target_requirement").selected_text(self.target.label()).show_ui(ui, |ui| { for target in [TargetRequirement::Optional, TargetRequirement::Creature, TargetRequirement::Block, TargetRequirement::Device] { ui.selectable_value(&mut self.target, target, target.label()); } }); if ui.button("Save changes").clicked() { action = Some(Action::Update(spell.id, self.name.clone(), self.target)); } if ui.add_enabled(self.quote_job.is_none(), egui::Button::new("Generate quote (local AI)")).clicked() { action = Some(Action::GenerateQuote(spell.id)); } let mut allowed = spell.allow_guests; if ui.checkbox(&mut allowed, "Allow guests to cast").changed() { action = Some(Action::AllowGuests(spell.id, allowed)); } ui.horizontal(|ui| { ui.label("Give card to"); ui.text_edit_singleline(&mut self.trade_target); if ui.add_enabled(!self.trade_target.trim().is_empty(), egui::Button::new("Give card")).clicked() { action = Some(Action::Transfer(spell.id, self.trade_target.trim().to_owned())); } }); }); }
                     }); } else { ui.centered_and_justified(|ui| { ui.label("Select a spell to inspect its details."); }); }
                 });
             });
+            if !self.feedback.is_empty() { ui.label(&self.feedback); }
             ui.separator(); ui.horizontal(|ui| { ui.label("📖  Tip: Create and manage spells in Spell Workshop."); if ui.button("Open Spell Workshop [~]").clicked() { close_requested = true; } });
         });
         if close_requested { open = false; }

@@ -70,7 +70,7 @@ pub struct UiRequests {
     pub spellbook_action: Option<crate::spellbook_ui::Action>,
     pub open_spellbook: bool,
     pub close_workshop: bool,
-    pub attach_rule: Option<usize>,
+
     pub detach_rule: Option<usize>,
     pub eat_food: Option<crate::voxel::BlockType>,
     pub eat_harvest: Option<String>,
@@ -104,7 +104,7 @@ pub struct Ui {
     pub spell_hud: Option<(String, bool)>,
     pub aimed_object: String,
     pub aimed_enchantments: Vec<String>,
-    pub attach_generation: bool,
+    pub workshop_kind: crate::spell_workshop::Kind,
     pub compass_yaw: f32,
     pub machine_compass: [Option<egui::Pos2>; 5],
     pub journal: crate::adventure_ui::Journal,
@@ -165,7 +165,7 @@ impl Ui {
             spell_hud: None,
             aimed_object: String::new(),
             aimed_enchantments: Vec::new(),
-            attach_generation: false,
+            workshop_kind: Default::default(),
             pickup_rows: Vec::new(),
             journal: Default::default(),
             campfire: Default::default(),
@@ -367,7 +367,7 @@ impl Ui {
             if !console_open {
                 requests.select_slot=crate::equipment_ui::hotbar_with_spells(ctx,&player.crafting,self.inventory_open || self.spellbook.open,self.inventory_open || self.spellbook.open || Instant::now()<self.selected_until,self.automation.tools_suspended(),&scripting.spellbook);
             }
-            if !self.inventory_open && !self.automation.tools_suspended() {
+            if !self.inventory_open && !self.spellbook.open && !console_open && !chat_open && !quit_dialog_open && !crafting_ui.open && !self.automation.tools_suspended() {
                 if let Some((text,ready))=&self.spell_hud {
                     crate::equipment_ui::spell_hud(ctx,text,*ready);
                 }
@@ -481,8 +481,8 @@ impl Ui {
             }
 
             if console_open {
-                crate::spell_workshop::draw(ctx, prompt_input, &mut self.attach_generation,
-                    &self.aimed_object, is_host, can_prompt, scripting, recent_index,
+                crate::spell_workshop::draw(ctx, prompt_input, &mut self.workshop_kind,
+                    is_host, can_prompt, scripting, recent_index,
                     generation_status, registry, &mut viewing_index, &mut self.workshop_selected, &mut requests);
             }
             if quit_dialog_open {

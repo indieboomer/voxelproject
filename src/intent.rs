@@ -603,6 +603,8 @@ fn smoke_code_with_attachment(
         host.attach_at(
             0,
             Binding {
+                source_spell: None,
+                owner: String::new(),
                 id: 1,
                 creator: 0,
                 target: reference,

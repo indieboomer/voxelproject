@@ -318,23 +318,20 @@ These semantics must be shown before activation.
 
 ## Creation and review UI
 
-When opening the prompt console while targeting an object, the UI should display a target card:
+The object-first creation flow is superseded by reusable Enchantment spells.
+Workshop generation selects a spell type and needs no world target. Remember
+saves the definition to Spellbook without activating a rule. Neither panel offers
+Run for Enchantments. Assign the card to a hotbar slot, then aim and left-click;
+the host validates the cast and creates a separate persistent instance.
 
-> **Target: Sheep #1842**
-> Health: 73/100
-> Distance: 4.2 m
-> Existing enchantments: 2
-
-After interpretation, the review panel should state:
-
-> **Persistent rule attached to Sheep #1842**
-> While it is raining, this sheep follows the rule’s creator.
-> The effect ends when the rain stops.
-> If the sheep dies, the rule becomes inactive.
+The Workshop and Spellbook show target requirements. A concrete target card and
+readiness feedback belong to aimed gameplay, not generation. Each instance keeps
+its source spell/version, owner and durable target; template edits do not silently
+revise earlier instances. See [current behavior and acceptance checks](docs/ENCHANTMENTS.md).
 
 The player should be able to:
 
-* apply the rule;
+* cast the remembered template on a target from the hotbar;
 * preview its expected effect;
 * edit parameters;
 * inspect the generated code;

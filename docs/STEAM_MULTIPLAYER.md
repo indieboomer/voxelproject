@@ -7,9 +7,13 @@ Steam support uses **test App ID 480 (Spacewar)** by default. Up to four players
 
 ## Implementation plan and status
 
-The hunger update uses protocol **48** (previously 47) to include fullness in
-player snapshots. Update both host and guests for Direct/LAN and Steam sessions;
-mixed protocol versions cannot join. See [hunger and eating](HUNGER.md).
+Targeted Enchantment spells now use protocol **49**, adding spell type, stable
+creature picking IDs and cast identity checks. Both host and guests need this
+build. See [Enchantment multiplayer and manual checks](ENCHANTMENTS.md#multiplayer).
+
+The earlier hunger update introduced fullness in player snapshots with protocol
+48; protocol 49 retains it. Mixed protocol versions cannot join. See
+[hunger and eating](HUNGER.md).
 
 1. Preserve gameplay behind a transport interface: implemented. Direct UDP and Steam share the existing authoritative host, snapshots, block changes, crafting, Lua effects and chat protocol.
 2. Add Steam identity and session discovery: implemented with optional `steamworks` 0.13.1, friends-only four-member lobbies, lobby codes, native invite overlay and Steam invite callbacks.

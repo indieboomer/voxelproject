@@ -93,3 +93,8 @@ The Multiplayer section now selects Direct / LAN or Steam friends for the next s
 ## Hotbar and targeting
 
 See [inventory and hotbar](inventory.md) for the nine-slot hotbar, I inventory assignment panel, tool requirements and multiplayer persistence. Settings > Gameplay > Show block targeting outlines toggles the local gold/green/red target previews.
+
+Spell slots use a green ready reticle or orange blocked reticle with a short
+reason. Enchantments target objects within 18 blocks; block outlines use cast
+readiness instead of tool-mining eligibility. Workshop creation needs no target.
+See [Enchantment spells](ENCHANTMENTS.md) for assignment and casting controls.

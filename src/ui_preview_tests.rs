@@ -190,7 +190,7 @@ fn render_ui_previews() {
             let mut spellbook = crate::spellbook::Spellbook::default();
             let mut workshop = crate::scripting::ScriptHost::new();
             let mut workshop_prompt = "Make bluebells grow around this tree when it rains, and slowly disappear when it is dry.".to_string();
-            let mut workshop_enchant = true;
+            let mut workshop_enchant = crate::spell_workshop::Kind::Enchantment;
             let mut workshop_viewing = None;
             let mut workshop_selected = None;
             if panel == "spell_workshop" {
@@ -207,10 +207,7 @@ fn render_ui_previews() {
                     let module = crate::scripting::Module::load(name.into(), prompt.into(), source.into()).unwrap();
                     workshop.modules.push(module);
                 }
-                workshop.modules.last_mut().unwrap().attachment_candidate = Some(crate::enchantment::Reference {
-                    world_id: "preview".into(), world_revision: 0,
-                    object: crate::enchantment::Object::Block { cell: (-5, 30, 3), material: crate::voxel::BlockType::OakWood, generation: 0 },
-                });
+                *workshop.modules.last_mut().unwrap() = crate::scripting::Module::load("Growing Ward".into(), "Heal creatures near the enchanted block in rain".into(), format!("{}\n-- spell_type: enchantment\n-- spell_target: block", include_str!("../modules/attached_block_ward.lua"))).unwrap();
             }
             let mut spell_panel = crate::spellbook_ui::Panel::default();
             if matches!(
@@ -239,7 +236,9 @@ fn render_ui_previews() {
                             include_str!("../modules/target_heal.lua").into(),
                         )
                         .unwrap();
-                        spellbook.remember(&module, "Host").unwrap();
+                        let module = if name == "Winter Ward" { crate::scripting::Module::load(name.into(), prompt.into(), format!("{}\n-- spell_type: enchantment\n-- spell_target: creature", include_str!("../modules/attached_crystal_follower.lua"))).unwrap() } else { module };
+                        let id = spellbook.remember(&module, "Host").unwrap();
+                        if name == "Winter Ward" { spell_panel.selected = Some(id); }
                     }
                     for (spell, quote) in spellbook.spells.iter_mut().zip([
                         "Even broken things remember the shape of hope.",
@@ -306,7 +305,7 @@ fn render_ui_previews() {
                         }
                         if panel == "spell_workshop" {
                             crate::spell_workshop::draw(ctx, &mut workshop_prompt, &mut workshop_enchant,
-                                "Oak tree · -5, 30, 3", true, true, &workshop, Some(5),
+                                true, true, &workshop, Some(5),
                                 Some("Generating spell code..."), &registry, &mut workshop_viewing, &mut workshop_selected,
                                 &mut crate::ui::UiRequests::default());
                         }

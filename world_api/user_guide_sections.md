@@ -6,16 +6,28 @@ write a module yourself. A rule changes what happens over time; an instant
 spell performs an action when run. You do not need to learn every method to
 start: choose a concrete outcome, review the generated behavior, and test it.
 
-1. Open the Rule Console with the backquote/tilde key, describe your request,
-   and submit it with Enter. State whether it should happen once or repeatedly.
+1. Open Spell Workshop with the backquote/tilde key, describe your request,
+   choose a spell type, and click **Generate Spell** or press **Ctrl+Enter**.
 2. Read the interpretation and any generation/validation feedback. Unsupported
    requirements should be clarified rather than silently replaced with a smaller effect.
-3. In the Rules panel, use **View Code** to inspect the result. Generated modules
+3. In Spell Workshop, use **View Code** to inspect the result. Generated modules
    are not automatically active.
 4. The host clicks **Enable** for a continuing rule or **Run** for an instant
    spell. **Disable** stops future rule callbacks; **Delete** removes the module.
 5. Test the trigger, the effect, and what happens when the condition ends.
    Save with **F5** when you want to retain the world and its modules.
+
+For **Enchantment**, no object is selected during generation. Choose **Remember**
+to store the reusable definition in Spellbook (`K`), assign it with **1–9** or a
+numbered slot button, close the panel, aim at a valid object within **18 blocks**,
+and **left-click**. There is no Enchantment **Run** action in either panel.
+Remembering and assigning do not activate behavior. Each successful hotbar cast
+creates its own persistent attachment, with source spell/version, owner and target;
+later edits to the template leave earlier instances unchanged. Templates are free
+to generate/remember; each attachment uses the existing 20-mana rule fee and
+1.5-second spell cooldown. Invalid casts cost nothing. Guests need the spell card
+and host casting permission. See [the Enchantment player guide](../docs/ENCHANTMENTS.md)
+for target categories, save compatibility and multiplayer checks.
 
 The host controls activation and the authoritative world. When the host enables
 guest prompting, a guest with local generation available can submit a proposal.

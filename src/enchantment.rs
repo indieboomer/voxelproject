@@ -1,4 +1,7 @@
 //! Persistent single-object bindings. Object replacement never silently retargets a rule.
+#[cfg(test)]
+#[path = "enchantment_spell_tests.rs"]
+mod spell_tests;
 use crate::{
     creature::Creatures,
     spell_target::Target,
@@ -206,6 +209,12 @@ fn loaded(world: &World, cell: Cell) -> bool {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Binding {
+    /// Absent on legacy object-first enchantments.
+    #[serde(default)]
+    pub source_spell: Option<(crate::spellbook::SpellId, u32)>,
+    /// Stable account identity; creator retains the original runtime player ID.
+    #[serde(default)]
+    pub owner: String,
     pub id: u64,
     pub creator: u32,
     pub target: Reference,
@@ -221,6 +230,98 @@ pub struct Summary {
     pub target: Reference,
     pub name: String,
     pub status: String,
+}
+
+pub struct Cast {
+    pub spell_id: crate::spellbook::SpellId,
+    pub caster_id: u32,
+    pub owner: String,
+    pub eye: glam::Vec3,
+    pub alive: bool,
+    pub guest: bool,
+    pub context: Option<crate::spell_target::TargetContext>,
+}
+
+impl crate::scripting::ScriptHost {
+    pub fn refresh_enchantment_owners(&mut self, connected: impl Fn(&str) -> Option<u32>) {
+        for binding in self
+            .modules
+            .iter_mut()
+            .filter_map(|m| m.attachment.as_mut())
+        {
+            if !binding.owner.is_empty() {
+                // Never let a reused connection ID impersonate a disconnected owner.
+                binding.creator = connected(&binding.owner).unwrap_or(u32::MAX);
+            }
+        }
+    }
+    /// Resolve a trusted template and commit one independent instance. No client
+    /// source is accepted, and all fallible validation precedes resource changes.
+    pub fn cast_enchantment(
+        &mut self,
+        world: &mut World,
+        creatures: &Creatures,
+        account: &mut crate::crafting::Account,
+        registry: &crate::crafting::Registry,
+        cast: Cast,
+    ) -> Result<Reference, String> {
+        use crate::{equipment::Entry, spellbook::SpellType};
+        let spell = self
+            .spellbook
+            .get(cast.spell_id)
+            .ok_or("Spell no longer exists")?;
+        if !spell.ready() || spell.spell_type != SpellType::Enchantment {
+            return Err("Choose a validated Enchantment spell".into());
+        }
+        if !cast.alive {
+            return Err("Defeated players cannot cast".into());
+        }
+        if (cast.guest && !spell.allow_guests) || !account.has_spell_card(spell.id) {
+            return Err("Not allowed: you need this spell card and casting permission".into());
+        }
+        if account.hotbar.entry() != Some(Entry::Spell(spell.id)) {
+            return Err("Select this enchantment in the hotbar before casting".into());
+        }
+        if !self.can_cast_immediately() {
+            return Err("Rules are busy; try again".into());
+        }
+        let context = cast
+            .context
+            .ok_or("No target within 18 blocks")?
+            .validate(world, creatures, cast.eye)?;
+        if !spell.accepts_target(world, Some(context.target)) {
+            return Err(format!("Invalid target: requires {}", spell.target_label()));
+        }
+        let cost = registry.mana_charge(spell.mana_cost);
+        if account.mana < cost {
+            return Err(format!("Not enough mana: needs {cost}"));
+        }
+        if self.modules.len() >= crate::world_api_gen::SCRIPT_MODULES_MAX {
+            return Err("World rule limit reached; remove an unused rule first".into());
+        }
+        let mut module = spell.compiled()?;
+        let id = world.identity.next_creation.max(1);
+        let next = id.checked_add(1).ok_or("Creation ID limit reached")?;
+        let reference = Reference::capture(world, creatures, context.target)?;
+        if !reference.available(world, creatures)? {
+            return Err("Target is unloaded".into());
+        }
+        module.attachment = Some(Binding {
+            id,
+            creator: cast.caster_id,
+            owner: cast.owner,
+            source_spell: Some((spell.id, spell.revision)),
+            target: reference.clone(),
+            lost: None,
+        });
+        module.enabled = true;
+        self.modules.push(module);
+        world.identity.next_creation = next;
+        world.identity.revision = world.identity.revision.saturating_add(1);
+        account.mana -= cost;
+        account.revision = account.revision.saturating_add(1);
+        Ok(reference)
+    }
 }
 
 pub fn hud(ctx: &egui::Context, target: &str, rules: &[String]) {
@@ -271,6 +372,8 @@ mod tests {
         host.attach_at(
             0,
             Binding {
+                source_spell: None,
+                owner: String::new(),
                 id: 1,
                 creator: 0,
                 target: reference,
@@ -482,6 +585,8 @@ mod tests {
         host.attach_at(
             1,
             Binding {
+                source_spell: None,
+                owner: String::new(),
                 id: 1,
                 creator: 0,
                 target: reference,

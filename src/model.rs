@@ -1489,7 +1489,11 @@ mod tests {
                     .get(animation.name())
                     .expect("required player animation");
                 if let Some(duration) = animation.duration() {
-                    assert!((clip.duration - duration).abs() < 0.001);
+                    assert!(
+                        (clip.duration - duration).abs() < 0.001,
+                        "player {index} {animation:?}: asset duration {} != runtime {duration}",
+                        clip.duration
+                    );
                 }
                 let mut positions = Vec::new();
                 for time in [0.0, clip.duration * 0.3, clip.duration * 0.6] {

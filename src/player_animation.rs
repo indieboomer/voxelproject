@@ -34,7 +34,7 @@ impl Clip {
         match self {
             Self::Attack => Some(0.9),
             Self::Work | Self::Jump => Some(1.2),
-            Self::Hello => Some(1.5),
+            Self::Hello => Some(2.2),
             Self::Dance => Some(3.2),
             Self::Angry => Some(2.0),
             _ => None,

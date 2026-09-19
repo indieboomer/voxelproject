@@ -292,9 +292,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Hemisphere fill and a subtle warm ground bounce give normals shape
     // without irradiance probes. AO mainly occludes indirect illumination.
     let hemisphere = shading_normal.y * 0.5 + 0.5;
-    let fill_tint = mix(vec3<f32>(1.02, 0.96, 0.88), vec3<f32>(0.94, 0.98, 1.04), hemisphere);
+    let golden_hour = (1.0 - smoothstep(0.0, 0.4, camera.sun_dir.w))
+        * smoothstep(-0.2, 0.0, camera.sun_dir.w);
+    let fill_tint = mix(vec3<f32>(1.02, 0.96, 0.88), vec3<f32>(0.94, 0.98, 1.04), hemisphere)
+        * mix(vec3<f32>(1.0), vec3<f32>(1.12, 0.94, 0.76), golden_hour);
     let fill = fill_tint * ambient * mix(0.65, 1.15, hemisphere) * in.ao;
-    let sun_tint = mix(vec3<f32>(1.0, 0.79, 0.60), vec3<f32>(1.0, 0.98, 0.93), smoothstep(0.0, 0.45, camera.sun_dir.w));
+    let sun_tint = mix(vec3<f32>(1.0, 0.98, 0.93), vec3<f32>(1.0, 0.62, 0.24), golden_hour);
     let direct = sun_tint * sun_intensity * ndotl * shadow * mix(0.8, 1.0, in.ao);
     var local_light=vec3<f32>(0.0);
     var local_specular=vec3<f32>(0.0);

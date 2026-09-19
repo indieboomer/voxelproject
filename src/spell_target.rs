@@ -7,6 +7,16 @@ use glam::Vec3;
 
 pub const CAST_RANGE: f32 = 18.0;
 
+/// Read-only picking data. Clients need authoritative creature IDs, not just
+/// anonymous render positions; the host still repeats every pick on cast.
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub struct CreatureBody {
+    pub id: u32,
+    pub kind: u8,
+    pub position: [f32; 3],
+    pub facing: f32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Target {
     Creature {
@@ -36,6 +46,41 @@ impl TargetContext {
         origin: Vec3,
         facing: Vec3,
     ) -> Option<Self> {
+        Self::resolve_using(world, origin, facing, |dir| {
+            creatures.aimed_body(world, origin, dir, CAST_RANGE)
+        })
+    }
+
+    pub fn resolve_replica(
+        world: &World,
+        bodies: &[CreatureBody],
+        origin: Vec3,
+        facing: Vec3,
+    ) -> Option<Self> {
+        Self::resolve_using(world, origin, facing, |dir| {
+            crate::creature::aimed_bodies(
+                world,
+                origin,
+                dir,
+                CAST_RANGE,
+                bodies.iter().map(|body| {
+                    (
+                        body.id,
+                        crate::creature::CreatureKind::from_u8(body.kind),
+                        Vec3::from_array(body.position),
+                        body.facing,
+                    )
+                }),
+            )
+        })
+    }
+
+    fn resolve_using(
+        world: &World,
+        origin: Vec3,
+        facing: Vec3,
+        pick: impl FnOnce(Vec3) -> Option<(u32, f32)>,
+    ) -> Option<Self> {
         if !origin.is_finite() || origin.abs().max_element() > 1_000_000.0 || !facing.is_finite() {
             return None;
         }
@@ -43,7 +88,7 @@ impl TargetContext {
         if facing == Vec3::ZERO {
             return None;
         }
-        if let Some((id, distance)) = creatures.aimed_body(world, origin, facing, CAST_RANGE) {
+        if let Some((id, distance)) = pick(facing) {
             if !loaded_path(world, origin, facing, distance) {
                 return None;
             }

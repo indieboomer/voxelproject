@@ -1,5 +1,20 @@
 # Lighting and surface weather
 
+## Square sun and halo
+
+The sun has a softly edged square core, a warm glow around its edges and a wider
+atmospheric halo. Its orientation follows world up rather than camera rotation.
+The sky shader keeps the existing cloud occlusion and dawn/dusk fading; the halo
+requires no extra render pass or texture.
+
+Near the horizon the square grows smoothly to 140% of its daytime width and
+turns orange, with a warmer halo. Low-angle sunlight, reflections and light shafts
+shift toward yellow-orange, with subtle warm ambient fill. Direct light fades to
+zero at the horizon and the warm fill fades out through twilight. The same
+height-based transition applies at sunrise; midday retains its normal colors.
+For a sunset GPU preview, set `VOXEL_PREVIEW_DAYTIME=0.48` and
+`VOXEL_RAYS_PREVIEW=clouds`, then run the weather preview command below.
+
 ## Plant size variation
 
 Cross-mesh plants, flowers and mushrooms have a nominal 0.8-block size with

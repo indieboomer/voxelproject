@@ -42,5 +42,7 @@ struct Varying { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> }
     let radial = 1.0-smoothstep(0.35,1.15,length(in.uv-sun));
     let strength = min(0.6, pow(light/32.0,0.85) * fade * radial * 1.8 * camera.light_params.y
         * (1.0-camera.weather_fx.y*0.75) * (1.0-camera.weather_fx.x));
-    return vec4<f32>(vec3<f32>(1.0,0.87,0.63)*strength,1.0);
+    let golden_hour = 1.0-smoothstep(0.0,0.4,camera.sun_dir.w);
+    let tint = mix(vec3<f32>(1.0,0.87,0.63),vec3<f32>(1.0,0.62,0.24),golden_hour);
+    return vec4<f32>(tint*strength,1.0);
 }

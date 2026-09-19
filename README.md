@@ -8,12 +8,13 @@ language, review generated Lua, and activate it in a shared authoritative world.
 [SPELLCASTING_PLAN.md](SPELLCASTING_PLAN.md) is the active development plan:
 reusable targeted spells, a saved Spellbook, and hotbar casting first; persistent
 object enchantments, owned effects, and revision history second. Targeted host casts
-and the saved Spellbook are implemented, including an inventory Spells column,
+and the saved Spellbook are implemented, including spell-card management,
 host/guest hotbar casting, a casting HUD and replicated particles. Temporary
 slow/stun effects and collision-checked creature pushes extend the spell API. See
 [implementation status](docs/SPELLCASTING.md) for the available flow and limits.
-Phase 2A adds [persistent object enchantments](docs/ENCHANTMENTS.md): attach a rule
-to a creature, block or device, save it, and inspect its status while aiming.
+Phase 2A adds [Enchantment spells](docs/ENCHANTMENTS.md): generate without a target,
+Remember, assign to the hotbar, then aim and left-click to attach an independent
+persistent rule to a creature, block or device. Inspect its status while aiming.
 Owned effects and composition are next (2B).
 
 See [project state](docs/project.md) for implemented systems and remaining

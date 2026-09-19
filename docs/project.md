@@ -7,11 +7,13 @@ casts, persistent Spellbook and hotbar assignment, followed by Phase 2 persisten
 object enchantments, owned effects, revision history and regions.
 
 Existing callback transactions, budgets, interpreted prompting, saved accounts and
-creature IDs are foundations to reuse. Current hotbar entries are resource/equipment
-references; they do not yet reference saved spell IDs. The
+creature IDs are foundations to reuse. Hotbar entries support resources, equipment
+and stable remembered spell IDs. The
 [spellcasting implementation](SPELLCASTING.md) supplies host-targeted creature/block
 casts and a persistent host Spellbook with stable IDs, compatibility checks and
-management controls. Hotbar and guest casting remain pending.
+management controls. Host and guest hotbar casting are implemented. Enchantments
+are now remembered templates cast onto world targets, with independent saved
+instances; see [the Enchantment guide](ENCHANTMENTS.md).
 
 The [older World API roadmap](archive/WORLD_API_ROADMAP.md) is historical. Its
 bulk-construction jobs, blueprints, explicit Lua state, broader events/timers,
@@ -19,8 +21,8 @@ conflict-aware world undo and creation bundles remain proposals to reassess when
 concrete spellcasting stage needs them. Archiving does not mark those items complete.
 The [playtesting plan](PLAYTESTING_PLAN.md) separately retains its unfinished gates.
 
-Compatibility sources of truth are `src/net.rs::PROTOCOL_VERSION` (48 after the
-2026-09-19 hunger update) and `world_api/schema.yaml` (1.37.0). Version
+Compatibility sources of truth are `src/net.rs::PROTOCOL_VERSION` (49 after the
+targeted Enchantment workflow update) and `world_api/schema.yaml` (1.37.0). Version
 numbers in historical implementation results describe those revisions only.
 
 ## Playable systems

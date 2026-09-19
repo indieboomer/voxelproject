@@ -112,6 +112,9 @@ pub fn entry_name(entry: Entry, book: &crate::spellbook::Spellbook) -> &str {
 }
 
 pub fn spell_hud(ctx: &egui::Context, text: &str, ready: bool) {
+    let color = if ready { egui::Color32::LIGHT_GREEN } else { egui::Color32::from_rgb(255, 160, 110) };
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("spell_reticle")));
+    painter.circle_stroke(ctx.screen_rect().center(), 7.0, egui::Stroke::new(1.5_f32, color));
     egui::Area::new(egui::Id::new("spell_cast_hud"))
         .anchor(egui::Align2::CENTER_BOTTOM, [0., -116.])
         .show(ctx, |ui| {

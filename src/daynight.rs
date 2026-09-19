@@ -94,7 +94,9 @@ pub fn sky_lighting(time_of_day: f32) -> SkyLighting {
     // (not pushed all the way to/past 1.0) -- combined with unclamped
     // ambient this is already enough to noticeably brighten highlights
     // without oversaturating flat-lit surfaces like grass.
-    let sun_intensity = sun_height.clamp(0.0, 1.0) * 0.85;
+    // Retain enough low-angle light to illuminate golden-hour surfaces,
+    // while still fading continuously to zero at the horizon.
+    let sun_intensity = sun_height.clamp(0.0, 1.0).powf(0.65) * 0.85;
 
     SkyLighting {
         sun_dir,

@@ -246,7 +246,6 @@ pub struct ModuleSaveEntry {
 pub struct Module {
     pub artwork: crate::spell_art::Recipe,
     pub attachment: Option<crate::enchantment::Binding>,
-    pub attachment_candidate: Option<crate::enchantment::Reference>,
     pub name: String,
     pub prompt: String,
     pub source: String,
@@ -322,7 +321,6 @@ impl Module {
         Ok(Module {
             artwork: crate::spell_art::Recipe::from_source(&source, &prompt),
             attachment: None,
-            attachment_candidate: None,
             name,
             prompt,
             source,
@@ -414,7 +412,6 @@ impl Module {
             replacement.runtime_id = self.runtime_id;
             replacement.activation_epoch = self.activation_epoch;
             replacement.attachment = self.attachment.clone();
-            replacement.attachment_candidate = self.attachment_candidate.clone();
             *self = replacement;
         }
         self.lua.set_app_data(registry);
@@ -768,7 +765,7 @@ impl ScriptHost {
             }
             match Module::load(e.name.clone(), e.prompt.clone(), e.source.clone()) {
                 Ok(mut m) => {
-                    m.enabled = e.enabled;
+                    m.enabled = e.enabled && !crate::spellbook::is_enchantment_source(&m.source);
                     host.modules.push(m);
                 }
                 Err(err) => {
@@ -835,6 +832,9 @@ impl ScriptHost {
     /// notification message, or `None` if the index no longer exists.
     pub fn toggle_at(&mut self, index: usize) -> Option<(String, bool)> {
         let m = self.modules.get_mut(index)?;
+        if m.attachment.is_none() && crate::spellbook::is_enchantment_source(&m.source) {
+            return None;
+        }
         m.enabled = !m.enabled;
         m.activation_epoch = m.activation_epoch.wrapping_add(1);
         self.scheduler.cancel(m.runtime_id);
@@ -862,7 +862,9 @@ impl ScriptHost {
     /// Explicit Rules-panel deletion also removes remembered copies of this module.
     pub fn delete_rule(&mut self, index: usize) -> Option<String> {
         let module = self.modules.get(index)?;
-        self.spellbook.delete_for_module(module);
+        if module.attachment.is_none() {
+            self.spellbook.delete_for_module(module);
+        }
         self.spell_cooldowns
             .retain(|id, _| self.spellbook.get(*id).is_some());
         self.remove(index)
@@ -1060,7 +1062,6 @@ impl ScriptHost {
         if let Some(module) = self.modules.get_mut(index) {
             if module.attachment.take().is_some() {
                 module.enabled = false;
-                module.attachment_candidate = None;
                 module.needs_reload = true;
                 self.scheduler.cancel(module.runtime_id);
             }
@@ -1084,6 +1085,11 @@ impl ScriptHost {
                     module.error = Some("Attachments require a continuous rule".into());
                 }
                 module.attachment = Some(entry.binding);
+                // Template source is deliberately inert when loaded alone; saved
+                // bound instances restore their own activation state separately.
+                if !module.is_instant && module.attachment.as_ref().unwrap().lost.is_none() {
+                    module.enabled = entry.module.enabled;
+                }
                 self.modules.push(module);
             } else {
                 self.unloaded_enchantments.push(entry);
@@ -1356,6 +1362,8 @@ mod tests {
             let eye = player.pos + Vec3::Y * 1.62;
             let context = TargetContext::resolve(&world, &creatures, eye, Vec3::X).unwrap();
             let request = crate::spell_network::Request {
+                device_id: None,
+                world_revision: world.identity.revision,
                 session: 1,
                 sequence: 1,
                 spell: id,
