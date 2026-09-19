@@ -107,6 +107,7 @@ fn resolve_gpu_checks(test_rays: bool) {
             var distance = 0.3;
             if p.x >= 24.0 { distance = 4.0; }
             if p.x >= 32.0 && p.x < 40.0 { distance = 3.5; }
+            if p.x >= 48.0 && p.x < 56.0 { distance = 0.3; }
             o.depth = (400.0 - 0.05 * 400.0 / distance) / (400.0 - 0.05);
             if p.x >= 56.0 { o.depth = 1.0; }
             return o;
@@ -262,15 +263,18 @@ fn resolve_gpu_checks(test_rays: bool) {
         red(&on, 8) >= 100 && red(&on, 8) < 140,
         "near blur visibly softens fine detail"
     );
-    assert!(
-        red(&on, 34) > 0 && red(&on, 34) < red(&on, 8),
-        "smooth near falloff"
-    );
+    for y in 0..16 {
+        for x in 19..45 {
+            let i = (y * 64 + x) * 4;
+            assert_eq!(&on[i..i + 4], &off[i..i + 4], "central pixel {x},{y} stays sharp");
+        }
+    }
+    assert!(red(&on, 51) < red(&off, 51), "right side still blurs near detail");
     assert_eq!(red(&on, 23), 255, "near edge rejects distant black");
     for x in 24..32 {
         assert_eq!(red(&on, x), red(&off, x));
     }
-    for x in 40..64 {
+    for x in (40..48).chain(56..64) {
         assert_eq!(red(&on, x), red(&off, x), "far/sky pixel {x}");
     }
     assert_eq!(

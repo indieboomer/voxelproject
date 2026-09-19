@@ -9,7 +9,7 @@ use crate::voxel::block::BlockType;
 pub type PlayerId = u32;
 pub type WorldEdit = ((i32, i32, i32), BlockType);
 pub const MAX_PLAYERS: usize = 4;
-pub const PROTOCOL_VERSION: u32 = 47;
+pub const PROTOCOL_VERSION: u32 = 48;
 pub const HOST_PLAYER_ID: PlayerId = 0;
 pub const DEFAULT_PORT: u16 = 7878;
 pub const RELIABLE_RESEND_INTERVAL: Duration = Duration::from_millis(200);
@@ -216,6 +216,7 @@ pub struct SnapshotPlayer {
     pub speed_multiplier: f32,
     pub jump_multiplier: f32,
     pub oxygen: f32,
+    pub satiety: f32,
 }
 
 /// Best-effort messages sent every tick; a dropped one is superseded by the
@@ -561,6 +562,7 @@ mod tests {
             speed_multiplier: 1.5,
             jump_multiplier: 0.8,
             oxygen: 42.0,
+            satiety: 7.0,
         };
         let packet = Packet::Unreliable(UnreliableMsg::Snapshot {
             creature_vitals: vec![([4., 5., 6.], 1, 4.)],

@@ -4484,9 +4484,10 @@ impl App {
         }
 
         // Hunger is intentionally gentle: a full meter lasts about 25 minutes.
-        self.player.satiety = (self.player.satiety - dt * (100.0 / 1500.0)).max(0.0);
-        let hungry = self.player.satiety <= 35.0;
-        let starving = self.player.satiety <= 8.0;
+        let satiety_before = self.player.satiety;
+        crate::hunger::tick(&mut self.player.satiety, &mut self.player.health, dt);
+        let hungry = self.player.satiety <= crate::hunger::HUNGRY;
+        let starving = self.player.satiety <= crate::hunger::STARVING;
         if starving {
             self.player.statuses.apply(crate::status_effects::Kind::Starving, 0.3, 1.0, 0.0, "hunger");
             self.player.statuses.remove(crate::status_effects::Kind::Hungry);
@@ -4497,12 +4498,10 @@ impl App {
             self.player.statuses.remove(crate::status_effects::Kind::Hungry);
             self.player.statuses.remove(crate::status_effects::Kind::Starving);
         }
-        if starving && self.player.health > 0.0 {
-            self.player.damage((1.0 / 18.0) * dt);
-        }
-        if starving && !self.player.poisoned && (self.player.satiety + dt * (100.0 / 1500.0)) > 8.0 {
-            self.notify_important("You are starving. Eat food to recover.".into());
-        } else if hungry && !starving && (self.player.satiety + dt * (100.0 / 1500.0)) > 35.0 {
+
+        if starving && satiety_before > crate::hunger::STARVING {
+            self.notify_important("Hunger is slowly draining health. Eat any food to stop it.".into());
+        } else if hungry && !starving && satiety_before > crate::hunger::HUNGRY {
             self.notify_important("You are getting hungry.".into());
         }
 
@@ -4547,10 +4546,7 @@ impl App {
             } else {
                 rp.oxygen = (rp.oxygen + OXYGEN_REGEN_PER_SEC * dt).min(MAX_OXYGEN);
             }
-            rp.satiety = (rp.satiety - dt * (100.0 / 1500.0)).max(0.0);
-            if rp.satiety <= 8.0 {
-                rp.health = (rp.health - (1.0 / 18.0) * dt).max(0.0);
-            }
+            crate::hunger::tick(&mut rp.satiety, &mut rp.health, dt);
             let mut roofs = crate::shelter::Roofs::default();
             let exposed = self.weather.current.has_rain_particles()
                 && !roofs.covered(&self.world, rp.pos + Vec3::Y * 1.6);
@@ -4947,6 +4943,7 @@ impl App {
                 speed_multiplier: self.player.speed_multiplier,
                 jump_multiplier: self.player.jump_multiplier,
                 oxygen: self.player.oxygen,
+                satiety: self.player.satiety,
                 held: self
                     .player
                     .crafting
@@ -4980,6 +4977,7 @@ impl App {
                     speed_multiplier: rp.speed_multiplier,
                     jump_multiplier: rp.jump_multiplier,
                     oxygen: rp.oxygen,
+                    satiety: rp.satiety,
                     held: rp.held,
                     torch_lit: rp.torch_lit,
                 });
@@ -5572,6 +5570,7 @@ impl App {
                         self.player.speed_multiplier = sp.speed_multiplier;
                         self.player.jump_multiplier = sp.jump_multiplier;
                         self.player.oxygen = sp.oxygen;
+                        self.player.satiety = sp.satiety;
                         continue;
                     }
                     let NetRole::Joined(client) = &mut self.net else {
@@ -5593,6 +5592,7 @@ impl App {
                             rp.speed_multiplier = sp.speed_multiplier;
                             rp.jump_multiplier = sp.jump_multiplier;
                             rp.oxygen = sp.oxygen;
+                            rp.satiety = sp.satiety;
                             rp.held = sp.held;
                             rp.torch_lit = sp.torch_lit;
                             rp.receive_animation(sp.animation);
@@ -5614,6 +5614,7 @@ impl App {
                             rp.speed_multiplier = sp.speed_multiplier;
                             rp.jump_multiplier = sp.jump_multiplier;
                             rp.oxygen = sp.oxygen;
+                            rp.satiety = sp.satiety;
                             rp.held = sp.held;
                             rp.torch_lit = sp.torch_lit;
                             rp.receive_animation(sp.animation);

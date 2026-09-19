@@ -47,6 +47,7 @@ description starts without AI; optional descriptions use the configured local mo
 | Control | Guide |
 | --- | --- |
 | I: inventory; 1–9 / mouse wheel: hotbar | [Inventory and hotbar](docs/inventory.md) |
+| I: eat; F at a campfire: cook | [Hunger and eating](docs/HUNGER.md) |
 | K: Spellbook; Remember in Rules | [Remembered spells](docs/SPELLCASTING.md#stage-1b-persistent-spellbook) |
 | C: crafting | [Crafting](docs/CRAFTING.md), [resources](docs/RESOURCES.md), [mana](docs/mana.md) |
 | B: build; R: rotate; F: interact/configure | [Automation](docs/AUTOMATION_GUIDE.md) |

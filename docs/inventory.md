@@ -22,7 +22,8 @@ active slot. Clear the active slot to use empty hands. Assignment references the
 existing stack; it does not consume or duplicate items. Depleted entries cannot
 be assigned, and resource and element balances remain host-authoritative.
 
-Select a food stack and click **Eat 1** to consume one item and restore health:
+Select a food stack and click **Eat 1** to consume one item, restore health and
+clear [hunger](HUNGER.md):
 
 | Food | Health restored |
 | --- | ---: |
@@ -32,9 +33,12 @@ Select a food stack and click **Eat 1** to consume one item and restore health:
 | Wild herbs | 5 |
 | Brown mushroom | 6 |
 
-Healing stops at 100 health. Full-health or defeated players cannot eat and keep
-their food. Eating does not cure poison. The host validates inventory revisions,
-consumes one item, and applies healing; duplicate requests cannot consume twice.
+Healing stops at 100 health. The resource **Eat 1** button currently remains
+disabled at full health, including while hungry, and for defeated players.
+Harvested foods and dishes use a separate **Eat** button, available at full health.
+Ordinary food does not cure poison; herbal purifying stew does, while glowcaps and
+toxic dishes cause poison. The host validates inventory revisions, consumes one
+item, and applies healing and fullness; duplicate requests cannot consume twice.
 Raw and cooked meat are inventory resources and cannot be placed as terrain.
 Aim at a campfire and press **F** to cook raw meat individually or in batches of up to 64.
 

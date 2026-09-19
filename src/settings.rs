@@ -267,7 +267,7 @@ impl SettingsPanel {
                 ui.checkbox(&mut self.values.graphics.water_fresnel, "Water Fresnel reflections");
                 ui.small("Disabling this removes the angle-based boost while keeping water reflections active.");
                 ui.checkbox(&mut self.values.graphics.depth_of_field, "Depth of field");
-                ui.small("Subtle blur on surfaces very close to the camera. Distant scenery and held items stay sharp.");
+                ui.small("Subtle near-surface blur at the sides. The central 40% of the screen, distant scenery and held items stay sharp.");
                 ui.checkbox(&mut self.values.graphics.god_rays, "God rays (sunlight shafts)");
                 ui.small("Soft sunlight through clouds and canopy gaps when looking toward the sun.");
                 ui.separator();

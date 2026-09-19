@@ -158,7 +158,9 @@ impl Player {
     }
 
     pub fn restore_satiety(&mut self, amount: f32) {
-        self.satiety = (self.satiety + amount).min(MAX_SATIETY);
+        crate::hunger::eat(&mut self.satiety, amount);
+        self.statuses.remove(crate::status_effects::Kind::Hungry);
+        self.statuses.remove(crate::status_effects::Kind::Starving);
     }
 
     pub fn set_jump_multiplier(&mut self, multiplier: f32) {

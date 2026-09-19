@@ -12,6 +12,9 @@ Under **Graphics**, **Depth of field** toggles a subtle blur on world surfaces
 within 4 blocks of the camera. Its blur radius fades from its strongest effect at
 0.6 blocks to zero at 4 blocks; distant scenery, held items and UI remain sharp. Enabled
 by default, it applies immediately and persists as `graphics.depth_of_field`.
+The central 40% of screen width stays completely free of this blur at every
+height. Blur fades in smoothly over the next 10% of width on each side and reaches
+its normal strength in the outer left and right portions of the screen.
 
 **God rays (sunlight shafts)** adds warm, soft sunlight through visible cloud and
 tree-canopy gaps when looking toward the sun. It defaults on and persists locally

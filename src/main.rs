@@ -28,6 +28,7 @@ mod harvesting;
 mod harvest_fx;
 mod held_item;
 mod input;
+mod hunger;
 mod inventory_ui;
 mod light_visibility;
 mod llm;

@@ -619,16 +619,16 @@ pub(crate) fn status_hud(ctx: &egui::Context, player: &Player, fps: f32) {
                 egui::Color32::from_rgb(100, 200, 100)
             };
             ui.colored_label(health_color, format!("Health: {:.0}/100", player.health));
-            if player.satiety <= 35.0 {
-                let hunger_color = if player.satiety <= 8.0 {
+            if player.satiety <= crate::hunger::HUNGRY {
+                let hunger_color = if player.satiety <= crate::hunger::STARVING {
                     egui::Color32::from_rgb(220, 90, 90)
                 } else {
                     egui::Color32::from_rgb(230, 190, 90)
                 };
                 ui.colored_label(
                     hunger_color,
-                    if player.satiety <= 8.0 {
-                        "STARVING".to_string()
+                    if player.satiety <= crate::hunger::STARVING {
+                        "HUNGRY - eat to stop health loss".to_string()
                     } else {
                         "HUNGRY".to_string()
                     },

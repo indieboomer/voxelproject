@@ -124,6 +124,18 @@ Death, reconnecting and saving do not reset progress. Guest identity follows the
 project's existing account-key behavior; changing that identity can select a
 different inventory and journal.
 
+## Food on expeditions
+
+Bring a little food for longer trips. From full, **HUNGRY** appears after about
+16 minutes; after about 23 minutes, hunger slowly drains 1 health per 30 seconds.
+It stops at 50 health, so hunger alone cannot kill you. Any successfully eaten
+food clears the effect immediately. Cooked meat, pumpkin and mushrooms keep you
+satisfied longer than their raw versions.
+
+Use **I** to eat and **F** at a campfire to cook. See the
+[hunger and eating guide](HUNGER.md) for food effects, the current full-health
+resource-button limitation, and multiplayer/save behavior.
+
 ## Expedition controls
 
 | Control | Action |

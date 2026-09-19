@@ -19,8 +19,8 @@ conflict-aware world undo and creation bundles remain proposals to reassess when
 concrete spellcasting stage needs them. Archiving does not mark those items complete.
 The [playtesting plan](PLAYTESTING_PLAN.md) separately retains its unfinished gates.
 
-Compatibility sources of truth are `src/net.rs::PROTOCOL_VERSION` (39 at the
-2026-09-15 documentation review) and `world_api/schema.yaml` (1.34.0). Version
+Compatibility sources of truth are `src/net.rs::PROTOCOL_VERSION` (48 after the
+2026-09-19 hunger update) and `world_api/schema.yaml` (1.37.0). Version
 numbers in historical implementation results describe those revisions only.
 
 ## Playable systems
@@ -29,6 +29,8 @@ numbers in historical implementation results describe those revisions only.
 - Procedural chunks with mainland rivers/lakes, mountain terrain, vegetation,
   resources, and configurable world-generation presets.
 - Resource inventory, crafting, equipment, health and underwater oxygen.
+- [Gentle hunger](HUNGER.md): delayed warnings and damage, a 50-health floor,
+  relief from every successful meal, and authoritative guest HUD replication.
 - Optional campkeeper dialogue, three personal saved contracts, a field journal,
   camp rest and automatic recovery after defeat; see [the adventure guide](ADVENTURE_GUIDE.md).
 - Portable left-hand torch light, map waypoints/recovery markers, aimed creature health

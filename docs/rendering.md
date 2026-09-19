@@ -302,6 +302,10 @@ field (`graphics.depth_of_field`, enabled by default). It reuses scene color and
 depth, with no extra render targets, draw calls or world rendering. Linear eye
 depth uses the camera's actual near/far planes. Pixels beyond 4 blocks and sky
 skip the blur kernel; disabling it skips all blur depth/color samples.
+The middle 40% of screen width (30% through 70%) also bypasses the kernel at all
+heights. A horizontal smoothstep fades blur in across 20–30% and 70–80% of width,
+with the usual depth-dependent strength beyond those bands. The mask uses
+normalized screen coordinates, so the clear center scales with window resizing.
 
 Near pixels use twelve fractional disk taps with linear filtering plus a center
 sample. Maximum radius is 10 pixels at 1080p (18-pixel cap), shrinking smoothly
@@ -314,7 +318,8 @@ existing resolve. Held items and egui draw afterward and remain sharp. Existing
 resize handling recreates the shared inputs, so no new resize resources are needed.
 
 GPU regression: `cargo test --offline near_depth_of_field_resolve -- --ignored --nocapture`.
-The readback test checks near falloff, foreground depth edges, unchanged distant
+The readback test checks blur on both sides, an unchanged central 40% at every
+height, foreground depth edges, unchanged distant
 and sky pixels, input rebinding and exact restoration when toggled off.
 
 Real-texture comparison: set `VOXEL_DOF_PREVIEW=1` and `VOXEL_PREVIEW_1080=1`, then

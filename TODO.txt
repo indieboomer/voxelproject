@@ -15,19 +15,6 @@ Open work is ordered by risk: stabilize input/targeting, finish host approval an
 spell ownership, replace food and poison special cases with shared resources and
 status effects, then expand campfires/cooking and renewable harvesting.
 
-0.1 Reduce flower-field size — implemented
-Make flower patches significantly smaller.
-Preserve both mixed-color patches and nearly uniform clusters.
-Add configurable minimum and maximum patch radius.
-Prevent large flower fields from dominating entire terrain regions.
-
-0.2 Change gesture key bindings — implemented
-Use:
-, — Hello
-. — Dance
-/ — Angry
-Verify that these bindings work consistently for both the host and connected peers.
-
 0.3 Fix mouse cursor and camera-control states [partial: explicit modes now track gameplay/UI/text input; full topmost-layer routing remains]
 Introduce an explicit input-mode state machine:
 Gameplay Mode: cursor captured, mouse controls the camera.
@@ -51,20 +38,6 @@ avoid selecting distant blocks through the intended placement area.
 Display a clear outline of the block being mined and a preview of the block being placed.
 Run tests from standing, crouching, jumping, swimming, and looking sharply downward.
 
-0.5 Show spell-generation progress [partial: named status and cancel now exist; spinner/multi-stage validation open]
-Spell creation may involve long LLM processing, so the UI must clearly represent its state.
-Suggested stages:
-Generating the spell
-Validating the script
-Checking permissions and cost
-Waiting for host approval, if required
-Saving the spell
-Ready or failed
-Additionally:
-Show a spinner or progress animation immediately.
-Let the player cancel generation.
-Prevent duplicate submissions.
-If exact percentage progress is unavailable, show named stages rather than fake percentages.
 0.6 Improve spell-card artwork [partial: structured metadata/procedural art exists; favorites/unique art open]
 The current images repeat too often and communicate too little.
 Generate card visuals from structured spell metadata, not only from spell names.

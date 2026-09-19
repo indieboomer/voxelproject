@@ -7,6 +7,10 @@ Steam support uses **test App ID 480 (Spacewar)** by default. Up to four players
 
 ## Implementation plan and status
 
+The hunger update uses protocol **48** (previously 47) to include fullness in
+player snapshots. Update both host and guests for Direct/LAN and Steam sessions;
+mixed protocol versions cannot join. See [hunger and eating](HUNGER.md).
+
 1. Preserve gameplay behind a transport interface: implemented. Direct UDP and Steam share the existing authoritative host, snapshots, block changes, crafting, Lua effects and chat protocol.
 2. Add Steam identity and session discovery: implemented with optional `steamworks` 0.13.1, friends-only four-member lobbies, lobby codes, native invite overlay and Steam invite callbacks.
 3. Harden joining and lifecycle: implemented protocol checks, four-player admission, world transfer chunks, sender-bound acknowledgements, departure messages, timeouts and host-loss handling.

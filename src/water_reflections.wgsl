@@ -56,12 +56,17 @@ fn eye_depth(z: f32) -> f32 {
 // Reject other depth layers so a near silhouette cannot smear the background.
 fn near_blur(pixel: vec2<i32>, original: vec3<f32>) -> vec3<f32> {
     if camera.graphics.y < 0.5 { return original; }
+    let size = vec2<i32>(textureDimensions(scene));
+    // Keep the middle 40% of screen width sharp at every height. Fade the
+    // effect in over the next 10% on either side, without a hard seam.
+    let from_center = abs((f32(pixel.x) + 0.5) / f32(size.x) - 0.5);
+    if from_center <= 0.2 { return original; }
+    let side_amount = smoothstep(0.2, 0.3, from_center);
     let z = textureLoad(depth, pixel, 0);
     if z >= 1.0 { return original; }
     let distance = eye_depth(z);
     if distance >= 4.0 { return original; }
     let amount = 1.0 - smoothstep(0.6, 4.0, distance);
-    let size = vec2<i32>(textureDimensions(scene));
     // Keep the immediate silhouette sharp: bilinear taps must not blend the
     // neighboring background into a foreground edge before depth rejection.
     var edge_offsets = array<vec2<i32>, 4>(vec2<i32>(1,0), vec2<i32>(-1,0), vec2<i32>(0,1), vec2<i32>(0,-1));
@@ -91,7 +96,7 @@ fn near_blur(pixel: vec2<i32>, original: vec3<f32>) -> vec3<f32> {
         color += textureSampleLevel(scene, blur_sampler, sample_pixel / vec2<f32>(size), 0.0).rgb * weight;
         total += weight;
     }
-    return mix(original, color / total, 0.95 * smoothstep(0.0, 0.2, amount));
+    return mix(original, color / total, side_amount * 0.95 * smoothstep(0.0, 0.2, amount));
 }
 
 fn resolve_scene(frag: vec4<f32>) -> vec4<f32> {
