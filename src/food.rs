@@ -8,9 +8,10 @@ use crate::{
 pub const MAX_COOK_BATCH: u32 = 64;
 pub const CAMPFIRE_DISH: &str = "harvest:campfire_dish";
 pub const CAMPFIRE_HERBAL_DISH: &str = "harvest:campfire_herbal_dish";
-pub fn harvest_name(item: &str) -> String { match item { "harvest:milk" => "Milk", "harvest:wool" => "Wool", "harvest:cooked_milk" => "Cooked Milk", "harvest:cooked_egg" => "Fried Egg", "harvest:cooked_honey" => "Melted Honey", "harvest:egg" => "Egg", "harvest:honey" => "Honey", "harvest:cooked_pumpkin" => "Cooked Pumpkin", "harvest:cooked_mushroom" | "harvest:fired_mushroom" => "Cooked Mushroom", "harvest:cooked_glowcap" | "harvest:fired_glowcap" => "Cooked Glowcap", CAMPFIRE_DISH => "Campfire Dish", CAMPFIRE_HERBAL_DISH => "Herbal Purifying Stew", _ => item.strip_prefix("harvest:").unwrap_or(item) }.into() }
+pub const CAMPFIRE_POISONOUS_DISH: &str = "harvest:campfire_poisonous_dish";
+pub fn harvest_name(item: &str) -> String { match item { "harvest:milk" => "Milk", "harvest:wool" => "Wool", "harvest:cooked_milk" => "Cooked Milk", "harvest:cooked_egg" => "Fried Egg", "harvest:cooked_honey" => "Melted Honey", "harvest:egg" => "Egg", "harvest:honey" => "Honey", "harvest:cooked_pumpkin" => "Cooked Pumpkin", "harvest:cooked_mushroom" | "harvest:fired_mushroom" => "Cooked Mushroom", "harvest:cooked_glowcap" | "harvest:fired_glowcap" => "Cooked Glowcap", CAMPFIRE_DISH => "Campfire Dish", CAMPFIRE_HERBAL_DISH => "Herbal Purifying Stew", CAMPFIRE_POISONOUS_DISH => "Toxic Campfire Dish", _ => item.strip_prefix("harvest:").unwrap_or(item) }.into() }
 pub fn harvest_healing(item: &str) -> Option<f32> {
-    Some(match item { "harvest:egg" => 0., "harvest:cooked_egg" => 8., "harvest:milk" => 4., "harvest:cooked_milk" => 12., "harvest:honey" => 12., "harvest:cooked_honey" => 8., "harvest:cooked_pumpkin" => 20., "harvest:cooked_mushroom" | "harvest:fired_mushroom" => 8., "harvest:glowcap" | "harvest:cooked_glowcap" | "harvest:fired_glowcap" => 0., CAMPFIRE_DISH => 24., CAMPFIRE_HERBAL_DISH => 24., _ => return None })
+    Some(match item { "harvest:egg" => 0., "harvest:cooked_egg" => 8., "harvest:milk" => 4., "harvest:cooked_milk" => 12., "harvest:honey" => 12., "harvest:cooked_honey" => 8., "harvest:cooked_pumpkin" => 20., "harvest:cooked_mushroom" | "harvest:fired_mushroom" => 8., "harvest:glowcap" | "harvest:cooked_glowcap" | "harvest:fired_glowcap" => 0., CAMPFIRE_DISH | CAMPFIRE_HERBAL_DISH | CAMPFIRE_POISONOUS_DISH => 24., _ => return None })
 }
 pub fn harvest_satiety(item: &str) -> f32 {
     match item { "harvest:egg" => 0., "harvest:cooked_egg" => 12., "harvest:milk" => 10., "harvest:cooked_milk" => 18., "harvest:honey" => 16., "harvest:cooked_honey" => 10., "harvest:cooked_pumpkin" => 30., "harvest:cooked_mushroom" => 12., CAMPFIRE_DISH | CAMPFIRE_HERBAL_DISH => 24., _ => 0. }
@@ -34,6 +35,7 @@ pub fn cook_harvest(account: &mut Account, item: &str, amount: u32) -> Result<()
 pub fn cook_batch(account: &mut Account, ingredients: &[String]) -> Result<&'static str, String> {
     if !(1..=4).contains(&ingredients.len()) { return Err("A dish needs 1 to 4 ingredients".into()); }
     let purifying = ingredients.iter().any(|ingredient| ingredient == "block:WildHerbs");
+    let poisonous = ingredients.iter().any(|ingredient| ingredient == "block:Glowcap");
     for ingredient in ingredients {
         if let Some(block_name) = ingredient.strip_prefix("block:") {
             let block = match block_name {
@@ -54,7 +56,12 @@ pub fn cook_batch(account: &mut Account, ingredients: &[String]) -> Result<&'sta
             return Err("That ingredient cannot be cooked".into());
         }
     }
-    let dish = if purifying { CAMPFIRE_HERBAL_DISH } else { CAMPFIRE_DISH };
+    let dish = match (purifying, poisonous) {
+        (true, false) => CAMPFIRE_HERBAL_DISH,
+        (false, true) => CAMPFIRE_POISONOUS_DISH,
+        // Herbs neutralize Glowcap when both are in the same dish.
+        (true, true) | (false, false) => CAMPFIRE_DISH,
+    };
     let current = account.production_goods.get(dish).copied().unwrap_or(0);
     account.production_goods.insert(dish.into(), current.checked_add(1).ok_or("Dish stack is full")?);
     Ok(dish)

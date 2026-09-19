@@ -23,6 +23,7 @@ mod equipment_ui;
 mod fantasy_name;
 mod food;
 mod gear_catalog;
+mod god_rays;
 mod harvesting;
 mod harvest_fx;
 mod held_item;

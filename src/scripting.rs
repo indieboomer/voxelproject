@@ -1683,7 +1683,11 @@ mod tests {
         'search: for cx in -48..48 {
             for cz in -48..48 {
                 for cy in 0..48 {
-                    if world.get_block(cx, cy, cz).is_wood() {
+                    // Branches also use Wood; choose a grounded trunk so the
+                    // player and the rule's search are at walking height.
+                    if world.get_block(cx, cy, cz).is_wood()
+                        && world.get_block(cx, cy - 1, cz) == BlockType::Grass
+                    {
                         tree_pos = Some(Vec3::new(cx as f32, cy as f32, cz as f32));
                         break 'search;
                     }

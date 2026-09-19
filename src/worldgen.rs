@@ -23,6 +23,9 @@ pub enum Surface {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorldGeneration {
+    /// Missing in old saves: preserve the original branchless trees.
+    #[serde(default)]
+    pub tree_version: u8,
     /// Zero preserves worlds saved before geological detail and flower patches.
     #[serde(default)]
     pub landscape_version: u8,
@@ -46,6 +49,7 @@ pub struct WorldGeneration {
 impl Default for WorldGeneration {
     fn default() -> Self {
         Self {
+            tree_version: 2,
             landscape_version: 3,
             underground: true,
             cave_version: 2,
@@ -87,6 +91,7 @@ impl WorldGeneration {
             .iter()
             .any(|(key, value)| !CREATURE_SPECIES.contains(&key.as_str()) || *value > 1000)
             || self.cave_version > 2
+            || self.tree_version > 2
             || self.landscape_version > 3
             || self.description.len() > 2048
             || self.trees > 300
@@ -174,6 +179,7 @@ pub fn resolve(description: &str, base_url: &str) -> Result<WorldGeneration, Str
     crate::llm_server::ensure_ready(base_url)?;
     let mut config = crate::llm::describe_world(description, base_url)?;
     config.landscape_version = 3;
+    config.tree_version = 2;
     Ok(config)
 }
 
@@ -193,10 +199,12 @@ mod tests {
         old.as_object_mut().unwrap().remove("creatures");
         old.as_object_mut().unwrap().remove("cave_version");
         old.as_object_mut().unwrap().remove("landscape_version");
+        old.as_object_mut().unwrap().remove("tree_version");
         let old: WorldGeneration = serde_json::from_value(old).unwrap();
         assert_eq!(old.abundance("cow"), 100);
         assert_eq!(old.cave_version, 0);
         assert_eq!(old.landscape_version, 0);
+        assert_eq!(old.tree_version, 0);
         assert_eq!(config.cave_version, 2);
         config.creatures.insert("cow".into(), 1001);
         assert!(config.validate().is_err());

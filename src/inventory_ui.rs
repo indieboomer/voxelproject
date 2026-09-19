@@ -1,4 +1,4 @@
-//! Local inventory selection; all assignments use the existing authoritative hotbar path.
+﻿//! Local inventory selection; all assignments use the existing authoritative hotbar path.
 use crate::{
     crafting::{Account, Element},
     equipment::{Entry, Gear},
@@ -16,7 +16,7 @@ pub struct Inventory {
 mod tests {
     use super::*;
     #[test]
-    fn spells_assign_with_number_keys_only_when_available() {
+    fn spells_are_not_assignable_from_inventory() {
         let mut book = crate::spellbook::Spellbook::default();
         let module = crate::scripting::Module::load(
             "Heal".into(),
@@ -54,10 +54,7 @@ mod tests {
                 },
                 |ctx| inventory.show(ctx, &account, 100., &registry, &mut requests, &book),
             );
-            assert_eq!(
-                requests.assign_entry,
-                available.then_some(Some(Entry::Spell(id)))
-            );
+            assert_eq!(requests.assign_entry, None);
         }
     }
     #[test]
@@ -136,10 +133,7 @@ impl Inventory {
         use crate::crafting::{Action, ObjectKind};
         match self.selected {
             Some(Entry::Spell(_)) => {
-                ui.label("Select its hotbar slot, then left-click to cast at your aim.");
-                if ui.button("Manage spells in Spellbook [K]").clicked() {
-                    requests.open_spellbook = true;
-                }
+                ui.label("Spells are managed in Spellbook [K].");
             }
             Some(Entry::Gear(g)) => {
                 for salvage in [false, true] {
@@ -269,12 +263,12 @@ impl Inventory {
                     }
                 });
                 ui.separator();
-                ui.label("Select an item, resource or spell, then press 1–9 to assign a hotbar slot.");
+                ui.label("Select an item or resource, then press 1–9 to assign a hotbar slot.");
                 ui.horizontal(|ui| {
                     ui.label(if crate::torch::equipped(account) {"Left hand: burning torch"}else{"Left hand: empty"});
                     if ui.add_enabled(account.gear[Gear::Torch as usize]>0,egui::Button::new(if account.torch_equipped {"Put torch away"}else{"Equip torch"})).clicked(){requests.crafting=Some(crate::crafting::Action::EquipTorch(!account.torch_equipped));}
                 });
-                ui.columns(3, |columns| {
+                ui.columns(2, |columns| {
                     columns[0].heading("Items");
                     columns[0].small("Tools and weapons");
                     egui::ScrollArea::vertical().id_source("inventory_items").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible).max_height(height).min_scrolled_height(height).show(&mut columns[0], |ui| {
@@ -283,33 +277,19 @@ impl Inventory {
                     let mut resources: Vec<_> = COLLECTIBLE_BLOCKS.iter().copied().map(Entry::Resource).filter(|e| e.count(account)>0).collect();
                     resources.sort_by_key(|e|e.name());
                     columns[1].heading("Resources");
-                    columns[1].small(format!("{} types · unlimited storage",resources.len()));
+                    columns[1].small(format!("{} types Â· unlimited storage",resources.len()));
                     egui::ScrollArea::vertical().id_source("inventory_resources").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible).max_height(height).min_scrolled_height(height).show(&mut columns[1], |ui| {
                         if resources.is_empty() {ui.label("No resources yet. Gather plants by hand or use your tools to mine.");}
                         for e in resources { self.row(ui,e,account); }
-                        for item in ["harvest:wool", "harvest:egg", "harvest:cooked_egg", "harvest:milk", "harvest:cooked_milk", "harvest:honey", "harvest:cooked_honey", "harvest:cooked_pumpkin", "harvest:cooked_mushroom", "harvest:cooked_glowcap", "harvest:fired_mushroom", "harvest:fired_glowcap", crate::food::CAMPFIRE_DISH, crate::food::CAMPFIRE_HERBAL_DISH] {
+                        for item in ["harvest:wool", "harvest:egg", "harvest:cooked_egg", "harvest:milk", "harvest:cooked_milk", "harvest:honey", "harvest:cooked_honey", "harvest:cooked_pumpkin", "harvest:cooked_mushroom", "harvest:cooked_glowcap", "harvest:fired_mushroom", "harvest:fired_glowcap", crate::food::CAMPFIRE_DISH, crate::food::CAMPFIRE_HERBAL_DISH, crate::food::CAMPFIRE_POISONOUS_DISH] {
                             if let Some(&count) = account.production_goods.get(item) {
-                                ui.horizontal(|ui| { crate::equipment_ui::harvest_icon(ui, item); ui.label(format!("{} ×{count}", crate::food::harvest_name(item))); if crate::food::harvest_healing(item).is_some_and(|h| h > 0.) || matches!(item, "harvest:glowcap" | "harvest:cooked_glowcap") { if ui.button("Eat").clicked() { requests.eat_harvest = Some(item.into()); } } });
+                                ui.horizontal(|ui| { crate::equipment_ui::harvest_icon(ui, item); ui.label(format!("{} Ă—{count}", crate::food::harvest_name(item))); if crate::food::harvest_healing(item).is_some_and(|h| h > 0.) || matches!(item, "harvest:glowcap" | "harvest:cooked_glowcap") { if ui.button("Eat").clicked() { requests.eat_harvest = Some(item.into()); } } });
                             }
-                        }
-                    });
-                    columns[2].heading("Spells");
-                    columns[2].small("Remembered spells");
-                    egui::ScrollArea::vertical().id_source("inventory_spells").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible).max_height(height).min_scrolled_height(height).show(&mut columns[2], |ui| {
-                        if book.spells.is_empty() {ui.label("Remember an instant spell in Spell Workshop, or ask the host to share one from the Spellbook.");}
-                        for spell in &book.spells {
-                            let entry=Entry::Spell(spell.id);
-                            ui.horizontal(|ui| {
-                                crate::equipment_ui::icon_with_book(ui,entry,book);
-                                let label=if spell.ready() {spell.name.clone()} else {format!("{} (review)",spell.name)};
-                                if ui.selectable_label(self.selected==Some(entry),label)
-                                    .on_hover_text(format!("{}\n{} mana · {:.1}s cooldown · {}\n{}",spell.description,registry.mana_charge(spell.mana_cost),spell.cooldown_seconds,spell.target.label(),if entry.count(account)>0 {"Press 1–9 to assign"}else{"Open Spellbook to review"})).clicked() {self.selected=Some(entry);}
-                            });
                         }
                     });
                 });
                 ui.separator();
-                ui.label(self.selected.map_or("Nothing selected".into(), |e|if e==Entry::Gear(Gear::Torch) {"Selected: Torch — use the left-hand Equip torch button above".into()}else{format!("Selected: {} — press 1–9 or click a hotbar slot",crate::equipment_ui::entry_name(e,book))}));
+                ui.label(self.selected.map_or("Nothing selected".into(), |e| if e == Entry::Gear(Gear::Torch) { "Selected: Torch — use the left-hand Equip torch button above".into() } else { format!("Selected: {} — press 1–9 or click a hotbar slot", crate::equipment_ui::entry_name(e, book)) }));
                 self.actions(ui,account,health,registry,requests);
                 if !self.feedback.is_empty() {ui.label(&self.feedback);}
                 if ui.button(format!("Clear slot {} (empty hand)",account.hotbar.active+1)).clicked() {
@@ -335,7 +315,7 @@ impl Inventory {
             requests.select_slot = Some(slot);
             if let Some(entry) = self
                 .selected
-                .filter(|e| e.count(account) > 0 && *e != Entry::Gear(Gear::Torch))
+                .filter(|e| e.count(account) > 0 && !matches!(e, Entry::Spell(_)) && *e != Entry::Gear(Gear::Torch))
             {
                 requests.assign_entry = Some(Some(entry));
             }
@@ -349,7 +329,7 @@ impl Inventory {
                     crate::equipment_ui::icon(ui, entry);
                     ui.selectable_label(
                         self.selected == Some(entry),
-                        format!("{}   ×{}", entry.name(), count),
+                        format!("{}   Ă—{}", entry.name(), count),
                     )
                 })
                 .inner;
@@ -364,3 +344,4 @@ impl Inventory {
         });
     }
 }
+

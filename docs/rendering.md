@@ -1,5 +1,65 @@
 # Lighting and surface weather
 
+## Plant size variation
+
+Cross-mesh plants, flowers and mushrooms have a nominal 0.8-block size with
+seeded ±20% uniform variation (0.64–0.96 blocks). Their world seed, block type
+and position determine the size, so rebuilding chunks, reloading and multiplayer
+agree. Meshes remain centered horizontally and anchored at the bottom of the
+cell; wind amplitude is bounded by the available margin, even during storms.
+This changes visuals only: each harvested block still gives one of its usual
+resources, and placement, targeting and saves use the same block grid.
+Variation is calculated during meshing and adds no vertices or draw calls.
+
+## God rays: screen-space sunlight shafts
+
+The chosen approach is a quarter-resolution radial light integration. A shadow-map
+volumetric march would handle off-screen occluders better, but needs extra shadow
+sampling and a second cloud-shadow representation. This effect reuses the exact
+visible cloud mask and canopy cutout/depth already rendered, avoiding another
+world pass, new assets, temporal history or changes to world generation.
+
+Implementation order: encode sky visibility, integrate the mask toward the
+projected sun, composite into the existing scene resolve, connect the local toggle,
+then validate image differences, gating, resizing and GPU cost.
+
+The sky stores visibility in scene alpha 0.1–0.9. Geometry/depth blocks light;
+the existing water marker remains zero. `god_rays.wgsl` takes 32 midpoint samples
+per quarter-resolution pixel, weighted by distance, sun intensity and weather.
+`god_rays.rs` owns one RGBA8 target (about 0.5 MiB at 1080p), recreated on resize.
+The existing reflection/DOF resolve upsamples it linearly and adds a warm bounded
+contribution. Nearby surfaces suppress the overlay; held items and UI render later.
+
+The prominent-ray tuning uses gain 1.8 (previously 0.55), a 0.85 power curve
+to lift shafts from sparse canopy openings, and a wider radial falloff. The
+contribution is capped at 0.6 to limit sky washout. Surface suppression fades
+from one to four blocks, so nearby tree canopies no longer suppress most of the
+effect. Sample count, resolution and render passes are unchanged. Fully opaque
+cloud masks have a small dead zone to avoid amplifying RGBA8 rounding residue.
+
+`graphics.god_rays` defaults on. Off skips the ray pass and uses the original
+resolve entry point with no ray texture reads. The game also skips the pass at
+night and underwater. The shader fades at screen edges and rejects a sun behind
+the camera. Storm coverage and lightning attenuate the effect.
+
+Limits: this is a view-dependent light-shaft approximation, not volumetric fog.
+Only visible cloud/canopy gaps contribute; off-screen occluders cannot cast beams,
+and rays fade when the sun leaves the view. It does not add cloud shadows on terrain.
+
+Validation commands:
+
+- `cargo test --offline god_rays_occlusion_and_toggle -- --ignored --nocapture`
+  checks visible sunlight, cloud/solid occlusion, night, underwater, behind/offscreen
+  sun, toggle restoration, and GPU pipeline validation.
+- Set `VOXEL_RAYS_PREVIEW=clouds` or `canopy` and `VOXEL_PREVIEW_1080=1`, then run
+  `cargo test --offline render_weather_previews -- --ignored --nocapture`.
+  These use actual sky and foliage shaders, assert a visible on/off difference,
+  write `target/rays-{clouds|canopy}-{on|off}.png` and report GPU timings.
+
+Measured at 1920×1080 on an RTX 3060: the fixed canopy scene went from 1.016 ms
+to 1.161 ms median GPU time; the cloud scene from 0.808 ms to 0.998 ms. These
+are render-preview measurements (about 0.15–0.19 ms added), not whole-game FPS.
+
 ## Visual voxel clouds
 
 The sky shader renders an 8-block voxel grid at Y=160–184, above the build ceiling.
@@ -234,3 +294,31 @@ and settings remains the final frame-time check.
 Validation: 521 tests passed, 25 opt-in tests ignored with the serial command.
 One concurrent full-suite run hit an existing Lua wall-clock budget assertion;
 the serial suite passed without changing sandbox limits.
+
+## Near depth of field
+
+The existing water-reflection resolve also applies optional near-only depth of
+field (`graphics.depth_of_field`, enabled by default). It reuses scene color and
+depth, with no extra render targets, draw calls or world rendering. Linear eye
+depth uses the camera's actual near/far planes. Pixels beyond 4 blocks and sky
+skip the blur kernel; disabling it skips all blur depth/color samples.
+
+Near pixels use twelve fractional disk taps with linear filtering plus a center
+sample. Maximum radius is 10 pixels at 1080p (18-pixel cap), shrinking smoothly
+from 0.6 to 4 blocks. A 95% blend removes the original sharp overlay, fading out
+near the focus boundary. This replaces the grid-aligned 1–4 pixel kernel that
+barely affected magnified voxel texels. Immediate depth edges stay sharp. Depth weights
+reject unrelated surfaces to avoid foreground/background halos. The water base
+color is softened before reflection composition; reflected detail retains its
+existing resolve. Held items and egui draw afterward and remain sharp. Existing
+resize handling recreates the shared inputs, so no new resize resources are needed.
+
+GPU regression: `cargo test --offline near_depth_of_field_resolve -- --ignored --nocapture`.
+The readback test checks near falloff, foreground depth edges, unchanged distant
+and sky pixels, input rebinding and exact restoration when toggled off.
+
+Real-texture comparison: set `VOXEL_DOF_PREVIEW=1` and `VOXEL_PREVIEW_1080=1`, then
+run `cargo test --offline render_weather_previews -- --ignored --nocapture`.
+This renders the normal atlas materials and depth pipeline at arm's reach, asserts
+a visible image difference and unchanged distant sky, writes `target/dof-off.png`
+and `target/dof-on.png`, and reports GPU timings for both modes.

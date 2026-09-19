@@ -5,6 +5,8 @@ pub struct Reflections {
     layout: wgpu::BindGroupLayout,
     inputs: wgpu::BindGroup,
     pipeline: wgpu::RenderPipeline,
+    ray_pipeline: wgpu::RenderPipeline,
+    rays: crate::god_rays::GodRays,
 }
 
 impl Reflections {
@@ -18,32 +20,33 @@ impl Reflections {
     ) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("water reflection inputs"),
-            entries: &[0, 1].map(|binding| wgpu::BindGroupLayoutEntry {
+            entries: &[0, 1, 2].map(|binding| wgpu::BindGroupLayoutEntry {
                 binding,
                 visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
+                ty: if binding == 2 { wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering) } else { wgpu::BindingType::Texture {
                     sample_type: if binding == 0 {
-                        wgpu::TextureSampleType::Float { filterable: false }
+                        wgpu::TextureSampleType::Float { filterable: true }
                     } else {
                         wgpu::TextureSampleType::Depth
                     },
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
-                },
+                } },
                 count: None,
             }),
         });
         let (scene, inputs) = Self::targets(device, format, width, height, depth, &layout);
+        let rays = crate::god_rays::GodRays::new(device, width, height, camera, &scene, depth);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("water reflections"),
             source: wgpu::ShaderSource::Wgsl(include_str!("water_reflections.wgsl").into()),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("water reflection layout"),
-            bind_group_layouts: &[camera, &layout],
+            bind_group_layouts: &[camera, &layout, &rays.output_layout],
             push_constant_ranges: &[],
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let make_pipeline = |entry_point| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("water reflection resolve"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
@@ -53,7 +56,7 @@ impl Reflections {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point,
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: None,
@@ -65,11 +68,15 @@ impl Reflections {
             multisample: Default::default(),
             multiview: None,
         });
+        let pipeline = make_pipeline("fs_main");
+        let ray_pipeline = make_pipeline("fs_rays");
         Self {
             scene,
             layout,
             inputs,
             pipeline,
+            ray_pipeline,
+            rays,
         }
     }
 
@@ -110,6 +117,15 @@ impl Reflections {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(depth),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&device.create_sampler(&wgpu::SamplerDescriptor {
+                        label: Some("near blur linear sampler"),
+                        mag_filter: wgpu::FilterMode::Linear,
+                        min_filter: wgpu::FilterMode::Linear,
+                        ..Default::default()
+                    })),
+                },
             ],
         });
         (scene, inputs)
@@ -125,6 +141,7 @@ impl Reflections {
     ) {
         (self.scene, self.inputs) =
             Self::targets(device, format, width, height, depth, &self.layout);
+        self.rays.resize(device, width, height, &self.scene, depth);
     }
 
     pub fn draw(
@@ -132,7 +149,9 @@ impl Reflections {
         encoder: &mut wgpu::CommandEncoder,
         output: &wgpu::TextureView,
         camera: &wgpu::BindGroup,
+        god_rays: bool,
     ) {
+        if god_rays { self.rays.draw(encoder, camera); }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("water reflections"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -147,9 +166,10 @@ impl Reflections {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        pass.set_pipeline(&self.pipeline);
+        pass.set_pipeline(if god_rays { &self.ray_pipeline } else { &self.pipeline });
         pass.set_bind_group(0, camera, &[]);
         pass.set_bind_group(1, &self.inputs, &[]);
+        pass.set_bind_group(2, &self.rays.output, &[]);
         pass.draw(0..3, 0..1);
     }
 }

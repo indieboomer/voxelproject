@@ -98,6 +98,7 @@ struct SaveV2 {
 }
 fn legacy_generation() -> crate::worldgen::WorldGeneration {
     crate::worldgen::WorldGeneration {
+        tree_version: 0,
         underground: false,
         cave_version: 0,
         landscape_version: 0,
@@ -739,6 +740,26 @@ mod tests {
         assert_eq!(decode_save(&bytes).unwrap().1.host, account);
         assert_eq!(decode_save(&bytes).unwrap().2, legacy_generation());
         assert!(decode_save(b"not a save").is_none());
+    }
+
+    #[test]
+    fn tree_generation_version_and_removed_wood_survive_save() {
+        let mut saved = world_save();
+        saved.edits.push(((15, 30, 16), crate::voxel::BlockType::Air));
+        let generation = crate::worldgen::WorldGeneration::default();
+        let bytes = encode_save(saved, &CraftingSave::default(), &generation).unwrap();
+        let (loaded, _, settings) = decode_save(&bytes).unwrap();
+        assert_eq!(settings.tree_version, 2);
+        assert!(loaded.edits.contains(&((15, 30, 16), crate::voxel::BlockType::Air)));
+        let mut json: serde_json::Value = serde_json::from_slice(&bytes[MAGIC.len()..]).unwrap();
+        json["generation"].as_object_mut().unwrap().remove("tree_version");
+        let mut old = MAGIC.to_vec();
+        old.extend(serde_json::to_vec(&json).unwrap());
+        assert_eq!(decode_save(&old).unwrap().2.tree_version, 0);
+        json["generation"]["tree_version"] = 3.into();
+        let mut invalid = MAGIC.to_vec();
+        invalid.extend(serde_json::to_vec(&json).unwrap());
+        assert!(decode_save(&invalid).is_none());
     }
 
     #[test]

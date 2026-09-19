@@ -7,6 +7,7 @@ pub mod mesher;
 pub mod noise;
 pub mod resource_catalog;
 pub mod terrain;
+mod trees;
 pub mod world;
 
 pub use block::{BlockType, COLLECTIBLE_BLOCKS};

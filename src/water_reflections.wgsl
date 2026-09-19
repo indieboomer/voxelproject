@@ -23,6 +23,8 @@ struct CameraUniform {
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
 @group(1) @binding(0) var scene: texture_2d<f32>;
 @group(1) @binding(1) var depth: texture_depth_2d;
+@group(1) @binding(2) var blur_sampler: sampler;
+@group(2) @binding(0) var sunlight_rays: texture_2d<f32>;
 
 @vertex fn vs_main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
     let p = vec2<f32>(f32((index << 1u) & 2u), f32(index & 2u));
@@ -44,9 +46,58 @@ fn probe(p: vec3<f32>) -> vec3<f32> {
     if z >= 1.0 { return vec3<f32>(uv, -10000.0); }
     return vec3<f32>(uv, distance(p, camera.camera_pos.xyz) - distance(world_at(uv, z), camera.camera_pos.xyz));
 }
-@fragment fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
+fn eye_depth(z: f32) -> f32 {
+    let near = camera.graphics.z;
+    let far = camera.graphics.w;
+    return near * far / max(far - z * (far - near), 0.0001);
+}
+
+// Tiny depth-aware kernel in the existing resolve: no new targets or passes.
+// Reject other depth layers so a near silhouette cannot smear the background.
+fn near_blur(pixel: vec2<i32>, original: vec3<f32>) -> vec3<f32> {
+    if camera.graphics.y < 0.5 { return original; }
+    let z = textureLoad(depth, pixel, 0);
+    if z >= 1.0 { return original; }
+    let distance = eye_depth(z);
+    if distance >= 4.0 { return original; }
+    let amount = 1.0 - smoothstep(0.6, 4.0, distance);
+    let size = vec2<i32>(textureDimensions(scene));
+    // Keep the immediate silhouette sharp: bilinear taps must not blend the
+    // neighboring background into a foreground edge before depth rejection.
+    var edge_offsets = array<vec2<i32>, 4>(vec2<i32>(1,0), vec2<i32>(-1,0), vec2<i32>(0,1), vec2<i32>(0,-1));
+    for (var e = 0u; e < 4u; e += 1u) {
+        let q = clamp(pixel + edge_offsets[e], vec2<i32>(0), size - 1);
+        if abs(eye_depth(textureLoad(depth, q, 0)) - distance) > 0.2 + distance * 0.2 { return original; }
+    }
+    // Fractional disk taps avoid the grid-aligned resampling that left large
+    // nearest-filtered voxel texels sharp. Radius follows circle of confusion.
+    let radius = clamp(f32(size.y) / 108.0, 2.0, 18.0) * amount;
+    var offsets = array<vec2<f32>, 12>(
+        vec2<f32>(0.28,0.0), vec2<f32>(-0.21,0.25), vec2<f32>(0.04,-0.42),
+        vec2<f32>(0.31,0.40), vec2<f32>(-0.56,-0.10), vec2<f32>(0.53,-0.34),
+        vec2<f32>(-0.18,0.66), vec2<f32>(-0.35,-0.65), vec2<f32>(0.75,0.27),
+        vec2<f32>(-0.78,0.33), vec2<f32>(0.39,-0.81), vec2<f32>(0.28,0.91));
+    var color = original;
+    var total = 1.0;
+    for (var i = 0u; i < 12u; i += 1u) {
+        let sample_pixel = clamp(vec2<f32>(pixel) + vec2<f32>(0.5) + offsets[i] * radius,
+            vec2<f32>(0.5), vec2<f32>(size) - vec2<f32>(0.5));
+        let p = vec2<i32>(sample_pixel);
+        let neighbor_z = textureLoad(depth, p, 0);
+        let gap = abs(eye_depth(neighbor_z) - distance);
+        let tolerance = 0.1 + distance * 0.1;
+        let weight = (1.0 - smoothstep(tolerance, tolerance * 2.0, gap))
+            * select(1.0, 0.0, neighbor_z >= 1.0);
+        color += textureSampleLevel(scene, blur_sampler, sample_pixel / vec2<f32>(size), 0.0).rgb * weight;
+        total += weight;
+    }
+    return mix(original, color / total, 0.95 * smoothstep(0.0, 0.2, amount));
+}
+
+fn resolve_scene(frag: vec4<f32>) -> vec4<f32> {
     let pixel = vec2<i32>(frag.xy);
-    let original = textureLoad(scene, pixel, 0);
+    let sample = textureLoad(scene, pixel, 0);
+    let original = vec4<f32>(near_blur(pixel, sample.rgb), sample.a);
     if original.a > 0.05 || camera.weather_fx.z > 0.5 { return vec4<f32>(original.rgb, 1.0); }
     let size = vec2<f32>(textureDimensions(scene));
     let pos = world_at(frag.xy / size, textureLoad(depth, pixel, 0));
@@ -92,4 +143,18 @@ fn probe(p: vec3<f32>) -> vec3<f32> {
         previous_gap = hit.z;
     }
     return vec4<f32>(original.rgb, 1.0);
+}
+
+@fragment fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
+    return resolve_scene(frag);
+}
+
+@fragment fn fs_rays(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
+    let color = resolve_scene(frag);
+    let z = textureLoad(depth,vec2<i32>(frag.xy),0);
+    let uv = frag.xy / vec2<f32>(textureDimensions(scene));
+    // Keep nearby walls/held geometry from receiving an artificial glowing veil.
+    let visibility = select(smoothstep(1.0,4.0,eye_depth(z)),1.0,z >= 1.0);
+    let rays = textureSampleLevel(sunlight_rays,blur_sampler,uv,0.0).rgb * visibility;
+    return vec4<f32>(color.rgb + rays * (vec3<f32>(1.0)-color.rgb),1.0);
 }

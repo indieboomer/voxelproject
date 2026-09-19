@@ -205,6 +205,7 @@ impl BlockType {
                 .is_some_and(|r| r.hand_pickable)
     }
     pub fn harvest_category(self) -> Category {
+        if self.is_branch() { return Category::Wood; }
         match crate::voxel::resource_catalog::RESOURCES
             .iter()
             .find(|r| r.block == self)
@@ -393,7 +394,7 @@ pub(crate) fn block_action_at(
             let drops: &[(BlockType, u32)] = if old == BlockType::Campfire {
                 &[(BlockType::Stone, 2), (BlockType::OakWood, 2)]
             } else {
-                &[(old, 1)]
+                &[(old.wood_resource(), 1)]
             };
             for &(block, count) in drops {
                 let i = COLLECTIBLE_BLOCKS
@@ -739,13 +740,20 @@ mod tests {
     fn specialist_harvesting_is_faster_without_duplicate_rewards() {
         for (gear, block) in [
             (Gear::ForesterAxe, BlockType::OakWood),
+            (Gear::ForesterAxe, BlockType::OakBranch),
+            (Gear::ForesterAxe, BlockType::BirchBranch),
+            (Gear::ForesterAxe, BlockType::SpruceBranch),
+            (Gear::ForesterAxe, BlockType::CherryBranch),
             (Gear::ProspectorPick, BlockType::Stone),
             (Gear::Spade, BlockType::Soil),
             (Gear::Sickle, BlockType::CherryLeaves),
+            (Gear::Sickle, BlockType::RedPoppy),
+            (Gear::Sickle, BlockType::Fern),
+            (Gear::Sickle, BlockType::BrownMushroom),
         ] {
             let (world, mut a, intent, feet) = fixture(block, Some(Entry::Gear(gear)));
             a.gear[gear as usize] = 1;
-            let before = Entry::Resource(block).count(&a);
+            let before = Entry::Resource(block.wood_resource()).count(&a);
             let now = std::time::Instant::now();
             let mut state = Mining::default();
             let strikes = block.hardness().div_ceil(gear.harvest_power());
@@ -762,7 +770,7 @@ mod tests {
                 .unwrap();
                 assert_eq!(edit.is_some(), n + 1 == strikes);
             }
-            assert_eq!(Entry::Resource(block).count(&a), before + 1);
+            assert_eq!(Entry::Resource(block.wood_resource()).count(&a), before + 1);
         }
     }
     #[test]

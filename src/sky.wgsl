@@ -219,5 +219,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // so the sky whites out along with the terrain instead of just one or
     // the other.
     let flashed = mix(grade(color), vec3<f32>(1.0), camera.weather_fx.x);
-    return vec4<f32>(flashed, 1.0);
+    // Internal sunlight mask: 0.1..0.9 is sky visibility, 1 is geometry,
+    // and 0 remains reserved for the water reflection mask.
+    return vec4<f32>(flashed, 0.1 + 0.8 * sky_visibility);
 }

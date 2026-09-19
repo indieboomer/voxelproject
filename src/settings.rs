@@ -27,10 +27,12 @@ pub struct Settings {
 #[serde(default)]
 pub struct Graphics {
     pub water_fresnel: bool,
+    pub depth_of_field: bool,
+    pub god_rays: bool,
 }
 impl Default for Graphics {
     fn default() -> Self {
-        Self { water_fresnel: true }
+        Self { water_fresnel: true, depth_of_field: true, god_rays: true }
     }
 }
 
@@ -264,6 +266,10 @@ impl SettingsPanel {
                 ui.heading("Graphics");
                 ui.checkbox(&mut self.values.graphics.water_fresnel, "Water Fresnel reflections");
                 ui.small("Disabling this removes the angle-based boost while keeping water reflections active.");
+                ui.checkbox(&mut self.values.graphics.depth_of_field, "Depth of field");
+                ui.small("Subtle blur on surfaces very close to the camera. Distant scenery and held items stay sharp.");
+                ui.checkbox(&mut self.values.graphics.god_rays, "God rays (sunlight shafts)");
+                ui.small("Soft sunlight through clouds and canopy gaps when looking toward the sun.");
                 ui.separator();
                 ui.heading("Gameplay");
                 ui.checkbox(&mut self.values.gameplay.mana_free, "Mana-free actions (testing)");
@@ -372,6 +378,12 @@ mod tests {
         assert_eq!(values.appearance.spell_artwork, SpellArtwork::Default);
         assert!(values.gameplay.show_block_target);
         assert!(!values.gameplay.mana_free);
+        assert!(values.graphics.depth_of_field);
+        assert!(values.graphics.god_rays);
+        let mut dof = values.clone();
+        dof.graphics.depth_of_field = false;
+        dof.graphics.god_rays = false;
+        assert_eq!(serde_json::from_str::<Settings>(&serde_json::to_string(&dof).unwrap()).unwrap(), dof);
         let testing: Settings = serde_json::from_str(r#"{"gameplay":{"mana_free":true}}"#).unwrap();
         assert!(testing.gameplay.mana_free);
         assert_eq!(

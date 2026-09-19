@@ -282,6 +282,11 @@ fn normalize3(v: [f32; 3]) -> [f32; 3] {
     }
 }
 
+fn plant_size(seed: u32, block: BlockType, x: i32, y: i32, z: i32) -> f32 {
+    // Nominal 0.8-block size leaves space for the +20% specimens.
+    0.8 * (0.8 + 0.4 * super::noise::block_rand(x, y, z, seed, 0x51AE_9100 ^ block as u32))
+}
+
 /// Appends a double-sided billboard cross for `only_on_top`+`cross` blocks
 /// (short grass) at world position `(wx, ly, wz)`. Never culled, never
 /// AO-darkened -- it's a thin decoration, not part of the solid cube grid.
@@ -289,8 +294,7 @@ fn normalize3(v: [f32; 3]) -> [f32; 3] {
 /// getting a single winding's handedness right against the pipeline's
 /// front-face convention), so each plane renders from both sides off one
 /// shared normal -- an intentional simplification for a paper-thin card.
-/// Top corners get `wind = 1.0` (bottom corners `0.0`), which the vertex
-/// shader uses to sway just the top of the card in the wind.
+/// Top corners get bounded wind motion (bottom corners stay anchored).
 #[allow(clippy::too_many_arguments)]
 fn push_cross(
     vertices: &mut Vec<Vertex>,
@@ -300,7 +304,12 @@ fn push_cross(
     wz: i32,
     uv_rect: [f32; 4],
     emission: f32,
+    size: f32,
 ) {
+    // Both material and shadow shaders have a maximum sway of
+    // (0.09 + 0.05) * Storm.wind_strength(). Keep even storms in the cell.
+    let margin = (1.0 - size) * 0.5;
+    let wind = (margin / (0.14 * crate::weather::Weather::Storm.wind_strength())).min(1.0);
     for plane in CROSS_PLANES.iter() {
         let normal = normalize3(cross3(sub3(plane[1], plane[0]), sub3(plane[3], plane[0])));
         let base_index = vertices.len() as u32;
@@ -308,9 +317,9 @@ fn push_cross(
             let [uc, vc] = FACE_UV_CORNERS[corner_idx];
             vertices.push(Vertex {
                 position: [
-                    wx as f32 + corner[0],
-                    ly as f32 + corner[1],
-                    wz as f32 + corner[2],
+                    wx as f32 + margin + corner[0] * size,
+                    ly as f32 + corner[1] * size,
+                    wz as f32 + margin + corner[2] * size,
                 ],
                 color: [1.0, 1.0, 1.0],
                 normal,
@@ -321,7 +330,7 @@ fn push_cross(
                 ao: 1.0,
                 reflectivity: 0.0,
                 emission,
-                wind: corner[1],
+                wind: corner[1] * wind,
                 tex_layer: 0.0,
                 glimmer: 0.0,
                 skylight: 1.0,
@@ -432,6 +441,17 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                 let wz = oz + lz;
                 let def = block.def();
 
+                if block.is_branch() {
+                    let connected = FACE_NORMALS.map(|n| {
+                        let neighbor = sample(wx + n[0], ly + n[1], wz + n[2]);
+                        neighbor.is_wood() && neighbor.wood_resource() == block.wood_resource()
+                    });
+                    push_branch(&mut vertices, &mut indices,
+                        Vec3::new(wx as f32, ly as f32, wz as f32), connected,
+                        atlas::uv_rect(def.tile_side));
+                    continue;
+                }
+
                 if block == BlockType::Campfire {
                     crate::campfire::base_mesh(
                         &mut vertices,
@@ -453,6 +473,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                         wz,
                         uv_rect,
                         def.emission,
+                        plant_size(world.seed, block, wx, ly, wz),
                     );
                     continue;
                 }
@@ -519,9 +540,9 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                             1.0
                         } else {
                             ao_brightness(
-                                sample(wx + s1.0, ly + s1.1, wz + s1.2).is_solid(),
-                                sample(wx + s2.0, ly + s2.1, wz + s2.2).is_solid(),
-                                sample(wx + c.0, ly + c.1, wz + c.2).is_solid(),
+                                ao_occluder(sample(wx + s1.0, ly + s1.1, wz + s1.2)),
+                                ao_occluder(sample(wx + s2.0, ly + s2.1, wz + s2.2)),
+                                ao_occluder(sample(wx + c.0, ly + c.1, wz + c.2)),
                             )
                         };
                         let [uc, vc] = FACE_UV_CORNERS[corner_idx];
@@ -563,6 +584,35 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
     let mut mesh = MeshData { vertices, indices };
     crate::shelter::Roofs::default().shade(world, &mut mesh);
     mesh
+}
+
+fn ao_occluder(block: BlockType) -> bool {
+    block.is_solid() && !block.is_branch()
+}
+
+/// Straight beams occupy exactly 1 x 0.5 x 0.5, rotated along their neighbors.
+/// Non-overlapping center/arm boxes keep bends and rises visually connected.
+fn push_branch(vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>, origin: Vec3,
+    connected: [bool; 6], uv: [f32; 4]) {
+    let axes = [connected[0] || connected[1], connected[2] || connected[3], connected[4] || connected[5]];
+    if axes.iter().filter(|&&v| v).count() <= 1 {
+        let axis = axes.iter().position(|&v| v).unwrap_or(0);
+        let mut min = Vec3::splat(0.25);
+        let mut max = Vec3::splat(0.75);
+        min[axis] = 0.0; max[axis] = 1.0;
+        push_cuboid(vertices, indices, origin+min, origin+max, [1.;3], uv);
+        return;
+    }
+    push_cuboid(vertices, indices, origin+Vec3::splat(0.25), origin+Vec3::splat(0.75), [1.;3], uv);
+    for (face, link) in connected.iter().enumerate() {
+        if !*link { continue; }
+        let axis = face / 2;
+        let mut min = Vec3::splat(0.25);
+        let mut max = Vec3::splat(0.75);
+        if face % 2 == 0 { min[axis] = 0.75; max[axis] = 1.0; }
+        else { min[axis] = 0.0; max[axis] = 0.25; }
+        push_cuboid(vertices, indices, origin+min, origin+max, [1.;3], uv);
+    }
 }
 
 /// Appends an axis-aligned box (all 6 faces, no culling, no AO) to a mesh
@@ -620,6 +670,53 @@ pub fn push_cuboid(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn plant_variation_is_seeded_rooted_and_stays_inside_the_cell_in_storms() {
+        let mut smallest = 1.0f32;
+        let mut largest = 0.0f32;
+        for block in crate::voxel::COLLECTIBLE_BLOCKS.into_iter().filter(|b| b.def().cross) {
+            for x in -32..32 {
+                let size = plant_size(42, block, x, 8, -17);
+                assert_eq!(size, plant_size(42, block, x, 8, -17));
+                assert!((0.64..=0.960001).contains(&size));
+                smallest = smallest.min(size); largest = largest.max(size);
+                let (mut vertices, mut indices) = (vec![], vec![]);
+                push_cross(&mut vertices, &mut indices, 0, 0, 0, [0.,0.,1.,1.], 0., size);
+                assert_eq!((vertices.len(), indices.len()), (8,24));
+                assert!(vertices.iter().any(|v| v.position[1] == 0.0 && v.wind == 0.0));
+                for v in vertices {
+                    assert!((0.0..=1.0).contains(&v.position[1]));
+                    let max_sway = 0.14 * crate::weather::Weather::Storm.wind_strength() * v.wind;
+                    for axis in [0,2] {
+                        assert!(v.position[axis] - max_sway >= -0.000001);
+                        assert!(v.position[axis] + max_sway <= 1.000001);
+                    }
+                }
+            }
+        }
+        assert!(smallest < 0.66 && largest > 0.94);
+        assert_ne!(plant_size(42, BlockType::Fern, 0, 8, 0), plant_size(43, BlockType::Fern, 0, 8, 0));
+    }
+    #[test]
+    fn branches_have_centered_half_thickness_and_connected_elbows() {
+        for axis in 0..3 {
+            let mut connected = [false; 6];
+            connected[axis*2] = true;
+            let (mut vertices, mut indices) = (vec![], vec![]);
+            push_branch(&mut vertices, &mut indices, Vec3::ZERO, connected, [0.,0.,1.,1.]);
+            assert_eq!(vertices.len(), 24);
+            for a in 0..3 {
+                let min = vertices.iter().map(|v| v.position[a]).fold(f32::INFINITY, f32::min);
+                let max = vertices.iter().map(|v| v.position[a]).fold(f32::NEG_INFINITY, f32::max);
+                assert_eq!((min,max), if a == axis { (0.,1.) } else { (0.25,0.75) });
+            }
+        }
+        let (mut vertices, mut indices) = (vec![], vec![]);
+        push_branch(&mut vertices, &mut indices, Vec3::ZERO, [true,false,true,false,false,true], [0.,0.,1.,1.]);
+        for point in [[1.,0.25,0.25],[0.25,1.,0.25],[0.25,0.25,0.]] {
+            assert!(vertices.iter().any(|v| v.position == point));
+        }
+    }
     use std::collections::HashMap;
 
     #[test]

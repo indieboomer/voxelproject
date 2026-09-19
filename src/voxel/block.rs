@@ -113,6 +113,11 @@ pub enum BlockType {
     /// Food stacks, appended after existing save/network IDs.
     Meat,
     CookedMeat,
+    // Generation-only shapes; harvesting yields the parent wood resource.
+    OakBranch,
+    SpruceBranch,
+    BirchBranch,
+    CherryBranch,
 }
 
 /// Per-block static properties, transcribed 1:1 from `textures/blocks.csv`
@@ -263,6 +268,16 @@ impl BlockType {
         }
         use BlockType::*;
         match self {
+            OakBranch | SpruceBranch | BirchBranch | CherryBranch => {
+                let mut def = self.wood_resource().def();
+                def.display_name = match self {
+                    OakBranch => "Oak branch", SpruceBranch => "Spruce branch",
+                    BirchBranch => "Birch branch", _ => "Cherry branch",
+                };
+                def.tile_top = def.tile_side;
+                def.tile_bottom = def.tile_side;
+                def
+            }
             AutomationDevice => BlockDef {
                 display_name: "Automation device",
                 resource_type: "automation",
@@ -410,6 +425,7 @@ impl BlockType {
     /// Whether a face against this block should be culled (i.e. this block
     /// fills its full cube and is not see-through).
     pub fn is_opaque(self) -> bool {
+        if self.is_branch() { return false; }
         let def = self.def();
         def.opacity >= 1.0 && !def.cutout && !def.cross
     }
@@ -429,7 +445,33 @@ impl BlockType {
                 | BlockType::SpruceWood
                 | BlockType::CherryWood
                 | BlockType::BirchWood
+                | BlockType::OakBranch | BlockType::SpruceBranch
+                | BlockType::BirchBranch | BlockType::CherryBranch
         )
+    }
+
+    pub fn is_branch(self) -> bool {
+        matches!(self, Self::OakBranch | Self::SpruceBranch | Self::BirchBranch | Self::CherryBranch)
+    }
+
+    pub fn wood_resource(self) -> Self {
+        match self {
+            Self::OakBranch => Self::OakWood,
+            Self::SpruceBranch => Self::SpruceWood,
+            Self::BirchBranch => Self::BirchWood,
+            Self::CherryBranch => Self::CherryWood,
+            _ => self,
+        }
+    }
+
+    pub fn branch(self) -> Self {
+        match self {
+            Self::OakWood => Self::OakBranch,
+            Self::SpruceWood => Self::SpruceBranch,
+            Self::BirchWood => Self::BirchBranch,
+            Self::CherryWood => Self::CherryBranch,
+            _ => self,
+        }
     }
 
     pub fn name(self) -> &'static str {
@@ -447,6 +489,10 @@ impl BlockType {
         }
         match self {
             BlockType::Air => "air",
+            BlockType::OakBranch => "oak_branch",
+            BlockType::SpruceBranch => "spruce_branch",
+            BlockType::BirchBranch => "birch_branch",
+            BlockType::CherryBranch => "cherry_branch",
             BlockType::AutomationDevice => "automation_device",
             BlockType::Campfire => "campfire",
             BlockType::Crystal => "crystal",
@@ -467,12 +513,35 @@ impl BlockType {
             return Some(block);
         }
         match lower.as_str() {
+            "oak_branch" => Some(BlockType::OakBranch),
+            "spruce_branch" => Some(BlockType::SpruceBranch),
+            "birch_branch" => Some(BlockType::BirchBranch),
+            "cherry_branch" => Some(BlockType::CherryBranch),
             "air" => Some(BlockType::Air),
             "campfire" => Some(BlockType::Campfire),
             "crystal" => Some(BlockType::Crystal),
             "mud" => Some(BlockType::Mud),
             "redstone" => Some(BlockType::RedStone),
             _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod branch_tests {
+    use super::*;
+    #[test]
+    fn branch_blocks_keep_species_material_collision_and_wire_identity() {
+        for wood in [BlockType::OakWood, BlockType::BirchWood, BlockType::SpruceWood, BlockType::CherryWood] {
+            let branch = wood.branch();
+            assert!(branch.is_solid() && branch.is_targetable() && branch.is_wood());
+            assert!(!branch.is_opaque());
+            assert_eq!(branch.hardness(), wood.hardness());
+            assert_eq!(branch.wood_resource(), wood);
+            assert!(!COLLECTIBLE_BLOCKS.contains(&branch));
+            for face in 0..6 { assert_eq!(super::super::atlas::tile_for(branch, face), wood.def().tile_side); }
+            assert_eq!(BlockType::from_name(branch.id()), Some(branch));
+            assert_eq!(bincode::deserialize::<BlockType>(&bincode::serialize(&branch).unwrap()).unwrap(), branch);
         }
     }
 }

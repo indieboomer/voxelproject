@@ -416,7 +416,7 @@ struct CameraUniform {
     /// `Weather::cloud_coverage` -- how much of sky.wgsl's procedural cloud
     /// layer covers the sky dome). z = camera eye underwater; w = surface wetness.
     weather_fx: [f32; 4],
-    /// x = water Fresnel enabled (1/0); remaining lanes are reserved.
+    /// x = water Fresnel, y = near depth of field (1/0), z/w = near/far planes.
     graphics: [f32; 4],
     camp_lights: [[f32; 4]; 4],
 }
@@ -6087,9 +6087,9 @@ impl App {
             ],
             graphics: [
                 if self.ui.settings.values.graphics.water_fresnel { 1.0 } else { 0.0 },
-                0.0,
-                0.0,
-                0.0,
+                if self.ui.settings.values.graphics.depth_of_field { 1.0 } else { 0.0 },
+                self.camera.znear,
+                self.camera.zfar,
             ],
         };
         self.queue
@@ -6319,7 +6319,8 @@ impl App {
             self.block_target.draw(&mut rpass, &self.camera_bind_group);
         }
 
-        self.water_reflections.draw(&mut encoder, &view, &self.camera_bind_group);
+        self.water_reflections.draw(&mut encoder, &view, &self.camera_bind_group,
+            self.ui.settings.values.graphics.god_rays && lighting.sun_intensity > 0.0 && !underwater);
 
         if self.cursor_grabbed {
             // Separate depth so the local view model cannot clip through nearby terrain.
@@ -7087,3 +7088,7 @@ mod underwater_tests {
         assert!(pollster::block_on(device.pop_error_scope()).is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "depth_of_field_tests.rs"]
+mod depth_of_field_tests;

@@ -280,7 +280,7 @@ impl World {
                         && height < super::chunk::TERRAIN_HEIGHT - 12
                         && self.generation.surface != crate::worldgen::Surface::Stone
                 };
-                if tree_land
+                if self.generation.tree_version == 0 && tree_land
                     && column_rand(wx, wz, self.seed, 0xA11CE)
                         < 0.006 * self.generation.trees as f32 / 100.
                 {
@@ -317,6 +317,9 @@ impl World {
             }
         }
 
+        if self.generation.tree_version > 0 {
+            self.scatter_branched_trees(&mut chunk);
+        }
         self.scatter_veins(&mut chunk, cx, cz, &heights);
         self.scatter_brick_ruins(&mut chunk, cx, cz);
         self.scatter_surface_resources(&mut chunk, &heights);

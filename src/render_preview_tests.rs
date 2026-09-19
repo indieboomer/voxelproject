@@ -184,6 +184,15 @@ fn render_weather_previews() {
         }
     }
     let reflection_preview = std::env::var_os("VOXEL_REFLECTION_PREVIEW").is_some();
+    let dof_preview = std::env::var_os("VOXEL_DOF_PREVIEW").is_some();
+    let ray_preview = std::env::var("VOXEL_RAYS_PREVIEW").ok();
+    if dof_preview {
+        // Actual atlas materials at arm's reach, with distant terrain visible
+        // alongside them. Same meshes and lighting for the on/off comparison.
+        for x in -2..=0 { for y in 7..=10 {
+            world.set_block(x, y, 3, if x == 0 { BlockType::OakWood } else { BlockType::Bricks });
+        } }
+    }
     if reflection_preview {
 
         for (x, block) in [(2, BlockType::OakWood), (6, BlockType::Stone)] {
@@ -203,6 +212,8 @@ fn render_weather_previews() {
     let aura_preview = std::env::var_os("VOXEL_AURA_PREVIEW").is_some();
     let machine_preview = std::env::var_os("VOXEL_MACHINE_PREVIEW").is_some() || aura_preview;
     let mut target = if reflection_preview { Vec3::new(4.5, 8.0, 9.0) } else { Vec3::new(3.0, 7.0, 0.0) };
+    if dof_preview { target = Vec3::new(0.5, 8.5, 3.0); }
+    if ray_preview.is_some() { target = Vec3::new(-3.,8.,-4.) + crate::daynight::sky_lighting(0.14).sun_dir*12.; }
     let landscape_preview = std::env::var("VOXEL_LANDSCAPE_PREVIEW").ok();
     if let Some(mode) = &landscape_preview {
         world = World::new(42);
@@ -239,7 +250,7 @@ fn render_weather_previews() {
         target = Vec3::new(x as f32, world.terrain_height(x, z) as f32, z as f32);
         println!("Landscape preview {mode}: seed 42 at {x}, {z}");
     }
-    if std::env::var_os("VOXEL_FOREST_PREVIEW").is_some() {
+    if std::env::var_os("VOXEL_FOREST_PREVIEW").is_some() || ray_preview.as_deref() == Some("canopy") {
         for x in [-6, 0, 6, 12] {
             for z in [-8, -2, 4] {
                 for y in 7..13 {
@@ -610,7 +621,11 @@ fn render_weather_previews() {
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let eye = if reflection_preview {
+    let eye = if ray_preview.is_some() {
+        Vec3::new(-3.,8.,-4.)
+    } else if dof_preview {
+        Vec3::new(0.5, 8.5, 5.0)
+    } else if reflection_preview {
         Vec3::new(4.5, 8.2, 0.5)
     } else if landscape_preview.is_some() {
         target + Vec3::new(-22., 18., 30.)
@@ -655,6 +670,8 @@ fn render_weather_previews() {
             motion: [10., 1., 0., 0.],
         }),
     );
+    let mut dof_off: Option<Vec<u8>> = None;
+    let mut rays_off: Option<Vec<u8>> = None;
     for (name, wet, clouds, old) in [
         ("before", 0.0, 0.0, true),
         ("dry", 0.0, 0.0, false),
@@ -663,6 +680,10 @@ fn render_weather_previews() {
         ("before-storm", 0.0, 0.85, true),
         ("storm", 1.0, 0.85, false),
     ] {
+        if (dof_preview || ray_preview.is_some()) && name != "before" && name != "dry" { continue; }
+        let dof_enabled = dof_preview && name == "dry";
+        let rays_enabled = ray_preview.is_some() && name == "dry";
+        let old = old && !dof_preview && ray_preview.is_none();
         // Exercise actual per-vertex character moisture for every weather case.
         if std::env::var_os("VOXEL_WET_PREVIEW").is_some() {
             crate::wetness::apply(&mut effect_mesh.vertices, wet);
@@ -739,7 +760,7 @@ fn render_weather_previews() {
                 1.0,
             ],
             weather_fx: [0.0, clouds, 0.0, wet],
-            graphics: [1.0, 0.0, 0.0, 0.0],
+            graphics: [1.0, if dof_enabled { 1.0 } else { 0.0 }, 0.1, 200.0],
         };
         queue.write_buffer(&camera, 0, bytemuck::bytes_of(&camera_uniform));
         let mut times = Vec::new();
@@ -854,7 +875,7 @@ fn render_weather_previews() {
                     pass.draw_indexed(0..mesh.index_count, 0, 0..1);
                 }
             }
-            water_reflections.draw(&mut encoder, &view, &camera_bg);
+            water_reflections.draw(&mut encoder, &view, &camera_bg, rays_enabled);
             if let Some(q) = &queries {
                 encoder.write_timestamp(q, 1);
                 encoder.resolve_query_set(q, 0..2, &resolve, 0);
@@ -912,9 +933,30 @@ fn render_weather_previews() {
                 temporal_changes[24], temporal_changes[46]
             );
         }
+        let pixels = read_buffer(&device, &readback);
+        if ray_preview.is_some() {
+            if let Some(off) = &rays_off {
+                let changed = pixels.chunks_exact(4).zip(off.chunks_exact(4))
+                    .filter(|(a,b)| (0..3).any(|i| a[i].abs_diff(b[i]) > 12)).count();
+                assert!(changed > (width*height) as usize / 40, "sun shafts must be prominent, not just a tiny pixel change");
+            } else { rays_off = Some(pixels.clone()); }
+        }
+        if dof_preview {
+            if let Some(off) = &dof_off {
+                let changed = pixels.chunks_exact(4).zip(off.chunks_exact(4))
+                    .filter(|(a,b)| (0..3).any(|i| a[i].abs_diff(b[i]) > 4)).count();
+                assert!(changed > (width*height) as usize / 40, "blur must visibly change real atlas textures");
+                for y in 0..height/2 { for x in width*3/4..width {
+                    let i = ((y*width+x)*4) as usize;
+                    assert_eq!(&pixels[i..i+4], &off[i..i+4], "distant sky must remain exact");
+                } }
+            } else { dof_off = Some(pixels.clone()); }
+        }
         image::save_buffer(
-            format!("target/render-{name}.png"),
-            &read_buffer(&device, &readback),
+            if let Some(mode) = &ray_preview { format!("target/rays-{mode}-{}.png", if rays_enabled { "on" } else { "off" }) }
+            else if dof_preview { format!("target/dof-{}.png", if dof_enabled { "on" } else { "off" }) }
+            else { format!("target/render-{name}.png") },
+            &pixels,
             width,
             height,
             image::ColorType::Rgba8,

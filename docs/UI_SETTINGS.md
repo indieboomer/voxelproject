@@ -8,6 +8,16 @@ Generic is the default. Both themes use the same UI and actions. Preferences liv
 in `settings.json` beside the game's working-directory saves, independently of
 world data and multiplayer. Each running player controls their own appearance.
 
+Under **Graphics**, **Depth of field** toggles a subtle blur on world surfaces
+within 4 blocks of the camera. Its blur radius fades from its strongest effect at
+0.6 blocks to zero at 4 blocks; distant scenery, held items and UI remain sharp. Enabled
+by default, it applies immediately and persists as `graphics.depth_of_field`.
+
+**God rays (sunlight shafts)** adds warm, soft sunlight through visible cloud and
+tree-canopy gaps when looking toward the sun. It defaults on and persists locally
+as `graphics.god_rays`. Turning it off immediately skips the ray pass. Rays fade
+at the screen edge, disappear at night and underwater, and leave held items/UI sharp.
+
 ## UI audit and changes
 
 Every game screen uses the shared `Ui` egui context; no independent UI framework

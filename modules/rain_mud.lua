@@ -22,13 +22,18 @@ function on_tick(api)
         local trees = api.find_blocks("wood", px, py, pz, SEARCH_RADIUS)
 
         for _, tree in ipairs(trees) do
-            for dx = -MUD_RADIUS, MUD_RADIUS do
-                for dz = -MUD_RADIUS, MUD_RADIUS do
-                    if math.sqrt(dx * dx + dz * dz) <= MUD_RADIUS then
-                        local bx, by, bz = tree.x + dx, tree.y - 1, tree.z + dz
-                        local block = api.get_block(bx, by, bz)
-                        if block == "soil" or block == "grass" then
-                            api.replace_block(bx, by, bz, "mud")
+            -- Wood includes canopy branches. Only grounded trunks need a
+            -- soil search; scanning every limb would waste the API budget.
+            local ground = api.get_block(tree.x, tree.y - 1, tree.z)
+            if ground == "soil" or ground == "grass" or ground == "mud" then
+                for dx = -MUD_RADIUS, MUD_RADIUS do
+                    for dz = -MUD_RADIUS, MUD_RADIUS do
+                        if math.sqrt(dx * dx + dz * dz) <= MUD_RADIUS then
+                            local bx, by, bz = tree.x + dx, tree.y - 1, tree.z + dz
+                            local block = api.get_block(bx, by, bz)
+                            if block == "soil" or block == "grass" then
+                                api.replace_block(bx, by, bz, "mud")
+                            end
                         end
                     end
                 end
