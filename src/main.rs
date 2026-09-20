@@ -144,6 +144,7 @@ fn main() {
     let window = Arc::new(
         WindowBuilder::new()
             .with_title("Voxel Project")
+            .with_fullscreen(Some(Fullscreen::Borderless(None)))
             .with_inner_size(winit::dpi::PhysicalSize::new(1280, 720))
             .build(&event_loop)
             .expect("failed to create window"),

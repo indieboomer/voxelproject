@@ -70,11 +70,15 @@ pub enum Action {
     },
     CookHarvest { camp: Cell, item: String, amount: u32, revision: u64 },
     CookBatch { camp: Cell, ingredients: Vec<String>, revision: u64 },
+    AddFuel { camp: Cell, block: BlockType, revision: u64 },
+    AddIngredient { camp: Cell, ingredient: String, revision: u64 },
+    ClearIngredients { camp: Cell, revision: u64 },
+    CookIngredients { camp: Cell, revision: u64 },
 }
 impl Action {
     pub fn camp(&self) -> Cell {
         match self {
-            Self::Rest { camp } | Self::Claim { camp } | Self::Cook { camp, .. } | Self::CookHarvest { camp, .. } | Self::CookBatch { camp, .. } => *camp,
+            Self::Rest { camp } | Self::Claim { camp } | Self::Cook { camp, .. } | Self::CookHarvest { camp, .. } | Self::CookBatch { camp, .. } | Self::AddFuel { camp, .. } | Self::AddIngredient { camp, .. } | Self::ClearIngredients { camp, .. } | Self::CookIngredients { camp, .. } => *camp,
         }
     }
 
@@ -85,9 +89,17 @@ impl Action {
             Self::Cook { camp, amount, .. } => Self::Cook { camp, amount, revision },
             Self::CookHarvest { camp, item, amount, .. } => Self::CookHarvest { camp, item, amount, revision },
             Self::CookBatch { camp, ingredients, .. } => Self::CookBatch { camp, ingredients, revision },
+            Self::CookIngredients { camp, .. } => Self::CookIngredients { camp, revision },
             other => other,
         }
     }
+}
+
+pub fn fuel_value(block: BlockType) -> Option<u32> {
+    let value = crate::resource_defs::definition(block).fuel_value;
+    let name = block.name().to_lowercase();
+    (value > 0 || ["leaves", "flower", "herb", "plant"].iter().any(|s| name.contains(s)))
+        .then_some(value.max(1) as u32)
 }
 
 pub fn count(account: &Account, block: BlockType) -> u32 {
@@ -217,6 +229,44 @@ pub fn transact(
     }
     let mut next = account.clone();
     let message = match action {
+        Action::AddFuel { block, revision, .. } => {
+            if revision != account.revision { return Err("Inventory changed; try again".into()); }
+            if has_keeper(world, camp) { return Err("This fire already has unlimited fuel".into()); }
+            let value = fuel_value(block).ok_or("That resource is not fuel")?;
+            resource(&mut next, block, -1)?;
+            next.campfire_fuel_added = next.campfire_fuel_added.checked_add(value as u64).ok_or("Fuel limit reached")?;
+            format!("Added 1 {} to the fire.", block.name())
+        }
+        Action::AddIngredient { ingredient, revision, .. } => {
+            if revision != account.revision { return Err("Inventory changed; try again".into()); }
+            if next.cooking_ingredients.len() >= 4 { return Err("The pot holds four ingredients".into()); }
+            crate::food::transfer_ingredient(&mut next, &ingredient, false)?;
+            next.cooking_ingredients.push(ingredient);
+            "Added 1 ingredient to the pot.".into()
+        }
+        Action::ClearIngredients { revision, .. } => {
+            if revision != account.revision { return Err("Inventory changed; try again".into()); }
+            for ingredient in std::mem::take(&mut next.cooking_ingredients) {
+                crate::food::transfer_ingredient(&mut next, &ingredient, true)?;
+            }
+            "Returned ingredients to inventory.".into()
+        }
+        Action::CookIngredients { revision, .. } => {
+            if revision != account.revision { return Err("Inventory changed; try again".into()); }
+            let ingredients = std::mem::take(&mut next.cooking_ingredients);
+            if ingredients.is_empty() { return Err("Add an ingredient first".into()); }
+            for ingredient in &ingredients { crate::food::transfer_ingredient(&mut next, ingredient, true)?; }
+            if ingredients.len() == 1 && ingredients[0] != "block:WildHerbs" {
+                match ingredients[0].as_str() {
+                    "block:Meat" => crate::food::cook(&mut next, 1)?,
+                    "block:Pumpkin" => crate::food::cook_pumpkin(&mut next, 1)?,
+                    "block:BrownMushroom" => crate::food::cook_mushroom(&mut next, BlockType::BrownMushroom, 1)?,
+                    "block:Glowcap" => crate::food::cook_mushroom(&mut next, BlockType::Glowcap, 1)?,
+                    raw => crate::food::cook_harvest(&mut next, raw, 1)?,
+                }
+            } else { crate::food::cook_batch(&mut next, &ingredients)?; }
+            "Cooking complete. Food added to inventory.".into()
+        }
         Action::Cook {
             amount, revision, ..
         } => {
@@ -437,6 +487,47 @@ mod tests {
         resource(&mut a, BlockType::OakWood, 6).unwrap();
         resource(&mut a, BlockType::Stone, 4).unwrap();
         (w, a, feet((8, 40, 5)))
+    }
+    #[test]
+    fn campfire_transfers_one_item_and_rejects_duplicates() {
+        let (mut w, mut a, p) = fixture();
+        w.starter_camp = None;
+        w.seed = (0..100).find(|seed| crate::voxel::noise::block_rand(CAMP.0, CAMP.1, CAMP.2, *seed, 0xCA91) >= 0.2).unwrap();
+        for block in [BlockType::OakWood, BlockType::Coal, BlockType::OakLeaves] {
+            resource(&mut a, block, 2).unwrap();
+            let before = count(&a, block);
+            let action = Action::AddFuel { camp: CAMP, block, revision: a.revision };
+            transact(&w, &mut a, p, 100., false, action.clone()).unwrap();
+            assert_eq!(count(&a, block), before - 1);
+            let after = a.clone();
+            assert!(transact(&w, &mut a, p, 100., false, action).is_err());
+            assert_eq!(a, after);
+        }
+        let before = a.clone();
+        let revision = a.revision;
+        assert!(transact(&w, &mut a, p, 100., false, Action::AddFuel { camp: CAMP, block: BlockType::Stone, revision }).is_err());
+        assert_eq!(a, before);
+        resource(&mut a, BlockType::Meat, 2).unwrap();
+        let revision = a.revision;
+        let add = Action::AddIngredient { camp: CAMP, ingredient: "block:Meat".into(), revision };
+        transact(&w, &mut a, p, 100., false, add.clone()).unwrap();
+        assert_eq!(count(&a, BlockType::Meat), 1);
+        assert!(transact(&w, &mut a, p, 100., false, add).is_err());
+        assert_eq!(a.cooking_ingredients.len(), 1);
+        a = serde_json::from_slice(&serde_json::to_vec(&a).unwrap()).unwrap();
+        let revision = a.revision;
+        transact(&w, &mut a, p, 100., false, Action::CookIngredients { camp: CAMP, revision }).unwrap();
+        assert_eq!(count(&a, BlockType::Meat), 1);
+        assert_eq!(count(&a, BlockType::CookedMeat), 1);
+        assert!(a.cooking_ingredients.is_empty());
+        a.production_goods.insert("harvest:egg".into(), 1);
+        let revision = a.revision;
+        transact(&w, &mut a, p, 100., false, Action::AddIngredient { camp: CAMP, ingredient: "harvest:egg".into(), revision }).unwrap();
+        assert!(!a.production_goods.contains_key("harvest:egg"));
+        let revision = a.revision;
+        transact(&w, &mut a, p, 100., false, Action::ClearIngredients { camp: CAMP, revision }).unwrap();
+        assert_eq!(a.production_goods["harvest:egg"], 1);
+        assert!(a.cooking_ingredients.is_empty());
     }
     #[test]
     fn keepers_staff_about_one_in_five_camps_and_always_the_start() {

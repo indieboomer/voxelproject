@@ -69,7 +69,10 @@ pub struct UiRequests {
     pub remember_index: Option<usize>,
     pub spellbook_action: Option<crate::spellbook_ui::Action>,
     pub open_spellbook: bool,
+    pub open_recipe_book: Option<u8>,
     pub close_workshop: bool,
+    pub edit_spell_comment: Option<crate::spell_workshop::SpellComment>,
+    pub submit_spell_comment: Option<crate::spell_workshop::SpellComment>,
 
     pub detach_rule: Option<usize>,
     pub eat_food: Option<crate::voxel::BlockType>,
@@ -105,6 +108,7 @@ pub struct Ui {
     pub aimed_object: String,
     pub aimed_enchantments: Vec<String>,
     pub workshop_kind: crate::spell_workshop::Kind,
+    pub spell_comment: Option<crate::spell_workshop::SpellComment>,
     pub compass_yaw: f32,
     pub machine_compass: [Option<egui::Pos2>; 5],
     pub journal: crate::adventure_ui::Journal,
@@ -187,6 +191,7 @@ impl Ui {
             map: Default::default(),
             inventory_open: false,
             workshop_selected: None,
+            spell_comment: None,
             last_hotbar: None,
             selected_until: Instant::now(),
             inventory: Default::default(),
@@ -328,6 +333,10 @@ impl Ui {
             if self.settings.open {
                 // No underlying controls run while the settings panel owns input.
                 self.settings.draw(ctx);
+                return;
+            }
+            if console_open && self.spell_comment.is_some() {
+                crate::spell_workshop::draw_comment(ctx, &mut self.spell_comment, &mut requests);
                 return;
             }
             if self.spellbook.open {

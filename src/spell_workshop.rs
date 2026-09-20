@@ -4,6 +4,117 @@ use egui::{Color32, RichText};
 
 const GOLD: Color32 = Color32::from_rgb(236, 192, 99);
 
+/// Capture the definition when Comment is clicked, so list changes cannot retarget a draft.
+pub struct SpellComment {
+    pub name: String,
+    pub prompt: String,
+    pub source: String,
+    pub saved_spells: Vec<(u64, u32)>,
+    pub text: String,
+    focus: bool,
+}
+
+impl SpellComment {
+    fn new(module: &crate::scripting::Module, scripting: &ScriptHost) -> Self {
+        Self {
+            name: module.name.clone(), prompt: module.prompt.clone(), source: module.source.clone(),
+            saved_spells: scripting.spellbook.spells.iter().filter(|s| s.source == module.source)
+                .map(|s| (s.id, s.revision)).collect(),
+            text: String::new(), focus: true,
+        }
+    }
+
+    pub fn chat_line(&self, code_id: &str) -> String {
+        // Leave room for the spell identity inside the existing 512-character chat limit.
+        let name: String = self.name.chars().filter(|c| !c.is_control()).take(64).collect();
+        let text: String = self.text.trim().chars().take(360)
+            .map(|c| if c.is_control() { ' ' } else { c }).collect();
+        format!("Spell comment [code {code_id}] \"{name}\": {text}")
+    }
+}
+
+pub fn draw_comment(ctx: &egui::Context, draft: &mut Option<SpellComment>, requests: &mut UiRequests) {
+    let Some(comment) = draft.as_mut() else { return; };
+    let mut open = true;
+    let mut submit = false;
+    let mut cancel = false;
+    egui::Window::new("Comment on spell").id(egui::Id::new("spell_comment"))
+        .open(&mut open).anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .default_width((ctx.screen_rect().width() - 48.0).clamp(240.0, 520.0))
+        .collapsible(false).resizable(true).show(ctx, |ui| {
+            ui.heading(&comment.name);
+            ui.label("What did you expect, and what actually happened?");
+            let response = ui.add(egui::TextEdit::multiline(&mut comment.text).char_limit(360)
+                .desired_rows(5).desired_width(f32::INFINITY)
+                .hint_text("Expected... Observed..."));
+            if comment.focus { response.request_focus(); comment.focus = false; }
+            ui.small(format!("{} / 360 characters", comment.text.chars().count()));
+            ui.small("Posts to session chat with this spell attached. F5 saves the host's chat log.");
+            ui.horizontal(|ui| {
+                let ready = !comment.text.trim().is_empty();
+                submit = ui.add_enabled(ready, egui::Button::new("Post comment")).clicked()
+                    || (ready && ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Enter)));
+                cancel = ui.button("Cancel").clicked();
+            });
+        });
+    if submit { requests.submit_spell_comment = draft.take(); }
+    else if !open || cancel { *draft = None; }
+}
+
+#[cfg(test)]
+mod comment_tests {
+    use super::*;
+
+    #[test]
+    fn comment_keeps_original_spell_after_list_changes_and_fits_chat() {
+        let mut scripting = ScriptHost::new();
+        let source = "function on_cast(api, event) end";
+        let module = crate::scripting::Module::load("First spell".into(), "Original prompt".into(), source.into()).unwrap();
+        let id = scripting.spellbook.remember(&module, "Tester").unwrap();
+        let mut draft = SpellComment::new(&module, &scripting);
+        scripting.add_generated(module).unwrap();
+        scripting.remove(0);
+        scripting.add_generated(crate::scripting::Module::load("Replacement".into(), "Different prompt".into(), source.into()).unwrap()).unwrap();
+        assert_eq!(draft.name, "First spell");
+        assert_eq!(draft.prompt, "Original prompt");
+        assert_eq!(draft.source, source);
+        assert_eq!(draft.saved_spells[0].0, id);
+        draft.name = "猫".repeat(100);
+        draft.text = "ż".repeat(360);
+        let line = draft.chat_line("0123456789abcdef");
+        assert!(line.chars().count() <= crate::net::MAX_CHAT_LEN);
+        assert_eq!(crate::net::chat_text(&line), Some(line.clone()));
+        assert!(line.ends_with(&draft.text));
+    }
+
+    #[test]
+    fn comment_editor_rejects_blank_and_posts_once() {
+        let ctx = egui::Context::default();
+        let scripting = ScriptHost::new();
+        let module = crate::scripting::Module::load("Heal".into(), "Heal sheep".into(), "function on_cast(api, event) end".into()).unwrap();
+        let mut draft = Some(SpellComment::new(&module, &scripting));
+        let mut requests = UiRequests::default();
+        for text in ["   ", "Expected healing; health stayed unchanged."] {
+            draft.as_mut().unwrap().text = text.into();
+            let modifiers = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280., 720.))),
+                modifiers,
+                events: vec![egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers }],
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| draw_comment(ctx, &mut draft, &mut requests));
+            if text.trim().is_empty() { assert!(requests.submit_spell_comment.is_none()); assert!(draft.is_some()); }
+        }
+        let posted = requests.submit_spell_comment.take().unwrap();
+        assert_eq!(posted.name, "Heal");
+        assert_eq!(posted.text.trim(), "Expected healing; health stayed unchanged.");
+        assert!(draft.is_none());
+        let _ = ctx.run(Default::default(), |ctx| draw_comment(ctx, &mut draft, &mut requests));
+        assert!(requests.submit_spell_comment.is_none());
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Kind { #[default] Auto, Instant, Permanent, Enchantment }
 impl Kind {
@@ -209,6 +320,9 @@ pub fn draw(
                                         *viewing = if *viewing == Some(i) { None } else { Some(i) };
                                     }
                                     if is_host && ui.small_button(RichText::new("Delete").color(Color32::LIGHT_RED)).clicked() { requests.delete_index = Some(i); }
+                                    if ui.small_button("Comment").clicked() {
+                                        requests.edit_spell_comment = Some(SpellComment::new(module, scripting));
+                                    }
                                 });
                                 if let Some(binding) = &module.attachment {
                                     ui.small(format!("Enchanting {}", binding.target.label()));

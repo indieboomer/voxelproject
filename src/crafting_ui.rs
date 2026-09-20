@@ -64,7 +64,7 @@ impl CraftingUi {
         self.craftable_only = false;
         self.selected_gear = crate::equipment::Gear::ALL[4 + kind as usize * 4];
         self.feedback = format!(
-            "{}: four recipes learned. This book remains for other travelers.",
+            "{}: four recipes learned. Book stored in inventory [I].",
             crate::gear_catalog::BOOK_NAMES[kind as usize]
         );
     }

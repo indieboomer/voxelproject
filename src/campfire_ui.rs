@@ -15,7 +15,7 @@ pub struct Panel {
     fuel_updated_at: Option<std::time::Instant>,
     fuel_selection: Option<crate::voxel::BlockType>,
     cook_selection: Option<String>,
-    ingredients: Vec<String>,
+    fuel_received: Option<u64>,
 }
 
 impl Panel {
@@ -30,6 +30,7 @@ impl Panel {
             self.cooking_seconds = started.elapsed().as_secs_f32().min(10.0);
             self.cooking_seconds >= 10.0
         } else { false };
+        let ingredients = &player.crafting.cooking_ingredients;
         let mut open = true;
         let mut close_requested = false;
         let mut action = None;
@@ -37,7 +38,7 @@ impl Panel {
             self.cooking_started = None;
             self.cooking_seconds = 0.0;
             action = self.pending_cook.take().map(|queued| queued.with_revision(player.crafting.revision));
-            self.ingredients.clear();
+
             if action.is_some() {
                 self.feedback = "Cooking complete. Adding the dish to your inventory…".into();
             } else {
@@ -56,7 +57,7 @@ impl Panel {
                     ui.label(RichText::new("CAMPFIRE").size(27.0).strong().color(Color32::from_rgb(247, 194, 83)));
                     ui.label("Fire, food and rest.");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("×").clicked() { close_requested = true; }
+                        if ui.small_button("x").clicked() { close_requested = true; }
                     });
                 });
                 ui.separator();
@@ -67,6 +68,10 @@ impl Panel {
                     self.fuel_updated_at = Some(std::time::Instant::now());
                 }
                 let fuel_level = self.fuel_level.get_or_insert(if keeper { 1.0 } else { 0.65 });
+                let received = player.crafting.campfire_fuel_added;
+                if let Some(previous) = self.fuel_received.replace(received) {
+                    *fuel_level = (*fuel_level + received.saturating_sub(previous) as f32 * 0.05).min(1.0);
+                }
                 if keeper { *fuel_level = 1.0; }
                 if !keeper {
                     let now = std::time::Instant::now();
@@ -98,11 +103,12 @@ impl Panel {
                                 let name = block.name().to_lowercase();
                                 adventure::count(&player.crafting, block) > 0 && (crate::resource_defs::definition(block).fuel_value > 0 || name.contains("leaves") || name.contains("flower") || name.contains("herb") || name.contains("plant"))
                             }).collect();
-                            let selected = self.fuel_selection.or_else(|| fuel_items.first().copied());
-                            egui::ComboBox::from_id_source("campfire_fuel").selected_text(selected.map_or("No fuel available".into(), |b| format!("{}  ×{}", b.name(), adventure::count(&player.crafting, b)))).show_ui(ui, |ui| {
-                                for block in &fuel_items { ui.selectable_value(&mut self.fuel_selection, Some(*block), format!("{}  ×{}", block.name(), adventure::count(&player.crafting, *block))); }
+                            self.fuel_selection = self.fuel_selection.filter(|b| fuel_items.contains(b)).or_else(|| fuel_items.first().copied());
+                            let selected = self.fuel_selection;
+                            egui::ComboBox::from_id_source("campfire_fuel").selected_text(selected.map_or("No fuel available".into(), |b| format!("{}  x{}", b.name(), adventure::count(&player.crafting, b)))).show_ui(ui, |ui| {
+                                for block in &fuel_items { ui.selectable_value(&mut self.fuel_selection, Some(*block), format!("{}  x{}", block.name(), adventure::count(&player.crafting, *block))); }
                             });
-                            if ui.add_enabled(!keeper && selected.is_some(), egui::Button::new("Add")).clicked() { let block = selected.unwrap(); let value = crate::resource_defs::definition(block).fuel_value.max(1) as f32; *fuel_level = (*fuel_level + value * 0.05).min(1.0); self.fuel_updated_at = Some(std::time::Instant::now()); self.fuel_selection = None; self.feedback = format!("Added {} to the fire.", block.name()); }
+                            if ui.add_enabled(!keeper && self.fuel_selection.is_some() && action.is_none(), egui::Button::new("Add 1")).clicked() { action = Some(adventure::Action::AddFuel { camp, block: self.fuel_selection.unwrap(), revision: player.crafting.revision }); }
                         });
                         panel(ui, "Light / Extinguish", "Extinguishing preserves the remaining fuel.", |ui| {
                             if keeper { ui.add_enabled(false, egui::Button::new("Campkeeper fire · ∞ fuel")); }
@@ -112,36 +118,28 @@ impl Panel {
                             let account = &player.crafting;
                             let mut cookable: Vec<(String, String, u32)> = crate::voxel::COLLECTIBLE_BLOCKS.iter().copied().filter(|&block| adventure::count(account, block) > 0 && crate::resource_defs::definition(block).cookable).map(|block| (format!("block:{block:?}"), block.name().to_string(), adventure::count(account, block))).collect();
                             for raw in ["harvest:egg", "harvest:milk", "harvest:honey"] { if let Some(&count) = account.production_goods.get(raw) { if count > 0 { cookable.push((raw.into(), crate::food::harvest_name(raw), count)); } } }
-                            let selected = self.cook_selection.clone().or_else(|| cookable.first().map(|item| item.0.clone()));
-                            let selected_display = selected.as_ref().and_then(|key| cookable.iter().find(|item| &item.0 == key)).map_or("No cookable ingredients".into(), |item| format!("{}  ×{}", item.1, item.2));
+                            self.cook_selection = self.cook_selection.clone().filter(|key| cookable.iter().any(|item| &item.0 == key)).or_else(|| cookable.first().map(|item| item.0.clone()));
+                            let selected = self.cook_selection.clone();
+                            let selected_display = selected.as_ref().and_then(|key| cookable.iter().find(|item| &item.0 == key)).map_or("No cookable ingredients".into(), |item| format!("{}  x{}", item.1, item.2));
                             egui::ComboBox::from_id_source("campfire_cooking").selected_text(selected_display).show_ui(ui, |ui| {
-                                for (key, label, count) in &cookable { ui.selectable_value(&mut self.cook_selection, Some(key.clone()), format!("{}  ×{}", label, count)); }
+                                for (key, label, count) in &cookable { ui.selectable_value(&mut self.cook_selection, Some(key.clone()), format!("{}  x{}", label, count)); }
                             });
                             ui.horizontal(|ui| {
-                                let selected_already_added = selected.as_ref().map_or(0usize, |key| self.ingredients.iter().filter(|ingredient| *ingredient == key).count());
-                                let selected_owned = selected.as_ref().and_then(|key| cookable.iter().find(|item| &item.0 == key)).map_or(0, |item| item.2);
-                                if ui.add_enabled(selected.is_some() && self.ingredients.len() < 4 && selected_already_added < selected_owned as usize, egui::Button::new("Add")).clicked() { self.ingredients.push(selected.clone().unwrap()); }
-                                if ui.add_enabled(!self.ingredients.is_empty(), egui::Button::new("Clear")).clicked() { self.ingredients.clear(); }
+                                let idle = self.cooking_started.is_none() && action.is_none();
+                                if ui.add_enabled(idle && self.cook_selection.is_some() && ingredients.len() < 4, egui::Button::new("Add 1")).clicked() {
+                                    action = Some(adventure::Action::AddIngredient { camp, ingredient: self.cook_selection.clone().unwrap(), revision: account.revision });
+                                }
+                                if ui.add_enabled(idle && !ingredients.is_empty(), egui::Button::new("Clear")).clicked() {
+                                    action = Some(adventure::Action::ClearIngredients { camp, revision: account.revision });
+                                }
                             });
-                            ui.label(format!("Ingredients: {} / 4", self.ingredients.len()));
-                            for ingredient in &self.ingredients { ui.small(cookable.iter().find(|item| &item.0 == ingredient).map_or(ingredient.as_str(), |item| item.1.as_str())); }
-                            let selected_count = selected.as_ref().and_then(|key| cookable.iter().find(|item| &item.0 == key).map(|item| item.2)).unwrap_or(0);
-                            ui.label(format!("Selected ingredient  ×{selected_count}"));
-                            let single_action = selected.as_ref().and_then(|key| match key.as_str() {
-                                "block:Meat" => Some(adventure::Action::Cook { camp, amount: 1, revision: account.revision }),
-                                "block:Pumpkin" => Some(adventure::Action::CookHarvest { camp, item: "pumpkin".into(), amount: 1, revision: account.revision }),
-                                "block:BrownMushroom" => Some(adventure::Action::CookHarvest { camp, item: "brown_mushroom".into(), amount: 1, revision: account.revision }),
-                                "block:Glowcap" => Some(adventure::Action::CookHarvest { camp, item: "glowcap".into(), amount: 1, revision: account.revision }),
-                                raw if raw.starts_with("harvest:") => Some(adventure::Action::CookHarvest { camp, item: raw.to_string(), amount: 1, revision: account.revision }),
-                                _ => None,
-                            });
-                            let cook_action = if self.ingredients.len() >= 2 || self.ingredients.first().is_some_and(|key| key == "block:WildHerbs") {
-                                Some(adventure::Action::CookBatch { camp, ingredients: self.ingredients.clone(), revision: account.revision })
-                            } else {
-                                single_action
-                            };
-                            if ui.add_enabled(player.health > 0.0 && cook_action.is_some() && selected_count > 0 && self.cooking_started.is_none(), egui::Button::new("Cook")).clicked() {
-                                self.pending_cook = cook_action;
+                            ui.label(format!("Ingredients: {} / 4", ingredients.len()));
+                            for ingredient in ingredients {
+                                let label = ingredient.strip_prefix("block:").map(str::to_string).unwrap_or_else(|| crate::food::harvest_name(ingredient));
+                                ui.small(format!("{label} x1"));
+                            }
+                            if ui.add_enabled(player.health > 0.0 && !ingredients.is_empty() && self.cooking_started.is_none() && action.is_none(), egui::Button::new("Cook")).clicked() {
+                                self.pending_cook = Some(adventure::Action::CookIngredients { camp, revision: account.revision });
                                 self.cooking_seconds = 0.0;
                                 self.cooking_started = Some(std::time::Instant::now());
                             }

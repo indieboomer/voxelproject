@@ -616,7 +616,7 @@ fn creature_kind_filter(kind: &str) -> Option<u8> {
 /// inverse of `creature_kind_filter`, used everywhere a creature's kind is
 /// reported back into a Lua table (`creatures()`/`find_creatures()`/
 /// `nearest_creature()`/`on_death`'s event).
-fn creature_kind_name(kind_u8: u8) -> &'static str {
+pub(crate) fn creature_kind_name(kind_u8: u8) -> &'static str {
     match kind_u8 {
         1 => "chicken",
         2 => "stone_golem",

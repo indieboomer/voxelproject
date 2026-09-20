@@ -3,7 +3,7 @@ impl App {
     pub(super) fn aimed_book(&self) -> Option<crate::lore_books::Book> {
         let eye = self.camera.eye_position();
         let dir = self.camera.forward();
-        crate::lore_books::nearby(&self.world, self.player.position)
+        crate::lore_books::nearby_uncollected(&self.world, self.player.position, &self.player.crafting)
             .into_iter()
             .filter(|b| crate::lore_books::can_read(&self.world, *b, self.player.position))
             .filter(|b| {

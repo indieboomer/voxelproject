@@ -2,6 +2,8 @@
 use super::{request_completion, request_json, ChatMessage, LlmClient, PromptKind};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+#[path = "intent_scenarios.rs"]
+mod scenarios;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -19,6 +21,8 @@ pub struct Plan {
     pub api_groups: Vec<String>,
     pub requirements: Vec<String>,
     pub unsupported: Vec<String>,
+    #[serde(default)]
+    pub behavior_checks: Vec<scenarios::Check>,
 }
 const SPECIES: &[&str] = &[
     "sheep",
@@ -47,7 +51,8 @@ const GROUPS: &[&str] = &[
 pub const SUMMARY_PREFIX: &str = "-- Interpretation: ";
 
 fn schema() -> Value {
-    json!({"type":"object","additionalProperties":false,"required":["execution","summary","condition","actor_kind","effect","targets","api_groups","requirements","unsupported","artwork","flavor_quote"],"properties":{
+    json!({"type":"object","additionalProperties":false,"required":["execution","summary","condition","actor_kind","effect","targets","api_groups","requirements","unsupported","artwork","flavor_quote","behavior_checks"],"properties":{
+        "behavior_checks":{"type":"array","maxItems":4,"items":scenarios::Check::schema()},
         "flavor_quote":{"type":"string","maxLength":96},
         "artwork":crate::spell_art::Recipe::schema(),
         "execution":{"type":"string","enum":["rule","instant"]},
@@ -56,13 +61,37 @@ fn schema() -> Value {
         "actor_kind":{"type":"string","enum":["none","sheep","chicken","cow","wolf","stone_golem","goblin","stinger","sunscorch","zombie","skeleton","dragon_green","dragon_red","fish","skeleton_sorcerer"]},
         "effect":{"type":"string","enum":["protect_players","suppress_attacks","custom"]},
         "targets":{"type":"string","enum":["players","all","custom"]},
-        "api_groups":{"type":"array","items":{"type":"string","enum":GROUPS},"maxItems":6},
-        "requirements":{"type":"array","items":{"type":"string"},"maxItems":8},
+        "api_groups":{"type":"array","items":{"type":"string","enum":GROUPS},"minItems":1,"maxItems":6},
+        "requirements":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":8},
         "unsupported":{"type":"array","items":{"type":"string"},"maxItems":4}
     }})
 }
 impl Plan {
     pub fn validate(&self, kind: PromptKind) -> Result<(), String> {
+        let mut shape_issues = Vec::new();
+        if self.effect != "custom" && !self.behavior_checks.is_empty() {
+            return Err(
+                "Spatial behavior checks require effect=custom, not an attack protection policy"
+                    .into(),
+            );
+        }
+        if self.behavior_checks.len() > 4 {
+            shape_issues.push("At most four behavior checks are supported".into());
+        }
+        for check in &self.behavior_checks {
+            if let Err(error) = check.validate(kind) {
+                shape_issues.push(error);
+            }
+        }
+        if self.requirements.is_empty()
+            || self.requirements.len() > 8
+            || self.requirements.iter().any(|r| r.len() > 600)
+        {
+            shape_issues.push("Expected 1-8 bounded behavior requirements; state the requested observable outcome".into());
+        }
+        if !shape_issues.is_empty() {
+            return Err(shape_issues.join("; "));
+        }
         let expected = if kind == PromptKind::Rule {
             "rule"
         } else {
@@ -85,12 +114,6 @@ impl Plan {
             || self.summary.chars().any(char::is_control)
         {
             return Err("Interpretation must be one short nonempty line".into());
-        }
-        if self.requirements.is_empty()
-            || self.requirements.len() > 8
-            || self.requirements.iter().any(|r| r.len() > 600)
-        {
-            return Err("Expected 1-8 bounded behavior requirements".into());
         }
         if self.api_groups.is_empty()
             || self.api_groups.len() > 6
@@ -184,8 +207,9 @@ fn interpreted(
     let instructions = include_str!("../prompts/interpretation.txt");
     let mut messages = vec![
         ChatMessage::system(format!(
-            "{instructions}\n{}",
-            crate::spell_flavor::INSTRUCTIONS
+            "{instructions}\n{}\n{}",
+            crate::spell_flavor::INSTRUCTIONS,
+            material_facts()
         )),
         ChatMessage::user(LlmClient::build_user_turn(prompt, kind)),
     ];
@@ -205,7 +229,7 @@ fn interpreted(
         execution:"rule".into(),summary:"During mist, players are protected from goblin attacks; protection ends with mist.".into(),
         condition:"mist".into(),actor_kind:"goblin".into(),effect:"protect_players".into(),targets:"players".into(),
         api_groups:vec!["weather".into(),"creatures".into(),"players".into()],
-        requirements:vec!["Prevent goblins hurting players while mist lasts".into(),"Leave other targets and species unchanged".into()],unsupported:vec![]
+        requirements:vec!["Prevent goblins hurting players while mist lasts".into(),"Leave other targets and species unchanged".into()],unsupported:vec![],behavior_checks:vec![]
     }).unwrap()));
     for attempt in 0..2 {
         let raw = request_json(
@@ -228,12 +252,16 @@ fn interpreted(
         match result {
             Ok(plan) => return Ok(plan),
             Err(error) if attempt == 0 => {
+                log::debug!("Rejected interpretation: {error}\n{raw}");
                 messages.push(ChatMessage::assistant(raw.to_string()));
                 messages.push(ChatMessage::user(format!(
                     "Correct this interpretation validation error: {error}"
                 )));
             }
-            Err(error) => return Err(error),
+            Err(error) => {
+                log::debug!("Rejected repaired interpretation: {error}\n{raw}");
+                return Err(error);
+            }
         }
     }
     unreachable!()
@@ -287,6 +315,10 @@ fn review(
         ChatMessage::user(format!("Request: {prompt}\nProposed: {meaning}"))];
     if let Some(code) = code {
         messages.push(ChatMessage::user(format!(
+            "Relevant engine contracts:\n{}",
+            focused_prompt(plan)
+        )));
+        messages.push(ChatMessage::user(format!(
             "Also check this Lua implements it; report actual coding errors only.\n{code}"
         )));
     }
@@ -324,6 +356,14 @@ fn focused_prompt(plan: &Plan) -> String {
             || method == "- api.get_rule_target"
             || method == "- api.get_equipped_item"
             || method == "- api.get_player_journal"
+            || !plan.behavior_checks.is_empty()
+                && [
+                    "- api.surface_height",
+                    "- api.get_block",
+                    "- api.is_block_loaded",
+                    "- api.is_exposed_to_sky",
+                ]
+                .contains(&method)
             || plan.api_groups.iter().any(|g| match g.as_str() {
                 "creatures" => [
                     "creature",
@@ -376,10 +416,40 @@ fn focused_prompt(plan: &Plan) -> String {
         }
     }
     // Unrelated long examples encouraged accidental copying of their night/radius conditions.
-    full.split("EXAMPLE MODULES")
+    let prompt = full
+        .split("EXAMPLE MODULES")
         .next()
         .unwrap_or(&full)
-        .replace(super::WORLD_API_COMPACT, &compact)
+        .replace(super::WORLD_API_COMPACT, &compact);
+    let prompt = prompt
+        .lines()
+        .filter(|line| {
+            !line.starts_with("- Ground position in front")
+                || plan.behavior_checks.iter().any(|c| c.scope == "front")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    // A worked example must obey the actual plan's radius; otherwise small models
+    // copy its default distance even after receiving a narrower placement check.
+    let prompt = if let Some(check) = plan.behavior_checks.iter().find(|c| c.scope == "front") {
+        let distance = check.radius.min(3.0);
+        prompt
+            .replace("p.x+3*f.x/n", &format!("p.x+{distance}*f.x/n"))
+            .replace("p.z+3*f.z/n", &format!("p.z+{distance}*f.z/n"))
+    } else {
+        prompt
+    };
+    format!("{prompt}\n{}", material_facts())
+}
+
+/// The same definitions drive eating and Lua metadata; do not maintain a second toxic-plant list.
+fn material_facts() -> String {
+    let poisonous: Vec<_> = crate::voxel::COLLECTIBLE_BLOCKS
+        .iter()
+        .filter(|&&b| crate::resource_defs::definition(b).poisonous)
+        .map(|b| b.id())
+        .collect();
+    format!("Authoritative material facts: valid block IDs: {}. Poisonous when eaten raw: {}. This is a material property (get_block_info(kind).poisonous), not a creature's poisoned status. Wild herbs use wild_herbs; mushrooms include brown_mushroom and glowcap. No other material should be assumed poisonous.", crate::world_api_gen::BLOCK_KINDS.join(", "), poisonous.join(", "))
 }
 fn resolve_target_scope(url: &str, prompt: &str) -> Result<String, String> {
     let schema = json!({"type":"object","additionalProperties":false,"required":["targets"],"properties":{"targets":{"type":"string","enum":["players","all","custom"]}}});
@@ -457,7 +527,7 @@ pub(super) fn generate_prepared(
         verify_policy(&plan, &code)?;
         return Ok(plan.annotate(&code, "typed capability; scenario checks passed"));
     }
-    let mut messages=vec![ChatMessage::system(focused_prompt(&plan)),ChatMessage::user(format!("{}\nValidated interpretation: {}\nImplement all requirements. Do not invent constraints.",LlmClient::build_user_turn(prompt,kind),serde_json::to_string(&plan).unwrap()))];
+    let mut messages=vec![ChatMessage::system(focused_prompt(&plan)),ChatMessage::user(format!("{}\nValidated interpretation: {}\nImplement all requirements. Do not invent constraints.\n{}",LlmClient::build_user_turn(prompt,kind),serde_json::to_string(&plan).unwrap(),scenarios::guidance(&plan.behavior_checks)))];
     if let Some((code, error)) = correction {
         messages.push(ChatMessage::assistant(code.into()));
         messages.push(ChatMessage::user(format!(
@@ -487,6 +557,8 @@ pub(super) fn generate_prepared(
             Some("This attached rule must use api.get_rule_target() to address its saved object. Return if the target is nil.".into())
         } else if let Err(error) = smoke_generated_code(&code, kind, prompt) {
             Some(error)
+        } else if let Err(error) = scenarios::verify(&code, kind, &plan.behavior_checks) {
+            Some(error)
         } else {
             review(url, prompt, &plan, Some(&code))?
         };
@@ -498,12 +570,17 @@ pub(super) fn generate_prepared(
                 ))
             }
             Some(error) if attempt == 0 => {
+                log::debug!("Rejected spell candidate: {error}\n{code}");
                 messages.push(ChatMessage::assistant(code));
                 messages.push(ChatMessage::user(format!(
-                    "Repair these concrete failures: {error}"
+                    "Repair these concrete failures: {error}\n{}",
+                    scenarios::guidance(&plan.behavior_checks)
                 )));
             }
-            Some(error) => return Err(format!("Behavior review failed: {error}")),
+            Some(error) => {
+                log::debug!("Rejected repaired spell candidate: {error}\n{code}");
+                return Err(format!("Behavior review failed: {error}"));
+            }
         }
     }
     unreachable!()
@@ -519,7 +596,17 @@ pub(crate) fn validate_candidate(code: &str, kind: PromptKind) -> Result<(), Str
             .collect::<Vec<_>>()
             .join("; "));
     }
-    smoke_code(code, kind)
+    smoke_code(code, kind)?;
+    if let Some(json) = code
+        .lines()
+        .find_map(|line| line.strip_prefix("-- Intent plan: "))
+    {
+        let plan: Plan =
+            serde_json::from_str(json).map_err(|e| format!("Invalid saved intent plan: {e}"))?;
+        plan.validate(kind)?;
+        scenarios::verify(code, kind, &plan.behavior_checks)?;
+    }
+    Ok(())
 }
 
 fn smoke_code(code: &str, kind: PromptKind) -> Result<(), String> {
@@ -564,7 +651,16 @@ fn smoke_code_with_attachment(
     let mut chunk = crate::voxel::chunk::Chunk::new(0, 0);
     for x in 0..16 {
         for z in 0..16 {
-            chunk.set_local(x, 24, z, crate::voxel::BlockType::Stone);
+            chunk.set_local(
+                x,
+                24,
+                z,
+                if attachment == Some("block") {
+                    crate::voxel::BlockType::Stone
+                } else {
+                    crate::voxel::BlockType::Grass
+                },
+            );
         }
     }
     world.chunks.insert((0, 0), chunk);
@@ -645,7 +741,14 @@ fn smoke_code_with_attachment(
         let mut weather = WeatherState::new(1);
         weather.set(Weather::from_name(weather_name).unwrap());
         let out = if kind == PromptKind::Instant {
-            host.run_cast(
+            let context = crate::spell_target::TargetContext::resolve(
+                &world,
+                &creatures,
+                pos + Vec3::Y * 1.62,
+                Vec3::new(1.0, -0.6, 0.0),
+            )
+            .ok_or("Smoke fixture could not resolve cast context")?;
+            host.run_targeted_cast(
                 0,
                 &world,
                 &mut creatures,
@@ -654,6 +757,7 @@ fn smoke_code_with_attachment(
                 &mut weather,
                 0,
                 [1; COLLECTIBLE_BLOCKS.len()],
+                context,
             )
         } else {
             host.run_tick(
@@ -669,7 +773,7 @@ fn smoke_code_with_attachment(
         };
         if !out.crashes.is_empty() {
             return Err(format!(
-                "Isolated {weather_name} scenario failed: {}",
+                "Isolated {weather_name} scenario failed on loaded dry ground. Y=24 is SOLID support, Y=25 is AIR; caster is at (8.5,25,8.5). Do not require support below a land creature to be air. Sky exposure is NOT a water test. Attachment fixture: {attachment:?}. get_block_info accepts material IDs, never creature species, and can return nil: {}",
                 out.crashes.join("; ")
             ));
         }
@@ -868,6 +972,7 @@ mod tests {
             api_groups: vec!["creatures".into(), "players".into(), "weather".into()],
             requirements: vec!["Protect players during rain only".into()],
             unsupported: vec![],
+            behavior_checks: vec![],
         }
     }
     #[test]
@@ -900,6 +1005,31 @@ mod tests {
         p.actor_kind = "wolf\"; api.die(1)".into();
         assert!(p.validate(PromptKind::Rule).is_err());
         assert!(verify_policy(&plan(), "function on_tick(api) end").is_err());
+    }
+
+    #[test]
+    fn cached_code_reruns_declared_behavior_checks() {
+        let mut p = plan();
+        p.effect = "custom".into();
+        p.execution = "instant".into();
+        p.condition = "always".into();
+        p.actor_kind = "none".into();
+        p.behavior_checks = vec![scenarios::Check {
+            action: "place_block".into(),
+            material: "campfire".into(),
+            scope: "nearby".into(),
+            count: 1,
+            radius: 6.,
+        }];
+        let broken = p.annotate("function on_cast(api,e) end", "test");
+        assert!(validate_candidate(&broken, PromptKind::Instant)
+            .unwrap_err()
+            .contains("Expected 1 placed campfire"));
+        let good = p.annotate(
+            "function on_cast(api,e) assert(api.place_campfire_near_player(e.player_id,6)) end",
+            "test",
+        );
+        validate_candidate(&good, PromptKind::Instant).unwrap();
     }
     #[test]
     fn attached_smoke_exercises_creature_ids_and_equipped_item_branch() {
@@ -1037,6 +1167,110 @@ mod tests {
             assert!(prompt.contains(&format!("- api.{name}(")), "missing {name}");
         }
         assert!(!prompt.contains("There is no separate equipment-item catalog yet"));
+    }
+
+    #[test]
+    #[ignore = "requires existing local llama-server; checks the latest playtest regressions without activating spells"]
+    fn live_spatial_spell_regressions() {
+        let _ = env_logger::Builder::new()
+            .is_test(true)
+            .filter_module("voxelproject::llm::intent", log::LevelFilter::Debug)
+            .try_init();
+        let url = "http://127.0.0.1:8090/v1/chat/completions";
+        let cases = [
+            (
+                "Create a campfire directly in front of me",
+                "place_block",
+                "campfire",
+                "front",
+            ),
+            (
+                "Create a campfire close to me",
+                "place_block",
+                "campfire",
+                "nearby",
+            ),
+            (
+                "spawn a chicken in front of me",
+                "spawn_creature",
+                "chicken",
+                "front",
+            ),
+            (
+                "Grow one bush of wild herbs nearby",
+                "place_block",
+                "wild_herbs",
+                "nearby",
+            ),
+            (
+                "Destroy all poisonous plants and mushrooms nearby",
+                "remove_blocks",
+                "poisonous",
+                "nearby",
+            ),
+            (
+                "If target is poisonous then destroy it",
+                "remove_blocks",
+                "poisonous",
+                "attached",
+            ),
+        ];
+        let mut results = Vec::new();
+        let filter = std::env::var("VOXEL_SPELL_REGRESSION_FILTER").ok();
+        for (request, action, material, scope) in cases {
+            if filter
+                .as_ref()
+                .is_some_and(|filter| !request.contains(filter))
+            {
+                continue;
+            }
+            let prompt = if scope == "attached" {
+                crate::spell_workshop::Kind::Enchantment.prepare(request).1
+            } else {
+                request.into()
+            };
+            let kind = if scope == "attached" {
+                PromptKind::Rule
+            } else {
+                super::super::classify_prompt(request)
+            };
+            let start = std::time::Instant::now();
+            let result = prepare(url, &prompt, kind).and_then(|plan| {
+                if !plan.behavior_checks.iter().any(|c| {
+                    c.action == action
+                        && c.scope == scope
+                        && (c.material == material
+                            || material == "poisonous"
+                                && crate::voxel::BlockType::from_name(&c.material)
+                                    .is_some_and(|b| crate::resource_defs::definition(b).poisonous))
+                }) {
+                    return Err(format!(
+                        "Interpretation omitted the requested behavior check: {}",
+                        serde_json::to_string(&plan).unwrap()
+                    ));
+                }
+                generate_prepared(url, &prompt, kind, None, plan)
+            });
+            println!(
+                "{} {request} ({:.1}s)",
+                if result.is_ok() { "PASS" } else { "FAIL" },
+                start.elapsed().as_secs_f32()
+            );
+            results.push(json!({"prompt":request,"seconds":start.elapsed().as_secs_f32(),"code":result.as_ref().ok(),"error":result.as_ref().err()}));
+            std::fs::write(
+                if filter.is_some() {
+                    "target/spell-creation-focused.json"
+                } else {
+                    "target/spell-creation-regressions.json"
+                },
+                serde_json::to_vec_pretty(&results).unwrap(),
+            )
+            .unwrap();
+        }
+        assert!(
+            results.iter().all(|r| r["error"].is_null()),
+            "See target/spell-creation-regressions.json"
+        );
     }
     #[test]
     #[ignore = "live preflight timing and semantic checks; requires local llama-server"]

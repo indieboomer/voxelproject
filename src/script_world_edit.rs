@@ -214,6 +214,9 @@ pub(super) fn populate<'lua, 'scope>(
             t.set("hardness", d.hardness)?;
             t.set("emission", d.emission)?;
             t.set("ore", BlockFilter::Ore.matches(b))?;
+            let resource = crate::resource_defs::definition(b);
+            t.set("edible", resource.edible)?;
+            t.set("poisonous", resource.poisonous)?;
             Ok(Some(t))
         })?,
     )?;

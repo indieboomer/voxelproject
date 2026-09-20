@@ -6,6 +6,27 @@ use crate::{
 };
 
 pub const MAX_COOK_BATCH: u32 = 64;
+/// Move exactly one ingredient into or out of the saved cooking tray.
+pub fn transfer_ingredient(account: &mut Account, ingredient: &str, refund: bool) -> Result<(), String> {
+    let count = if let Some(name) = ingredient.strip_prefix("block:") {
+        let block = match name {
+            "Meat" => BlockType::Meat, "Pumpkin" => BlockType::Pumpkin,
+            "BrownMushroom" => BlockType::BrownMushroom, "Glowcap" => BlockType::Glowcap,
+            "WildHerbs" => BlockType::WildHerbs,
+            _ => return Err("That ingredient cannot be cooked".into()),
+        };
+        &mut account.resources[index(block)]
+    } else {
+        if !matches!(ingredient, "harvest:egg" | "harvest:milk" | "harvest:honey") {
+            return Err("That ingredient cannot be cooked".into());
+        }
+        account.production_goods.entry(ingredient.into()).or_default()
+    };
+    *count = if refund { count.checked_add(1).ok_or("Ingredient stack is full")? }
+        else { count.checked_sub(1).ok_or("Not enough ingredients")? };
+    if !refund && *count == 0 && ingredient.starts_with("harvest:") { account.production_goods.remove(ingredient); }
+    Ok(())
+}
 pub const CAMPFIRE_DISH: &str = "harvest:campfire_dish";
 pub const CAMPFIRE_HERBAL_DISH: &str = "harvest:campfire_herbal_dish";
 pub const CAMPFIRE_POISONOUS_DISH: &str = "harvest:campfire_poisonous_dish";
@@ -35,7 +56,7 @@ pub fn cook_harvest(account: &mut Account, item: &str, amount: u32) -> Result<()
 pub fn cook_batch(account: &mut Account, ingredients: &[String]) -> Result<&'static str, String> {
     if !(1..=4).contains(&ingredients.len()) { return Err("A dish needs 1 to 4 ingredients".into()); }
     let purifying = ingredients.iter().any(|ingredient| ingredient == "block:WildHerbs");
-    let poisonous = ingredients.iter().any(|ingredient| ingredient == "block:Glowcap");
+    let mut poisonous = false;
     for ingredient in ingredients {
         if let Some(block_name) = ingredient.strip_prefix("block:") {
             let block = match block_name {
@@ -47,6 +68,7 @@ pub fn cook_batch(account: &mut Account, ingredients: &[String]) -> Result<&'sta
                 _ => return Err("That ingredient cannot be cooked".into()),
             };
             let index = COLLECTIBLE_BLOCKS.iter().position(|candidate| *candidate == block).ok_or("Ingredient unavailable")?;
+            poisonous |= crate::resource_defs::definition(block).poisonous;
             account.resources[index] = account.resources[index].checked_sub(1).ok_or("Not enough ingredients")?;
         } else if ingredient.starts_with("harvest:") {
             let count = account.production_goods.get(ingredient).copied().unwrap_or(0);

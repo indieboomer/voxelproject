@@ -1,4 +1,4 @@
-# Prompting with World API 1.33
+# Prompting with World API 1.38
 
 For the complete current walkthrough and API reference in one document, use the
 [World API user guide](../world_api/USER_GUIDE.md).
@@ -8,6 +8,32 @@ generated compact API reference, so schema updates must be regenerated before
 rebuilding. All methods live directly under `api`; there is no `api.world` or
 `api.player` namespace. See the [complete reference](../world_api/world_api_readme.md)
 for signatures, supported callbacks, resource limits and existing creature control.
+
+Auto treats "grow" and "destroy" commands as instant actions; recurring language
+still selects a rule. Explicit Instant/Permanent/Enchantment choices take precedence.
+For directional placement, aim at nearby ground: targeted casts expose
+`event.facing`, while player snapshots have no facing field. Ground placements use
+`surface_height(x,z) + 1`. Missing aim must produce feedback instead of a fixed
+world-direction fallback.
+
+Material facts come from the same definitions used by food consumption.
+`get_block_info(kind).poisonous` identifies raw materials that cause poison when
+eaten (currently Glowcap); it does not mean a creature is currently poisoned.
+Unknown `find_blocks` filters now raise an error instead of silently matching nothing.
+
+The interpreted plan can declare bounded behavior checks for simple placement,
+spawning, and block removal. Generation executes these in isolated worlds with
+several facing directions, a guest caster, real support blocks, and matching and
+nonmatching plants. It checks counts, direction, and preservation before model
+review, and feeds failures into the existing repair attempt. Missing-direction and
+no-matching-target cases are tested too. Cached generated code reruns its declared
+checks. These scenarios cover the declared spatial behavior, not every possible
+rule or terrain arrangement; other requests retain sandbox smoke checks and review.
+
+Regression tests run with `cargo test --offline llm::`. With an existing local
+model server on port 8090, `cargo test --offline live_spatial_spell_regressions --
+--ignored --nocapture` records six playtest requests in
+`target/spell-creation-regressions.json` without activating them in a saved world.
 
 ## World shaping
 

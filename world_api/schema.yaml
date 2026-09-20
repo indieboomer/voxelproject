@@ -18,7 +18,7 @@
 # (air, mud, redstone, crystal, campfire), so it can't drift out of sync with the
 # actual block system the way a third hand-copied list would.
 
-version: "1.37.0"
+version: "1.38.0"
 title: World API
 description: >
   The Lua API exposed to sandboxed rule modules as the `api` table passed
@@ -297,6 +297,8 @@ types:
       - {name: hardness, type: integer, desc: "Base mining hardness, not a mutable setting."}
       - {name: emission, type: number, desc: "Self illumination; does not imply a local light source."}
       - {name: ore, type: boolean, desc: "Ore block or coal."}
+      - {name: edible, type: boolean, desc: "Raw resource can be eaten."}
+      - {name: poisonous, type: boolean, desc: "Eating the raw resource causes poison. This is a material property, not an entity's poisoned status; sourced from the food definitions."}
   PlayerJournal:
     desc: "Detached, read-only view of saved optional campkeeper progress and twenty traveler quests. Mutating this table has no effect."
     fields:
@@ -404,7 +406,7 @@ types:
       - {name: y, type: integer}
       - {name: z, type: integer}
   CastEvent:
-    desc: "Passed to on_cast. Host Run resolves the current aimed creature or block within 18 blocks, rechecking identity, range and terrain obstruction. Target fields are absent when nothing is aimed at or for legacy/guest-proposal casts. Assert the required target kind before making changes. Stage 1A context is immediate and transient; world_revision, selected_region, durable spell IDs and guest targeted requests are not implemented. Top-level x/y/z are not provided."
+    desc: "Passed to on_cast. Targeted casts resolve the current aimed creature or block within 18 blocks, rechecking identity, range and terrain obstruction. Optional context fields are absent when nothing is aimed at or for legacy/proposal casts. Use event.facing for direction, never player.facing; require context for directional effects and report missing aim before changing anything. Assert any required target kind. Context is immediate and transient. Top-level x/y/z are not provided."
     fields:
       - {name: player_id, type: integer, desc: "Caster ID matching PlayerSnapshot.id. Host-approved guest proposals use the connected author's ID; do not hardcode 0."}
       - {name: target, type: "CastTarget|nil", desc: "Authoritatively resolved target for this invocation; never embed its ID in reusable source."}
@@ -550,7 +552,7 @@ methods:
   - name: get_block_info
     namespace: world
     category: query
-    summary: "Inspect a block material by ID, not coordinates. To inspect a cell use get_block_info(get_block(x,y,z))."
+    summary: "Inspect a block material by ID, not coordinates. Includes edible and poisonous food properties. To inspect a cell use get_block_info(get_block(x,y,z)); attached blocks expose target.material."
     params: [{name: kind, type: string}]
     returns: {type: "BlockInfo | nil", desc: "Detached metadata; nil for unknown IDs."}
     errors: []
@@ -577,7 +579,7 @@ methods:
   - name: surface_height
     namespace: world
     category: query
-    summary: "Topmost solid block in a loaded column, including trees, construction, devices and staged edits. Unlike terrain_height this reads the actual edited world. It is not the cave floor below a player. Scans at most 128 cells."
+    summary: "Topmost occupied solid block Y in a loaded column, including trees, construction, devices and staged edits. Place ground plants or campfires at Y+1 after checking support/clearance, not inside this block. Unlike terrain_height this reads the actual edited world. It is not the cave floor below a player. Scans at most 128 cells."
     params: [{name: x, type: integer}, {name: z, type: integer}]
     returns: {type: "integer | nil", desc: "Top solid Y; nil for an unloaded or entirely empty column."}
     errors: []
@@ -885,7 +887,7 @@ methods:
   - name: place_campfire
     namespace: world
     category: action
-    summary: "Place an indefinitely burning campfire on loaded grass, soil, sand, or stone with four air blocks above the support. Uses one shared block edit; no recipe or inventory cost."
+    summary: "Place an indefinitely burning campfire in an air cell above loaded grass, soil, sand, or stone, with four air blocks above the support. For surface placement pass surface_height(x,z)+1 as y, never the occupied support Y. Uses one shared block edit; no recipe or inventory cost. Returns a boolean, not a snapshot."
     params: [{name: x, type: integer}, {name: y, type: integer}, {name: z, type: integer}]
     returns: {type: boolean, desc: "False for occupied, unsupported, unloaded, out-of-height, or exhausted-budget sites. To remove, replace_block(x,y,z,'air')."}
     errors: []
@@ -1000,13 +1002,13 @@ methods:
     category: query
     summary: "Positions of every block of one kind within a radius of a point."
     params:
-      - {name: kind, type: string, desc: "Exact block ID or category any, wood, ore, leaves, plant, solid, liquid; see block_matches. Unknown filters return an empty result. Legacy find_creatures instead treats unknown kinds as any; do not rely on that behavior."}
+      - {name: kind, type: string, desc: "Exact block ID or category any, wood, ore, leaves, plant, solid, liquid; see block_matches. Unknown filters raise an error, including names passed through variables. Poisonous is not a filter: query plants then inspect get_block_info(kind).poisonous. Legacy find_creatures instead treats unknown kinds as any; do not rely on that behavior."}
       - {name: cx, type: integer}
       - {name: cy, type: integer}
       - {name: cz, type: integer}
       - {name: radius, type: number, desc: "Clamped into [0, find_radius_max]."}
     returns: {type: "BlockPos[]", desc: "Up to find_results_max entries; excess matches are silently dropped."}
-    errors: []
+    errors: ["Unknown block ID or filter raises a runtime error (since 1.38.0); a valid filter with no matches returns an empty table."]
     budget_ref: find_radius_max
     since: "1.0.0"
 

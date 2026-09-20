@@ -43,7 +43,7 @@ fn card(ui: &mut egui::Ui, spell: &crate::spellbook::Spell, selected: bool, mana
     (response.on_hover_text(format!("{}\n{} mana", spell.name, if mana_free { 0 } else { spell.mana_cost })), false)
 }
 
-pub enum Action { Assign(SpellId, usize), GenerateQuote(SpellId), SetQuote(SpellId, u32, String), Update(SpellId, String, TargetRequirement), Duplicate(SpellId), Delete(SpellId), Cast(SpellId), AllowGuests(SpellId, bool), Transfer(SpellId, String) }
+pub enum Action { OpenWorkshop, Assign(SpellId, usize), GenerateQuote(SpellId), SetQuote(SpellId, u32, String), Update(SpellId, String, TargetRequirement), Duplicate(SpellId), Delete(SpellId), Cast(SpellId), AllowGuests(SpellId, bool), Transfer(SpellId, String) }
 
 #[derive(Default)]
 pub struct Panel {
@@ -52,6 +52,42 @@ pub struct Panel {
     pub feedback: String, trade_target: String, quote_job: Option<QuoteJob>, view_code: Option<SpellId>,
 }
 struct QuoteJob { id: SpellId, revision: u32, receiver: std::sync::mpsc::Receiver<Result<String, String>> }
+
+#[cfg(test)]
+mod navigation_tests {
+    use super::*;
+
+    #[test]
+    fn workshop_button_emits_navigation_for_host_and_guest() {
+        for is_host in [true, false] {
+            let ctx = egui::Context::default();
+            let book = Spellbook::default();
+            let mut panel = Panel { open: true, ..Default::default() };
+            let input = || egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600., 1000.))),
+                ..Default::default()
+            };
+            // Let egui finish window sizing before finding the actual button.
+            let _ = ctx.run(input(), |ctx| { panel.draw(ctx, &book, is_host, false); });
+            let output = ctx.run(input(), |ctx| { panel.draw(ctx, &book, is_host, false); });
+            let pos = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.text() == "Open Spell Workshop [~]" =>
+                    Some(text.pos + text.galley.size() * 0.5),
+                _ => None,
+            }).expect("workshop button must be visible");
+            let mut action = None;
+            for pressed in [true, false] {
+                let mut frame = input();
+                frame.events = vec![egui::Event::PointerMoved(pos), egui::Event::PointerButton {
+                    pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default(),
+                }];
+                let _ = ctx.run(frame, |ctx| { action = panel.draw(ctx, &book, is_host, false); });
+            }
+            assert!(matches!(action, Some(Action::OpenWorkshop)));
+            assert!(!panel.open);
+        }
+    }
+}
 
 impl Panel {
     pub fn start_quote(&mut self, spell: &crate::spellbook::Spell, url: &str) {
@@ -101,7 +137,7 @@ impl Panel {
                 });
             });
             if !self.feedback.is_empty() { ui.label(&self.feedback); }
-            ui.separator(); ui.horizontal(|ui| { ui.label("📖  Tip: Create and manage spells in Spell Workshop."); if ui.button("Open Spell Workshop [~]").clicked() { close_requested = true; } });
+            ui.separator(); ui.horizontal(|ui| { ui.label("📖  Tip: Create and manage spells in Spell Workshop."); if ui.button("Open Spell Workshop [~]").clicked() { close_requested = true; action = Some(Action::OpenWorkshop); } });
         });
         if close_requested { open = false; }
         self.open = open;

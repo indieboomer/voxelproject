@@ -13,6 +13,8 @@ mod npc_app;
 mod playtest_app;
 #[path = "spell_app.rs"]
 mod spell_app;
+#[path = "spell_diagnostics_app.rs"]
+mod spell_diagnostics_app;
 use crate::transport::{JoinTarget, Peer, Transport};
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -732,6 +734,7 @@ pub struct App {
     /// `CHAT_LOG_CAPACITY`. See `log_message`.
     chat_log: Vec<ChatEntry>,
     chat_transcript: Vec<String>,
+    diagnostic_sources: std::collections::HashSet<String>,
     chat_bubbles: HashMap<PlayerId, remote_player::ChatBubble>,
     chat_open: bool,
     chat_input: String,
@@ -1883,6 +1886,7 @@ impl App {
             toasts: Vec::new(),
             chat_log: Vec::new(),
             chat_transcript: crafting_save.chat_transcript,
+            diagnostic_sources: Default::default(),
             chat_bubbles: HashMap::new(),
             chat_open: false,
             chat_input: String::new(),
@@ -2020,6 +2024,16 @@ impl App {
                 let PhysicalKey::Code(code) = key_event.physical_key else {
                     return;
                 };
+                if self.console_open && self.ui.spell_comment.is_some() {
+                    if !key_event.repeat && code == KeyCode::Escape {
+                        self.ui.spell_comment = None;
+                    }
+                    if !key_event.repeat && code == KeyCode::F5 {
+                        self.input.save_requested = true;
+                    }
+                    // Text (especially digits) belongs to the comment, not hotbar shortcuts.
+                    return;
+                }
                 if self.ui.spellbook.open {
                     if !key_event.repeat {
                         if let Some(slot) = match code {
@@ -2376,7 +2390,7 @@ impl App {
     /// Appends one line to the persistent chat/notification scrollback,
     /// dropping the oldest entry once `CHAT_LOG_CAPACITY` is exceeded.
     fn log_message(&mut self, text: String, color: egui::Color32) {
-        self.chat_transcript.push(text.clone());
+        self.chat_transcript.push(format!("[{}] {}", spell_diagnostics_app::unix_ms(), text));
         if self.chat_log.len() >= CHAT_LOG_CAPACITY {
             self.chat_log.remove(0);
         }
@@ -3190,7 +3204,7 @@ impl App {
             crate::visibility::within_terrain_range(cell, center, RENDER_RADIUS)
                 && self.chunk_meshes.contains_key(&cell)
         }));
-        let books = crate::lore_books::nearby(&self.world, self.player.position)
+        let books = crate::lore_books::nearby_uncollected(&self.world, self.player.position, &self.player.crafting)
             .into_iter()
             .filter(|b| self.chunk_meshes.contains_key(&chunk_of(b.pos)))
             .collect::<Vec<_>>();
@@ -3395,6 +3409,24 @@ impl App {
         }
         if requests.close_workshop {
             self.close_console();
+        }
+        if let Some(comment) = requests.edit_spell_comment {
+            self.ui.spell_comment = Some(comment);
+        }
+        if let Some(comment) = requests.submit_spell_comment {
+            if !comment.text.trim().is_empty() {
+                let code_id = self.diagnose_source(&comment.name, &comment.prompt, &comment.source);
+                self.spell_diagnostic("spell_comment", serde_json::json!({
+                    "code_id": code_id, "name": comment.name, "prompt": comment.prompt,
+                    "saved_spells": comment.saved_spells,
+                    "author": self.local_nickname, "text": comment.text.trim(),
+                }));
+                self.send_chat(comment.chat_line(&code_id));
+            }
+        }
+        if let Some(kind) = requests.open_recipe_book {
+            self.ui.inventory_open = false;
+            self.open_recipe_book(kind);
         }
         if requests.open_spellbook {
             self.console_open = false;
@@ -3664,6 +3696,13 @@ impl App {
     }
 
     fn show_player_chat(&mut self, player_id: PlayerId, name: &str, text: String) {
+        self.spell_diagnostic("player_comment", serde_json::json!({
+            "player_id": player_id, "name": name, "text": text,
+            "local_context": (player_id == self.local_player_id).then(|| serde_json::json!({
+                "selected_spell": self.ui.spellbook.selected,
+                "hotbar_entry": format!("{:?}", self.player.crafting.hotbar.slots[self.player.crafting.hotbar.active as usize]),
+            })),
+        }));
         let formatted = format!("{name}: {text}");
         self.toasts.push(Toast::new(formatted.clone()));
         self.log_message(formatted, CHAT_MESSAGE_COLOR);
@@ -3759,6 +3798,10 @@ impl App {
     /// the in-game console), and it goes to the LLM along with the World
     /// API doc and an example module.
     fn start_generation(&mut self, user_request: String) {
+        self.spell_diagnostic("generation_requested", serde_json::json!({
+            "prompt": user_request, "workshop_kind": format!("{:?}", self.ui.workshop_kind),
+            "api_version": crate::world_api_gen::VERSION,
+        }));
         if !self.can_prompt() {
             return;
         }
@@ -3981,6 +4024,10 @@ impl App {
         };
 
         let name = self.make_rule_name(&user_request);
+        let code_id = self.diagnose_source(&name, &user_request, &code);
+        self.spell_diagnostic("generation_response", serde_json::json!({
+            "code_id": code_id, "retry": is_retry, "expected_kind": generation_noun(kind),
+        }));
         // Pre-flight lint (see world_api_validate) before ever handing the
         // source to a real Lua VM -- catches hallucinated/misspelled World
         // API calls and stale block-kind literals with a specific,
@@ -4007,6 +4054,11 @@ impl App {
         };
         match load_result {
             Ok(module) => {
+                self.spell_diagnostic("generation_validation", serde_json::json!({
+                    "code_id": code_id, "sandbox_loaded": true,
+                    "kind_matches": module.is_instant == matches!(kind, PromptKind::Instant),
+                    "retry": is_retry,
+                }));
                 // Never silently turn a one-time command into a repeating rule
                 // (or vice versa), even if the corrective retry ignores intent.
                 let kind_matches = module.is_instant == matches!(kind, PromptKind::Instant);
@@ -4033,6 +4085,7 @@ impl App {
                         }
                     };
                     let pending = self.llm.retry(&user_request, kind, &code, hint);
+                    self.spell_diagnostic("generation_retry", serde_json::json!({"code_id": code_id, "reason": hint}));
                     self.generation = GenerationState::Waiting {
                         user_request,
                         kind,
@@ -4111,6 +4164,7 @@ impl App {
                 ));
             }
             Err(err) if !is_retry => {
+                self.spell_diagnostic("generation_retry", serde_json::json!({"code_id": code_id, "reason": err}));
                 log::warn!("Generated {noun} failed validation, asking the model to fix it: {err}");
                 let pending = self.llm.retry(&user_request, kind, &code, &err);
                 self.generation = GenerationState::Waiting {
@@ -4121,6 +4175,7 @@ impl App {
                 };
             }
             Err(err) => {
+                self.spell_diagnostic("generation_rejected", serde_json::json!({"code_id": code_id, "reason": err}));
                 log::error!("Generated {noun} failed validation twice, giving up: {err}");
                 self.notify_important(format!("{noun} generation failed: {err}"));
             }
@@ -4541,7 +4596,20 @@ impl App {
     /// the UI, checked again here since `requests.run_index` is plain user
     /// input the UI layer can't fully trust on its own).
     fn run_instant(&mut self, index: usize) {
+        if let Some(module) = self.scripting.modules.get(index) {
+            let (name, prompt, source) = (module.name.clone(), module.prompt.clone(), module.source.clone());
+            let code_id = self.diagnose_source(&name, &prompt, &source);
+            self.spell_diagnostic("workshop_cast", serde_json::json!({
+                "code_id": code_id, "name": name, "mana_before": self.player.crafting.mana,
+                "target": self.aimed_spell_context().map(|c| c.target),
+            }));
+        }
         self.run_instant_with_target(index, None);
+        self.spell_diagnostic("workshop_cast_result", serde_json::json!({
+            "module": self.scripting.modules.get(index).map(|m| &m.name),
+            "runtime_error": self.scripting.modules.get(index).and_then(|m| m.error.as_ref()),
+            "mana_after": self.player.crafting.mana,
+        }));
     }
 
     fn run_instant_with_target(
@@ -4665,7 +4733,13 @@ impl App {
                 caster_resources,
             )
         };
+        self.diagnose_cast_effects(&outcome);
         self.apply_tick_outcome(outcome);
+        self.spell_diagnostic("instant_execution_result", serde_json::json!({
+            "name": name, "caster_id": caster_id,
+            "executed": self.scripting.cast_succeeded(index, caster_id),
+            "runtime_error": self.scripting.modules[index].error,
+        }));
         if self.scripting.cast_succeeded(index, caster_id) {
             let direction = if caster_id == HOST_PLAYER_ID {
                 self.camera.forward()
@@ -4708,6 +4782,14 @@ impl App {
 
     fn spellbook_action(&mut self, action: crate::spellbook_ui::Action) {
         use crate::spellbook_ui::Action;
+        if let Action::OpenWorkshop = action {
+            self.ui.spellbook.open = false;
+            self.chat_open = false;
+            self.crafting_ui.open = false;
+            self.ui.inventory_open = false;
+            self.open_console();
+            return;
+        }
         if let Action::Assign(id, slot) = action {
             self.ui.spellbook.selected = Some(id);
             self.assign_selected_spell_to_hotbar(slot);
@@ -4784,13 +4866,28 @@ impl App {
                 self.cast_remembered_spell(id);
                 return;
             }
-            Action::Transfer(_, _) | Action::Assign(_, _) => unreachable!(),
+            Action::OpenWorkshop | Action::Transfer(_, _) | Action::Assign(_, _) => unreachable!(),
         };
         self.ui.spellbook.feedback = result.unwrap_or_else(|error| error);
         self.publish_spell_catalog();
     }
 
     fn cast_remembered_spell(&mut self, id: crate::spellbook::SpellId) {
+        let attempt = self.diagnose_saved_cast(id, "spellbook_or_hotbar");
+        let before = self.creatures.snapshot_with_ids();
+        self.cast_remembered_spell_inner(id);
+        let after = self.creatures.snapshot_with_ids();
+        self.spell_diagnostic("cast_result", serde_json::json!({
+            "attempt": attempt, "spell_id": id, "feedback": self.ui.spellbook.feedback,
+            "awaiting_host": self.spell_network.pending.is_some(),
+            "mana_after": self.player.crafting.mana,
+            "creatures_changed_or_spawned": after.iter().filter(|c| !before.contains(c)).collect::<Vec<_>>(),
+            "creatures_removed": before.iter().filter(|c| !after.iter().any(|a| a.0 == c.0)).map(|c| c.0).collect::<Vec<_>>(),
+        }));
+        self.log_message(format!("Spell #{id}: {}", self.ui.spellbook.feedback), egui::Color32::LIGHT_BLUE);
+    }
+
+    fn cast_remembered_spell_inner(&mut self, id: crate::spellbook::SpellId) {
         if !matches!(self.net, NetRole::Host(_)) {
             self.request_guest_spell(id);
             return;
@@ -5437,6 +5534,10 @@ impl App {
                                 );
                             }
                             self.ui.spellbook.feedback = message.clone();
+                            self.spell_diagnostic("guest_cast_result", serde_json::json!({
+                                "spell_id": spell, "request_sequence": sequence, "message": message,
+                            }));
+                            self.log_message(format!("Spell #{spell}: {message}"), egui::Color32::LIGHT_BLUE);
                             self.toasts.push(Toast::new(message));
                         }
                     }
@@ -5731,7 +5832,7 @@ impl App {
                 ));
             }
         }
-        for book in crate::lore_books::nearby(&self.world, self.player.position) {
+        for book in crate::lore_books::nearby_uncollected(&self.world, self.player.position, &self.player.crafting) {
             let target = book.pos + Vec3::Y;
             let distance = eye.distance(target);
             if distance > 28.
@@ -7084,7 +7185,7 @@ mod underwater_tests {
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
                 .unwrap();
         device.push_error_scope(wgpu::ErrorFilter::Validation);
-        for source in [include_str!("shader.wgsl"), include_str!("sky.wgsl")] {
+        for source in [include_str!("shader.wgsl"), include_str!("sky.wgsl"), include_str!("water_reflections.wgsl")] {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("underwater validation"),
                 source: wgpu::ShaderSource::Wgsl(source.into()),

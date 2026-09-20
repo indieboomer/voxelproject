@@ -582,6 +582,11 @@ pub fn validate_account(account: &Account, b: &Balance, recipes: &Registry) -> R
     if !account.adventure.valid() {
         return Err("Invalid adventure progress".into());
     }
+    if account.cooking_ingredients.len() > 4 || account.cooking_ingredients.iter().any(|item| !matches!(item.as_str(),
+        "block:Meat" | "block:Pumpkin" | "block:BrownMushroom" | "block:Glowcap" | "block:WildHerbs" |
+        "harvest:egg" | "harvest:milk" | "harvest:honey")) {
+        return Err("Invalid cooking ingredients".into());
+    }
     if account.packed_devices.len() > 8
         || account.production_goods.len() > 13
         || account

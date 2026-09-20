@@ -54,12 +54,16 @@ pub fn validate_source(source: &str) -> Vec<ValidationIssue> {
 // the optional filter for the new block kind (e.g. "ore" is not placeable).
 fn validate_shape_literals(source: &str) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
-    for (method, kind_index) in [("fill_box", 6), ("fill_sphere", 4)] {
+    for (method, arguments) in [
+        ("fill_box", vec![(6, false), (7, true)]),
+        ("fill_sphere", vec![(4, false), (5, true)]),
+        ("find_blocks", vec![(0, true)]),
+    ] {
         for (idx, _) in source.match_indices(&format!("api.{method}")) {
             let Some(args) = call_args_span(source, idx + 4 + method.len()) else {
                 continue;
             };
-            for (index, is_filter) in [(kind_index, false), (kind_index + 1, true)] {
+            for &(index, is_filter) in &arguments {
                 let Some(literal) = argument_literal(args, index) else {
                     continue;
                 };
@@ -363,6 +367,21 @@ mod tests {
     fn validate_source_accepts_a_real_block_kind_literal() {
         let source = r#"function on_tick(api) api.replace_block(0, 0, 0, "oak_wood") end"#;
         assert_eq!(validate_source(source), Vec::new());
+    }
+
+    #[test]
+    fn find_blocks_rejects_invented_literals_but_accepts_catalog_and_categories() {
+        for name in ["glowcap", "wild_herbs", "plant", "ore"] {
+            assert!(validate_source(&format!(
+                "function on_cast(api,e) api.find_blocks('{name}',0,25,0,6) end"
+            ))
+            .is_empty());
+        }
+        assert!(validate_source(
+            "function on_cast(api,e) api.find_blocks('poison_ivy',0,25,0,6) end"
+        )[0]
+        .message
+        .contains("unknown filter"));
     }
 
     #[test]

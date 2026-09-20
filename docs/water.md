@@ -76,3 +76,7 @@ The GPU preview timings include the reflection resolve.
 For a low-angle pool with two reflected pillars, set `VOXEL_REFLECTION_PREVIEW=1`
 and run the same GPU preview test (leave `VOXEL_WATER_PREVIEW` unset).
 Set `VOXEL_PREVIEW_1080=1` to exercise the resolve at 1920x1080.
+
+Water shading uses three oblique waves with smooth world-space noise varying their
+phase and amplitude. Both terrain shading and screen-space reflection use the
+same normals and Fresnel modulation to avoid the old repeating rectangular pattern.

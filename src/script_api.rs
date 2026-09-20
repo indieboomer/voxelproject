@@ -629,7 +629,9 @@ fn populate_api<'lua, 'scope>(
                 // (oak/spruce/birch/cherry), since rules like rain_mud.lua
                 // search for "a tree" generically rather than one species.
                 let Some(filter) = super::world_edit::BlockFilter::parse(&kind) else {
-                    return Ok(t);
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "api.find_blocks: unknown block filter {kind:?}; use get_block_kinds() or a documented category"
+                    )));
                 };
                 let radius = radius.clamp(0.0, MAX_FIND_RADIUS);
                 let r = radius.ceil() as i32;

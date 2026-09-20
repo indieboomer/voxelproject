@@ -121,6 +121,8 @@ pub struct Account {
     #[serde(with = "resource_counts")]
     pub resources: [u32; COLLECTIBLE_BLOCKS.len()],
     pub revision: u64,
+    pub cooking_ingredients: Vec<String>,
+    pub campfire_fuel_added: u64,
 }
 impl Default for Account {
     fn default() -> Self {
@@ -137,6 +139,8 @@ impl Default for Account {
             mana: 0,
             resources: [0; COLLECTIBLE_BLOCKS.len()],
             revision: 0,
+            cooking_ingredients: Vec::new(),
+            campfire_fuel_added: 0,
         }
     }
 }

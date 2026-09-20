@@ -80,7 +80,7 @@ impl App {
                 player_id: id,
                 delta,
             });
-            if block == BlockType::Glowcap { self.apply_player_effect(PlayerEffect::Poisoned { player_id: id, poisoned: true }); }
+            if crate::resource_defs::definition(block).poisonous { self.apply_player_effect(PlayerEffect::Poisoned { player_id: id, poisoned: true }); }
             let satiety = crate::food::satiety(block);
             if let Some(peer) = from {
                 if let NetRole::Host(host) = &mut self.net {

@@ -1,4 +1,4 @@
-//! Seeded, shared recipe books. Reading records knowledge per player; books remain for friends.
+//! Seeded recipe books collected into each player's persistent inventory.
 use crate::{
     adventure::{cell, clear_feet, feet},
     crafting::Account,
@@ -84,6 +84,12 @@ pub fn can_read(world: &World, book: Book, pos: Vec3) -> bool {
     let delta = book.pos + Vec3::Y * FOCUS_HEIGHT - eye;
     delta.length() <= 5.0
         && crate::raycast::raycast(world, eye, delta, (delta.length() - 0.25).max(0.)).is_none()
+}
+/// Collected volumes disappear for their owner; friends can collect their own copy.
+pub fn nearby_uncollected(world: &World, pos: Vec3, account: &Account) -> Vec<Book> {
+    nearby(world, pos).into_iter()
+        .filter(|book| account.adventure.recipe_books & (1 << book.kind) == 0)
+        .collect()
 }
 pub fn read(
     world: &World,
@@ -173,6 +179,8 @@ mod tests {
         let mut a = Account::default();
         let mut b = Account::default();
         assert_eq!(read(&world, &mut a, pos, book.sector), Ok(book.kind));
+        assert!(!nearby_uncollected(&world, pos, &a).iter().any(|b| b.sector == book.sector));
+        assert!(nearby_uncollected(&world, pos, &b).iter().any(|b| b.sector == book.sector));
         let once = a.clone();
         assert_eq!(read(&world, &mut a, pos, book.sector), Ok(book.kind));
         assert_eq!(a, once);

@@ -11,6 +11,18 @@ fn shaping_fixture() -> Fixture {
 }
 
 #[test]
+fn unknown_dynamic_block_filter_errors_and_rolls_back() {
+    let mut f = shaping_fixture();
+    let mut m = module("on_cast", "api.replace_block(1,30,1,'stone'); local names={'poison_ivy'}; api.find_blocks(names[1],0,30,0,6)");
+    let (out, _) = f.invoke(&mut m, "on_cast");
+    assert!(m.error.as_deref().unwrap().contains("unknown block filter"));
+    assert!(out.block_edits.is_empty());
+    let mut empty = module("on_cast", "assert(#api.find_blocks('glowcap',0,30,0,2)==0)");
+    f.invoke(&mut empty, "on_cast");
+    assert!(empty.error.is_none());
+}
+
+#[test]
 fn creature_magic_reads_staged_changes_respects_walls_and_rolls_back() {
     let mut f = shaping_fixture();
     f.creatures = Creatures::new();
@@ -105,6 +117,9 @@ fn world_shaping_queries_read_staged_materials_roofs_and_players() {
         assert(api.teleport_player(p.id,2,20,2)); assert(api.get_player(p.id).y==20)
         assert(#api.get_block_kinds()>80)
         local info=api.get_block_info('iron_ore'); assert(info.ore and info.solid and info.collectible)
+        assert(api.get_block_info('glowcap').poisonous and api.get_block_info('glowcap').edible)
+        assert(not api.get_block_info('brown_mushroom').poisonous)
+        assert(not api.get_block_info('wild_herbs').poisonous)
         info.hardness=999; assert(api.get_block_info('iron_ore').hardness~=999)
         assert(api.get_block_info('invented_ore')==nil)
         assert(api.block_matches('coal','ore') and api.block_matches('oak_wood','wood'))

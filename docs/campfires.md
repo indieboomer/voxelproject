@@ -5,15 +5,16 @@ rest/recovery points. Aim at the fire or keeper and press **F**. See
 [Camps and expeditions](ADVENTURE_GUIDE.md) for requirements, rewards and persistence.
 Camp actions are host-validated; F continues to emit `on_interact` for world rules.
 
-The camp panel includes **Cook 1 meat** and **Cook batch** (up to 64 pieces).
-Each raw meat becomes one cooked meat, with no mana or additional fuel cost.
+The camp panel's **Add 1** buttons transfer exactly one selected fuel resource or
+cooking ingredient per accepted click. Fuel is consumed immediately after host
+validation. Campkeeper fires have unlimited fuel and do not accept fuel.
+Ingredients leave inventory when added to the cooking tray (up to four), which
+is saved with the player's account. **Clear** returns them; **Cook** processes
+only those ingredients after about ten seconds without charging them again.
+A single ingredient produces its cooked version; mixed ingredients make a dish.
 Cooking requires a living player within six blocks, an unobstructed view of the
-fire, and no nearby hostiles. It changes inventory immediately; eat the cooked
-meat from inventory **I** to restore 25 health (raw meat restores 8).
-Inventory revisions prevent repeated cooking requests from consuming twice.
-Raw and cooked meat persist with the host and guest inventories. Multiplayer
-peers must use protocol 38 / the same updated build.
-
+fire, and no nearby hostiles. Inventory revisions reject duplicate requests.
+Multiplayer peers must use the same updated build (protocol 50).
 Campfires are append-only `campfire` blocks generated sparsely on level, dry
 grass, soil, sand, or stone above the shoreline. Placement requires a flat 3x3
 patch and four blocks of clearance. Eligible 48x48 regions try up to eight
@@ -50,7 +51,8 @@ fires play simultaneously; attenuation/panning follows the listener, fading to
 silence at 24 blocks. Removing a fire, its support, or its loaded chunk stops
 its audio. These loops are independent of rain and waterfall ambience.
 
-There is no fuel consumption, weather extinguishing, damage, crafting recipe,
+Fuel additions consume inventory resources; the fuel gauge is local presentation.
+There is no weather extinguishing, damage, crafting recipe,
 or collectible inventory entry. Empty hands (one hit) or a pickaxe (two hits)
 salvage 2 stone (`stone`), 2 oak wood (`oak_wood`), and 4 Fire elements. The stone
 ring and logs return existing resources; the flame releases elemental Fire into

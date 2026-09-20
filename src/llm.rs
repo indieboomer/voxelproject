@@ -167,7 +167,7 @@ impl LlmClient {
             PromptKind::Instant => {
                 "This is a one-time INSTANT SPELL request: define `function on_cast(api, event)` \
                  instead of on_tick. Its whole effect must happen once, immediately -- no \
-                 condition-checking, no waiting for a future tick."
+                 waiting for a future tick. Conditions may be checked during this cast."
             }
         }
     }
@@ -469,7 +469,7 @@ const INSTANT_FIRST_WORDS: &[&str] = &[
     "add", "create", "build", "give", "grant", "spawn", "summon", "heal", "clear", "remove",
     "delete", "kill", "fill", "place", "drop", "make", "set", "teleport", "cast", "poison", "cure",
     "damage", "boost", "start", "stop", "begin", "end", "move", "advance", "skip", "change",
-    "turn", "reset", "restore", "switch",
+    "turn", "reset", "restore", "switch", "grow", "destroy",
 ];
 
 /// Deterministic intent hint; generated code must honor the selected contract.
@@ -477,6 +477,25 @@ const INSTANT_FIRST_WORDS: &[&str] = &[
 /// defaults to a rule. No game effects are hard-coded by this classifier.
 pub fn classify_prompt(prompt: &str) -> PromptKind {
     let lower = format!(" {} ", prompt.trim().to_ascii_lowercase());
+    // A predicate on this selected object is evaluated once, unlike a future trigger.
+    // Explicit recurring language still wins below.
+    let one_shot_target = lower.trim().starts_with("if ")
+        && lower.contains(" then ")
+        && (lower.contains(" target ") || lower.contains(" this "))
+        && ["destroy", "remove", "heal", "damage", "replace"]
+            .iter()
+            .any(|verb| {
+                lower
+                    .split_once(" then ")
+                    .is_some_and(|(_, action)| action.starts_with(verb))
+            })
+        && !RULE_PHRASES
+            .iter()
+            .filter(|&&s| s != " if ")
+            .any(|s| lower.contains(s));
+    if one_shot_target {
+        return PromptKind::Instant;
+    }
     if RULE_PHRASES.iter().any(|p| lower.contains(p)) {
         return PromptKind::Rule;
     }
@@ -788,6 +807,10 @@ mod tests {
             "create camfpire nearby",
             "please build a campfire near me",
             "place a campfire nearby",
+            "Grow wild herbs in front of me",
+            "Grow one bush of wild herbs nearby",
+            "Destroy all poisonous plants and mushrooms nearby",
+            "If target is poisonous then destroy it",
         ] {
             assert_eq!(classify_prompt(prompt), PromptKind::Instant);
         }
@@ -796,6 +819,13 @@ mod tests {
             PromptKind::Rule
         );
         assert_eq!(classify_prompt("add 100 stone"), PromptKind::Instant);
+        for recurring in [
+            "Grow herbs whenever it rains",
+            "Destroy mushrooms every morning",
+            "If target is poisonous then destroy it at night",
+        ] {
+            assert_eq!(classify_prompt(recurring), PromptKind::Rule);
+        }
         assert_eq!(
             classify_prompt("spawn 12 chickens around me"),
             PromptKind::Instant

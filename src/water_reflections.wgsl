@@ -1,3 +1,26 @@
+// Smooth, deterministic world-space variation: no block/chunk boundaries or repeating grid.
+fn water_hash(p: vec2<f32>) -> f32 {
+    var q = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
+    q += vec3<f32>(dot(q, q.yzx + vec3<f32>(33.33)));
+    return fract((q.x + q.y) * q.z);
+}
+fn water_noise(p: vec2<f32>) -> f32 {
+    let cell = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(water_hash(cell), water_hash(cell + vec2<f32>(1.0, 0.0)), u.x),
+        mix(water_hash(cell + vec2<f32>(0.0, 1.0)), water_hash(cell + vec2<f32>(1.0, 1.0)), u.x), u.y);
+}
+fn water_slope(p: vec2<f32>, t: f32) -> vec2<f32> {
+    let warp = water_noise(p * 0.037) * 3.0;
+    let a = dot(p, vec2<f32>(0.51, 0.23)) + t * 0.42 + warp;
+    let b = dot(p, vec2<f32>(-0.19, 0.43)) - t * 0.31 + warp * 1.7;
+    let c = dot(p, vec2<f32>(0.83, -0.57)) + t * 0.57;
+    return (vec2<f32>(0.051, 0.023) * cos(a)
+        + vec2<f32>(-0.019, 0.043) * cos(b)
+        + vec2<f32>(0.021, -0.014) * cos(c))
+        * (0.7 + 0.6 * water_noise(p * 0.071 + vec2<f32>(19.7, 5.3)));
+}
 struct CameraUniform {
     view_proj: mat4x4<f32>,
     light_view_proj: mat4x4<f32>,
@@ -109,11 +132,12 @@ fn resolve_scene(frag: vec4<f32>) -> vec4<f32> {
     let view = normalize(camera.camera_pos.xyz - pos);
     let t = camera.light_params.z;
     // Match shader.wgsl's world-space water waves.
-    let normal = normalize(vec3<f32>(cos(pos.x * 0.6 + t * 0.42) * 0.09, 1.0, -sin(pos.z * 0.5 + t * 0.55) * 0.09));
+    let slope = water_slope(pos.xz, t);
+    let normal = normalize(vec3<f32>(slope.x, 1.0, slope.y));
     let direction = reflect(-view, normal);
     // Match the broad Fresnel response used by the main water material.
     let fresnel_base = select(0.06, 0.06 + 0.94 * pow(1.0 - max(dot(normal, view), 0.0), 3.0), camera.graphics.x > 0.5);
-    let fresnel_noise = 0.93 + 0.07 * sin(pos.x * 1.71 + sin(pos.z * 1.13));
+    let fresnel_noise = 0.90 + 0.10 * water_noise(pos.xz * 0.13);
     let fresnel = fresnel_base * fresnel_noise;
     if direction.y <= 0.01 || fresnel < 0.025 { return vec4<f32>(original.rgb, 1.0); }
     let origin = pos + vec3<f32>(0.0, 0.08, 0.0);

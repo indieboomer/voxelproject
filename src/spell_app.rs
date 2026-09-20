@@ -297,6 +297,15 @@ impl App {
         // Repeated/expired sequences never execute and cannot overwrite a newer result.
         let accepted = session.accept(&request, Instant::now());
         let token = session.token;
+        let spell = self.scripting.spellbook.get(request.spell).cloned();
+        let code_id = spell.as_ref().map(|s| self.diagnose_source(&s.name, &s.original_prompt, &s.source));
+        let attempt = self.spell_diagnostic("guest_cast_attempt", serde_json::json!({
+            "caster_id": caster_id, "spell_id": request.spell, "revision": request.revision,
+            "request_sequence": request.sequence, "code_id": code_id, "target": request.target,
+            "eye": eye.to_array(), "facing": request.facing,
+            "mana_before": self.guest_accounts.get(&key).map(|a| a.mana),
+        }));
+        let before = self.creatures.snapshot_with_ids();
         let result = accepted.and_then(|()| {
             if !alive {
                 return Err("Defeated players cannot cast".into());
@@ -373,6 +382,7 @@ impl App {
                     resources,
                 )
             };
+            self.diagnose_cast_effects(&outcome);
             self.apply_tick_outcome(outcome);
             let success = self.scripting.cast_succeeded(index, caster_id);
             let error = self.scripting.modules[index]
@@ -408,6 +418,14 @@ impl App {
             }
             Ok(format!("Cast {}.", spell.name))
         });
+        let after = self.creatures.snapshot_with_ids();
+        self.spell_diagnostic("guest_cast_execution_result", serde_json::json!({
+            "attempt": attempt, "caster_id": caster_id, "spell_id": request.spell,
+            "success": result.is_ok(), "result": result,
+            "mana_after": self.guest_accounts.get(&key).map(|a| a.mana),
+            "creatures_changed_or_spawned": after.iter().filter(|c| !before.contains(c)).collect::<Vec<_>>(),
+            "creatures_removed": before.iter().filter(|c| !after.iter().any(|a| a.0 == c.0)).map(|c| c.0).collect::<Vec<_>>(),
+        }));
         let remaining = self
             .spell_network
             .guest_cooldowns
