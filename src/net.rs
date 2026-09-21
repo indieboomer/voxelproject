@@ -9,7 +9,7 @@ use crate::voxel::block::BlockType;
 pub type PlayerId = u32;
 pub type WorldEdit = ((i32, i32, i32), BlockType);
 pub const MAX_PLAYERS: usize = 4;
-pub const PROTOCOL_VERSION: u32 = 50;
+pub const PROTOCOL_VERSION: u32 = 51;
 pub const HOST_PLAYER_ID: PlayerId = 0;
 pub const DEFAULT_PORT: u16 = 7878;
 pub const RELIABLE_RESEND_INTERVAL: Duration = Duration::from_millis(200);
@@ -42,12 +42,21 @@ pub enum ReliableMsg {
     ItemAction(crate::equipment::Intent),
     /// Transfer one physical saved-spell card. The host resolves both
     /// accounts and the immutable spell definition; clients never send code.
-    TransferSpellCard { spell_id: crate::spellbook::SpellId, target: String },
+    TransferSpellCard {
+        spell_id: crate::spellbook::SpellId,
+        target: String,
+    },
     /// Client request to harvest a nearby passive animal. Position is only a
     /// hint; the host resolves the creature and checks range/cooldown.
-    HarvestAnimal { pos: [f32; 3] },
-    HarvestHive { pos: [f32; 3] },
-    DestroyHive { pos: [f32; 3] },
+    HarvestAnimal {
+        pos: [f32; 3],
+    },
+    HarvestHive {
+        pos: [f32; 3],
+    },
+    DestroyHive {
+        pos: [f32; 3],
+    },
     /// Client intention; the host resolves the recipe and checks its own account revision.
     CraftRequest {
         revision: u64,
@@ -168,7 +177,10 @@ pub enum ReliableMsg {
         block: BlockType,
         revision: u64,
     },
-    EatHarvest { item: String, revision: u64 },
+    EatHarvest {
+        item: String,
+        revision: u64,
+    },
     FoodResult(String),
     SpellCastFx {
         origin: [f32; 3],
@@ -190,6 +202,10 @@ pub enum ReliableMsg {
     Enchantments {
         revision: u64,
         summaries: Vec<crate::enchantment::Summary>,
+    },
+    /// Host-only hive removal, also sent to late joiners.
+    HiveDestroyed {
+        key: u64,
     },
 }
 

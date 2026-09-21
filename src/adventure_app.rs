@@ -18,11 +18,18 @@ impl App {
     }
     pub(super) fn aimed_hive_hint(&self) -> Option<Vec3> {
         let eye = self.camera.eye_position(); let dir = self.camera.forward().normalize_or_zero();
-        crate::beehive::nearby(&self.world, self.player.position).into_iter().filter(|p| !self.destroyed_hives.contains(&crate::beehive::key(*p))).filter_map(|p| { let along=(p-eye).dot(dir); if !(0.0..=6.0).contains(&along) { return None; } let d=(p-(eye+dir*along)).length(); (d<0.8).then_some((d,p)) }).min_by(|a,b| a.0.total_cmp(&b.0)).map(|(_,p)| p)
+        let positions=crate::beehive::nearby(&self.world, self.player.position).into_iter().filter(|p| !self.destroyed_hives.contains(&crate::beehive::key(*p))).collect::<Vec<_>>();
+        crate::beehive::aimed(&self.world,eye,dir,&positions)
     }
     pub(super) fn harvest_hive(&mut self, from: Option<Peer>, pos: Vec3) {
+        if !matches!(self.net,NetRole::Host(_)) || !pos.is_finite()
+            || self.destroyed_hives.contains(&crate::beehive::key(pos)) || !self.adventure_actor_alive(from) { return; }
         let (player_id, feet, key) = if let Some(peer)=from { let NetRole::Host(host)=&self.net else{return}; let Some(&id)=host.clients.get(&peer) else{return}; let Some(p)=host.remote_players.get(&id) else{return}; (id, p.pos,Some(peer.account_key(&p.nickname))) } else {(self.local_player_id, self.player.position,None)};
-        if pos.distance(feet)>3.5 || !crate::beehive::nearby(&self.world, feet).iter().any(|p| p.distance(pos)<0.2) { self.notify_important("Move closer to the beehive".into()); return; }
+        let Some(pos)=crate::beehive::nearby(&self.world,feet).into_iter().find(|p|p.distance(pos)<0.2) else {return};
+        if self.destroyed_hives.contains(&crate::beehive::key(pos)) { return; }
+        let eye=feet+Vec3::Y*1.62;
+        if crate::beehive::aimed(&self.world,eye,pos+Vec3::Y*0.5-eye,&[pos]).is_none() { return; }
+        if pos.distance(feet)>3.5 { self.notify_important("Move closer to the beehive".into()); return; }
         let key_id = pos.x.to_bits() ^ pos.z.to_bits();
         if self.harvest_cooldowns.get(&key_id).is_some_and(|t| t.elapsed().as_secs_f32() < crate::harvesting::HIVE_COOLDOWN_SECONDS) { self.notify_important("This hive is still recovering".into()); return; }
         let updated = { let account=if let Some(k)=key {self.guest_accounts.entry(k).or_default()} else {&mut self.player.crafting}; *account.production_goods.entry("harvest:honey".into()).or_default() += 1; account.revision=account.revision.saturating_add(1); account.clone() };
@@ -34,11 +41,21 @@ impl App {
         if let Some(peer)=from { if let NetRole::Host(host)=&mut self.net { host.reliable.send(&host.socket, peer, ReliableMsg::CraftState { account: updated, feedback: Some("Collected honey".into()) }); } } else { self.notify_important("Collected honey".into()); }
     }
     pub(super) fn destroy_hive(&mut self, from: Option<Peer>, pos: Vec3) {
+        if !matches!(self.net,NetRole::Host(_)) || !pos.is_finite()
+            || self.destroyed_hives.contains(&crate::beehive::key(pos)) || !self.adventure_actor_alive(from) { return; }
         let (id, feet) = if let Some(peer)=from { let NetRole::Host(host)=&self.net else{return}; let Some(&id)=host.clients.get(&peer) else{return}; let Some(p)=host.remote_players.get(&id) else{return}; (id,p.pos) } else {(self.local_player_id,self.player.position)};
-        if pos.distance(feet)>3.5 || !crate::beehive::nearby(&self.world, feet).iter().any(|p| p.distance(pos)<0.2) { return; }
-        self.destroyed_hives.insert(crate::beehive::key(pos));
+        let Some(pos)=crate::beehive::nearby(&self.world,feet).into_iter().find(|p|p.distance(pos)<0.2) else {return};
+        if self.destroyed_hives.contains(&crate::beehive::key(pos)) { return; }
+        let eye=feet+Vec3::Y*1.62;
+        if crate::beehive::aimed(&self.world,eye,pos+Vec3::Y*0.5-eye,&[pos]).is_none() { return; }
+        if pos.distance(feet)>3.5 { return; }
+        let key=crate::beehive::key(pos);
+        if !self.destroyed_hives.insert(key) { return; }
+        if let NetRole::Host(host)=&mut self.net {
+            for &peer in host.clients.keys() { host.reliable.send(&host.socket,peer,ReliableMsg::HiveDestroyed { key }); }
+        }
         self.audio.play_beehive(pos);
-        self.apply_player_effect(PlayerEffect::Health { player_id: id, delta: -8.0 });
+        self.apply_player_effect(PlayerEffect::Health { player_id: id, delta: -crate::beehive::DESTROY_DAMAGE });
         if from.is_none() { self.notify_important("The hive broke; angry bees sting you!".into()); }
     }
 

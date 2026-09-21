@@ -8,6 +8,7 @@ pub struct Panel {
     pub open: bool,
     pub selected: Option<Cell>,
     pub build: Option<(Kind, u8, Option<usize>)>,
+    category: Category,
     config: Config,
     revision: u64,
     item: String,
@@ -20,6 +21,7 @@ impl Default for Panel {
             open: false,
             selected: None,
             build: None,
+            category: Category::default(),
             config: Config::default(),
             revision: 0,
             item: element_id(0).into(),
@@ -54,7 +56,7 @@ impl Panel {
         if let Some((kind, rotation, _)) = self.build {
             egui::Window::new("Placement").anchor(egui::Align2::CENTER_BOTTOM,[0.0,-110.0]).title_bar(false).show(ctx,|ui| {
                 ui.label(format!("{} · turn {} · Left/right click: place · R: rotate · B/Esc: exit",balance().def(kind).name,rotation));
-                if kind!=Kind::Chest {ui.small("Ports: blue single mark = mana · amber pair = matter · violet bars = signal");}
+                if kind.category()==Category::Machines {ui.small("Ports: blue single mark = mana · amber pair = matter · violet bars = signal");}
                 if !self.feedback.is_empty() {ui.label(&self.feedback);}
             });
         }
@@ -78,12 +80,25 @@ impl Panel {
         }
         let mut open = self.open;
         let mut close = false;
-        egui::Window::new("Mage's workshop").open(&mut open).default_pos(egui::pos2(16.,56.)).default_width(410.0).vscroll(true).show(ctx,|ui| {
+        egui::Window::new("Mage's Building Workshop").open(&mut open).default_pos(egui::pos2(16.,56.)).default_width(410.0).vscroll(true).show(ctx,|ui| {
+            if self.selected.is_none() {
+                ui.horizontal(|ui| { for category in Category::ALL {
+                    ui.selectable_value(&mut self.category, category, category.name());
+                }});
+                ui.separator();
+            }
             ui.label(&self.feedback);
             if let Some(p)=self.selected {
                 let Some(d)=state.devices.get(&p)else{ui.label("Device removed. Open B to build.");return;};
                 if self.config==d.config {self.revision=d.config_revision;}
                 ui.heading(&balance().def(d.kind).name);ui.small(format!("Cell {p:?} · rotation {}",d.rotation));
+                if d.kind.building_prop() {
+                    ui.horizontal(|ui| {
+                        if ui.button("Rotate").clicked() { command=Some(Action::Rotate{cell:p}); }
+                        if ui.button("Pack intact").clicked() { command=Some(Action::Pack{cell:p}); }
+                    });
+                    return;
+                }
                 ui.label(format!("Activity: {:?} · Network mana: {}/{}",d.activity,d.mana,balance().def(d.kind).mana_capacity));
                 if let Some(batch)=&d.batch {ui.add(egui::ProgressBar::new(batch.elapsed as f32/batch.duration as f32).show_percentage());ui.small("This paid cycle keeps its recipe until complete.");}
                 ui.checkbox(&mut self.config.enabled,"Enabled");
@@ -188,15 +203,15 @@ impl Panel {
                 ui.separator();
                 for (f,n,dir) in d.ports(balance()) {ui.small(format!("{f:?}: {n:?} {dir:?}"));}
             } else {
-                ui.label("Build devices with carried resources. F configures; left click packs intact.");
-                for def in &balance().devices {
+                ui.label("Build with carried resources. F inspects; left click packs intact.");
+                for def in balance().devices.iter().filter(|d| d.kind.category()==self.category) {
                     let affordable=def.cost.iter().all(|(id,n)|account_count(account,id)>=*n);
                     if ui.add_enabled(affordable,egui::Button::new(&def.name)).clicked(){self.build=Some((def.kind,0,None));close=true;}
-                    ui.small(def.cost.iter().map(|(id,n)|format!("{n} {id}")).collect::<Vec<_>>().join(", "));
+                    ui.small(def.cost.iter().map(|(id,n)|format!("{n} {}", id.trim_start_matches("resource:").replace('_', " "))).collect::<Vec<_>>().join(", "));
                 }
                 ui.separator();ui.label("Packed installations (all cargo and progress preserved):");
-                for (i,d) in account.packed_devices.iter().enumerate() {
-                    if ui.button(format!("Place {} · {} mana · {} matter",balance().def(d.kind).name,d.mana,d.item_count())).clicked(){self.build=Some((d.kind,d.rotation,Some(i)));close=true;}
+                for (i,d) in account.packed_devices.iter().enumerate().filter(|(_,d)| d.kind.category()==self.category) {
+                    if ui.button(if d.kind.building_prop() { format!("Place {}",balance().def(d.kind).name) } else { format!("Place {} · {} mana · {} matter",balance().def(d.kind).name,d.mana,d.item_count()) }).clicked(){self.build=Some((d.kind,d.rotation,Some(i)));close=true;}
                 }
                 for (item,n) in &account.production_goods {ui.small(format!("Bound creature: {item} ×{n}"));}
             }

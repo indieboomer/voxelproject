@@ -935,3 +935,153 @@ fn bound_creature_release_consumes_exactly_one_and_spawns_once() {
     .is_err());
     assert_eq!(creatures.snapshot().len(), 1);
 }
+
+#[test]
+fn building_props_pay_pack_reload_and_reserve_rotated_footprints() {
+    let r = recipes();
+    let b = balance();
+    for kind in Kind::ALL.into_iter().filter(|k| k.building_prop()) {
+        for rotation in 0..4 {
+            let mut world = World::new(42);
+            world.ensure_chunk_loaded(0, 0);
+            for x in 0..3 {
+                for z in 0..3 {
+                    for y in 40..43 {
+                        world.set_block(x, y, z, BlockType::Air);
+                    }
+                }
+            }
+            let mut state = State::default();
+            let mut account = Account::default();
+            let p = (0, 40, 0);
+            let feet = Vec3::new(0.5, 40.0, 4.5);
+            for (id, n) in &b.def(kind).cost {
+                account_add(&mut account, id, *n).unwrap();
+            }
+            let action = Action::Place {
+                kind,
+                cell: p,
+                rotation,
+                packed: None,
+            };
+            let obstruction = kind.cells(p, rotation).last().unwrap();
+            let before = account.clone();
+            world.set_block(
+                obstruction.0,
+                obstruction.1,
+                obstruction.2,
+                BlockType::Stone,
+            );
+            assert!(apply(&world, &mut state, &mut account, feet, &[], &action, b, &r).is_err());
+            assert_eq!(account, before);
+            world.set_block(obstruction.0, obstruction.1, obstruction.2, BlockType::Air);
+            let occupant = Vec3::new(obstruction.0 as f32 + 0.5, 40.0, obstruction.2 as f32 + 0.5);
+            assert!(apply(
+                &world,
+                &mut state,
+                &mut account,
+                feet,
+                &[occupant],
+                &action,
+                b,
+                &r
+            )
+            .is_err());
+            assert_eq!(account, before);
+            apply(&world, &mut state, &mut account, feet, &[], &action, b, &r).unwrap();
+            for id in b.def(kind).cost.keys() {
+                assert_eq!(account_count(&account, id), 0);
+            }
+            let saved = serde_json::to_string(&state).unwrap();
+            state = serde_json::from_str(&saved).unwrap();
+            state.validate(b, &r).unwrap();
+            world.automation = state.clone();
+            for q in kind.cells(p, rotation) {
+                assert_eq!(world.get_block(q.0, q.1, q.2), BlockType::AutomationDevice);
+                assert_eq!(state.device_at(q).unwrap().cell, p);
+            }
+            apply(
+                &world,
+                &mut state,
+                &mut account,
+                feet,
+                &[],
+                &Action::Pack { cell: p },
+                b,
+                &r,
+            )
+            .unwrap();
+            world.automation = state.clone();
+            assert!(state.devices.is_empty());
+            apply(
+                &world,
+                &mut state,
+                &mut account,
+                feet,
+                &[],
+                &Action::Place {
+                    kind,
+                    cell: p,
+                    rotation,
+                    packed: Some(0),
+                },
+                b,
+                &r,
+            )
+            .unwrap();
+            assert!(account.packed_devices.is_empty());
+        }
+    }
+}
+
+#[test]
+fn building_table_rotation_rejects_obstructions_atomically() {
+    let mut world = World::new(42);
+    world.ensure_chunk_loaded(0, 0);
+    for x in 0..3 {
+        for z in 0..3 {
+            world.set_block(x, 40, z, BlockType::Air);
+        }
+    }
+    let mut state = State::default();
+    let mut account = Account::default();
+    let p = (0, 40, 0);
+    state
+        .devices
+        .insert(p, Device::new(Kind::WoodenTable, p, 0));
+    world.automation = state.clone();
+    world.set_block(0, 40, 2, BlockType::Stone);
+    let before = state.clone();
+    let feet = Vec3::new(0.5, 40.0, -3.5);
+    assert!(apply(
+        &world,
+        &mut state,
+        &mut account,
+        feet,
+        &[],
+        &Action::Rotate { cell: p },
+        balance(),
+        &recipes()
+    )
+    .is_err());
+    assert_eq!(state, before);
+    world.set_block(0, 40, 2, BlockType::Air);
+    apply(
+        &world,
+        &mut state,
+        &mut account,
+        feet,
+        &[],
+        &Action::Rotate { cell: p },
+        balance(),
+        &recipes(),
+    )
+    .unwrap();
+    assert_eq!(state.devices[&p].rotation, 1);
+    assert!(state.device_at((0, 40, 2)).is_some());
+    assert!(state.device_at((2, 40, 0)).is_none());
+    state
+        .devices
+        .insert((1, 40, 2), Device::new(Kind::WoodenStool, (1, 40, 2), 0));
+    assert!(state.validate(balance(), &recipes()).is_err());
+}

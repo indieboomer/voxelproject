@@ -31,5 +31,14 @@
     {"kind":"valve","name":"Controlled Valve","cost":{"resource:copper":2,"resource:oak_wood":1},"mana_capacity":12,"item_capacity":8,"throughput":2,"duration_ticks":1,"ports":[["west","mana","in"],["east","mana","out"],["up","signal","in"],["down","signal","in"]]},
     {"kind":"signal","name":"Signal Connector","cost":{"resource:stone":1},"mana_capacity":0,"item_capacity":0,"throughput":1,"duration_ticks":1,"ports":[["west","signal","both"],["east","signal","both"],["north","signal","both"],["south","signal","both"],["up","signal","both"],["down","signal","both"]]},
     {"kind":"smelter","name":"Ore Smelter","cost":{"resource:stone":4,"resource:clay":2,"resource:oak_wood":1},"mana_capacity":30,"item_capacity":32,"throughput":2,"duration_ticks":1,"ports":[["west","mana","in"],["west","matter","in"],["north","matter","in"],["east","matter","out"]]}
+,
+    {"kind":"wood_roof","name":"Wooden Roof Slope (45°)","cost":{"resource:oak_wood":2},"mana_capacity":0,"item_capacity":0,"throughput":1,"duration_ticks":1,"ports":[]},
+    {"kind":"stone_roof","name":"Stone Roof Slope (45°)","cost":{"resource:stone":2},"mana_capacity":0,"item_capacity":0,"throughput":1,"duration_ticks":1,"ports":[]},
+    {"kind":"wooden_stool","name":"Wooden Stool","cost":{"resource:oak_wood":2},"mana_capacity":0,"item_capacity":0,"throughput":1,"duration_ticks":1,"ports":[]},
+    {"kind":"wooden_table","name":"Wooden Table","cost":{"resource:oak_wood":6},"mana_capacity":0,"item_capacity":0,"throughput":1,"duration_ticks":1,"ports":[]},
+    {"kind":"wooden_bench","name":"Wooden Bench","cost":{"resource:oak_wood":3},"mana_capacity":0,"item_capacity":0,"throughput":1,"duration_ticks":1,"ports":[]},
+    {"kind":"wooden_post","name":"Wooden Post","cost":{"resource:oak_wood":3},"mana_capacity":0,"item_capacity":0,"throughput":1,"duration_ticks":1,"ports":[]},
+    {"kind":"oak_roof_ridge","name":"Oak Roof Ridge (45°)","cost":{"resource:oak_wood":2},"mana_capacity":0,"item_capacity":0,"throughput":1,"duration_ticks":1,"ports":[]},
+    {"kind":"oak_roof_ridge_finial","name":"Oak Roof Ridge Finial","cost":{"resource:oak_wood":3},"mana_capacity":0,"item_capacity":0,"throughput":1,"duration_ticks":1,"ports":[]}
   ]
 }

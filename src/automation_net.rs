@@ -126,7 +126,7 @@ mod tests {
         let recipes = crate::crafting::Registry::load().unwrap();
         let mut state = State::default();
         for (x, kind) in Kind::ALL.into_iter().enumerate() {
-            let p = (x as i32, 30, 0);
+            let p = (x as i32 * 3, 30, 0);
             let mut d = Device::new(kind, p, 0);
             if kind.sustained() {
                 d.powered_ticks = 5;

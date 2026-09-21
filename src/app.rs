@@ -2676,13 +2676,19 @@ impl App {
         self.use_animation = (self.use_animation - dt).max(0.0);
         let machine_input = self.ui.automation.tools_suspended();
         if self.cursor_grabbed {
+                if self.input.left_clicked && !machine_input { if let Some(hive) = self.aimed_hive_hint() {
+                    match &mut self.net {
+                        NetRole::Host(_) => self.destroy_hive(None,hive),
+                        NetRole::Joined(client) => { client.reliable.send(&client.socket,client.server_addr,ReliableMsg::DestroyHive { pos:hive.to_array() }); }
+                    }
+                    self.input.left_clicked=false;
+                } }
                 if let Some(hit) = raycast(
                 &self.world,
                 self.camera.eye_position(),
                 self.camera.forward(),
                 REACH,
                 ) {
-                if self.input.left_clicked { if let Some(hive) = self.aimed_hive_hint() { self.destroy_hive(None, hive); self.input.left_clicked = false; } }
                 if self.input.left_clicked || self.input.right_clicked {
                     if let Some((kind, rotation, packed)) = self.ui.automation.build {
                         self.submit_automation(crate::automation::Action::Place {
@@ -3132,12 +3138,13 @@ impl App {
         let mut mesh =
             crate::creature::mesh_for_snapshot_wet(&visible_creatures, &self.models, &creature_wet);
         let hives = crate::beehive::nearby(&self.world, self.player.position).into_iter().filter(|p| !self.destroyed_hives.contains(&crate::beehive::key(*p))).collect::<Vec<_>>();
+        self.audio.update_beehives(&hives);
         let visible_hives: Vec<_> = hives.iter().copied().filter(|p| {
             let cell = chunk_of(*p);
             crate::visibility::within_terrain_range(cell, center, RENDER_RADIUS)
                 && self.chunk_meshes.contains_key(&cell)
         }).collect();
-        mesh.extend(crate::model::beehive_mesh(&visible_hives));
+        mesh.extend(crate::beehive::mesh(&visible_hives));
         mesh.extend(crate::beehive::particles(&visible_hives, self.water_time));
         mesh.extend(self.harvest_fx.mesh());
         self.prop_cache.retain(&self.world.automation);
@@ -5198,6 +5205,9 @@ impl App {
                         {
                             host.reliable.send(&host.socket, from, msg);
                         }
+                        for &key in &self.destroyed_hives {
+                            host.reliable.send(&host.socket,from,ReliableMsg::HiveDestroyed { key });
+                        }
                         let key = from.account_key(&nickname);
                         // Migrate legacy nickname accounts without letting Direct users claim Steam balances.
                         if matches!(from, Peer::Direct(_))
@@ -5435,6 +5445,7 @@ impl App {
                             }
                         ));
                     }
+                    ReliableMsg::HiveDestroyed { key } => { self.destroyed_hives.insert(key); }
                     ReliableMsg::FoodResult(message) => {
                         self.crafting_ui.feedback = message;
                     }

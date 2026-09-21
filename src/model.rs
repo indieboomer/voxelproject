@@ -266,7 +266,7 @@ impl Models {
     /// (see this module's doc comment). `app.rs`'s `create_atlas_bind_group`
     /// uploads these once at startup into the `tex_layer`-indexed
     /// `creature_texture` array `emit_skinned_mesh`'s vertices sample from.
-    pub fn creature_texture_layers(&self) -> [Option<&image::RgbaImage>; 37] {
+    pub fn creature_texture_layers(&self) -> [Option<&image::RgbaImage>; 46] {
         [
             self.sheep.texture.as_ref(),
             self.chicken.texture.as_ref(),
@@ -305,6 +305,31 @@ impl Models {
             lore_book_model().texture.as_ref(),
             torch_model().texture.as_ref(),
             self.skeleton_sorcerer[0].texture.as_ref(),
+            building_model(crate::automation::Kind::WoodRoof)
+                .texture
+                .as_ref(),
+            building_model(crate::automation::Kind::StoneRoof)
+                .texture
+                .as_ref(),
+            building_model(crate::automation::Kind::WoodenStool)
+                .texture
+                .as_ref(),
+            building_model(crate::automation::Kind::WoodenTable)
+                .texture
+                .as_ref(),
+            building_model(crate::automation::Kind::WoodenBench)
+                .texture
+                .as_ref(),
+            building_model(crate::automation::Kind::WoodenPost)
+                .texture
+                .as_ref(),
+            Some(crate::beehive::texture()),
+            building_model(crate::automation::Kind::OakRoofRidge)
+                .texture
+                .as_ref(),
+            building_model(crate::automation::Kind::OakRoofRidgeFinial)
+                .texture
+                .as_ref(),
         ]
     }
 
@@ -1251,6 +1276,111 @@ pub fn push_model(
     }
 }
 
+fn building_index(kind: crate::automation::Kind) -> usize {
+    use crate::automation::Kind;
+    match kind {
+        Kind::WoodRoof => 0,
+        Kind::StoneRoof => 1,
+        Kind::WoodenStool => 2,
+        Kind::WoodenTable => 3,
+        Kind::WoodenBench => 4,
+        Kind::WoodenPost => 5,
+        Kind::OakRoofRidge => 6,
+        Kind::OakRoofRidgeFinial => 7,
+        _ => panic!("not a building prop"),
+    }
+}
+fn building_model(kind: crate::automation::Kind) -> &'static AnimatedModel {
+    static MODELS: std::sync::OnceLock<[AnimatedModel; 8]> = std::sync::OnceLock::new();
+    &MODELS.get_or_init(|| {
+        let bytes: [&[u8]; 8] = [
+            include_bytes!("../models/construction/wood_shingle_roof_45deg.glb"),
+            include_bytes!("../models/construction/stone_slate_roof_45deg.glb"),
+            include_bytes!("../models/furniture/wooden_stool_1x1x1.glb"),
+            include_bytes!("../models/furniture/wooden_table_3x2x1.glb"),
+            include_bytes!("../models/furniture/wooden_bench_2x1x1.glb"),
+            include_bytes!("../models/furniture/carved_wooden_post_1x1x3.glb"),
+            include_bytes!("../models/construction/oak_roof_ridge_45deg.glb"),
+            include_bytes!("../models/construction/oak_roof_ridge_finial.glb"),
+        ];
+        std::array::from_fn(|i| {
+            let mut m = load_glb(bytes[i]);
+            // Layer 44 belongs to the beehive; new props follow it.
+            m.texture_layer = Some(38.0 + i as f32 + if i >= 6 { 1.0 } else { 0.0 });
+            // Use the same source pixels as the terrain, rather than each
+            // export's independently painted (and differently scaled) atlas.
+            let texture: &[u8] = if i == 1 {
+                include_bytes!("../textures/stone.png")
+            } else {
+                include_bytes!("../textures/oak_log.png")
+            };
+            m.texture = Some(image::load_from_memory(texture).unwrap().to_rgba8());
+            m
+        })
+    })[building_index(kind)]
+}
+pub fn building_mesh(kind: crate::automation::Kind) -> &'static crate::voxel::mesher::MeshData {
+    static MESHES: std::sync::OnceLock<[crate::voxel::mesher::MeshData; 8]> =
+        std::sync::OnceLock::new();
+    &MESHES.get_or_init(|| {
+        use crate::automation::Kind;
+        [
+            Kind::WoodRoof,
+            Kind::StoneRoof,
+            Kind::WoodenStool,
+            Kind::WoodenTable,
+            Kind::WoodenBench,
+            Kind::WoodenPost,
+            Kind::OakRoofRidge,
+            Kind::OakRoofRidgeFinial,
+        ]
+        .map(|kind| {
+            let model = building_model(kind);
+            let mut mesh = crate::voxel::mesher::MeshData {
+                vertices: Vec::new(),
+                indices: Vec::new(),
+            };
+            let matrices = compute_world_matrices(model, None, 0.0);
+            emit_rigid_parts(
+                model,
+                &matrices,
+                &mut mesh.vertices,
+                &mut mesh.indices,
+                Vec3::ZERO,
+                &|x, z| (x, z),
+                white_uv(),
+            );
+            // The supplied building exports use Z as up; the game uses Y.
+            {
+                let turn = glam::Mat3::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+                for v in &mut mesh.vertices {
+                    v.position = (turn * Vec3::from_array(v.position)).to_array();
+                    v.normal = (turn * Vec3::from_array(v.normal)).to_array();
+                }
+            }
+            let mut lo = Vec3::splat(f32::INFINITY);
+            for v in &mesh.vertices {
+                lo = lo.min(Vec3::from_array(v.position));
+            }
+            for v in &mut mesh.vertices {
+                v.position = (Vec3::from_array(v.position) - lo).to_array();
+                // One texture repeat per block in each surface direction.
+                // Project onto an orthonormal face basis so even the 45-degree
+                // roof has square pixels, with no stretching across long parts.
+                // UVs stay local to the prop when it is moved or rotated.
+                let normal = Vec3::from_array(v.normal).normalize();
+                let axis = if normal.x.abs() < 0.9 { Vec3::X } else { Vec3::Z };
+                let across = (axis - normal * axis.dot(normal)).normalize();
+                let along = across.cross(normal);
+                let position = Vec3::from_array(v.position);
+                v.uv = [position.dot(across), position.dot(along)];
+                v.color = [1.0; 3];
+            }
+            mesh
+        })
+    })[building_index(kind)]
+}
+
 fn chest_model() -> &'static AnimatedModel {
     static MODEL: std::sync::OnceLock<AnimatedModel> = std::sync::OnceLock::new();
     MODEL.get_or_init(|| {
@@ -1313,26 +1443,6 @@ fn torch_model() -> &'static AnimatedModel {
         m.texture_layer = Some(36.);
         m
     })
-}
-fn beehive_model() -> &'static AnimatedModel {
-    static MODEL: std::sync::OnceLock<AnimatedModel> = std::sync::OnceLock::new();
-    MODEL.get_or_init(|| load_glb(include_bytes!("../models/beehive.glb")))
-}
-pub fn beehive_mesh(positions: &[glam::Vec3]) -> crate::voxel::mesher::MeshData {
-    let mut mesh = crate::voxel::mesher::MeshData { vertices: vec![], indices: vec![] };
-    for &pos in positions {
-        let start = mesh.vertices.len();
-        push_model(&mut mesh.vertices, &mut mesh.indices, beehive_model(), crate::creature::CreatureKind::Sheep, "", 0., pos, 0.);
-        for vertex in &mut mesh.vertices[start..] {
-            let local = glam::Vec3::from_array(vertex.position) - pos;
-            let rotated = glam::Vec3::new(local.x, -local.z, local.y);
-            vertex.position = (pos + rotated).to_array();
-            let normal = glam::Vec3::from_array(vertex.normal);
-            vertex.normal = glam::Vec3::new(normal.x, -normal.z, normal.y).to_array();
-            vertex.color = [0.72, 0.38, 0.10];
-        }
-    }
-    mesh
 }
 /// Supplied torch's looping flame animation, cached at 16 frames per cycle.
 pub fn torch_mesh(time: f32) -> &'static crate::voxel::mesher::MeshData {
@@ -1538,7 +1648,10 @@ mod tests {
                     }
                     positions.push(matrices[grip].transform_point3(Vec3::ZERO));
                 }
-                if matches!(animation, Clip::Work | Clip::Attack | Clip::Hello | Clip::Dance) {
+                if matches!(
+                    animation,
+                    Clip::Work | Clip::Attack | Clip::Hello | Clip::Dance
+                ) {
                     assert!(
                         positions[0].distance(positions[1]) > 0.01,
                         "hand must move during {animation:?}"

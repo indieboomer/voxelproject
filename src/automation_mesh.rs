@@ -196,11 +196,22 @@ pub fn device(d: &Device, time: f32, preview: Option<bool>, state: &State) -> Me
             );
         }
     }
+    if d.kind.building_prop() {
+        let source = crate::model::building_mesh(d.kind);
+        mesh = MeshData {
+            vertices: source.vertices.clone(),
+            indices: source.indices.clone(),
+        };
+    }
     // Rotate the prop once; face ports below are already in world orientation.
     let rotation = Mat3::from_rotation_y(-(d.rotation as f32) * std::f32::consts::FRAC_PI_2);
+    let [w, _, depth] = d.kind.dimensions(0);
+    let [rw, _, rd] = d.kind.dimensions(d.rotation);
     for v in &mut mesh.vertices {
-        v.position = (Vec3::splat(0.5)
-            + rotation * (Vec3::from_array(v.position) - Vec3::splat(0.5)))
+        v.position = (Vec3::new(rw as f32 * 0.5, 0.0, rd as f32 * 0.5)
+            + rotation
+                * (Vec3::from_array(v.position)
+                    - Vec3::new(w as f32 * 0.5, 0.0, depth as f32 * 0.5)))
         .to_array();
         v.normal = (rotation * Vec3::from_array(v.normal)).to_array();
     }
@@ -285,7 +296,7 @@ pub fn device(d: &Device, time: f32, preview: Option<bool>, state: &State) -> Me
             );
         }
     }
-    if d.activity == Activity::Working || d.signal > 0 {
+    if !d.kind.building_prop() && (d.activity == Activity::Working || d.signal > 0) {
         let p = Vec3::new(
             0.5 + (time * 3.0).sin() * 0.18,
             0.94,
@@ -304,7 +315,7 @@ pub fn device(d: &Device, time: f32, preview: Option<bool>, state: &State) -> Me
         } else {
             [0.95, 0.2, 0.15]
         };
-        for level in 0..d.kind.height() {
+        for (x, y, z) in d.kind.cells((0, 0, 0), d.rotation) {
             let first = mesh.vertices.len();
             for a in [0.01, 0.97] {
                 for z in [0.01, 0.97] {
@@ -314,7 +325,9 @@ pub fn device(d: &Device, time: f32, preview: Option<bool>, state: &State) -> Me
                 }
             }
             for v in &mut mesh.vertices[first..] {
-                v.position[1] += level as f32;
+                v.position = (Vec3::from_array(v.position)
+                    + Vec3::new(x as f32, y as f32, z as f32))
+                .to_array();
             }
         }
     }
@@ -328,6 +341,35 @@ pub fn device(d: &Device, time: f32, preview: Option<bool>, state: &State) -> Me
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn building_models_keep_textures_and_roofs_slope_upward() {
+        for (i, kind) in [
+            Kind::WoodRoof,
+            Kind::StoneRoof,
+            Kind::WoodenStool,
+            Kind::WoodenTable,
+            Kind::WoodenBench,
+            Kind::WoodenPost,
+            Kind::OakRoofRidge,
+            Kind::OakRoofRidgeFinial,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mesh = crate::model::building_mesh(kind);
+            assert!(!mesh.vertices.is_empty());
+            let layer = 38.0 + i as f32 + if i >= 6 { 1.0 } else { 0.0 };
+            assert!(mesh.vertices.iter().all(|v| v.tex_layer == layer));
+            if kind.category() == Category::Construction {
+                assert!(
+                    mesh.vertices.iter().any(|v| v.normal[1] > 0.5
+                        && v.normal[1] < 0.9
+                        && v.normal[0].abs().max(v.normal[2].abs()) > 0.5),
+                    "{kind:?} must have an upward sloping roof face"
+                );
+            }
+        }
+    }
     #[test]
     fn automation_meshes_remain_inside_occupied_height_at_every_rotation() {
         for kind in Kind::ALL {
@@ -345,11 +387,7 @@ mod tests {
                                 .enumerate()
                                 .all(|(axis, x)| x.is_finite()
                                     && x >= -0.00001
-                                    && x <= if axis == 1 {
-                                        kind.height() as f32 + 0.00001
-                                    } else {
-                                        1.00001
-                                    }),
+                                    && x <= kind.dimensions(rotation)[axis] as f32 + 0.00001),
                             "{kind:?} {rotation}: {:?}",
                             v.position
                         );

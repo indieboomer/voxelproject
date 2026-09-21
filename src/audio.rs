@@ -235,6 +235,7 @@ pub struct AudioEngine {
     waterfall_sinks: Vec<SpatialSink>,
     campfire_sinks: Vec<SpatialSink>,
     torch_sinks: Vec<SpatialSink>,
+    beehive_sinks: Vec<SpatialSink>,
     aura_sinks: Vec<(
         crate::automation::Cell,
         crate::automation::Kind,
@@ -283,6 +284,7 @@ impl AudioEngine {
                 waterfall_sinks: Vec::new(),
                 campfire_sinks: Vec::new(),
                 torch_sinks: Vec::new(),
+                beehive_sinks: Vec::new(),
                 aura_sinks: Vec::new(),
                 _stream: Some(stream),
                 handle: Some(handle),
@@ -304,6 +306,7 @@ impl AudioEngine {
                     waterfall_sinks: Vec::new(),
                     campfire_sinks: Vec::new(),
                     torch_sinks: Vec::new(),
+                    beehive_sinks: Vec::new(),
                     aura_sinks: Vec::new(),
                     _stream: None,
                     handle: None,
@@ -438,7 +441,9 @@ impl AudioEngine {
     pub fn play_loot(&mut self) {
         self.play_varied(LOOT, 0.55, 0.0, 0.0);
     }
-    pub fn play_beehive(&mut self, pos: Vec3) { self.play_spatial(BEEHIVE, 0.18, 0.08, 0.05, pos, 8.0); }
+    pub fn play_beehive(&mut self, pos: Vec3) {
+        self.play_spatial(BEEHIVE, 0.18, 0.08, 0.05, pos, 8.0);
+    }
     pub fn play_lore_book(&mut self) {
         self.play_varied(include_bytes!("../sounds/lore_book.mp3"), 0.55, 0.0, 0.0);
     }
@@ -645,6 +650,47 @@ impl AudioEngine {
             sink.set_right_ear_position(right);
             let fade = ((12.0 - pos.distance(self.listener_pos)) / 8.0).clamp(0.0, 1.0);
             sink.set_volume(0.28 * fade * fade);
+        }
+    }
+
+    pub fn update_beehives(&mut self, hives: &[Vec3]) {
+        let mut positions: Vec<_> = hives
+            .iter()
+            .copied()
+            .filter(|p| p.distance_squared(self.listener_pos) < 12.0 * 12.0)
+            .collect();
+        positions.sort_by(|a, b| {
+            a.distance_squared(self.listener_pos)
+                .total_cmp(&b.distance_squared(self.listener_pos))
+        });
+        positions.truncate(4);
+        self.beehive_sinks.truncate(positions.len());
+        let Some(handle) = &self.handle else { return };
+        while self.beehive_sinks.len() < positions.len() {
+            let Ok(decoder) = Decoder::new(Cursor::new(BEEHIVE)) else {
+                break;
+            };
+            let Ok(sink) =
+                SpatialSink::try_new(handle, [0.0; 3], [-0.1, 0.0, 0.0], [0.1, 0.0, 0.0])
+            else {
+                break;
+            };
+            sink.set_volume(0.0);
+            sink.append(decoder.repeat_infinite());
+            self.beehive_sinks.push(sink);
+        }
+        for (i, pos) in positions
+            .into_iter()
+            .enumerate()
+            .take(self.beehive_sinks.len())
+        {
+            let (emitter, left, right) = self.spatial_positions(pos, 5.0);
+            let sink = &self.beehive_sinks[i];
+            sink.set_emitter_position(emitter);
+            sink.set_left_ear_position(left);
+            sink.set_right_ear_position(right);
+            let fade = ((12.0 - pos.distance(self.listener_pos)) / 8.0).clamp(0.0, 1.0);
+            sink.set_volume(0.22 * fade * fade);
         }
     }
 
@@ -1029,12 +1075,23 @@ mod tests {
         assert!(AmbientTrack::Silence.bytes().is_none());
     }
 
+    #[test]
+    fn beehive_buzz_decodes_and_handles_distance_and_removal_without_output() {
+        assert!(Decoder::new(Cursor::new(BEEHIVE)).unwrap().next().is_some());
+        let mut engine = silent_engine();
+        engine.update_beehives(&[Vec3::X, Vec3::Z]);
+        engine.update_beehives(&[Vec3::splat(100.0)]);
+        engine.update_beehives(&[]);
+        assert!(engine.beehive_sinks.is_empty());
+    }
+
     fn silent_engine() -> AudioEngine {
         AudioEngine {
             flight_sinks: Vec::new(),
             waterfall_sinks: Vec::new(),
             campfire_sinks: Vec::new(),
             torch_sinks: Vec::new(),
+            beehive_sinks: Vec::new(),
             aura_sinks: Vec::new(),
             _stream: None,
             handle: None,

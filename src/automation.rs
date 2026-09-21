@@ -33,6 +33,24 @@ pub fn apply_auras(creatures: &mut crate::creature::Creatures, auras: &[(Cell, K
 #[path = "automation_tests.rs"]
 mod tests;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Category {
+    #[default]
+    Construction,
+    Furniture,
+    Machines,
+}
+impl Category {
+    pub const ALL: [Self; 3] = [Self::Construction, Self::Furniture, Self::Machines];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Construction => "Construction",
+            Self::Furniture => "Furniture",
+            Self::Machines => "Machines",
+        }
+    }
+}
+
 pub type Cell = (i32, i32, i32);
 pub type Inventory = BTreeMap<String, u32>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -54,9 +72,17 @@ pub enum Kind {
     Lantern,
     DarkAltar,
     Shrine,
+    WoodRoof,
+    StoneRoof,
+    WoodenStool,
+    WoodenTable,
+    WoodenBench,
+    WoodenPost,
+    OakRoofRidge,
+    OakRoofRidgeFinial,
 }
 impl Kind {
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 24] = [
         Self::Collector,
         Self::Vessel,
         Self::Condenser,
@@ -73,6 +99,14 @@ impl Kind {
         Self::Lantern,
         Self::DarkAltar,
         Self::Shrine,
+        Self::WoodRoof,
+        Self::StoneRoof,
+        Self::WoodenStool,
+        Self::WoodenTable,
+        Self::WoodenBench,
+        Self::WoodenPost,
+        Self::OakRoofRidge,
+        Self::OakRoofRidgeFinial,
     ];
     pub fn id(self) -> &'static str {
         match self {
@@ -92,6 +126,14 @@ impl Kind {
             Self::Lantern => "lantern",
             Self::DarkAltar => "dark_altar",
             Self::Shrine => "shrine",
+            Self::WoodRoof => "wood_roof",
+            Self::StoneRoof => "stone_roof",
+            Self::WoodenStool => "wooden_stool",
+            Self::WoodenTable => "wooden_table",
+            Self::WoodenBench => "wooden_bench",
+            Self::WoodenPost => "wooden_post",
+            Self::OakRoofRidge => "oak_roof_ridge",
+            Self::OakRoofRidgeFinial => "oak_roof_ridge_finial",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -99,10 +141,44 @@ impl Kind {
     }
     pub fn height(self) -> i32 {
         match self {
-            Self::Lantern => 3,
-            Self::DarkAltar | Self::Shrine => 2,
+            Self::Lantern | Self::WoodenPost => 3,
+            Self::DarkAltar | Self::Shrine | Self::OakRoofRidgeFinial => 2,
             _ => 1,
         }
+    }
+    pub fn category(self) -> Category {
+        match self {
+            Self::WoodRoof | Self::StoneRoof | Self::OakRoofRidge | Self::OakRoofRidgeFinial => {
+                Category::Construction
+            }
+            Self::Chest
+            | Self::WoodenStool
+            | Self::WoodenTable
+            | Self::WoodenBench
+            | Self::WoodenPost => Category::Furniture,
+            _ => Category::Machines,
+        }
+    }
+    pub fn building_prop(self) -> bool {
+        self.category() != Category::Machines && self != Self::Chest
+    }
+    pub fn dimensions(self, rotation: u8) -> [i32; 3] {
+        let (x, z) = match self {
+            Self::WoodenTable => (3, 2),
+            Self::WoodenBench => (2, 1),
+            _ => (1, 1),
+        };
+        if rotation % 2 == 0 {
+            [x, self.height(), z]
+        } else {
+            [z, self.height(), x]
+        }
+    }
+    pub fn cells(self, p: Cell, rotation: u8) -> impl Iterator<Item = Cell> {
+        let [w, h, depth] = self.dimensions(rotation);
+        (0..w).flat_map(move |x| {
+            (0..h).flat_map(move |y| (0..depth).map(move |z| (p.0 + x, p.1 + y, p.2 + z)))
+        })
     }
     pub fn sustained(self) -> bool {
         matches!(self, Self::Lantern | Self::DarkAltar | Self::Shrine)
@@ -537,8 +613,34 @@ pub fn element_id(index: usize) -> &'static str {
     ][index.min(4)]
 }
 pub fn valid_item(id: &str) -> bool {
-    if id.strip_prefix("harvest:").is_some_and(|v| matches!(v, "wool" | "egg" | "milk" | "honey" | "cooked_egg" | "cooked_milk" | "cooked_honey" | "cooked_pumpkin" | "cooked_mushroom" | "cooked_glowcap" | "fired_mushroom" | "fired_glowcap" | "campfire_dish" | "campfire_herbal_dish" | "campfire_poisonous_dish")) { return true; }
-    if id.strip_prefix("spell:").is_some_and(|v| v.parse::<u64>().is_ok_and(|n| n > 0)) { return true; }
+    if id.strip_prefix("harvest:").is_some_and(|v| {
+        matches!(
+            v,
+            "wool"
+                | "egg"
+                | "milk"
+                | "honey"
+                | "cooked_egg"
+                | "cooked_milk"
+                | "cooked_honey"
+                | "cooked_pumpkin"
+                | "cooked_mushroom"
+                | "cooked_glowcap"
+                | "fired_mushroom"
+                | "fired_glowcap"
+                | "campfire_dish"
+                | "campfire_herbal_dish"
+                | "campfire_poisonous_dish"
+        )
+    }) {
+        return true;
+    }
+    if id
+        .strip_prefix("spell:")
+        .is_some_and(|v| v.parse::<u64>().is_ok_and(|n| n > 0))
+    {
+        return true;
+    }
     if (0..5).any(|i| element_id(i) == id) {
         return true;
     }
@@ -582,9 +684,21 @@ pub fn validate_account(account: &Account, b: &Balance, recipes: &Registry) -> R
     if !account.adventure.valid() {
         return Err("Invalid adventure progress".into());
     }
-    if account.cooking_ingredients.len() > 4 || account.cooking_ingredients.iter().any(|item| !matches!(item.as_str(),
-        "block:Meat" | "block:Pumpkin" | "block:BrownMushroom" | "block:Glowcap" | "block:WildHerbs" |
-        "harvest:egg" | "harvest:milk" | "harvest:honey")) {
+    if account.cooking_ingredients.len() > 4
+        || account.cooking_ingredients.iter().any(|item| {
+            !matches!(
+                item.as_str(),
+                "block:Meat"
+                    | "block:Pumpkin"
+                    | "block:BrownMushroom"
+                    | "block:Glowcap"
+                    | "block:WildHerbs"
+                    | "harvest:egg"
+                    | "harvest:milk"
+                    | "harvest:honey"
+            )
+        })
+    {
         return Err("Invalid cooking ingredients".into());
     }
     if account.packed_devices.len() > 8
@@ -624,16 +738,25 @@ impl State {
         if !valid_cell(p) {
             return None;
         }
-        (0..3).find_map(|dy| {
-            self.devices
-                .get(&(p.0, p.1 - dy, p.2))
-                .filter(|d| dy < d.kind.height())
-        })
+        // Only bases in the preceding three X columns can cover this cell.
+        // A range lookup avoids 27 tree searches on every terrain query.
+        self.devices
+            .range((p.0 - 2, i32::MIN, i32::MIN)..=p)
+            .find_map(|(_, d)| {
+                let [w, h, depth] = d.kind.dimensions(d.rotation);
+                (p.0 < d.cell.0 + w
+                    && p.1 >= d.cell.1
+                    && p.1 < d.cell.1 + h
+                    && p.2 >= d.cell.2
+                    && p.2 < d.cell.2 + depth)
+                    .then_some(d)
+            })
     }
     pub fn validate(&self, b: &Balance, recipes: &Registry) -> Result<(), String> {
         if self.devices.len() > b.max_devices {
             return Err("Device limit reached".into());
         }
+        let mut occupied = std::collections::HashSet::new();
         for (p, d) in &self.devices {
             if *p != d.cell
                 || !valid_cell(*p)
@@ -645,7 +768,9 @@ impl State {
                 || !valid_cell((p.0, p.1 + d.kind.height() - 1, p.2))
                 || d.powered_ticks > b.def(d.kind).duration_ticks
                 || (!d.kind.sustained() && d.powered_ticks != 0)
-                || (1..d.kind.height()).any(|dy| self.devices.contains_key(&(p.0, p.1 + dy, p.2)))
+                || d.kind
+                    .cells(*p, d.rotation)
+                    .any(|q| !valid_cell(q) || !occupied.insert(q))
             {
                 return Err("Invalid stored device".into());
             }
@@ -771,6 +896,17 @@ impl Action {
     }
 }
 
+fn player_in_cell(players: &[Vec3], p: Cell) -> bool {
+    players.iter().any(|v| {
+        v.x + 0.3 > p.0 as f32
+            && v.x - 0.3 < (p.0 + 1) as f32
+            && v.z + 0.3 > p.2 as f32
+            && v.z - 0.3 < (p.2 + 1) as f32
+            && v.y + 1.8 > p.1 as f32
+            && v.y < (p.1 + 1) as f32
+    })
+}
+
 /// Stage both accounts and installation; failures leave every count unchanged.
 pub fn apply(
     world: &World,
@@ -807,8 +943,7 @@ pub fn apply(
         } => {
             if *rotation > 3
                 || next.devices.len() >= b.max_devices
-                || (0..kind.height()).any(|dy| {
-                    let q = (p.0, p.1 + dy, p.2);
+                || kind.cells(p, *rotation).any(|q| {
                     !valid_cell(q)
                         || next.device_at(q).is_some()
                         || world.get_block(q.0, q.1, q.2) != BlockType::Air
@@ -816,14 +951,7 @@ pub fn apply(
             {
                 return Err("Occupied cell or device limit".into());
             }
-            if players.iter().any(|v| {
-                v.x + 0.3 > p.0 as f32
-                    && v.x - 0.3 < (p.0 + 1) as f32
-                    && v.z + 0.3 > p.2 as f32
-                    && v.z - 0.3 < (p.2 + 1) as f32
-                    && v.y + 1.8 > p.1 as f32
-                    && v.y < (p.1 + kind.height()) as f32
-            }) {
+            if kind.cells(p, *rotation).any(|q| player_in_cell(players, q)) {
                 return Err("A player occupies that cell".into());
             }
             let mut device = if let Some(index) = packed {
@@ -869,8 +997,22 @@ pub fn apply(
                 .push(next.devices.remove(&p).ok_or("No device")?);
         }
         Action::Rotate { .. } => {
-            let d = next.devices.get_mut(&p).ok_or("No device")?;
-            d.rotation = (d.rotation + 1) % 4;
+            let d = next.devices.get(&p).ok_or("No device")?;
+            let rotation = (d.rotation + 1) % 4;
+            if d.kind.cells(p, rotation).any(|q| {
+                !valid_cell(q)
+                    || player_in_cell(players, q)
+                    || next.device_at(q).is_some_and(|other| other.cell != p)
+                    || (world.get_block(q.0, q.1, q.2) != BlockType::Air
+                        && world
+                            .automation
+                            .device_at(q)
+                            .is_none_or(|other| other.cell != p))
+            }) {
+                return Err("Rotation is obstructed".into());
+            }
+            let d = next.devices.get_mut(&p).unwrap();
+            d.rotation = rotation;
             d.config_revision = d.config_revision.checked_add(1).ok_or("Revision limit")?;
         }
         Action::Configure {
@@ -962,13 +1104,23 @@ fn account_slot<'a>(account: &'a mut Account, id: &str) -> Result<&'a mut u32, S
     Err("Unknown matter".into())
 }
 pub fn account_count(account: &Account, id: &str) -> u32 {
-    if let Some(id) = id.strip_prefix("spell:").and_then(|v| v.parse::<u64>().ok()) { return u32::from(account.has_spell_card(id)); }
+    if let Some(id) = id
+        .strip_prefix("spell:")
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        return u32::from(account.has_spell_card(id));
+    }
     let mut copy = account.clone();
     account_slot(&mut copy, id).map(|v| *v).unwrap_or(0)
 }
 fn account_take(account: &mut Account, id: &str, n: u32) -> Result<(), String> {
-    if let Some(id) = id.strip_prefix("spell:").and_then(|v| v.parse::<u64>().ok()) {
-        if n != 1 { return Err("Spell cards transfer one at a time".into()); }
+    if let Some(id) = id
+        .strip_prefix("spell:")
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        if n != 1 {
+            return Err("Spell cards transfer one at a time".into());
+        }
         return account.remove_spell_card(id);
     }
     let v = account_slot(account, id)?;
@@ -978,8 +1130,13 @@ fn account_take(account: &mut Account, id: &str, n: u32) -> Result<(), String> {
     Ok(())
 }
 pub(crate) fn account_add(account: &mut Account, id: &str, n: u32) -> Result<(), String> {
-    if let Some(id) = id.strip_prefix("spell:").and_then(|v| v.parse::<u64>().ok()) {
-        if n != 1 { return Err("Spell cards transfer one at a time".into()); }
+    if let Some(id) = id
+        .strip_prefix("spell:")
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        if n != 1 {
+            return Err("Spell cards transfer one at a time".into());
+        }
         return account.add_spell_card(id);
     }
     let v = account_slot(account, id)?;
