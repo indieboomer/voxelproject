@@ -630,8 +630,8 @@ impl World {
     }
 
     pub fn get_block(&self, wx: i32, wy: i32, wz: i32) -> BlockType {
-        if self.automation.device_at((wx, wy, wz)).is_some() {
-            return BlockType::AutomationDevice;
+        if let Some(d) = self.automation.device_at((wx, wy, wz)) {
+            return if d.kind == crate::automation::Kind::Campfire { BlockType::Campfire } else { BlockType::AutomationDevice };
         }
         if wy < 0 || wy >= CHUNK_Y {
             return BlockType::Air;

@@ -273,6 +273,21 @@ impl Player {
 
         self.velocity.y += GRAVITY * dt;
         self.velocity.y = self.velocity.y.max(-50.0);
+        if world.automation.devices.values().any(|d| {
+            d.kind == crate::automation::Kind::OakLadder
+                && (self.position.x - d.cell.0 as f32 - 0.5).abs() < 0.65
+                && (self.position.z - d.cell.2 as f32 - 0.5).abs() < 0.65
+                && self.position.y < d.cell.1 as f32 + 2.0
+                && self.position.y + HEIGHT > d.cell.1 as f32
+        }) {
+            self.velocity.y = if input.is_down(KeyCode::KeyW) { speed * 0.65 }
+                else if input.is_down(KeyCode::KeyS) { -speed * 0.65 } else { 0.0 };
+            // Keep the player on the rungs until their feet clear the top.
+            let sideways = (i32::from(input.is_down(KeyCode::KeyD))
+                - i32::from(input.is_down(KeyCode::KeyA))) as f32;
+            self.velocity.x = right_flat.x * sideways * speed;
+            self.velocity.z = right_flat.z * sideways * speed;
+        }
         if crate::gear_catalog::held(&self.crafting, crate::equipment::Gear::FeatherCharm) {
             self.velocity.y = self.velocity.y.max(-3.0);
         }
@@ -311,6 +326,7 @@ impl Player {
         let attempt = self.position + Vec3::new(delta.x, 0.0, 0.0);
         if !Self::collides(world, attempt) {
             self.position.x = attempt.x;
+        } else if self.step_stairs(world, attempt) {
         } else {
             self.velocity.x = 0.0;
         }
@@ -319,6 +335,7 @@ impl Player {
         let attempt = self.position + Vec3::new(0.0, 0.0, delta.z);
         if !Self::collides(world, attempt) {
             self.position.z = attempt.z;
+        } else if self.step_stairs(world, attempt) {
         } else {
             self.velocity.z = 0.0;
         }
@@ -336,6 +353,41 @@ impl Player {
             }
             self.velocity.y = 0.0;
         }
+    }
+
+    fn step_stairs(&mut self, world: &World, attempt: Vec3) -> bool {
+        if self.velocity.y > 0.0 { return false; }
+        let top = world.automation.devices.values()
+            .filter(|d| d.kind == crate::automation::Kind::OakStairs)
+            .flat_map(Self::stair_boxes)
+            .filter(|(lo, hi)| attempt.x + HALF_WIDTH > lo.x && attempt.x - HALF_WIDTH < hi.x
+                && attempt.z + HALF_WIDTH > lo.z && attempt.z - HALF_WIDTH < hi.z
+                && hi.y > attempt.y && hi.y - attempt.y <= 0.51)
+            .map(|(_, hi)| hi.y).max_by(f32::total_cmp);
+        if let Some(top) = top {
+            let raised = Vec3::new(attempt.x, top + 0.0001, attempt.z);
+            // Check headroom for the vertical lift as well as its destination.
+            if !Self::collides(world, raised)
+                && !Self::collides(world, Vec3::new(self.position.x, raised.y, self.position.z)) {
+                self.position = raised;
+                self.on_ground = true;
+                return true;
+            }
+        }
+        false
+    }
+
+    fn stair_boxes(d: &crate::automation::Device) -> impl Iterator<Item = (Vec3, Vec3)> {
+        let origin = Vec3::new(d.cell.0 as f32, d.cell.1 as f32, d.cell.2 as f32);
+        let rotation = glam::Mat3::from_rotation_y(-(d.rotation as f32) * std::f32::consts::FRAC_PI_2);
+        (0..4).map(move |i| {
+            let a = Vec3::new(0.0, 0.0, i as f32 * 0.25);
+            let b = Vec3::new(1.0, (i + 1) as f32 * 0.25, (i + 1) as f32 * 0.25);
+            let center = Vec3::new(0.5, 0.0, 0.5);
+            let a = origin + center + rotation * (a - center);
+            let b = origin + center + rotation * (b - center);
+            (a.min(b), a.max(b))
+        })
     }
 
     fn collides(world: &World, feet: Vec3) -> bool {
@@ -356,6 +408,17 @@ impl Player {
         for bx in bx0..=bx1 {
             for by in by0..=by1 {
                 for bz in bz0..=bz1 {
+                    if let Some(d) = world.automation.device_at((bx, by, bz)) {
+                        if d.kind == crate::automation::Kind::OakLadder { continue; }
+                        if d.kind == crate::automation::Kind::OakStairs {
+                            if Self::stair_boxes(d).any(|(lo, hi)| {
+                                max_x > lo.x + 1e-4 && min_x < hi.x - 1e-4
+                                    && max_y > lo.y + 1e-4 && min_y < hi.y - 1e-4
+                                    && max_z > lo.z + 1e-4 && min_z < hi.z - 1e-4
+                            }) { return true; }
+                            continue;
+                        }
+                    }
                     if world.is_solid(bx, by, bz) {
                         return true;
                     }
@@ -368,6 +431,54 @@ impl Player {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stairs_walk_up_in_every_rotation_and_respect_headroom() {
+        use crate::automation::{Device, Kind};
+        for rotation in 0..4 {
+            let mut world = World::new(1);
+            let d = Device::new(Kind::OakStairs, (0, 60, 0), rotation);
+            world.automation.devices.insert(d.cell, d);
+            let turn = glam::Mat3::from_rotation_y(-(rotation as f32) * std::f32::consts::FRAC_PI_2);
+            let center = Vec3::new(0.5, 60.0, 0.5);
+            let mut player = Player::new(center + turn * Vec3::new(0.0, 0.0, -0.85));
+            player.on_ground = true;
+            for _ in 0..24 {
+                player.move_and_collide(&world, turn * Vec3::new(0.0, -0.01, 0.05));
+            }
+            assert!(player.position.y > 60.95, "rotation {rotation}: {:?}", player.position);
+            assert!(!Player::collides(&world, player.position));
+            for _ in 0..24 {
+                player.move_and_collide(&world, turn * Vec3::new(0.0, -0.05, -0.05));
+            }
+            assert!(player.position.y < 60.4);
+        }
+        let mut world = World::new(1);
+        world.automation.devices.insert((0,60,0), Device::new(Kind::OakStairs,(0,60,0),0));
+        world.ensure_chunk_loaded(0,0);
+        world.set_block(0,62,0,BlockType::Stone);
+        let mut player = Player::new(Vec3::new(0.5,60.0,-0.31));
+        player.move_and_collide(&world, Vec3::new(0.0,-0.01,0.1));
+        assert!(player.position.z < -0.3);
+    }
+
+    #[test]
+    fn ladder_walk_controls_climb_descend_and_hold() {
+        use crate::automation::{Device, Kind};
+        let mut world = World::new(1);
+        world.automation.devices.insert((0,60,0), Device::new(Kind::OakLadder,(0,60,0),0));
+        let mut player = Player::new(Vec3::new(0.5,60.0,0.5));
+        let mut input = Input::new();
+        input.key_event(KeyCode::KeyW, ElementState::Pressed);
+        for _ in 0..20 { player.update(&world,&input,Vec3::Z,Vec3::X,0.02); }
+        assert!(player.position.y > 60.5);
+        input.key_event(KeyCode::KeyW, ElementState::Released);
+        let height = player.position.y;
+        player.update(&world,&input,Vec3::Z,Vec3::X,0.1);
+        assert_eq!(player.position.y,height);
+        input.key_event(KeyCode::KeyS, ElementState::Pressed);
+        for _ in 0..10 { player.update(&world,&input,Vec3::Z,Vec3::X,0.02); }
+        assert!(player.position.y < height - 0.3);
+    }
     use super::*;
     use winit::event::ElementState;
 

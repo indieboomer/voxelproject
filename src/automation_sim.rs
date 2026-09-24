@@ -52,7 +52,10 @@ impl State {
             })
             .collect();
         for (&p, device) in self.devices.iter_mut() {
-            if device.kind.sustained() {
+            if device.kind == Kind::Campfire {
+                device.fuel_heat = device.fuel_heat.saturating_sub(1);
+                device.activity = if device.fuel_heat > 0 { Activity::Working } else { Activity::MissingFuel };
+            } else if device.kind.sustained() {
                 if !device.config.enabled {
                     device.activity = Activity::Disabled;
                 } else {
@@ -96,7 +99,7 @@ impl State {
                 let value = if center(p).distance(center(d.config.sensor_target)) <= 16.0 {
                     target.map_or(0, |t| match t.kind {
                         Kind::Vessel => t.mana,
-                        Kind::Chest => {
+                        Kind::Chest | Kind::SpruceWardrobe => {
                             if d.config.sensor_item.is_empty() {
                                 t.item_count()
                             } else {
@@ -425,7 +428,7 @@ fn produce(d: &mut Device, b: &Balance, recipes: &Registry, blocked: bool) {
                 output.quantity,
             );
         }
-        Kind::Chest if d.config.eject_contents => {
+        Kind::Chest | Kind::SpruceWardrobe if d.config.eject_contents => {
             if d.items.is_empty() {
                 d.activity = Activity::Idle;
             } else if d.activity != Activity::BlockedOutput {

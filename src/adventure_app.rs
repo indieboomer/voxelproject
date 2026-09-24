@@ -151,6 +151,14 @@ impl App {
         let success = result.is_ok();
         let message = result.unwrap_or_else(|e| e);
         let updated = account.clone();
+        if success {
+            if let Action::AddFuel { camp, block, .. } = &action {
+                if let Some(d) = self.world.automation.devices.get_mut(camp).filter(|d| d.kind == crate::automation::Kind::Campfire) {
+                    let capacity = crate::automation::campfire_capacity();
+                    d.fuel_heat = d.fuel_heat.saturating_add(adventure::fuel_value(*block).unwrap_or(0).saturating_mul(capacity) / 20).min(capacity);
+                }
+            }
+        }
         if success && matches!(action, Action::Rest { .. }) {
             self.apply_player_effect(PlayerEffect::Health {
                 player_id: id,

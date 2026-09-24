@@ -15,6 +15,7 @@
     }
   },
   "devices": [
+    {"kind":"campfire","name":"Campfire (10% fuel)","cost":{"resource:stone":2,"resource:birch_wood":1},"mana_capacity":0,"item_capacity":0,"throughput":1,"duration_ticks":1,"ports":[]},
     {"kind":"lantern","name":"Street Lantern","cost":{"resource:iron":2,"resource:copper":1},"mana_capacity":60,"item_capacity":0,"throughput":2,"duration_ticks":100,"ports":[["west","mana","in"],["east","mana","in"],["north","mana","in"],["south","mana","in"],["down","mana","in"]]},
     {"kind":"dark_altar","name":"Dark Altar","cost":{"resource:stone":5,"resource:copper":2},"mana_capacity":60,"item_capacity":0,"throughput":2,"duration_ticks":10,"ports":[["west","mana","in"],["east","mana","in"],["north","mana","in"],["south","mana","in"],["down","mana","in"]]},
     {"kind":"shrine","name":"Shrine","cost":{"resource:stone":5,"resource:silver":1},"mana_capacity":60,"item_capacity":0,"throughput":2,"duration_ticks":10,"ports":[["west","mana","in"],["east","mana","in"],["north","mana","in"],["south","mana","in"],["down","mana","in"]]},
@@ -33,12 +34,19 @@
     {"kind":"smelter","name":"Ore Smelter","cost":{"resource:stone":4,"resource:clay":2,"resource:oak_wood":1},"mana_capacity":30,"item_capacity":32,"throughput":2,"duration_ticks":1,"ports":[["west","mana","in"],["west","matter","in"],["north","matter","in"],["east","matter","out"]]}
 ,
     {"kind":"wood_roof","name":"Wooden Roof Slope (45°)","cost":{"resource:oak_wood":2},"mana_capacity":0,"item_capacity":0,"throughput":1,"duration_ticks":1,"ports":[]},
-    {"kind":"stone_roof","name":"Stone Roof Slope (45°)","cost":{"resource:stone":2},"mana_capacity":0,"item_capacity":0,"throughput":1,"duration_ticks":1,"ports":[]},
     {"kind":"wooden_stool","name":"Wooden Stool","cost":{"resource:oak_wood":2},"mana_capacity":0,"item_capacity":0,"throughput":1,"duration_ticks":1,"ports":[]},
     {"kind":"wooden_table","name":"Wooden Table","cost":{"resource:oak_wood":6},"mana_capacity":0,"item_capacity":0,"throughput":1,"duration_ticks":1,"ports":[]},
     {"kind":"wooden_bench","name":"Wooden Bench","cost":{"resource:oak_wood":3},"mana_capacity":0,"item_capacity":0,"throughput":1,"duration_ticks":1,"ports":[]},
     {"kind":"wooden_post","name":"Wooden Post","cost":{"resource:oak_wood":3},"mana_capacity":0,"item_capacity":0,"throughput":1,"duration_ticks":1,"ports":[]},
     {"kind":"oak_roof_ridge","name":"Oak Roof Ridge (45°)","cost":{"resource:oak_wood":2},"mana_capacity":0,"item_capacity":0,"throughput":1,"duration_ticks":1,"ports":[]},
-    {"kind":"oak_roof_ridge_finial","name":"Oak Roof Ridge Finial","cost":{"resource:oak_wood":3},"mana_capacity":0,"item_capacity":0,"throughput":1,"duration_ticks":1,"ports":[]}
+    {"kind":"oak_roof_ridge_finial","name":"Oak Roof Ridge Finial","cost":{"resource:oak_wood":3},"mana_capacity":0,"item_capacity":0,"throughput":1,"duration_ticks":1,"ports":[]},
+    {"kind":"oak_door","name":"Oak Door","cost":{"resource:oak_wood":4},"mana_capacity":0,"item_capacity":0,"throughput":2,"duration_ticks":10,"ports":[]},
+    {"kind":"oak_hanging_sign","name":"Oak Hanging Sign","cost":{"resource:oak_wood":2},"mana_capacity":0,"item_capacity":0,"throughput":2,"duration_ticks":10,"ports":[]},
+    {"kind":"oak_ladder","name":"Oak Ladder","cost":{"resource:oak_wood":3},"mana_capacity":0,"item_capacity":0,"throughput":2,"duration_ticks":10,"ports":[]},
+    {"kind":"oak_railing","name":"Oak Railing","cost":{"resource:oak_wood":2},"mana_capacity":0,"item_capacity":0,"throughput":2,"duration_ticks":10,"ports":[]},
+    {"kind":"oak_stairs","name":"Oak Stairs","cost":{"resource:oak_wood":3},"mana_capacity":0,"item_capacity":0,"throughput":2,"duration_ticks":10,"ports":[]},
+    {"kind":"oak_window_wall","name":"Oak Window Wall","cost":{"resource:oak_wood":3},"mana_capacity":0,"item_capacity":0,"throughput":2,"duration_ticks":10,"ports":[]},
+    {"kind":"spruce_bed","name":"Spruce Bed","cost":{"resource:spruce_wood":6},"mana_capacity":0,"item_capacity":0,"throughput":2,"duration_ticks":10,"ports":[]},
+    {"kind":"spruce_wardrobe","name":"Spruce Wardrobe","cost":{"resource:spruce_wood":6},"mana_capacity":0,"item_capacity":4294967295,"throughput":2,"duration_ticks":10,"ports":[["west","matter","in"],["east","matter","out"]]}
   ]
 }

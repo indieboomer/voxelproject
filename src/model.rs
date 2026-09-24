@@ -29,7 +29,10 @@
 //! image are supported -- this loader targets exactly the shape these
 //! bundled files use, not general-purpose glTF import.
 //!
-//! Kept dependency-free: hand-parsed against the already-present
+//! JSON glTF with one base64-embedded buffer and PNG data URI textures is
+//! also supported for furniture and roofs. External resource files are not supported.
+//!
+//! Hand-parsed against the already-present
 //! `serde_json` (mirroring `creature.rs`'s own `SimpleRng` -- this project
 //! avoids adding a crate for something this self-contained) rather than
 //! pulling in the `gltf` crate; texture decoding reuses the already-present
@@ -37,6 +40,7 @@
 
 use std::collections::HashMap;
 
+use base64::Engine;
 use glam::{Mat3, Mat4, Quat, Vec3};
 use serde_json::Value;
 
@@ -266,7 +270,7 @@ impl Models {
     /// (see this module's doc comment). `app.rs`'s `create_atlas_bind_group`
     /// uploads these once at startup into the `tex_layer`-indexed
     /// `creature_texture` array `emit_skinned_mesh`'s vertices sample from.
-    pub fn creature_texture_layers(&self) -> [Option<&image::RgbaImage>; 46] {
+    pub fn creature_texture_layers(&self) -> [Option<&image::RgbaImage>; 54] {
         [
             self.sheep.texture.as_ref(),
             self.chicken.texture.as_ref(),
@@ -308,9 +312,7 @@ impl Models {
             building_model(crate::automation::Kind::WoodRoof)
                 .texture
                 .as_ref(),
-            building_model(crate::automation::Kind::StoneRoof)
-                .texture
-                .as_ref(),
+            None, // Retired stone roof texture slot; keep later layers stable.
             building_model(crate::automation::Kind::WoodenStool)
                 .texture
                 .as_ref(),
@@ -330,6 +332,14 @@ impl Models {
             building_model(crate::automation::Kind::OakRoofRidgeFinial)
                 .texture
                 .as_ref(),
+            building_model(crate::automation::Kind::OakDoor).texture.as_ref(),
+            building_model(crate::automation::Kind::OakHangingSign).texture.as_ref(),
+            building_model(crate::automation::Kind::OakLadder).texture.as_ref(),
+            building_model(crate::automation::Kind::OakRailing).texture.as_ref(),
+            building_model(crate::automation::Kind::OakStairs).texture.as_ref(),
+            building_model(crate::automation::Kind::OakWindowWall).texture.as_ref(),
+            building_model(crate::automation::Kind::SpruceBed).texture.as_ref(),
+            building_model(crate::automation::Kind::SpruceWardrobe).texture.as_ref(),
         ]
     }
 
@@ -375,6 +385,39 @@ fn parse_glb(bytes: &[u8]) -> (Value, &[u8]) {
         offset += 8 + chunk_len;
     }
     (json_val.expect("glb missing JSON chunk"), bin)
+}
+
+/// Bundled JSON glTF exports are self-contained: buffers and images use
+/// base64 data URIs. External resources are deliberately unsupported.
+fn decode_data_uri(uri: &str) -> Vec<u8> {
+    let (header, payload) = uri.split_once(',').expect("glTF data URI missing comma");
+    assert!(
+        header.starts_with("data:") && header.ends_with(";base64"),
+        "bundled glTF resources must use base64 data URIs"
+    );
+    base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .expect("invalid base64 glTF resource")
+}
+
+fn load_gltf(bytes: &[u8]) -> AnimatedModel {
+    let json: Value = serde_json::from_slice(bytes).expect("invalid glTF JSON");
+    assert_eq!(json["asset"]["version"], "2.0");
+    let buffers = json["buffers"].as_array().expect("glTF missing buffers");
+    assert_eq!(
+        buffers.len(),
+        1,
+        "bundled glTF requires one embedded buffer"
+    );
+    let bin = decode_data_uri(buffers[0]["uri"].as_str().expect("glTF buffer missing URI"));
+    assert_eq!(bin.len() as u64, buffers[0]["byteLength"].as_u64().unwrap());
+    for view in json["bufferViews"]
+        .as_array()
+        .expect("glTF missing buffer views")
+    {
+        assert_eq!(view["buffer"].as_u64(), Some(0));
+    }
+    load_model(json, &bin)
 }
 
 fn buffer_view_offset_stride(json: &Value, bv_idx: usize, item_size: usize) -> (usize, usize) {
@@ -535,8 +578,8 @@ fn material_color(json: &Value, idx: Option<usize>) -> [f32; 3] {
 }
 
 /// Decodes a material's `baseColorTexture`, if it has one -- every bundled
-/// skinned model's image is embedded directly in the GLB's binary chunk via
-/// a `bufferView` (no external URIs), so this never touches the filesystem.
+/// skinned model's image uses a GLB `bufferView`; JSON glTF props use
+/// a base64 data URI. Neither path touches the filesystem.
 fn material_base_color_image(
     json: &Value,
     bin: &[u8],
@@ -550,6 +593,13 @@ fn material_base_color_image(
         .as_u64()? as usize;
     let image_idx = json["textures"].get(tex_idx)?.get("source")?.as_u64()? as usize;
     let image_json = json["images"].get(image_idx)?;
+    if let Some(uri) = image_json.get("uri").and_then(Value::as_str) {
+        return Some(
+            image::load_from_memory(&decode_data_uri(uri))
+                .expect("embedded glTF texture should decode")
+                .to_rgba8(),
+        );
+    }
     let bv_idx = image_json.get("bufferView")?.as_u64()? as usize;
     let bv = &json["bufferViews"][bv_idx];
     let offset = bv.get("byteOffset").and_then(Value::as_u64).unwrap_or(0) as usize;
@@ -563,6 +613,10 @@ fn material_base_color_image(
 
 fn load_glb(bytes: &[u8]) -> AnimatedModel {
     let (json, bin) = parse_glb(bytes);
+    load_model(json, bin)
+}
+
+fn load_model(json: Value, bin: &[u8]) -> AnimatedModel {
     let empty = Vec::new();
     let nodes_json = json["nodes"].as_array().unwrap_or(&empty);
     let meshes_json = json["meshes"].as_array().cloned().unwrap_or_default();
@@ -1280,59 +1334,84 @@ fn building_index(kind: crate::automation::Kind) -> usize {
     use crate::automation::Kind;
     match kind {
         Kind::WoodRoof => 0,
-        Kind::StoneRoof => 1,
-        Kind::WoodenStool => 2,
-        Kind::WoodenTable => 3,
-        Kind::WoodenBench => 4,
-        Kind::WoodenPost => 5,
-        Kind::OakRoofRidge => 6,
-        Kind::OakRoofRidgeFinial => 7,
+        Kind::WoodenStool => 1,
+        Kind::WoodenTable => 2,
+        Kind::WoodenBench => 3,
+        Kind::WoodenPost => 4,
+        Kind::OakRoofRidge => 5,
+        Kind::OakRoofRidgeFinial => 6,
+        Kind::OakDoor => 7,
+        Kind::OakHangingSign => 8,
+        Kind::OakLadder => 9,
+        Kind::OakRailing => 10,
+        Kind::OakStairs => 11,
+        Kind::OakWindowWall => 12,
+        Kind::SpruceBed => 13,
+        Kind::SpruceWardrobe => 14,
         _ => panic!("not a building prop"),
     }
 }
 fn building_model(kind: crate::automation::Kind) -> &'static AnimatedModel {
-    static MODELS: std::sync::OnceLock<[AnimatedModel; 8]> = std::sync::OnceLock::new();
+    static MODELS: std::sync::OnceLock<[AnimatedModel; 15]> = std::sync::OnceLock::new();
     &MODELS.get_or_init(|| {
-        let bytes: [&[u8]; 8] = [
-            include_bytes!("../models/construction/wood_shingle_roof_45deg.glb"),
-            include_bytes!("../models/construction/stone_slate_roof_45deg.glb"),
-            include_bytes!("../models/furniture/wooden_stool_1x1x1.glb"),
-            include_bytes!("../models/furniture/wooden_table_3x2x1.glb"),
+        let bytes: [&[u8]; 15] = [
+            include_bytes!("../models/construction/wooden_roof_45.gltf"),
+            include_bytes!("../models/furniture/wooden_stool.gltf"),
+            include_bytes!("../models/furniture/wooden_table.gltf"),
             include_bytes!("../models/furniture/wooden_bench_2x1x1.glb"),
-            include_bytes!("../models/furniture/carved_wooden_post_1x1x3.glb"),
-            include_bytes!("../models/construction/oak_roof_ridge_45deg.glb"),
-            include_bytes!("../models/construction/oak_roof_ridge_finial.glb"),
+            include_bytes!("../models/furniture/wooden_post.gltf"),
+            include_bytes!("../models/construction/wooden_roof_ridge_45.gltf"),
+            include_bytes!("../models/construction/wooden_roof_finial_45.gltf"),
+            include_bytes!("../models/furniture/oak_door.gltf"),
+            include_bytes!("../models/furniture/oak_hanging_sign.gltf"),
+            include_bytes!("../models/furniture/oak_ladder.gltf"),
+            include_bytes!("../models/furniture/oak_railing.gltf"),
+            include_bytes!("../models/furniture/oak_stairs.gltf"),
+            include_bytes!("../models/furniture/oak_window_wall.gltf"),
+            include_bytes!("../models/furniture/spruce_bed.gltf"),
+            include_bytes!("../models/furniture/spruce_wardrobe.gltf"),
         ];
         std::array::from_fn(|i| {
-            let mut m = load_glb(bytes[i]);
-            // Layer 44 belongs to the beehive; new props follow it.
-            m.texture_layer = Some(38.0 + i as f32 + if i >= 6 { 1.0 } else { 0.0 });
+            let authored_gltf = i != 3;
+            let mut m = if authored_gltf {
+                load_gltf(bytes[i])
+            } else {
+                load_glb(bytes[i])
+            };
+            // Keep retired layer 39 empty; layer 44 belongs to the beehive.
+            m.texture_layer = Some([38.0, 40.0, 41.0, 42.0, 43.0, 45.0, 46.0, 47.0, 48.0, 49.0, 50.0, 51.0, 52.0, 53.0, 54.0][i]);
+            if authored_gltf {
+                return m;
+            }
             // Use the same source pixels as the terrain, rather than each
             // export's independently painted (and differently scaled) atlas.
-            let texture: &[u8] = if i == 1 {
-                include_bytes!("../textures/stone.png")
-            } else {
-                include_bytes!("../textures/oak_log.png")
-            };
+            let texture: &[u8] = include_bytes!("../textures/oak_log.png");
             m.texture = Some(image::load_from_memory(texture).unwrap().to_rgba8());
             m
         })
     })[building_index(kind)]
 }
 pub fn building_mesh(kind: crate::automation::Kind) -> &'static crate::voxel::mesher::MeshData {
-    static MESHES: std::sync::OnceLock<[crate::voxel::mesher::MeshData; 8]> =
+    static MESHES: std::sync::OnceLock<[crate::voxel::mesher::MeshData; 15]> =
         std::sync::OnceLock::new();
     &MESHES.get_or_init(|| {
         use crate::automation::Kind;
         [
             Kind::WoodRoof,
-            Kind::StoneRoof,
             Kind::WoodenStool,
             Kind::WoodenTable,
             Kind::WoodenBench,
             Kind::WoodenPost,
             Kind::OakRoofRidge,
             Kind::OakRoofRidgeFinial,
+            Kind::OakDoor,
+            Kind::OakHangingSign,
+            Kind::OakLadder,
+            Kind::OakRailing,
+            Kind::OakStairs,
+            Kind::OakWindowWall,
+            Kind::SpruceBed,
+            Kind::SpruceWardrobe,
         ]
         .map(|kind| {
             let model = building_model(kind);
@@ -1350,8 +1429,25 @@ pub fn building_mesh(kind: crate::automation::Kind) -> &'static crate::voxel::me
                 &|x, z| (x, z),
                 white_uv(),
             );
-            // The supplied building exports use Z as up; the game uses Y.
-            {
+            let authored_gltf = matches!(
+                kind,
+                Kind::WoodenStool
+                    | Kind::WoodenTable
+                    | Kind::WoodenPost
+                    | Kind::WoodRoof
+                    | Kind::OakRoofRidge
+                    | Kind::OakRoofRidgeFinial
+                    | Kind::OakDoor
+                    | Kind::OakHangingSign
+                    | Kind::OakLadder
+                    | Kind::OakRailing
+                    | Kind::OakStairs
+                    | Kind::OakWindowWall
+                    | Kind::SpruceBed
+                    | Kind::SpruceWardrobe
+            );
+            // Legacy GLB buildings use Z-up; the new glTF props use Y-up.
+            if !authored_gltf {
                 let turn = glam::Mat3::from_rotation_x(-std::f32::consts::FRAC_PI_2);
                 for v in &mut mesh.vertices {
                     v.position = (turn * Vec3::from_array(v.position)).to_array();
@@ -1359,17 +1455,40 @@ pub fn building_mesh(kind: crate::automation::Kind) -> &'static crate::voxel::me
                 }
             }
             let mut lo = Vec3::splat(f32::INFINITY);
+            let mut hi = Vec3::splat(f32::NEG_INFINITY);
             for v in &mesh.vertices {
                 lo = lo.min(Vec3::from_array(v.position));
+                hi = hi.max(Vec3::from_array(v.position));
             }
+            // Keep the authored proportions while fitting the existing occupied
+            // cells (the stool's splayed legs/seat slightly exceed one block).
+            let dimensions = Vec3::from_array(kind.dimensions(0).map(|d| d as f32));
+            let size = hi - lo;
+            let scale = if authored_gltf {
+                (dimensions / size).min_element().min(1.0)
+            } else {
+                1.0
+            };
+            let inset = if authored_gltf {
+                (dimensions - size * scale) * Vec3::new(0.5, 0.0, 0.5)
+            } else {
+                Vec3::ZERO
+            };
             for v in &mut mesh.vertices {
-                v.position = (Vec3::from_array(v.position) - lo).to_array();
+                v.position = ((Vec3::from_array(v.position) - lo) * scale + inset).to_array();
+                if authored_gltf {
+                    continue;
+                }
                 // One texture repeat per block in each surface direction.
-                // Project onto an orthonormal face basis so even the 45-degree
-                // roof has square pixels, with no stretching across long parts.
+                // Project onto an orthonormal face basis to keep square pixels
+                // with no stretching across long parts of the legacy bench.
                 // UVs stay local to the prop when it is moved or rotated.
                 let normal = Vec3::from_array(v.normal).normalize();
-                let axis = if normal.x.abs() < 0.9 { Vec3::X } else { Vec3::Z };
+                let axis = if normal.x.abs() < 0.9 {
+                    Vec3::X
+                } else {
+                    Vec3::Z
+                };
                 let across = (axis - normal * axis.dot(normal)).normalize();
                 let along = across.cross(normal);
                 let position = Vec3::from_array(v.position);
@@ -1549,6 +1668,97 @@ pub fn loot_bag_mesh() -> &'static crate::voxel::mesher::MeshData {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn gltf_buildings_preserve_geometry_textures_and_uvs() {
+        use super::*;
+        use crate::automation::Kind;
+        for (kind, bytes) in [
+            (
+                Kind::WoodRoof,
+                include_bytes!("../models/construction/wooden_roof_45.gltf").as_slice(),
+            ),
+            (
+                Kind::OakRoofRidge,
+                include_bytes!("../models/construction/wooden_roof_ridge_45.gltf").as_slice(),
+            ),
+            (
+                Kind::OakRoofRidgeFinial,
+                include_bytes!("../models/construction/wooden_roof_finial_45.gltf").as_slice(),
+            ),
+            (
+                Kind::WoodenStool,
+                include_bytes!("../models/furniture/wooden_stool.gltf").as_slice(),
+            ),
+            (
+                Kind::WoodenTable,
+                include_bytes!("../models/furniture/wooden_table.gltf").as_slice(),
+            ),
+            (
+                Kind::WoodenPost,
+                include_bytes!("../models/furniture/wooden_post.gltf").as_slice(),
+            ),
+            (Kind::OakDoor, include_bytes!("../models/furniture/oak_door.gltf").as_slice()),
+            (Kind::OakHangingSign, include_bytes!("../models/furniture/oak_hanging_sign.gltf").as_slice()),
+            (Kind::OakLadder, include_bytes!("../models/furniture/oak_ladder.gltf").as_slice()),
+            (Kind::OakRailing, include_bytes!("../models/furniture/oak_railing.gltf").as_slice()),
+            (Kind::OakStairs, include_bytes!("../models/furniture/oak_stairs.gltf").as_slice()),
+            (Kind::OakWindowWall, include_bytes!("../models/furniture/oak_window_wall.gltf").as_slice()),
+            (Kind::SpruceBed, include_bytes!("../models/furniture/spruce_bed.gltf").as_slice()),
+            (Kind::SpruceWardrobe, include_bytes!("../models/furniture/spruce_wardrobe.gltf").as_slice()),
+        ] {
+            let json: Value = serde_json::from_slice(bytes).unwrap();
+            let model = building_model(kind);
+            let texture = image::load_from_memory(&decode_data_uri(
+                json["images"][0]["uri"].as_str().unwrap(),
+            ))
+            .unwrap()
+            .to_rgba8();
+            assert_eq!(model.texture.as_ref().unwrap(), &texture);
+            let mesh = building_mesh(kind);
+            let primitives: Vec<_> = model.nodes.iter().flat_map(|n| &n.mesh).collect();
+            assert_eq!(
+                mesh.vertices.len(),
+                primitives.iter().map(|p| p.positions.len()).sum::<usize>()
+            );
+            assert_eq!(
+                mesh.indices.len(),
+                primitives.iter().map(|p| p.indices.len()).sum::<usize>()
+            );
+            let authored_uvs: Vec<_> = primitives
+                .iter()
+                .flat_map(|p| p.uvs.iter().copied())
+                .collect();
+            assert_eq!(
+                mesh.vertices.iter().map(|v| v.uv).collect::<Vec<_>>(),
+                authored_uvs
+            );
+            assert!(mesh
+                .vertices
+                .iter()
+                .all(|v| Vec3::from_array(v.normal).is_finite()));
+            let mut lo = Vec3::splat(f32::INFINITY);
+            let mut hi = Vec3::splat(f32::NEG_INFINITY);
+            for vertex in &mesh.vertices {
+                lo = lo.min(Vec3::from_array(vertex.position));
+                hi = hi.max(Vec3::from_array(vertex.position));
+            }
+            assert!(lo.y.abs() < 1e-5, "{kind:?} must sit on the floor");
+            if kind == Kind::WoodenPost {
+                // Face offsets slightly widen the capital, then footprint
+                // fitting scales the entire three-block post proportionally.
+                let size = hi - lo;
+                assert!(
+                    (size - Vec3::new(1., 3., 1.)).length() < 0.005,
+                    "post size: {size:?}"
+                );
+            }
+            if kind == Kind::WoodenTable {
+                assert!(hi.x - lo.x > hi.y - lo.y);
+                assert!(hi.z - lo.z > hi.y - lo.y);
+            }
+        }
+    }
+
     #[test]
     fn wet_materials_respect_absorption_overrides_and_metal_content() {
         let json = serde_json::json!({"materials":[
@@ -1852,9 +2062,11 @@ mod tests {
     fn player_models_and_all_hats_render_with_textures_and_animated_sockets() {
         use super::*;
         let models = Models::load();
-        assert!(models.creature_texture_layers()[8..]
+        assert!(models.creature_texture_layers()
             .iter()
-            .all(|t| t.is_some()));
+            .enumerate()
+            .skip(8)
+            .all(|(i, t)| if i == 38 { t.is_none() } else { t.is_some() }));
         for model in 0..4 {
             assert!(models.players[model as usize].hat_socket.is_some());
             for hat in [None, Some(0), Some(1), Some(2), Some(3)] {

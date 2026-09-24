@@ -157,6 +157,9 @@ pub fn guide_position(world: &World, camp: Cell) -> Option<Cell> {
 /// Stable across chunk reloads, peers and exploration order. The first fire is
 /// always staffed; other fires have a one-in-five chance.
 pub fn has_keeper(world: &World, camp: Cell) -> bool {
+    if world.automation.devices.get(&camp).is_some_and(|d| d.kind == crate::automation::Kind::Campfire) {
+        return false;
+    }
     world.starter_camp == Some(camp)
         || crate::voxel::noise::block_rand(camp.0, camp.1, camp.2, world.seed, 0xCA91) < 0.2
 }
@@ -226,6 +229,10 @@ pub fn transact(
     }
     if threatened {
         return Err("A hostile creature is too close. Clear the camp first.".into());
+    }
+    if world.automation.devices.get(&camp).is_some_and(|d| d.kind == crate::automation::Kind::Campfire && d.fuel_heat == 0)
+        && !matches!(action, Action::AddFuel { .. } | Action::AddIngredient { .. } | Action::ClearIngredients { .. }) {
+        return Err("Add fuel to the campfire first".into());
     }
     let mut next = account.clone();
     let message = match action {

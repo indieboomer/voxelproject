@@ -40,6 +40,11 @@ pub fn device(d: &Device, time: f32, preview: Option<bool>, state: &State) -> Me
     let ceramic = [0.56, 0.24, 0.12];
     cube(&mut mesh, [0.08, 0.02, 0.08], [0.92, 0.14, 0.92], wood);
     match d.kind {
+        Kind::Campfire => {
+            mesh.vertices.clear();
+            mesh.indices.clear();
+            crate::campfire::base_mesh(&mut mesh.vertices, &mut mesh.indices, Vec3::ZERO);
+        }
         Kind::Lantern => {
             let iron = [0.065, 0.085, 0.11];
             cube(&mut mesh, [0.18, 0.05, 0.18], [0.82, 0.24, 0.82], iron);
@@ -218,7 +223,7 @@ pub fn device(d: &Device, time: f32, preview: Option<bool>, state: &State) -> Me
     for (face, net, dir) in d
         .ports(balance())
         .into_iter()
-        .filter(|_| d.kind != Kind::Chest)
+        .filter(|_| !d.kind.storage())
     {
         let delta = face.delta();
         let normal = Vec3::new(delta.0 as f32, delta.1 as f32, delta.2 as f32);
@@ -296,7 +301,7 @@ pub fn device(d: &Device, time: f32, preview: Option<bool>, state: &State) -> Me
             );
         }
     }
-    if !d.kind.building_prop() && (d.activity == Activity::Working || d.signal > 0) {
+    if !d.kind.building_prop() && d.kind != Kind::Campfire && (d.activity == Activity::Working || d.signal > 0) {
         let p = Vec3::new(
             0.5 + (time * 3.0).sin() * 0.18,
             0.94,
@@ -345,7 +350,6 @@ mod tests {
     fn building_models_keep_textures_and_roofs_slope_upward() {
         for (i, kind) in [
             Kind::WoodRoof,
-            Kind::StoneRoof,
             Kind::WoodenStool,
             Kind::WoodenTable,
             Kind::WoodenBench,
@@ -358,7 +362,7 @@ mod tests {
         {
             let mesh = crate::model::building_mesh(kind);
             assert!(!mesh.vertices.is_empty());
-            let layer = 38.0 + i as f32 + if i >= 6 { 1.0 } else { 0.0 };
+            let layer = [38.0, 40.0, 41.0, 42.0, 43.0, 45.0, 46.0][i];
             assert!(mesh.vertices.iter().all(|v| v.tex_layer == layer));
             if kind.category() == Category::Construction {
                 assert!(

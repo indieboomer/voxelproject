@@ -81,11 +81,14 @@ impl Panel {
                 } else {
                     self.fuel_updated_at = Some(std::time::Instant::now());
                 }
+                if let Some(d) = world.automation.devices.get(&camp).filter(|d| d.kind == crate::automation::Kind::Campfire) {
+                    *fuel_level = d.fuel_heat as f32 / crate::automation::campfire_capacity() as f32;
+                }
                 ui.columns(2, |columns| {
                     columns[0].vertical_centered(|ui| {
                         ui.add_space(18.0);
                         ui.label(RichText::new("🔥").size(96.0));
-                        ui.heading(RichText::new("Burning").color(Color32::from_rgb(247, 194, 83)));
+                        ui.heading(RichText::new(if *fuel_level > 0.0 { "Burning" } else { "Out of fuel" }).color(Color32::from_rgb(247, 194, 83)));
                         ui.label("Warmth, food and better tomorrows.");
                         ui.add_space(18.0);
                         ui.label("Fuel");

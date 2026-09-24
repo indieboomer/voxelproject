@@ -73,18 +73,18 @@ pub fn draw(
             .unwrap_or_default();
     }
     let mut action = None;
-    egui::Window::new("Chest")
+    egui::Window::new(crate::automation::balance().def(chest.kind).name.as_str())
         .open(open)
         .default_width(660.0)
         .resizable(false)
         .default_pos(ctx.screen_rect().center() - egui::vec2(340.0, 260.0))
         .show(ctx, |ui| {
-            ui.label("Select an item to move between your inventory and this chest.");
+            ui.label("Select an item to move between your inventory and this storage.");
             ui.add_space(8.0);
             ui.columns(2, |columns| {
                 for (index, items, title, empty) in [
                     (0, &carried, "Your inventory", "Your inventory is empty."),
-                    (1, &stored, "Chest contents", "This chest is empty."),
+                    (1, &stored, "Stored items", "This chest is empty."),
                 ] {
                     let ui = &mut columns[index];
                     ui.heading(title);

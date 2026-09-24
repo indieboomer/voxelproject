@@ -1,4 +1,90 @@
 use super::*;
+#[test]
+fn building_removal_uses_tool_and_returns_cost_and_stored_goods_atomically() {
+    let world = World::new(42);
+    let cell = (0, 40, 0);
+    let feet = Vec3::new(0.5, 40.0, 3.5);
+    let r = recipes();
+    for kind in Kind::ALL.into_iter().filter(|k| k.category() != Category::Machines) {
+        let mut state = State::default();
+        let mut d = Device::new(kind, cell, 0);
+        if kind.storage() { add(&mut d.items, "resource:stone", 7); }
+        state.devices.insert(cell, d.clone());
+        let mut account = Account::default();
+        account.hotbar.slots = [None; 9];
+        apply(&world, &mut state, &mut account, feet, &[], &Action::Remove { cell }, balance(), &r).unwrap();
+        assert_eq!(account.packed_devices, vec![d.clone()]);
+        assert!(state.devices.is_empty());
+        state.devices.insert(cell, d);
+        account.packed_devices.clear();
+        account_add(&mut account, "item:axe", 1).unwrap();
+        account.hotbar.slots[0] = Some(crate::equipment::Entry::Gear(crate::equipment::Gear::Axe));
+        account.hotbar.active = 0;
+        let before = account.clone();
+        apply(&world, &mut state, &mut account, feet, &[], &Action::Remove { cell }, balance(), &r).unwrap();
+        assert!(account.packed_devices.is_empty());
+        assert!(state.devices.is_empty());
+        for (item, amount) in &balance().def(kind).cost {
+            assert_eq!(account_count(&account, item), account_count(&before, item) + amount);
+        }
+        if kind.storage() { assert_eq!(account_count(&account, "resource:stone"), account_count(&before, "resource:stone") + 7); }
+        assert!(apply(&world, &mut state, &mut account, feet, &[], &Action::Remove { cell }, balance(), &r).is_err());
+    }
+    let mut state = State::default();
+    state.devices.insert(cell, Device::new(Kind::WoodRoof, cell, 0));
+    let mut account = Account::default();
+    account_add(&mut account, "item:axe", 1).unwrap();
+    account.hotbar.slots[0] = Some(crate::equipment::Entry::Gear(crate::equipment::Gear::Axe));
+    let current = account_count(&account, "resource:oak_wood");
+    account_add(&mut account, "resource:oak_wood", u32::MAX - current).unwrap();
+    let before = account.clone();
+    assert!(apply(&world, &mut state, &mut account, feet, &[], &Action::Remove { cell }, balance(), &r).is_err());
+    assert_eq!(account, before);
+    assert!(state.devices.contains_key(&cell));
+}
+
+#[test]
+fn built_campfire_cost_fuel_repersistence_and_packing() {
+    let mut world = World::new(42);
+    let cell = (0, 40, 0);
+    let feet = Vec3::new(0.5, 40.0, 3.5);
+    let r = recipes();
+    let mut state = State::default();
+    let mut account = Account::default();
+    account_add(&mut account, "resource:stone", 2).unwrap();
+    account_add(&mut account, "resource:birch_wood", 1).unwrap();
+    let before = account.clone();
+    assert_eq!(Kind::Campfire.category(), Category::Machines);
+    apply(&world, &mut state, &mut account, feet, &[], &Action::Place { kind: Kind::Campfire, cell, rotation: 0, packed: None }, balance(), &r).unwrap();
+    assert_eq!(account_count(&account, "resource:stone"), account_count(&before, "resource:stone") - 2);
+    assert_eq!(account_count(&account, "resource:birch_wood"), account_count(&before, "resource:birch_wood") - 1);
+    assert_eq!(state.devices[&cell].fuel_heat, campfire_capacity() / 10);
+    state.step(balance(), &r);
+    let remaining = state.devices[&cell].fuel_heat;
+    world.automation = state.clone();
+    assert_eq!(world.get_block(cell.0, cell.1, cell.2), BlockType::Campfire);
+    assert!(!crate::adventure::has_keeper(&world, cell));
+    assert!(crate::adventure::can_use_camp(&world, feet, cell));
+    apply(&world, &mut state, &mut account, feet, &[], &Action::Pack { cell }, balance(), &r).unwrap();
+    world.automation = state.clone();
+    account = serde_json::from_str(&serde_json::to_string(&account).unwrap()).unwrap();
+    apply(&world, &mut state, &mut account, feet, &[], &Action::Place { kind: Kind::Campfire, cell, rotation: 0, packed: Some(0) }, balance(), &r).unwrap();
+    assert_eq!(state.devices[&cell].fuel_heat, remaining);
+    for _ in 0..remaining { state.step(balance(), &r); }
+    assert_eq!(state.devices[&cell].fuel_heat, 0);
+    state.validate(balance(), &r).unwrap();
+}
+
+#[test]
+fn retired_stone_roofs_migrate_without_remaining_available() {
+    assert_eq!(Kind::parse("stone_roof"), None);
+    assert_eq!(
+        serde_json::from_str::<Kind>("\"stone_roof\"").unwrap(),
+        Kind::WoodRoof
+    );
+    balance().validate().unwrap();
+}
+
 fn recipes() -> Registry {
     Registry::load().unwrap()
 }
@@ -1084,4 +1170,98 @@ fn building_table_rotation_rejects_obstructions_atomically() {
         .devices
         .insert((1, 40, 2), Device::new(Kind::WoodenStool, (1, 40, 2), 0));
     assert!(state.validate(balance(), &recipes()).is_err());
+}
+
+#[test]
+fn wardrobe_large_transfers_are_atomic_and_pack_without_loss() {
+    let mut world = World::new(42);
+    let mut state = State::default();
+    let mut account = Account::default();
+    let cell = (0, 40, 0);
+    let feet = Vec3::new(0.5, 40.0, 3.5);
+    let r = recipes();
+    let b = balance();
+    account_add(&mut account, "resource:spruce_wood", 6).unwrap();
+    apply(
+        &world,
+        &mut state,
+        &mut account,
+        feet,
+        &[],
+        &Action::Place {
+            kind: Kind::SpruceWardrobe,
+            cell,
+            rotation: 0,
+            packed: None,
+        },
+        b,
+        &r,
+    )
+    .unwrap();
+    assert!(!state.devices[&cell].config.eject_contents);
+    world.automation = state.clone();
+    account_add(&mut account, "resource:stone", 2_000_000).unwrap();
+    apply(
+        &world,
+        &mut state,
+        &mut account,
+        feet,
+        &[],
+        &Action::Deposit {
+            cell,
+            item: "resource:stone".into(),
+            amount: 2_000_000,
+        },
+        b,
+        &r,
+    )
+    .unwrap();
+    let snapshot = state.clone();
+    let balances = account.clone();
+    assert!(apply(
+        &world,
+        &mut state,
+        &mut account,
+        feet,
+        &[],
+        &Action::Withdraw {
+            cell,
+            item: "resource:stone".into(),
+            amount: 2_000_001
+        },
+        b,
+        &r
+    )
+    .is_err());
+    assert_eq!(state, snapshot);
+    assert_eq!(account, balances);
+    apply(
+        &world,
+        &mut state,
+        &mut account,
+        feet,
+        &[],
+        &Action::Withdraw {
+            cell,
+            item: "resource:stone".into(),
+            amount: 1_000_000,
+        },
+        b,
+        &r,
+    )
+    .unwrap();
+    apply(
+        &world,
+        &mut state,
+        &mut account,
+        feet,
+        &[],
+        &Action::Pack { cell },
+        b,
+        &r,
+    )
+    .unwrap();
+    assert_eq!(account.packed_devices[0].items["resource:stone"], 1_000_000);
+    assert_eq!(account_count(&account, "resource:stone"), 1_000_000);
+    validate_account(&account, b, &r).unwrap();
 }

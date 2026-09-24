@@ -56,6 +56,7 @@ impl Panel {
         if let Some((kind, rotation, _)) = self.build {
             egui::Window::new("Placement").anchor(egui::Align2::CENTER_BOTTOM,[0.0,-110.0]).title_bar(false).show(ctx,|ui| {
                 ui.label(format!("{} · turn {} · Left/right click: place · R: rotate · B/Esc: exit",balance().def(kind).name,rotation));
+                if kind == Kind::OakLadder { ui.small("On ladder: W climbs up, S climbs down, A/D leaves the ladder; Shift climbs faster."); }
                 if kind.category()==Category::Machines {ui.small("Ports: blue single mark = mana · amber pair = matter · violet bars = signal");}
                 if !self.feedback.is_empty() {ui.label(&self.feedback);}
             });
@@ -66,7 +67,7 @@ impl Panel {
         if let Some(chest) = self
             .selected
             .and_then(|p| state.devices.get(&p))
-            .filter(|d| d.kind == Kind::Chest)
+            .filter(|d| d.kind.storage())
         {
             return chest_ui::draw(
                 ctx,
@@ -102,7 +103,7 @@ impl Panel {
                 ui.label(format!("Activity: {:?} · Network mana: {}/{}",d.activity,d.mana,balance().def(d.kind).mana_capacity));
                 if let Some(batch)=&d.batch {ui.add(egui::ProgressBar::new(batch.elapsed as f32/batch.duration as f32).show_percentage());ui.small("This paid cycle keeps its recipe until complete.");}
                 ui.checkbox(&mut self.config.enabled,"Enabled");
-                if matches!(d.kind,Kind::Chest|Kind::Smelter) {
+                if matches!(d.kind,Kind::Chest|Kind::SpruceWardrobe|Kind::Smelter) {
                     ui.checkbox(&mut self.config.eject_contents,if d.kind==Kind::Smelter {"Eject finished metal nearby"}else{"Eject contents nearby (bags / living creatures)"});
                     ui.small("Turn off to store stock or feed another machine through the output port.");
                 }
@@ -158,7 +159,7 @@ impl Panel {
                 });
                 if balance().def(d.kind).item_capacity>0 {
                 ui.separator();
-                if d.kind==Kind::Chest {ui.label(format!("Stored: {} (no slot limit)",d.item_count()));} else {ui.label(format!("Stored matter: {}/{}",d.item_count(),balance().def(d.kind).item_capacity));}
+                if d.kind.storage() {ui.label(format!("Stored: {} (no slot limit)",d.item_count()));} else {ui.label(format!("Stored matter: {}/{}",d.item_count(),balance().def(d.kind).item_capacity));}
                 for (id,n) in &d.items {ui.small(format!("Input/storage: {} ×{n}", if id.starts_with("harvest:") { crate::food::harvest_name(id) } else { id.clone() }));}
                 for (id,n) in &d.output {ui.small(format!("Output: {} ×{n}", if id.starts_with("harvest:") { crate::food::harvest_name(id) } else { id.clone() }));}
                 let mut choices:Vec<String>=(0..5).map(|i|element_id(i).into()).collect();
@@ -203,7 +204,7 @@ impl Panel {
                 ui.separator();
                 for (f,n,dir) in d.ports(balance()) {ui.small(format!("{f:?}: {n:?} {dir:?}"));}
             } else {
-                ui.label("Build with carried resources. F inspects; left click packs intact.");
+                ui.label("Build with carried resources. F inspects. Left click: empty hand packs intact; axe dismantles furniture/construction into resources.");
                 for def in balance().devices.iter().filter(|d| d.kind.category()==self.category) {
                     let affordable=def.cost.iter().all(|(id,n)|account_count(account,id)>=*n);
                     if ui.add_enabled(affordable,egui::Button::new(&def.name)).clicked(){self.build=Some((def.kind,0,None));close=true;}

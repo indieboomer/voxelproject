@@ -378,6 +378,9 @@ pub(crate) fn block_action_at(
     }
     match intent.action {
         Action::Mine => {
+            if world.automation.device_at(hit.target).is_some() {
+                return Err("Use building removal to pack this item".into());
+            }
             if !can_mine(entry, old, account) {
                 mining.target = None;
                 mining.hits = 0;

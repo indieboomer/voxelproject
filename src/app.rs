@@ -2703,14 +2703,16 @@ impl App {
                 }
                 if let Some(base) = self.world.automation.device_at(hit.target).map(|d| d.cell) {
                     if !machine_input && self.input.left_clicked {
-                        self.submit_automation(crate::automation::Action::Pack { cell: base });
+                        self.submit_automation(crate::automation::Action::Remove { cell: base });
                         self.input.left_clicked = false;
                     }
                     if self.input.interact_clicked {
                         if let Some(d) = self.world.automation.devices.get(&base) {
-                            self.ui.automation.inspect(d);
+                            if d.kind != crate::automation::Kind::Campfire {
+                                self.ui.automation.inspect(d);
+                                self.sync_settings_input();
+                            }
                         }
-                        self.sync_settings_input();
                     }
                 }
             }
@@ -4552,7 +4554,9 @@ impl App {
             .campfires
             .values()
             .flatten()
-            .any(|p| p.distance(self.player.position) < 5.0);
+            .any(|p| p.distance(self.player.position) < 5.0)
+            || self.world.automation.devices.values().any(|d| d.kind == crate::automation::Kind::Campfire
+                && d.fuel_heat > 0 && crate::automation::center(d.cell).distance(self.player.position) < 5.0);
         if exposed {
             self.player.statuses.apply(crate::status_effects::Kind::Wet, 0.3, 1.0, 0.0, "rain");
             self.player.wetness = (self.player.wetness + dt * 0.08).min(1.0);
@@ -6102,6 +6106,10 @@ impl App {
             .copied()
             .filter(|p| p.distance_squared(cam_pos) < 48.0 * 48.0)
             .collect();
+        campfires.extend(self.world.automation.devices.values()
+            .filter(|d| d.kind == crate::automation::Kind::Campfire && d.fuel_heat > 0)
+            .map(|d| Vec3::new(d.cell.0 as f32 + 0.5, d.cell.1 as f32, d.cell.2 as f32 + 0.5))
+            .filter(|p| p.distance_squared(cam_pos) < 48.0 * 48.0));
         campfires.sort_by(|a, b| {
             a.distance_squared(cam_pos)
                 .total_cmp(&b.distance_squared(cam_pos))

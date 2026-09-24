@@ -53,6 +53,8 @@ impl Category {
 
 pub type Cell = (i32, i32, i32);
 pub type Inventory = BTreeMap<String, u32>;
+/// Three minutes of fuel, expressed in authoritative simulation ticks.
+pub fn campfire_capacity() -> u32 { 180_000 / balance().tick_ms }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
@@ -72,17 +74,27 @@ pub enum Kind {
     Lantern,
     DarkAltar,
     Shrine,
+    // Migrate retired stone slopes in saved worlds to wooden slopes.
+    #[serde(alias = "stone_roof")]
     WoodRoof,
-    StoneRoof,
     WoodenStool,
     WoodenTable,
     WoodenBench,
     WoodenPost,
     OakRoofRidge,
     OakRoofRidgeFinial,
+    OakDoor,
+    OakHangingSign,
+    OakLadder,
+    OakRailing,
+    OakStairs,
+    OakWindowWall,
+    SpruceBed,
+    SpruceWardrobe,
+    Campfire,
 }
 impl Kind {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 32] = [
         Self::Collector,
         Self::Vessel,
         Self::Condenser,
@@ -100,13 +112,21 @@ impl Kind {
         Self::DarkAltar,
         Self::Shrine,
         Self::WoodRoof,
-        Self::StoneRoof,
         Self::WoodenStool,
         Self::WoodenTable,
         Self::WoodenBench,
         Self::WoodenPost,
         Self::OakRoofRidge,
         Self::OakRoofRidgeFinial,
+        Self::OakDoor,
+        Self::OakHangingSign,
+        Self::OakLadder,
+        Self::OakRailing,
+        Self::OakStairs,
+        Self::OakWindowWall,
+        Self::SpruceBed,
+        Self::SpruceWardrobe,
+        Self::Campfire,
     ];
     pub fn id(self) -> &'static str {
         match self {
@@ -127,13 +147,21 @@ impl Kind {
             Self::DarkAltar => "dark_altar",
             Self::Shrine => "shrine",
             Self::WoodRoof => "wood_roof",
-            Self::StoneRoof => "stone_roof",
             Self::WoodenStool => "wooden_stool",
             Self::WoodenTable => "wooden_table",
             Self::WoodenBench => "wooden_bench",
             Self::WoodenPost => "wooden_post",
             Self::OakRoofRidge => "oak_roof_ridge",
             Self::OakRoofRidgeFinial => "oak_roof_ridge_finial",
+            Self::OakDoor => "oak_door",
+            Self::OakHangingSign => "oak_hanging_sign",
+            Self::OakLadder => "oak_ladder",
+            Self::OakRailing => "oak_railing",
+            Self::OakStairs => "oak_stairs",
+            Self::OakWindowWall => "oak_window_wall",
+            Self::SpruceBed => "spruce_bed",
+            Self::SpruceWardrobe => "spruce_wardrobe",
+            Self::Campfire => "campfire",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -142,23 +170,24 @@ impl Kind {
     pub fn height(self) -> i32 {
         match self {
             Self::Lantern | Self::WoodenPost => 3,
-            Self::DarkAltar | Self::Shrine | Self::OakRoofRidgeFinial => 2,
+            Self::DarkAltar | Self::Shrine | Self::OakRoofRidgeFinial | Self::OakDoor | Self::OakLadder | Self::SpruceWardrobe => 2,
             _ => 1,
         }
     }
     pub fn category(self) -> Category {
         match self {
-            Self::WoodRoof | Self::StoneRoof | Self::OakRoofRidge | Self::OakRoofRidgeFinial => {
+            Self::WoodRoof | Self::OakRoofRidge | Self::OakRoofRidgeFinial | Self::OakDoor | Self::OakHangingSign | Self::OakLadder | Self::OakRailing | Self::OakStairs | Self::OakWindowWall => {
                 Category::Construction
             }
             Self::Chest
             | Self::WoodenStool
             | Self::WoodenTable
             | Self::WoodenBench
-            | Self::WoodenPost => Category::Furniture,
+            | Self::WoodenPost | Self::SpruceBed | Self::SpruceWardrobe => Category::Furniture,
             _ => Category::Machines,
         }
     }
+    pub fn storage(self) -> bool { matches!(self, Self::Chest | Self::SpruceWardrobe) }
     pub fn building_prop(self) -> bool {
         self.category() != Category::Machines && self != Self::Chest
     }
@@ -166,6 +195,7 @@ impl Kind {
         let (x, z) = match self {
             Self::WoodenTable => (3, 2),
             Self::WoodenBench => (2, 1),
+            Self::SpruceBed => (1, 2),
             _ => (1, 1),
         };
         if rotation % 2 == 0 {
@@ -329,7 +359,7 @@ impl Balance {
             }
             let d = defs[0];
             if d.mana_capacity > 10000
-                || (d.kind != Kind::Chest && d.item_capacity > 256)
+                || (!d.kind.storage() && d.item_capacity > 256)
                 || d.throughput == 0
                 || d.throughput > 256
                 || d.duration_ticks == 0
@@ -474,7 +504,7 @@ impl Device {
     }
     pub fn new(kind: Kind, cell: Cell, rotation: u8) -> Self {
         let mut config = Config::default();
-        if kind == Kind::Chest {
+        if kind.storage() {
             config.eject_contents = false;
         }
         if kind == Kind::Splitter {
@@ -485,7 +515,7 @@ impl Device {
             persistent_id: 0,
             powered_ticks: 0,
             feedback_events: [0; 3],
-            fuel_heat: 0,
+            fuel_heat: if kind == Kind::Campfire { campfire_capacity() / 10 } else { 0 },
             last_ejection_tick: 0,
             cell,
             kind,
@@ -504,7 +534,7 @@ impl Device {
     }
     pub fn ports(&self, b: &Balance) -> Vec<Port> {
         let mut ports = b.def(self.kind).ports.clone();
-        if matches!(self.kind, Kind::Chest | Kind::Smelter) && self.config.eject_contents {
+        if matches!(self.kind, Kind::Chest | Kind::SpruceWardrobe | Kind::Smelter) && self.config.eject_contents {
             ports.retain(|p| p.1 != Network::Matter || p.2 == Direction::In);
         }
         if matches!(
@@ -547,7 +577,7 @@ impl Device {
             }
             Kind::Workshop => item.starts_with("element:"),
             Kind::Dissipator => item == element_id(self.config.element),
-            Kind::Chest | Kind::Channel | Kind::Splitter => true,
+            Kind::Chest | Kind::SpruceWardrobe | Kind::Channel | Kind::Splitter => true,
             Kind::Valve => self.config.valve_matter,
             _ => false,
         }
@@ -775,8 +805,8 @@ impl State {
                 return Err("Invalid stored device".into());
             }
             validate_config(d.kind, &d.config, b, recipes)?;
-            if d.fuel_heat > b.smelting.coal_heat
-                || (d.kind != Kind::Smelter && d.fuel_heat != 0)
+            if d.fuel_heat > if d.kind == Kind::Campfire { campfire_capacity() } else { b.smelting.coal_heat }
+                || (!matches!(d.kind, Kind::Smelter | Kind::Campfire) && d.fuel_heat != 0)
                 || (d.kind == Kind::Smelter && d.batch.is_some())
             {
                 return Err("Invalid smelter heat or batch".into());
@@ -880,12 +910,14 @@ pub enum Action {
         cell: Cell,
         item: String,
     },
+    Remove { cell: Cell },
 }
 impl Action {
     pub fn cell(&self) -> Cell {
         match self {
             Self::Place { cell, .. }
             | Self::Pack { cell }
+            | Self::Remove { cell }
             | Self::Rotate { cell }
             | Self::Configure { cell, .. }
             | Self::Charge { cell, .. }
@@ -983,12 +1015,25 @@ pub fn apply(
                 .checked_add(1)
                 .ok_or("Device identity limit")?;
             device.rotation = *rotation;
-            if matches!(device.kind, Kind::Chest | Kind::Smelter) {
+            if matches!(device.kind, Kind::Chest | Kind::SpruceWardrobe | Kind::Smelter) {
                 device.last_ejection_tick = next.tick;
             }
             next.devices.insert(p, device);
         }
-        Action::Pack { .. } => {
+        Action::Remove { .. } if next.devices.get(&p).is_some_and(|d| d.kind.category() != Category::Machines)
+            && matches!(funds.hotbar.entry(), Some(crate::equipment::Entry::Gear(crate::equipment::Gear::Axe | crate::equipment::Gear::ForesterAxe))) => {
+            let entry = funds.hotbar.entry().unwrap();
+            if entry.count(&funds) == 0 { return Err("Axe unavailable".into()); }
+            let d = next.devices.remove(&p).ok_or("No device")?;
+            for (item, amount) in b.def(d.kind).cost.iter().chain(d.items.iter()).chain(d.output.iter()) {
+                account_add(&mut funds, item, *amount)?;
+            }
+        }
+        Action::Pack { .. } | Action::Remove { .. } => {
+            if matches!(action, Action::Remove { .. }) && funds.hotbar.entry().is_some()
+                && next.devices.get(&p).is_some_and(|d| d.kind.category() != Category::Machines) {
+                return Err("Use an empty hand to pack, or an axe to dismantle furniture and construction".into());
+            }
             if funds.packed_devices.len() >= 8 {
                 return Err("Packed device inventory full (8); place a packed device first".into());
             }

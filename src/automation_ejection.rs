@@ -14,7 +14,7 @@ pub fn eject_chests(
         .devices
         .iter()
         .filter(|(_, d)| {
-            matches!(d.kind, Kind::Chest | Kind::Smelter)
+            matches!(d.kind, Kind::Chest | Kind::SpruceWardrobe | Kind::Smelter)
                 && d.config.enabled
                 && d.config.eject_contents
                 && !d.outgoing().is_empty()

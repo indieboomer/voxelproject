@@ -299,7 +299,7 @@ pub fn machine_action(
     observe(a, state);
     use crate::automation::{Action, Kind};
     let p = action.cell();
-    if matches!(action, Action::Pack { .. }) {
+    if matches!(action, Action::Pack { .. } | Action::Remove { .. }) {
         for cell in &mut a.adventure.quests.machines {
             if *cell == Some(p) {
                 *cell = None;
