@@ -6,5 +6,6 @@ Cargo.lock.bak
 
 /settings.json
 /settings.json.tmp
+/coplay
 
 /tools/__pycache__/

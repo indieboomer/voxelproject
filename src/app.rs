@@ -13,6 +13,11 @@ mod npc_app;
 mod playtest_app;
 #[path = "spell_app.rs"]
 mod spell_app;
+#[path = "coplay_app.rs"]
+mod coplay_app;
+#[cfg(feature = "dev-playtest")]
+#[path = "coplay_live_check.rs"]
+mod coplay_live_check;
 #[path = "spell_diagnostics_app.rs"]
 mod spell_diagnostics_app;
 use crate::transport::{JoinTarget, Peer, Transport};
@@ -856,6 +861,7 @@ impl App {
     }
     fn crafting_save(&self) -> crate::save::CraftingSave {
         crate::save::CraftingSave {
+            coplay: self.ui.coplay.session.clone(),
             world_identity: self.world.identity.clone(),
             creature_next_id: self.creatures.next_identity(),
             enchantments: self.scripting.save_enchantments(),
@@ -1805,7 +1811,8 @@ impl App {
         let wind = crate::wind::Wind::new(&device, &camera_bgl, config.format);
         let block_target =
             crate::block_target::BlockTarget::new(&device, &camera_bgl, config.format);
-        let ui = Ui::new(&device, config.format, &window);
+        let mut ui = Ui::new(&device, config.format, &window);
+        ui.coplay.session = std::mem::take(&mut crafting_save.coplay);
         let entity_mesh = DynamicMesh::new(&device);
         let campfire_mesh = DynamicMesh::new(&device);
         let held_mesh = DynamicMesh::new(&device);
@@ -2024,6 +2031,19 @@ impl App {
                 let PhysicalKey::Code(code) = key_event.physical_key else {
                     return;
                 };
+                if !key_event.repeat && code == KeyCode::F8 {
+                    self.ui.coplay.open = !self.ui.coplay.open;
+                    self.sync_settings_input();
+                    return;
+                }
+                if self.ui.coplay.open {
+                    if !key_event.repeat && code == KeyCode::Escape {
+                        self.ui.coplay.open = false;
+                        self.sync_settings_input();
+                    }
+                    if !key_event.repeat && code == KeyCode::F5 { self.input.save_requested = true; }
+                    return;
+                }
                 if self.console_open && self.ui.spell_comment.is_some() {
                     if !key_event.repeat && code == KeyCode::Escape {
                         self.ui.spell_comment = None;
@@ -2246,6 +2266,7 @@ impl App {
             }
             WindowEvent::MouseInput { state, button, .. }
                 if !self.ui.spellbook.open
+                    && !self.ui.coplay.open
                     && !self.ui.campfire.open
                     && !self.ui.journal.open
                     && !self.ui.automation.open
@@ -2267,6 +2288,7 @@ impl App {
             }
             WindowEvent::MouseWheel { delta, .. }
                 if self.cursor_grabbed
+                    && !self.ui.coplay.open
                     && (matches!(self.net, NetRole::Host(_)) || self.inventory_ready) =>
             {
                 let y = match delta {
@@ -2289,6 +2311,7 @@ impl App {
         self.input.release_all();
         self.input.end_frame();
         let gameplay = !self.ui.spellbook.open
+                && !self.ui.coplay.open
                 && !self.ui.campfire.open
                 && !self.ui.map.open
                 && !self.ui.inventory_open
@@ -2595,7 +2618,7 @@ impl App {
 
     pub fn device_event(&mut self, event: &DeviceEvent) {
         if let DeviceEvent::MouseMotion { delta } = event {
-            if self.cursor_grabbed {
+            if self.cursor_grabbed && !self.ui.coplay.open {
                 self.input.mouse_delta.0 += delta.0 as f32;
                 self.input.mouse_delta.1 += delta.1 as f32;
             }
@@ -2603,6 +2626,7 @@ impl App {
     }
 
     pub fn update(&mut self) {
+        self.update_coplay();
         self.maintain_hotbars();
         // Only the host chooses the testing policy; clients receive it with
         // the crafting registry so previews and authoritative charges agree.
@@ -3380,6 +3404,7 @@ impl App {
             (p.proposal.nickname.clone(), p.proposal.prompt.clone(), p.module.name.clone())
         });
         let settings_was_open = self.ui.settings.open;
+        let coplay_was_open = self.ui.coplay.open;
         let spellbook_was_open = self.ui.spellbook.open;
         let map_was_open = self.ui.map.open;
         let automation_was_open = self.ui.automation.open;
@@ -3413,6 +3438,7 @@ impl App {
             proposal_review,
         );
         self.pending_egui_output = Some(full_output);
+        if coplay_was_open != self.ui.coplay.open { self.sync_settings_input(); }
         if spellbook_was_open != self.ui.spellbook.open {
             self.sync_settings_input();
         }

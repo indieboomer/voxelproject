@@ -11,6 +11,23 @@ fn shaping_fixture() -> Fixture {
 }
 
 #[test]
+fn coplay_authoring_error_rolls_back_then_correction_executes_without_subscription() {
+    let mut f=shaping_fixture();
+    let mut host=ScriptHost::new();
+    let before=f.creatures.snapshot_with_ids();
+    let mut bad=module("on_cast", "api.replace_block(1,30,1,'stone'); api.set_weather('rain'); error('generated mistake')");
+    let mut good=module("on_cast", "api.replace_block(1,30,1,'stone'); api.set_weather('rain')");
+    for (m,success) in [(&mut bad,false),(&mut good,true)] {
+        let mut outcome=TickOutcome::default();let mut deaths=Vec::new();
+        let mut input=TickInput {creatures:&mut f.creatures,world:&f.world,players:&f.players,time_of_day:&mut f.time,weather:&mut f.weather,block_edits:&mut outcome.block_edits,death_events:&mut deaths,broadcasts:&mut outcome.broadcasts,player_effects:&mut outcome.player_effects,host_resources:f.resources};
+        assert_eq!(host.author_execute(m,&mut input).is_ok(),success);
+        if success {assert_eq!(outcome.block_edits.len(),1);assert_eq!(f.weather.current,Weather::Rain);} else {assert!(outcome.block_edits.is_empty());}
+        assert_eq!(f.creatures.snapshot_with_ids(),before);
+        assert!(host.modules.is_empty());
+    }
+}
+
+#[test]
 fn unknown_dynamic_block_filter_errors_and_rolls_back() {
     let mut f = shaping_fixture();
     let mut m = module("on_cast", "api.replace_block(1,30,1,'stone'); local names={'poison_ivy'}; api.find_blocks(names[1],0,30,0,6)");

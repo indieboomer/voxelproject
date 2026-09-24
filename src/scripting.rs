@@ -766,6 +766,10 @@ impl ScriptHost {
             match Module::load(e.name.clone(), e.prompt.clone(), e.source.clone()) {
                 Ok(mut m) => {
                     m.enabled = e.enabled && !crate::spellbook::is_enchantment_source(&m.source);
+                    if (e.name.starts_with("coplay-") || e.prompt.starts_with("[Astra Co-Play]")) && m.api_version() != Some(crate::world_api_gen::VERSION) {
+                        m.enabled = false;
+                        m.error = Some("Co-Play API version mismatch; definition retained. Review/revise against this build.".into());
+                    }
                     host.modules.push(m);
                 }
                 Err(err) => {
@@ -826,6 +830,14 @@ impl ScriptHost {
         }
         self.modules.push(module);
         Ok(self.modules.len() - 1)
+    }
+
+    /// One explicit authoring action, using the same transaction/budgets as spells.
+    /// Does not enter the scheduler, charge mana, or leave a registered callback.
+    pub fn author_execute(&mut self, module: &mut Module, input: &mut TickInput) -> Result<(), String> {
+        if !module.is_instant { return Err("execute requires on_cast, not a persistent rule".into()); }
+        module.lua.set_app_data(self.inventory_registry.clone());
+        module.execute(input, Callback::Cast(HOST_PLAYER_ID)).map_err(|e| e.to_string())
     }
 
     /// Returns (name, new enabled state) so the caller can build a

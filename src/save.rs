@@ -12,6 +12,7 @@ use crate::voxel::World;
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct CraftingSave {
+    pub coplay: crate::coplay::Session,
     pub world_identity: crate::enchantment::WorldIdentity,
     pub creature_next_id: u32,
     pub enchantments: Vec<crate::enchantment::Saved>,

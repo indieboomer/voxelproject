@@ -103,6 +103,7 @@ pub struct UiRequests {
 }
 
 pub struct Ui {
+    pub coplay: crate::coplay::Panel,
     pub spellbook: crate::spellbook_ui::Panel,
     pub spell_hud: Option<(String, bool)>,
     pub aimed_object: String,
@@ -165,6 +166,7 @@ impl Ui {
         let state = State::new(ctx.clone(), egui::ViewportId::ROOT, window, None, None);
         let renderer = Renderer::new(device, output_format, None, 1);
         Self {
+            coplay: Default::default(),
             spellbook: Default::default(),
             spell_hud: None,
             aimed_object: String::new(),
@@ -260,6 +262,7 @@ impl Ui {
         let mut open_settings = false;
 
         let full_output = self.ctx.run(raw_input, |ctx| {
+            self.coplay.draw(ctx, is_host);
             if let Some((requester, prompt, summary)) = proposal_review {
                 egui::Window::new("Guest rule approval")
                     .collapsible(false)

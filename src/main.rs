@@ -57,6 +57,7 @@ mod save;
 mod script_budget;
 mod scripting;
 mod settings;
+mod coplay;
 mod shelter;
 mod spell_art;
 mod spell_flavor;
@@ -140,22 +141,37 @@ fn main() {
             log::warn!("{e}"); // Direct mode remains usable without a signed-in Steam client.
         }
     }
+    #[cfg(feature = "dev-playtest")]
+    let coplay_check = std::env::args().any(|a| a == "--coplay-check");
+    #[cfg(not(feature = "dev-playtest"))]
+    let coplay_check = false;
     let event_loop = EventLoop::new().expect("failed to create event loop");
     let window = Arc::new(
         WindowBuilder::new()
             .with_title("Voxel Project")
-            .with_fullscreen(Some(Fullscreen::Borderless(None)))
+            .with_visible(!coplay_check)
+            .with_fullscreen(if coplay_check { None } else { Some(Fullscreen::Borderless(None)) })
             .with_inner_size(winit::dpi::PhysicalSize::new(1280, 720))
             .build(&event_loop)
             .expect("failed to create window"),
     );
 
-    let launch_config = net::parse_args();
+    let launch_config = if coplay_check {
+        let mut cfg = net::parse_args();
+        cfg.world_name = format!("coplay-check-{}", coplay::stamp());
+        cfg.fresh = true; cfg.connect = None; cfg.port = 0;
+        cfg
+    } else { net::parse_args() };
 
     // `--connect` on the command line bypasses the menu entirely (used for
     // scripted/automated testing); any other launch starts at the main menu
     // so a normal double-click always lets the player choose new/load/join.
-    let mut stage = if let Some(addr) = launch_config.connect {
+    let mut stage = if coplay_check {
+        let app = pollster::block_on(app::App::new(window.clone(), launch_config)).expect("Co-Play check world failed to start");
+        #[cfg(feature = "dev-playtest")]
+        let app = { let mut app = app; app.start_coplay_live_check(); app };
+        Stage::Game(app)
+    } else if let Some(addr) = launch_config.connect {
         match pollster::block_on(app::App::new(window.clone(), launch_config)) {
             Ok(app) => Stage::Game(app),
             Err(e) => {
@@ -296,6 +312,10 @@ fn main() {
                                 }
                                 WindowEvent::RedrawRequested => {
                                     state.update();
+                                    #[cfg(feature = "dev-playtest")]
+                                    if coplay_check && state.finish_coplay_live_check() {
+                                        state.save(); elwt.exit(); return;
+                                    }
                                     if state.wants_return_to_menu() {
                                         // Same save-then-drop-then-create
                                         // dance as CloseRequested, except we
@@ -349,6 +369,19 @@ fn main() {
                     if let Stage::Game(state) = &mut stage {
                         state.device_event(&event);
                     }
+                }
+                #[cfg(feature = "dev-playtest")]
+                Event::AboutToWait if coplay_check => {
+                    // Hidden Windows surfaces do not receive redraw events.
+                    // Exercise the same App update/render loop explicitly.
+                    if let Stage::Game(state) = &mut stage {
+                        state.update();
+                        if state.finish_coplay_live_check() {
+                            state.save(); elwt.exit(); return;
+                        }
+                        if let Err(error) = state.render() { log::warn!("Co-Play check render: {error:?}"); }
+                    }
+                    elwt.set_control_flow(ControlFlow::WaitUntil(std::time::Instant::now()+std::time::Duration::from_millis(16)));
                 }
                 _ => {}
             }

@@ -21,6 +21,7 @@ pub struct Settings {
     pub appearance: Appearance,
     pub multiplayer: Multiplayer,
     pub aiapi: AiApi,
+    pub coplay: crate::coplay::Limits,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
