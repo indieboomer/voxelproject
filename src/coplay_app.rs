@@ -101,6 +101,14 @@ impl App {
             self.ui.coplay = panel;
             return;
         }
+        if !panel.log_enabled || panel.submit {
+            panel.log_enabled = true;
+            panel.log_secret = if self.ui.settings.values.aiapi.api_key.trim().is_empty() {
+                std::env::var("OPENAI_API_KEY").unwrap_or_default()
+            } else {
+                self.ui.settings.values.aiapi.api_key.clone()
+            };
+        }
         if panel.open {
             panel.context = format!(
                 "{} · revision {} · aimed {}",
@@ -121,6 +129,10 @@ impl App {
                 .coplay_undo(&mut panel)
                 .unwrap_or_else(|e| format!("Undo blocked: {e}"));
             panel.session.conversation.push(panel.status.clone());
+            panel.log(
+                "undo",
+                json!({"world_id":self.world.identity.id,"status":panel.status}),
+            );
         }
         if panel.submit && panel.run.is_none() && panel.enabled {
             panel.submit = false;
@@ -130,6 +142,8 @@ impl App {
                 coplay::stamp(),
                 panel.session.conversation.len()
             );
+            panel.log("request_submitted",json!({"request_id":id,"world_id":self.world.identity.id,
+                "world_name":self.world.name,"prompt":prompt,"api_version":crate::world_api_gen::VERSION,"build":coplay::build()}));
             let target = self
                 .aimed_spell_context()
                 .map(|t| {
@@ -141,7 +155,13 @@ impl App {
                 })
                 .transpose();
             match target {
-                Err(e) => panel.status = format!("Failed to capture target: {e}"),
+                Err(e) => {
+                    panel.status = format!("Failed to capture target: {e}");
+                    panel.log(
+                        "request_rejected",
+                        json!({"request_id":id,"status":panel.status}),
+                    );
+                }
                 Ok(target) => {
                     panel.session.last_target = target.clone();
                     panel.session.conversation.push(format!("You: {prompt}"));
@@ -176,6 +196,7 @@ impl App {
                         world: self.world.identity.id.clone(),
                     });
                     panel.status = "Inspecting".into();
+                    panel.log("request_context", initial);
                 }
             }
         }
@@ -200,9 +221,17 @@ impl App {
             match response {
                 Err(e) => panel.stop(&format!("Failed: {e}")),
                 Ok(reply) => {
+                    panel.log(
+                        "provider_response",
+                        json!({"status":reply.status,"output":reply.output,"tokens":reply.tokens}),
+                    );
                     let r = panel.run.as_mut().unwrap();
                     r.tokens = r.tokens.saturating_add(reply.tokens);
-                    if r.tokens > r.limits.tokens {
+                    if reply.status != "completed" {
+                        panel.stop(
+                            "Failed: provider response incomplete/refused; no actions executed",
+                        );
+                    } else if r.tokens > r.limits.tokens {
                         panel.stop("Stopped: token budget reached; response actions discarded");
                     } else {
                         let calls = reply
@@ -231,11 +260,17 @@ impl App {
                                     )
                                 })
                                 .unwrap_or_default();
+                            let request_id = panel.run.as_ref().map(|r| r.id.clone());
+                            panel.log(
+                                "tool_call",
+                                json!({"call_id":call["call_id"],"operation":op,"arguments":args}),
+                            );
                             let result = if call["name"] != "coplay" {
                                 Err("Unknown tool".into())
                             } else {
                                 self.coplay_tool(&mut panel, &op, &args)
                             };
+                            panel.log("tool_result",json!({"request_id":request_id,"call_id":call["call_id"],"operation":op,"result":result}));
                             if let Some(r) = &mut panel.run {
                                 r.steps += 1;
                                 let result = match result {
@@ -273,6 +308,7 @@ impl App {
             if key.is_empty() || model.is_empty() {
                 panel.stop("Failed: configure aiapi.OPENAI_API_KEY and OPENAI_PLAYTEST_MODEL in settings.json");
             } else {
+                panel.log("provider_request", json!({"model":model}));
                 let r = panel.run.as_mut().unwrap();
                 let body = coplay::request(&model, r);
                 // Reserve a conservative upper bound for input plus output before making a paid call.

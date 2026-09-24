@@ -94,6 +94,15 @@ Requests needing an unavailable persistent state mechanism belong in the backlog
 
 ## Capability backlog
 
+Co-Play also appends a diagnostic transcript to **`saves/coplay.log`** as events
+occur, independently of F5/world saves. It contains timestamped JSON Lines with
+world/request IDs, prompts and context, complete visible provider output, Lua/tool
+arguments and results, final summaries, errors, cancellations, undo results and
+token usage. Existing log contents are retained across sessions; multiline text
+is preserved inside each JSON record. Credentials and internal provider reasoning
+are excluded. Log write failures appear in the Co-Play panel. Logging starts with
+new requests; older saved conversations are not retroactively imported.
+
 `coplay/backlog.json` is the independent, durable development backlog. It is never
 included in world undo and is reused across worlds/restarts. A corrupt file causes
 an explicit error; the game does not replace it with an empty backlog.

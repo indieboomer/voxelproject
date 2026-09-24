@@ -11,6 +11,59 @@ use std::{
 pub const API_DOC: &str = include_str!("../world_api/world_api_compact.md");
 pub const BACKLOG_PATH: &str = "coplay/backlog.json";
 pub const EXPORT_PATH: &str = "coplay/world_api_backlog.md";
+pub const LOG_PATH: &str = "saves/coplay.log";
+
+/// Append complete visible conversation/tool data without provider secrets or
+/// opaque internal reasoning. JSON Lines survives interrupted sessions and can
+/// be read incrementally by analysis tools without loading the entire history.
+fn append_log(path: &Path, event: &Value, secret: &str) -> Result<(), String> {
+    use std::io::Write;
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn clean(value: &Value) -> Value {
+        match value {
+            Value::Array(items) => Value::Array(
+                items
+                    .iter()
+                    .filter(|v| v["type"] != "reasoning")
+                    .map(clean)
+                    .collect(),
+            ),
+            Value::Object(fields) => Value::Object(
+                fields
+                    .iter()
+                    .filter(|(k, _)| {
+                        ![
+                            "encrypted_content",
+                            "api_key",
+                            "OPENAI_API_KEY",
+                            "Authorization",
+                        ]
+                        .contains(&k.as_str())
+                    })
+                    .map(|(k, v)| (k.clone(), clean(v)))
+                    .collect(),
+            ),
+            _ => value.clone(),
+        }
+    }
+    let mut record = serde_json::to_string(&clean(event)).map_err(|e| e.to_string())?;
+    if !secret.is_empty() {
+        record = record.replace(secret, "[redacted]");
+    }
+    record.push('\n');
+    let _guard = LOCK.lock().map_err(|_| "Co-Play log lock failed")?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    file.write_all(record.as_bytes())
+        .and_then(|_| file.sync_data())
+        .map_err(|e| e.to_string())
+}
 pub fn stamp() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -220,6 +273,7 @@ pub fn build() -> String {
 }
 
 pub struct Reply {
+    pub status: String,
     pub output: Vec<Value>,
     pub tokens: u64,
 }
@@ -388,6 +442,10 @@ pub fn install_rule(
 }
 #[derive(Default)]
 pub struct Panel {
+    // Local runtime-only configuration; never serialized into a world or log.
+    pub log_secret: String,
+    pub log_error: Option<String>,
+    pub log_enabled: bool,
     pub open: bool,
     pub enabled: bool,
     pub input: String,
@@ -409,6 +467,26 @@ pub struct Panel {
     pub live_wait: Option<Instant>,
 }
 impl Panel {
+    pub fn log(&mut self, event: &str, data: Value) {
+        if !self.log_enabled {
+            return;
+        }
+        let request_id = self
+            .run
+            .as_ref()
+            .map(|r| json!(r.id))
+            .unwrap_or_else(|| data["request_id"].clone());
+        let world_id = self
+            .run
+            .as_ref()
+            .map(|r| json!(r.world))
+            .unwrap_or_else(|| data["world_id"].clone());
+        let record = json!({"timestamp_ms":stamp(),"event":event,
+            "request_id":request_id,"world_id":world_id,"data":data});
+        if let Err(error) = append_log(Path::new(LOG_PATH), &record, &self.log_secret) {
+            self.log_error = Some(format!("Cannot append {LOG_PATH}: {error}"));
+        }
+    }
     pub fn stop(&mut self, status: &str) {
         let committed = self.run.as_ref().is_some_and(|r| r.mutated);
         self.archive(status);
@@ -423,6 +501,10 @@ impl Panel {
         self.session.conversation.push(self.status.clone());
     }
     pub fn archive(&mut self, status: &str) {
+        if let Some(r) = &self.run {
+            self.log("request_finished",json!({"status":status,"steps":r.steps,"tokens":r.tokens,
+                "elapsed_ms":r.started.elapsed().as_millis(),"committed":r.mutated,"verified_checks":r.verified_checks,"gap_ids":r.gap_ids}));
+        }
         if let Some(r) = self.run.take() {
             self.session.requests.push(json!({"id":r.id,"prompt":r.prompt,"world":r.world,"status":status,"steps":r.steps,"tokens":r.tokens,"elapsed_ms":r.started.elapsed().as_millis(),"evidence":r.evidence,"gap_ids":r.gap_ids,"committed":r.mutated,"verified_checks":r.verified_checks}));
         }
@@ -447,7 +529,14 @@ impl Panel {
             ui.label("Experimental world authoring · host only · no spell fees");
             if !host { ui.label("Co-Play is unavailable to multiplayer guests."); return; }
             ui.checkbox(&mut self.enabled,"Enable world authoring for my requests");
-            ui.label(&self.context); ui.strong(&self.status);
+            ui.label(&self.context);
+            if let Some(error) = &self.log_error { ui.colored_label(egui::Color32::RED, error); }
+            ui.horizontal_wrapped(|ui| {
+                if self.submit || self.run.is_some() {
+                    ui.spinner().on_hover_text("Processing your request or checking its effects…");
+                }
+                ui.strong(&self.status);
+            });
             egui::ScrollArea::vertical().max_height((size.y * 0.4).min(360.)).stick_to_bottom(true).show(ui, |ui| {
                 for line in self.session.conversation.iter().rev().take(80).collect::<Vec<_>>().into_iter().rev() { ui.label(line); }
             });
@@ -535,10 +624,8 @@ pub fn fetch(key: &str, body: Value) -> Result<Reply, String> {
     }
     let sanitized = String::from_utf8_lossy(&bytes).replace(key, "[redacted]");
     let value: Value = serde_json::from_str(&sanitized).map_err(|_| "Invalid provider JSON")?;
-    if value["status"] != "completed" {
-        return Err("Provider response incomplete/refused; no actions executed".into());
-    }
     Ok(Reply {
+        status: value["status"].as_str().unwrap_or("missing").into(),
         output: value["output"].as_array().ok_or("Missing output")?.clone(),
         tokens: value["usage"]["total_tokens"]
             .as_u64()
@@ -549,6 +636,34 @@ pub fn fetch(key: &str, body: Value) -> Result<Reply, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn coplay_log_appends_complete_records_and_redacts_credentials() {
+        let path = std::env::temp_dir().join(format!("coplay-log-{}.log", stamp()));
+        let source = "function on_tick(api)\n api.set_weather('rain')\nend";
+        let event = json!({"event":"provider_response","output":[
+            {"type":"reasoning","encrypted_content":"private-internal-data"},
+            {"type":"function_call","source":source},
+            {"type":"message","text":"test-secret"}],"OPENAI_API_KEY":"test-secret"});
+        append_log(&path, &event, "test-secret").unwrap();
+        append_log(
+            &path,
+            &json!({"event":"tool_result","result":{"ok":true}}),
+            "test-secret",
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("test-secret"));
+        assert!(!text.contains("private-internal-data"));
+        let records: Vec<Value> = text
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0]["output"][0]["source"], source);
+        assert_eq!(records[0]["output"][1]["text"], "[redacted]");
+        assert_eq!(records[1]["result"]["ok"], true);
+        std::fs::remove_file(path).unwrap();
+    }
     fn run() -> Run {
         Run {
             id: "request-test".into(),
@@ -616,6 +731,7 @@ mod tests {
         assert!(p.status.contains("committed changes remain"));
         assert!(tx
             .send(Ok(Reply {
+                status: "completed".into(),
                 output: Vec::new(),
                 tokens: 1
             }))
