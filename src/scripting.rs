@@ -38,6 +38,9 @@ mod scheduler;
 mod transaction;
 #[path = "script_world_edit.rs"]
 mod world_edit;
+#[path = "script_spawns.rs"]
+mod spawns;
+pub use spawns::SpawnScene;
 use api::Callback;
 use transaction::CallbackTransaction;
 
@@ -152,6 +155,8 @@ pub struct InteractEvent {
 /// growing a new field for every future player-targeted action.
 #[derive(Debug, PartialEq)]
 pub enum PlayerEffect {
+    SpawnNpc(crate::npc::Npc),
+    SpawnLootBag(crate::loot::Drop),
     AutomationState {
         state: Box<crate::automation::State>,
     },
@@ -204,6 +209,7 @@ pub enum PlayerEffect {
 /// can produce. Only what concrete rules actually need is exposed to Lua --
 /// extend this as new rules require more of the World API.
 pub struct TickInput<'a> {
+    pub scene: &'a SpawnScene,
     pub creatures: &'a mut Creatures,
     pub world: &'a World,
     pub players: &'a [PlayerSnapshot],
@@ -729,6 +735,8 @@ fn random_offset_in_disk(seed: u64, radius: f32) -> (f32, f32) {
 /// (block edits replicate reliably, creature positions ride the existing
 /// snapshot broadcast).
 pub struct ScriptHost {
+    /// Refresh from authoritative NPCs/loot before each dispatch; callbacks read staged effects too.
+    pub scene: SpawnScene,
     unloaded_enchantments: Vec<crate::enchantment::Saved>,
     pub spellbook: crate::spellbook::Spellbook,
     pub spell_cooldowns: std::collections::HashMap<crate::spellbook::SpellId, std::time::Instant>,
@@ -742,6 +750,7 @@ pub struct ScriptHost {
 impl ScriptHost {
     pub fn new() -> Self {
         Self {
+            scene: SpawnScene::default(),
             spellbook: Default::default(),
             unloaded_enchantments: Vec::new(),
             spell_cooldowns: Default::default(),
@@ -1017,7 +1026,9 @@ impl ScriptHost {
     ) -> TickOutcome {
         let mut outcome = TickOutcome::default();
         let mut deaths = Vec::new();
+        let scene = self.scene.clone();
         let mut input = TickInput {
+            scene: &scene,
             creatures,
             world,
             players,
@@ -1575,7 +1586,7 @@ mod tests {
         let mut broadcasts = Vec::new();
         let mut player_effects = Vec::new();
         let mut tod = time_of_day;
-        let mut input = TickInput {
+        let mut input = TickInput { scene: &SpawnScene::default(),
             creatures,
             world,
             players,
@@ -1607,7 +1618,7 @@ mod tests {
         let mut broadcasts = Vec::new();
         let mut player_effects = Vec::new();
         let mut tod = time_of_day;
-        let mut input = TickInput {
+        let mut input = TickInput { scene: &SpawnScene::default(),
             creatures,
             world,
             players,
@@ -1977,7 +1988,7 @@ mod tests {
         let mut deaths = Vec::new();
         let mut broadcasts = Vec::new();
         let mut effects = Vec::new();
-        let mut input = TickInput {
+        let mut input = TickInput { scene: &SpawnScene::default(),
             creatures: &mut creatures,
             world: &world,
             players: &[],

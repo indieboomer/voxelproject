@@ -73,7 +73,7 @@ mod tests {
         let mut deaths = Vec::new();
         let mut budget = DispatchBudget::new();
         budget.callbacks = DISPATCH_CALLBACKS - 1;
-        let mut input = TickInput {
+        let mut input = TickInput { scene: &SpawnScene::default(),
             creatures: &mut creatures,
             world: &world,
             weather: &mut weather,

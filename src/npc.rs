@@ -5,7 +5,7 @@ use crate::{
 };
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Npc {
     pub kind: u8,
     pub home: Cell,
@@ -166,6 +166,8 @@ fn spawn_near(world: &mut World, center: Vec3, kind: u8, starting: bool) -> Opti
     None
 }
 
+/// Stable World API identifiers; order matches quests::NAMES and model kinds.
+pub const API_KINDS: [&str; 6] = ["sage", "elf_ranger", "warrior", "merchant", "fire_sorceress", "necromancer"];
 pub const SPACING: i32 = 100;
 pub const ACTIVE_RADIUS: f32 = 140.;
 pub const MAX_VISIBLE: usize = 32;

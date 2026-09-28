@@ -135,6 +135,7 @@ fn populate_api<'lua, 'scope>(
     super::environment::populate(lua, scope, api, tx, block_budget, spawn_budget)?;
     super::world_edit::populate(lua, scope, api, tx, block_budget)?;
     super::inventory::populate(lua, scope, api, tx)?;
+    super::spawns::populate(lua, scope, api, tx, spawn_budget)?;
     super::automation_api::populate(lua, scope, api, tx, block_budget)?;
     api.set(
         "get_rule_target",
@@ -1057,6 +1058,10 @@ fn populate_api<'lua, 'scope>(
                 let radius=args.get(3).cloned().map(|v|lua.coerce_number(v)).transpose()?.flatten().unwrap_or(0.0);
                 let side=2*(radius as f32).clamp(0.0,12.0).ceil() as u32+1;
                 side.saturating_pow(3).saturating_mul(2).saturating_mul(1+tx.blocks.borrow().len() as u32)
+            } else if method_name == "find_loot_bags" {
+                tx.native_scan_cost().saturating_mul(64)
+            } else if matches!(method_name.as_str(),"spawn_npc"|"spawn_loot_bag") {
+                tx.native_scan_cost().saturating_add(32u32.saturating_mul(1+tx.blocks.borrow().len() as u32))
             } else if matches!(method_name.as_str(),"get_campfire"|"place_campfire"|"get_water"|"get_waterfalls"|"can_spawn_fish"|"spawn_fish"|"spawn_creature") {
                 200u32.saturating_mul(1+tx.blocks.borrow().len() as u32)
             } else if method_name == "find_blocks" {

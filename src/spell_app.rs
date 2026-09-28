@@ -357,6 +357,7 @@ impl App {
             account.mana -= cost;
             account.revision = account.revision.saturating_add(1);
             let resources = account.resources;
+            self.scripting.scene = crate::scripting::SpawnScene::capture(&self.npcs, &self.loot.drops);
             let players = self.host_player_positions();
             let outcome = if let Some(context) = context {
                 self.scripting.run_targeted_cast(

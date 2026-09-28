@@ -277,6 +277,10 @@ pub struct Reply {
     pub output: Vec<Value>,
     pub tokens: u64,
 }
+pub enum ProviderReply {
+    InputTokens(u64),
+    Generated(Reply),
+}
 pub struct Run {
     pub id: String,
     pub prompt: String,
@@ -285,7 +289,8 @@ pub struct Run {
     pub errors: u32,
     pub tokens: u64,
     pub input: Vec<Value>,
-    pub pending: Option<mpsc::Receiver<Result<Reply, String>>>,
+    pub pending: Option<mpsc::Receiver<Result<ProviderReply, String>>>,
+    pub counted_input: Option<u64>,
     pub limits: Limits,
     pub evidence: Vec<Value>,
     pub discovered: bool,
@@ -298,6 +303,36 @@ pub struct Run {
     pub world: String,
 }
 impl Run {
+    pub fn limit_reason(&self) -> String {
+        if self.tokens >= self.limits.tokens {
+            format!("Co-Play local token limit reached: {} / {} tokens. Adjust coplay.tokens in settings.json; this is separate from OpenAI credits.",self.tokens,self.limits.tokens)
+        } else if self.started.elapsed().as_secs() >= self.limits.seconds {
+            format!(
+                "Co-Play request time limit reached ({} seconds)",
+                self.limits.seconds
+            )
+        } else if self.steps >= self.limits.steps.min(64) {
+            format!(
+                "Co-Play tool step limit reached ({})",
+                self.limits.steps.min(64)
+            )
+        } else {
+            format!(
+                "Co-Play correction limit reached ({})",
+                self.limits.corrections.min(8)
+            )
+        }
+    }
+    pub fn output_allowance(&self, input_tokens: u64) -> Result<u32, String> {
+        let requested = self.limits.output_tokens.min(16000);
+        let remaining = self.limits.tokens.saturating_sub(self.tokens);
+        let available = remaining.saturating_sub(input_tokens);
+        if requested == 0 || input_tokens >= remaining || available < u64::from(requested.min(1024))
+        {
+            return Err(format!("Co-Play local token limit: {} / {} tokens used; next call needs {} input tokens plus output. Increase coplay.tokens in settings.json for longer requests. This limit is separate from OpenAI credits.",self.tokens,self.limits.tokens,input_tokens));
+        }
+        Ok(u64::from(requested).min(available) as u32)
+    }
     pub fn exhausted(&self) -> bool {
         self.started.elapsed().as_secs() >= self.limits.seconds
             || self.steps >= self.limits.steps.min(64)
@@ -312,7 +347,7 @@ impl Run {
             return Err("World changed".into());
         }
         if self.exhausted() {
-            return Err("Request budget reached".into());
+            return Err(self.limit_reason());
         }
         Ok(())
     }
@@ -538,7 +573,13 @@ impl Panel {
                 ui.strong(&self.status);
             });
             egui::ScrollArea::vertical().max_height((size.y * 0.4).min(360.)).stick_to_bottom(true).show(ui, |ui| {
-                for line in self.session.conversation.iter().rev().take(80).collect::<Vec<_>>().into_iter().rev() { ui.label(line); }
+                for line in self.session.conversation.iter().rev().take(80).collect::<Vec<_>>().into_iter().rev() {
+                    if line.starts_with("Astra:") {
+                        ui.colored_label(egui::Color32::from_rgb(161, 182, 197), line);
+                    } else {
+                        ui.label(line);
+                    }
+                }
             });
             ui.add_sized(
                 [ui.available_width(), (size.y * 0.23).clamp(100., 200.)],
@@ -591,6 +632,7 @@ get_rule: {id:"stable name"} returns current source/revision.
 upsert_rule: {action_id:"unique logical action",id:"existing id or empty for new",expected_source:"exact old source or empty",source:"Lua",enabled:true}. Requires current target still valid. Rules must not define on_cast. CREATE example: {action_id:"night-horde-create",id:"",expected_source:"",source:"function on_tick(api) end",enabled:true}. Never invent a new ID; save the returned ID for revisions.
 For temporary creature waves: use api.is_night, spawn at most the documented per-callback budget, check the returned single id for nil, and immediately set_creature_group(id,"unique-stable-rule-group"). Query creatures_in_group for cleanup even after reload and regardless of distance. Use despawn(id) for disappearance without on_death; destroy/die are kills and fire death handlers. Never remove all creatures of a kind to clean up a wave. Lua globals reset on reload; groups persist, so reconcile existing members before spawning. State whether a rule maintains a bounded population (replaces casualties) or creates one wave per night; do not claim a saved once-per-night quota using globals alone. Disabling/removing a rule stops callbacks, so clean its group first when removal is requested. Verify actual group membership at night and emptiness after dawn; nearby inspect results alone cannot prove global cleanup. Do not change the world's time just to verify unless the player requested it.
 execute: {action_id:"unique logical action",source:"Lua defining on_cast(api)"}. Effects persist; no automatic world undo.
+Quest NPCs and loot: use spawn_npc(kind,x,y,z) for sage/elf_ranger/warrior/merchant/fire_sorceress/necromancer with existing quest behavior. Merchant is not a trading shop. Use spawn_loot_bag(x,y,z,{stone=3,amber=1}) for resource bags; select random valid contents in Lua. Both return booleans and share spawn budgets. Require loaded solid support and two air cells. Inspect/find_npcs/find_loot_bags include real and staged state. Co-Play inspect includes npcs and loot_bags within 32 blocks of center; verify kind/home and bag contents before claiming completion. Bags expire after 120 seconds and pickup starts after two seconds. Inventory grants are not dropped bags. Existing quests remain per-player; spawning copies never resets quest rewards.
 report_gap: {key:"canonical underlying capability key; reuse existing backlog keys",title,category:"missing_capability|api_engine_bug|generated_code_error|permission_limit|uncertain",behavior,insufficient,proposal,workaround,impact:"completely_blocked|partially_blocked|quality_improvement",priority,acceptance}. All fields strings. REQUIRED for unavailable behavior; first inspect alternative names/compositions. Exact errors and inspected capabilities are attached automatically. Do useful independent portions; do not invent calls.
 resolve_gap: {id:"CAP-...",evidence:"observed acceptance result"}. Only on explicit human recheck and successful observed behavior in this build.
 finish: {status:"complete|blocked|partial|clarification",summary:"concise changes, observed evidence, unverified effects and limitations"}. Blocked/partial requires a persisted gap unless asking clarification. Never claim effects verified merely because registration succeeded."#;
@@ -602,12 +644,47 @@ pub fn request(model: &str, run: &Run) -> Value {
           "parameters":{"type":"object","properties":{"operation":{"type":"string","enum":["capabilities","inspect","verify","get_rule","upsert_rule","execute","report_gap","resolve_gap","finish"]},"arguments":{"type":"string"}},"required":["operation","arguments"],"additionalProperties":false}}],"tool_choice":"required"})
 }
 pub fn fetch(key: &str, body: Value) -> Result<Reply, String> {
+    let value = provider_json(key, "https://api.openai.com/v1/responses", body)?;
+    Ok(Reply {
+        status: value["status"].as_str().unwrap_or("missing").into(),
+        output: value["output"].as_array().ok_or("Missing output")?.clone(),
+        tokens: value["usage"]["total_tokens"]
+            .as_u64()
+            .ok_or("Missing usage")?,
+    })
+}
+
+pub fn count_input(key: &str, body: &Value) -> Result<u64, String> {
+    // Only count-endpoint parameters; preserve the exact model input and tools.
+    let mut count = serde_json::Map::new();
+    for field in [
+        "model",
+        "input",
+        "instructions",
+        "tools",
+        "tool_choice",
+        "parallel_tool_calls",
+    ] {
+        if let Some(value) = body.get(field) {
+            count.insert(field.into(), value.clone());
+        }
+    }
+    provider_json(
+        key,
+        "https://api.openai.com/v1/responses/input_tokens",
+        Value::Object(count),
+    )?["input_tokens"]
+        .as_u64()
+        .ok_or_else(|| "Token-count endpoint returned no input_tokens".into())
+}
+
+fn provider_json(key: &str, url: &str, body: Value) -> Result<Value, String> {
     use std::io::Read;
     let response = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(60))
         .redirects(0)
         .build()
-        .post("https://api.openai.com/v1/responses")
+        .post(url)
         .set("Authorization", &format!("Bearer {key}"))
         .send_json(body)
         .map_err(|e| match e {
@@ -624,19 +701,51 @@ pub fn fetch(key: &str, body: Value) -> Result<Reply, String> {
         return Err("Provider response too large".into());
     }
     let sanitized = String::from_utf8_lossy(&bytes).replace(key, "[redacted]");
-    let value: Value = serde_json::from_str(&sanitized).map_err(|_| "Invalid provider JSON")?;
-    Ok(Reply {
-        status: value["status"].as_str().unwrap_or("missing").into(),
-        output: value["output"].as_array().ok_or("Missing output")?.clone(),
-        tokens: value["usage"]["total_tokens"]
-            .as_u64()
-            .ok_or("Missing usage")?,
-    })
+    serde_json::from_str(&sanitized).map_err(|_| "Invalid provider JSON".into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn coplay_budget_uses_counted_tokens_not_serialized_encrypted_bytes() {
+        let mut r = run();
+        r.tokens = 100_000;
+        r.input
+            .push(json!({"type":"reasoning","encrypted_content":"x".repeat(120_000)}));
+        assert!(
+            request("configured-model", &r).to_string().len() as u64 > r.limits.tokens - r.tokens
+        );
+        assert_eq!(r.output_allowance(12_000).unwrap(), 6000);
+        r.tokens = 155_000;
+        assert_eq!(r.output_allowance(2000).unwrap(), 3000);
+        let error = r.output_allowance(4500).unwrap_err();
+        assert!(error.contains("155000 / 160000"));
+        assert!(error.contains("separate from OpenAI credits"));
+        assert!(r.output_allowance(u64::MAX).is_err());
+    }
+    #[test]
+    #[ignore = "calls the configured OpenAI token-count endpoint"]
+    fn live_coplay_input_token_count() {
+        let config = crate::settings::Settings::load(Path::new("settings.json")).unwrap();
+        let key = if config.aiapi.api_key.is_empty() {
+            std::env::var("OPENAI_API_KEY").unwrap()
+        } else {
+            config.aiapi.api_key
+        };
+        let model = if config.aiapi.model.is_empty() {
+            std::env::var("OPENAI_PLAYTEST_MODEL").unwrap()
+        } else {
+            config.aiapi.model
+        };
+        let mut r = run();
+        r.input = vec![json!({"role":"user","content":"Inspect the world; do not change it."})];
+        let tokens =
+            count_input(&key, &request(&model, &r)).unwrap_or_else(|error| panic!("{error}"));
+        assert!(tokens > 0);
+        assert!(r.output_allowance(tokens).is_ok());
+        println!("OpenAI counted {tokens} input tokens; request fits local limit.");
+    }
     #[test]
     fn coplay_log_appends_complete_records_and_redacts_credentials() {
         let path = std::env::temp_dir().join(format!("coplay-log-{}.log", stamp()));
@@ -675,6 +784,7 @@ mod tests {
             tokens: 0,
             input: Vec::new(),
             pending: None,
+            counted_input: None,
             limits: Limits::default(),
             evidence: Vec::new(),
             discovered: false,
@@ -744,11 +854,11 @@ mod tests {
         assert!(p.run.is_none());
         assert!(p.status.contains("committed changes remain"));
         assert!(tx
-            .send(Ok(Reply {
+            .send(Ok(ProviderReply::Generated(Reply {
                 status: "completed".into(),
                 output: Vec::new(),
                 tokens: 1
-            }))
+            })))
             .is_err());
         assert_eq!(p.session.receipts.len(), 1);
     }

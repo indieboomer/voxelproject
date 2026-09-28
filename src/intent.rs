@@ -367,6 +367,7 @@ fn focused_prompt(plan: &Plan) -> String {
             || plan.api_groups.iter().any(|g| match g.as_str() {
                 "creatures" => [
                     "creature",
+                    "npc",
                     "fish",
                     "chase",
                     "attack",
@@ -375,6 +376,7 @@ fn focused_prompt(plan: &Plan) -> String {
                     "protect",
                     "api.damage",
                     "api.destroy",
+                    "api.despawn",
                     "api.die",
                 ]
                 .iter()
@@ -382,6 +384,7 @@ fn focused_prompt(plan: &Plan) -> String {
                 "players" => method.contains("player") || method.contains("poison"),
                 "inventory" => [
                     "inventory",
+                    "loot_bag",
                     "resource",
                     "item",
                     "mana",
@@ -396,6 +399,8 @@ fn focused_prompt(plan: &Plan) -> String {
                 "time" => ["time", "night", "dawn"].iter().any(|k| method.contains(k)),
                 "blocks" => [
                     "block",
+                    "npc",
+                    "loot_bag",
                     "device",
                     "terrain",
                     "distance",
@@ -1141,6 +1146,19 @@ mod tests {
             .contains("function on_cast(api, event) local fire = api.place_campfire_near_player"));
     }
 
+    #[test]
+    fn focused_scene_spawn_context_includes_quest_npcs_and_loot() {
+        let mut p = plan();
+        for (group, names) in [
+            ("creatures", vec!["spawn_npc", "find_npcs"]),
+            ("inventory", vec!["spawn_loot_bag", "find_loot_bags"]),
+            ("blocks", vec!["spawn_npc", "find_npcs", "spawn_loot_bag", "find_loot_bags"]),
+        ] {
+            p.api_groups = vec![group.into()];
+            let prompt = focused_prompt(&p);
+            for name in names { assert!(prompt.contains(&format!("- api.{name}(")), "{group} missing {name}"); }
+        }
+    }
     #[test]
     fn focused_docs_do_not_include_unrelated_inventory_actions() {
         let p = plan();

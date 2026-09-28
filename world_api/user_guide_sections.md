@@ -1,3 +1,24 @@
+## Quest NPCs and loot bags
+
+`api.spawn_npc("merchant", x, y, z)` places an existing quest NPC at an integer
+feet cell. Supported types: `sage`, `elf_ranger`, `warrior`, `merchant`,
+`fire_sorceress`, `necromancer`. They retain normal wandering and quests;
+duplicates do not reset a player's completed quests or add shop trading.
+
+`api.spawn_loot_bag(x, y, z, {stone=3, amber=1})` creates a collectible bag.
+Use canonical resource IDs from `get_block_kinds`; quantities must be integers.
+Lua can select random contents with `math.random`. The bag remains for up to
+120 seconds of simulation, is collectible after two seconds, and saves its age.
+It contains resources, not equipment or arbitrary item names.
+
+Both calls return a boolean, require loaded solid support and two empty air cells,
+read staged block edits, and share the existing creature spawn budget. Invalid
+NPC types/contents raise errors; placement/capacity failures return false.
+Use `on_cast` for a one-time stand setup and check each result. All accepted
+spawns roll back if the callback fails. Query `find_npcs(x,y,z,radius)` and
+`find_loot_bags(x,y,z,radius)` to inspect actual state, including staged spawns.
+Co-Play inspection also includes `npcs` and `loot_bags` within 32 blocks of its center.
+
 ## Temporary creatures and dawn cleanup
 
 Use `api.is_night` in `on_tick` for nighttime behavior. Spawn calls return one

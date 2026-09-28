@@ -53,8 +53,13 @@ No provider reasoning items or credentials are stored in world saves.
 Limits apply per user request. The UI cancels future work immediately; an
 already-running HTTP request can finish in its worker, but its result is discarded.
 Calls have a 60-second transport timeout, no automatic application retry, and a
-bounded response size. Input bytes plus maximum output tokens conservatively
-reserve the remaining model budget before each call. Hard ceilings are 64 tool
+bounded response size. Before each generation, OpenAI's `/v1/responses/input_tokens`
+endpoint counts the actual input asynchronously. Co-Play reserves those tokens
+and caps output to the remaining local allowance. Serialized JSON bytes and
+encrypted reasoning bytes are not treated as tokens. This local per-request
+allowance is independent of the OpenAI account balance; increase `coplay.tokens`
+for longer requests. Token-count results and output allowances appear in the log.
+Cancelling during counting prevents the subsequent generation call. Hard ceilings are 64 tool
 steps, 8 correction attempts and 16,000 output tokens per call.
 
 ## Authoring and verification

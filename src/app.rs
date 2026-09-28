@@ -3027,6 +3027,8 @@ impl App {
                         })
                     });
                 }
+                self.scripting.scene =
+                    crate::scripting::SpawnScene::capture(&self.npcs, &self.loot.drops);
                 let players = self.host_player_positions();
                 let outcome = self.scripting.run_tick(
                     &self.world,
@@ -4282,6 +4284,13 @@ impl App {
             return;
         }
         match effect {
+            PlayerEffect::SpawnNpc(npc) => {
+                self.npcs.push(npc);
+                self.npc_timer = 0.5; // existing reliable NPC replication on next update
+            }
+            PlayerEffect::SpawnLootBag(drop) => {
+                self.loot.drops.push(drop);
+            }
             PlayerEffect::AutomationState { state } => {
                 self.world.automation = *state;
                 self.automation_timer = 1.0;
@@ -4749,6 +4758,7 @@ impl App {
             .crafting_registry
             .mana_charge(crate::crafting::INSTANT_MANA);
         account.revision = account.revision.saturating_add(1);
+        self.scripting.scene = crate::scripting::SpawnScene::capture(&self.npcs, &self.loot.drops);
         let players = self.host_player_positions();
         let outcome = if let Some(context) = target_context {
             self.scripting.run_targeted_cast(

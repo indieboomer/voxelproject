@@ -4,6 +4,7 @@ use crate::creature::CreatureDraft;
 use std::collections::HashMap;
 
 pub(super) struct CallbackTransaction<'a> {
+    pub scene: RefCell<SpawnScene>,
     pub attachment: Option<crate::enchantment::Binding>,
     pub world: &'a World,
     pub automation: RefCell<crate::automation::State>,
@@ -41,7 +42,10 @@ impl<'a> CallbackTransaction<'a> {
             }
             resources.insert(player.id, counts);
         }
+        let mut scene = input.scene.clone();
+        for effect in input.player_effects.iter() { scene.apply(effect); }
         Self {
+            scene: RefCell::new(scene),
             attachment: None,
             world: input.world,
             automation: RefCell::new(
@@ -91,7 +95,8 @@ impl<'a> CallbackTransaction<'a> {
     }
 
     pub fn native_scan_cost(&self) -> u32 {
-        1 + self.creatures.borrow().snapshot.len() as u32
+        1 + self.scene.borrow().npcs.len() as u32 + self.scene.borrow().loot.len() as u32
+            + self.creatures.borrow().snapshot.len() as u32
             + self.base_players.len() as u32
             + self.effects.borrow().len() as u32
             + self.blocks.borrow().len() as u32

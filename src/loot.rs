@@ -8,7 +8,7 @@ use crate::{
     },
 };
 use glam::Vec3;
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Drop {
     pub pos: [f32; 3],
     pub contents: Vec<(BlockType, u32)>,

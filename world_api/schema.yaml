@@ -18,7 +18,7 @@
 # (air, mud, redstone, crystal, campfire), so it can't drift out of sync with the
 # actual block system the way a third hand-copied list would.
 
-version: "1.39.0"
+version: "1.40.0"
 title: World API
 description: >
   The Lua API exposed to sandboxed rule modules as the `api` table passed
@@ -217,8 +217,8 @@ budgets:
   creature_spawns_per_call:
     value: 4
     scope: "per module, per call"
-    applies_to: [spawn_creature, spawn_creature_near_player]
-    on_exhausted: "the call returns nil; not an error."
+    applies_to: [spawn_creature, spawn_creature_near_player, spawn_fish, spawn_npc, spawn_loot_bag]
+    on_exhausted: "Creature/fish spawns return nil; NPC/bag spawns return false. These share one budget, including failed placement attempts."
   find_radius_max:
     value: 10.0
     applies_to: [find_creatures, find_blocks]
@@ -239,8 +239,8 @@ budgets:
   creature_spawns_per_cast_call:
     value: 30
     scope: "per instant-spell module, per on_cast call -- higher than creature_spawns_per_call since a spell runs once, not ~10/sec"
-    applies_to: [spawn_creature, spawn_creature_near_player]
-    on_exhausted: "the call returns nil; not an error."
+    applies_to: [spawn_creature, spawn_creature_near_player, spawn_fish, spawn_npc, spawn_loot_bag]
+    on_exhausted: "Creature/fish spawns return nil; NPC/bag spawns return false. These share one budget, including failed placement attempts."
   item_grant_max:
     value: 500
     scope: "per give_item call -- caps the amount argument itself, not a call count"
@@ -286,6 +286,24 @@ creature_kinds: [sheep, chicken, stone_golem, wolf, stinger, cow, goblin, sunsco
 # Shared table shapes returned by queries / passed to event handlers.
 # ---------------------------------------------------------------------------
 types:
+  NpcSnapshot:
+    fields:
+      - {name: kind, type: string, desc: "Quest NPC type: sage, elf_ranger, warrior, merchant, fire_sorceress, necromancer."}
+      - {name: x, type: number}
+      - {name: y, type: number}
+      - {name: z, type: number}
+      - {name: home_x, type: integer}
+      - {name: home_y, type: integer}
+      - {name: home_z, type: integer}
+      - {name: quests, type: boolean, desc: "Always true. Existing per-player quests, not a trading shop or creature."}
+  LootBagSnapshot:
+    fields:
+      - {name: x, type: number}
+      - {name: y, type: number}
+      - {name: z, type: number}
+      - {name: age, type: number, desc: "Seconds since creation. Ordinary bags expire at 120 seconds."}
+      - {name: machine, type: boolean, desc: "True for existing machine-ejected loot; spawn_loot_bag creates ordinary bags."}
+      - {name: contents, type: "table<string, integer>", desc: "Resource-name to amount map. Does not include machine equipment cargo."}
   BlockInfo:
     fields:
       - {name: kind, type: string, desc: "Canonical block ID."}
@@ -486,6 +504,52 @@ properties:
 # Callable functions on the `api` table.
 # ---------------------------------------------------------------------------
 methods:
+  - name: spawn_npc
+    namespace: world
+    category: action
+    summary: "Spawn an existing quest NPC by type at a loaded, supported, dry air feet cell (x,y,z), centered at x+0.5,z+0.5. Types are sage, elf_ranger, warrior, merchant, fire_sorceress, necromancer; unknown types raise an error. NPCs keep normal local wandering, dialogue and per-player quest progress; merchant is a quest giver, not a trading shop. Requires two air cells, solid support, and 1.2 blocks clearance from players/other NPCs. Reads staged block edits and spawns. Returns false at 256 total NPCs, unsuitable/unloaded placement or exhausted shared spawn budget. Creation persists and replicates through existing NPC systems; no new creature ID is returned. Use on_cast for one-time placement; never unconditionally spawn each tick."
+    params:
+      - {name: kind, type: string}
+      - {name: x, type: integer}
+      - {name: y, type: integer}
+      - {name: z, type: integer}
+    returns: {type: boolean, desc: "True if staged; false if blocked. Shared creature/NPC/bag budget, including failed placement attempts."}
+    errors: []
+    budget_ref: creature_spawns_per_call
+    since: "1.40.0"
+
+  - name: spawn_loot_bag
+    namespace: world
+    category: action
+    summary: "Create a collectible ordinary loot bag at a loaded, supported, dry two-air-cell location. Coordinates are integer feet cells; bag center is x+0.5,y+0.3,z+0.5. Contents is a map such as {stone=3, amber=1}; use canonical collectible resource names, at most 16 entries, integer amounts 1..256 and at most 1024 items total. Empty/invalid contents raise an error. Choose random resources/counts with math.random before calling; arbitrary gear, coins and invented items are unsupported. No player inventory is charged. Returns false for blocked/unloaded placement, a bag within 0.5 blocks, 48 existing bags (including machine drops), or exhausted shared spawn budget. Reads staged edits and spawns; failed callbacks create nothing. Bags use existing host-authoritative pickup (2-second delay, 1.5-block range), expire after 120 seconds and save/reload with their remaining lifetime. Do not promise permanent decorative bags."
+    params:
+      - {name: x, type: integer}
+      - {name: y, type: integer}
+      - {name: z, type: integer}
+      - {name: contents, type: "table<string, integer>"}
+    returns: {type: boolean, desc: "True if staged; no bag ID is returned. Use find_loot_bags or Co-Play inspection to verify."}
+    errors: []
+    budget_ref: creature_spawns_per_call
+    since: "1.40.0"
+
+  - name: find_npcs
+    namespace: world
+    category: query
+    summary: "Detached snapshots of up to 64 quest NPCs within 3D radius clamped to 0..32. Includes staged spawns. NPCs are separate from creatures; kind strings and home cells identify their roles/sites, not globally unique IDs."
+    params: [{name: x, type: number}, {name: y, type: number}, {name: z, type: number}, {name: radius, type: number}]
+    returns: {type: "NpcSnapshot[]"}
+    errors: []
+    since: "1.40.0"
+
+  - name: find_loot_bags
+    namespace: world
+    category: query
+    summary: "Detached snapshots of live loot bags within 3D radius clamped to 0..32, including staged bags and existing machine drops. Contents exposes resource stacks; machine equipment cargo is not included. No stable IDs. Re-query after creation; collection/expiry can remove bags between callbacks."
+    params: [{name: x, type: number}, {name: y, type: number}, {name: z, type: number}, {name: radius, type: number}]
+    returns: {type: "LootBagSnapshot[]"}
+    errors: []
+    since: "1.40.0"
+
   - name: get_player
     namespace: world
     category: query

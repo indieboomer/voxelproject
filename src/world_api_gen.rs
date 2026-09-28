@@ -4,7 +4,7 @@
 // Consumed by src/world_api_validate.rs's pre-flight lint, which runs on
 // LLM-generated Lua before it's ever loaded into a real Lua VM.
 
-pub const VERSION: &str = "1.39.0";
+pub const VERSION: &str = "1.40.0";
 
 // Runtime execution limits, shared with the generated documentation.
 pub const SCRIPT_TIME_MS: u64 = 5;
@@ -29,6 +29,10 @@ pub const SCRIPT_MODULES_MAX: usize = 64;
 
 // Zero-based parameter positions used by native argument validation.
 pub const NUMERIC_ARGUMENTS: &[(&str, &[usize])] = &[
+    ("spawn_npc", &[1, 2, 3]),
+    ("spawn_loot_bag", &[0, 1, 2]),
+    ("find_npcs", &[0, 1, 2, 3]),
+    ("find_loot_bags", &[0, 1, 2, 3]),
     ("get_player", &[0]),
     ("get_creature", &[0]),
     ("heal_creature", &[0, 1]),
@@ -106,6 +110,10 @@ pub const NUMERIC_ARGUMENTS: &[(&str, &[usize])] = &[
 ];
 
 pub const COORDINATE_ARGUMENTS: &[(&str, &[usize])] = &[
+    ("spawn_npc", &[1, 2, 3]),
+    ("spawn_loot_bag", &[0, 1, 2]),
+    ("find_npcs", &[0, 1, 2]),
+    ("find_loot_bags", &[0, 1, 2]),
     ("is_block_loaded", &[0, 1, 2]),
     ("surface_height", &[0, 1]),
     ("is_exposed_to_sky", &[0, 1, 2]),
@@ -137,6 +145,10 @@ pub const COORDINATE_ARGUMENTS: &[(&str, &[usize])] = &[
 
 /// Every `api.<name>` callable method this World API version defines.
 pub const METHOD_NAMES: &[&str] = &[
+    "spawn_npc",
+    "spawn_loot_bag",
+    "find_npcs",
+    "find_loot_bags",
     "get_player",
     "get_rule_target",
     "get_creature",

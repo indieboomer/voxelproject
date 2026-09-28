@@ -62,6 +62,10 @@ impl App {
             })
             .take(32)
             .collect();
+        let npcs: Vec<_> = self.npcs.iter().filter(|n| Vec3::from_array(n.position).distance(center) <= 32.)
+            .take(64).map(|n| json!({"kind":crate::npc::API_KINDS[n.kind as usize],"position":n.position,"home":n.home,"quests":true})).collect();
+        let loot_bags: Vec<_> = self.loot.drops.iter().filter(|d| Vec3::from_array(d.pos).distance(center) <= 32.)
+            .map(|d| json!({"position":d.pos,"age":d.age,"machine":d.machine,"contents":d.contents.iter().map(|(b,n)|(b.id(),*n)).collect::<std::collections::BTreeMap<_,_>>(),"cargo":d.cargo})).collect();
         let resources: std::collections::BTreeMap<_, _> = crate::voxel::block::COLLECTIBLE_BLOCKS
             .iter()
             .zip(self.player.resources_snapshot())
@@ -72,7 +76,7 @@ impl App {
             "selection":format!("{:?}",self.player.crafting.hotbar.entry()),
             "time":self.time_of_day,"weather":self.weather,"target":panel.run.as_ref().and_then(|r| r.target.as_ref()),
             "creatures_id_kind_position_health_facing":creatures,"blocks":blocks,"blocks_truncated":blocks.len()==512,
-            "creature_properties":properties,"creature_groups":groups,"devices":devices,
+            "npcs":npcs,"loot_bags":loot_bags,"npcs_truncated":npcs.len()==64,"creature_properties":properties,"creature_groups":groups,"devices":devices,
             "target_availability":panel.run.as_ref().and_then(|r|r.target.as_ref()).map(|t|t.available(&self.world,&self.creatures)),
             "rules":self.scripting.modules.iter().map(|m|json!({"id":m.name,"enabled":m.enabled,"error":m.error,"instant":m.is_instant,"api":m.api_version()})).collect::<Vec<_>>(),
             "recent_events":self.chat_transcript.iter().rev().take(12).collect::<Vec<_>>(),
@@ -194,6 +198,7 @@ impl App {
                         tokens: 0,
                         input: vec![json!({"role":"user","content":initial.to_string()})],
                         pending: None,
+                        counted_input: None,
                         limits: self.ui.settings.values.coplay.clone(),
                         evidence: Vec::new(),
                         discovered: false,
@@ -211,7 +216,8 @@ impl App {
             }
         }
         if panel.run.as_ref().is_some_and(Run::exhausted) {
-            panel.stop("Stopped: request budget reached");
+            let reason = panel.run.as_ref().unwrap().limit_reason();
+            panel.stop(&reason);
         }
         let response = panel
             .run
@@ -230,7 +236,12 @@ impl App {
             }
             match response {
                 Err(e) => panel.stop(&format!("Failed: {e}")),
-                Ok(reply) => {
+                Ok(coplay::ProviderReply::InputTokens(tokens)) => {
+                    panel.run.as_mut().unwrap().counted_input = Some(tokens);
+                    panel.log("input_token_count", json!({"input_tokens":tokens}));
+                }
+                Ok(coplay::ProviderReply::Generated(reply)) => {
+                    panel.run.as_mut().unwrap().counted_input = None;
                     panel.log(
                         "provider_response",
                         json!({"status":reply.status,"output":reply.output,"tokens":reply.tokens}),
@@ -301,7 +312,8 @@ impl App {
             }
         }
         if panel.run.as_ref().is_some_and(Run::exhausted) {
-            panel.stop("Stopped: request budget reached");
+            let reason = panel.run.as_ref().unwrap().limit_reason();
+            panel.stop(&reason);
         }
         if panel.run.as_ref().is_some_and(|r| r.pending.is_none()) {
             let cfg = &self.ui.settings.values.aiapi;
@@ -318,19 +330,31 @@ impl App {
             if key.is_empty() || model.is_empty() {
                 panel.stop("Failed: configure aiapi.OPENAI_API_KEY and OPENAI_PLAYTEST_MODEL in settings.json");
             } else {
-                panel.log("provider_request", json!({"model":model}));
                 let r = panel.run.as_mut().unwrap();
-                let body = coplay::request(&model, r);
-                // Reserve a conservative upper bound for input plus output before making a paid call.
-                if (body.to_string().len() as u64).saturating_add(r.limits.output_tokens as u64)
-                    > r.limits.tokens.saturating_sub(r.tokens)
-                {
-                    panel.stop("Stopped: insufficient remaining model budget");
+                let mut body = coplay::request(&model, r);
+                if let Some(input_tokens) = r.counted_input {
+                    match r.output_allowance(input_tokens) {
+                        Err(reason) => panel.stop(&reason),
+                        Ok(output_tokens) => {
+                            body["max_output_tokens"] = json!(output_tokens);
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            r.pending = Some(rx);
+                            panel.log("provider_request", json!({"model":model,"input_tokens":input_tokens,"max_output_tokens":output_tokens}));
+                            std::thread::spawn(move || {
+                                let _ = tx.send(
+                                    coplay::fetch(&key, body).map(coplay::ProviderReply::Generated),
+                                );
+                            });
+                        }
+                    }
                 } else {
                     let (tx, rx) = std::sync::mpsc::channel();
                     r.pending = Some(rx);
                     std::thread::spawn(move || {
-                        let _ = tx.send(coplay::fetch(&key, body));
+                        let _ = tx.send(
+                            coplay::count_input(&key, &body)
+                                .map(coplay::ProviderReply::InputTokens),
+                        );
                     });
                 }
             }
@@ -449,7 +473,9 @@ impl App {
                     let mut outcome = TickOutcome::default();
                     let mut deaths = Vec::new();
                     let before = self.creatures.snapshot_with_ids();
+                    let scene = crate::scripting::SpawnScene::capture(&self.npcs, &self.loot.drops);
                     let mut input = crate::scripting::TickInput {
+                        scene: &scene,
                         world: &self.world,
                         creatures: &mut self.creatures,
                         players: &players,
