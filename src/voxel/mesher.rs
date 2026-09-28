@@ -452,6 +452,10 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                     continue;
                 }
 
+                // Hives share the animated hive renderer and honey interactions.
+                if block == BlockType::Beehive {
+                    continue;
+                }
                 if block == BlockType::Campfire {
                     crate::campfire::base_mesh(
                         &mut vertices,

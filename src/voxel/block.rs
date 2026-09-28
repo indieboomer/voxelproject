@@ -118,6 +118,8 @@ pub enum BlockType {
     SpruceBranch,
     BirchBranch,
     CherryBranch,
+    /// Placed hive; persisted and replicated through ordinary block edits.
+    Beehive,
 }
 
 /// Per-block static properties, transcribed 1:1 from `textures/blocks.csv`
@@ -285,6 +287,21 @@ impl BlockType {
                 roughness: 1.0,
                 emission: 0.0,
                 hardness: 0,
+                tile_top: TILE_WHITE,
+                tile_side: TILE_WHITE,
+                tile_bottom: TILE_WHITE,
+                only_on_top: false,
+                single_item: true,
+                cutout: false,
+                cross: false,
+            },
+            Beehive => BlockDef {
+                display_name: "Beehive",
+                resource_type: "world_feature",
+                opacity: 0.0,
+                roughness: 1.0,
+                emission: 0.0,
+                hardness: 2,
                 tile_top: TILE_WHITE,
                 tile_side: TILE_WHITE,
                 tile_bottom: TILE_WHITE,
@@ -495,6 +512,7 @@ impl BlockType {
             BlockType::CherryBranch => "cherry_branch",
             BlockType::AutomationDevice => "automation_device",
             BlockType::Campfire => "campfire",
+            BlockType::Beehive => "beehive",
             BlockType::Crystal => "crystal",
             BlockType::Mud => "mud",
             BlockType::RedStone => "redstone",
@@ -519,6 +537,7 @@ impl BlockType {
             "cherry_branch" => Some(BlockType::CherryBranch),
             "air" => Some(BlockType::Air),
             "campfire" => Some(BlockType::Campfire),
+            "beehive" => Some(BlockType::Beehive),
             "crystal" => Some(BlockType::Crystal),
             "mud" => Some(BlockType::Mud),
             "redstone" => Some(BlockType::RedStone),

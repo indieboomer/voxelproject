@@ -1062,7 +1062,7 @@ fn populate_api<'lua, 'scope>(
                 tx.native_scan_cost().saturating_mul(64)
             } else if matches!(method_name.as_str(),"spawn_npc"|"spawn_loot_bag") {
                 tx.native_scan_cost().saturating_add(32u32.saturating_mul(1+tx.blocks.borrow().len() as u32))
-            } else if matches!(method_name.as_str(),"get_campfire"|"place_campfire"|"get_water"|"get_waterfalls"|"can_spawn_fish"|"spawn_fish"|"spawn_creature") {
+            } else if matches!(method_name.as_str(),"place_beehive"|"get_campfire"|"place_campfire"|"get_water"|"get_waterfalls"|"can_spawn_fish"|"spawn_fish"|"spawn_creature") {
                 200u32.saturating_mul(1+tx.blocks.borrow().len() as u32)
             } else if method_name == "find_blocks" {
                 let radius = args.get(4).cloned().map(|v| lua.coerce_number(v)).transpose()?.flatten().unwrap_or(0.0);

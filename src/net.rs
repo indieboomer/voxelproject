@@ -839,6 +839,24 @@ pub fn parse_args() -> LaunchConfig {
 mod multiplayer_tests {
     use super::*;
     #[test]
+    fn beehive_placement_and_removal_replicate_over_local_transport() {
+        use glam::Vec3;
+        let host = Transport::direct("127.0.0.1:0").unwrap();
+        let guest = Transport::direct("127.0.0.1:0").unwrap();
+        let mut client_world = crate::voxel::World::new(42);
+        client_world.ensure_chunk_loaded(0,0);
+        let mut channel = ReliableChannel::new();
+        for block in [BlockType::Beehive, BlockType::Air] {
+            channel.send(&host, guest.local_peer(), ReliableMsg::BlockEdit { x: 2, y: 90, z: 2, block });
+            let (Packet::Reliable { msg: ReliableMsg::BlockEdit { x,y,z,block: received }, .. }, _) = receive(&guest) else {
+                panic!("expected hive block edit");
+            };
+            assert_eq!(received, block);
+            client_world.set_block(x,y,z,received);
+            assert_eq!(crate::beehive::nearby(&client_world, Vec3::new(2.5,90.,2.5)).contains(&Vec3::new(2.5,90.,2.5)), block == BlockType::Beehive);
+        }
+    }
+    #[test]
     fn camp_request_and_saved_reward_round_trip_over_local_transport() {
         let host = Transport::direct("127.0.0.1:0").unwrap();
         let guest = Transport::direct("127.0.0.1:0").unwrap();

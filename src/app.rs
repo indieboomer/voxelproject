@@ -756,6 +756,7 @@ pub struct App {
     /// Host-owned mining progress and cooldowns, shared by local and remote interactions.
     interaction_states: HashMap<PlayerId, crate::equipment::Mining>,
     harvest_cooldowns: HashMap<u32, Instant>,
+    hive_harvest_cooldowns: HashMap<(i32, i32, i32), Instant>,
     destroyed_hives: std::collections::HashSet<u64>,
     harvest_fx: crate::harvest_fx::Effects,
     recovery_timers: HashMap<PlayerId, f32>,
@@ -1909,6 +1910,7 @@ impl App {
             held_mesh,
             interaction_states: HashMap::new(),
             harvest_cooldowns: HashMap::new(),
+            hive_harvest_cooldowns: HashMap::new(),
             destroyed_hives: Default::default(),
             harvest_fx: Default::default(),
             recovery_timers: HashMap::new(),
@@ -3169,7 +3171,7 @@ impl App {
                 .creatures(&visible_creatures, &self.world, self.weather.current, dt);
         let mut mesh =
             crate::creature::mesh_for_snapshot_wet(&visible_creatures, &self.models, &creature_wet);
-        let hives = crate::beehive::nearby(&self.world, self.player.position).into_iter().filter(|p| !self.destroyed_hives.contains(&crate::beehive::key(*p))).collect::<Vec<_>>();
+        let hives = crate::beehive::nearby(&self.world, self.player.position).into_iter().filter(|p| crate::beehive::is_placed(&self.world, *p) || !self.destroyed_hives.contains(&crate::beehive::key(*p))).collect::<Vec<_>>();
         self.audio.update_beehives(&hives);
         let visible_hives: Vec<_> = hives.iter().copied().filter(|p| {
             let cell = chunk_of(*p);

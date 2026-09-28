@@ -4,7 +4,7 @@
 // Consumed by src/world_api_validate.rs's pre-flight lint, which runs on
 // LLM-generated Lua before it's ever loaded into a real Lua VM.
 
-pub const VERSION: &str = "1.40.0";
+pub const VERSION: &str = "1.41.0";
 
 // Runtime execution limits, shared with the generated documentation.
 pub const SCRIPT_TIME_MS: u64 = 5;
@@ -64,6 +64,7 @@ pub const NUMERIC_ARGUMENTS: &[(&str, &[usize])] = &[
     ("place_device", &[0, 2, 3, 4, 5]),
     ("get_campfire", &[0, 1, 2]),
     ("find_campfires", &[0, 1, 2, 3]),
+    ("place_beehive", &[0, 1, 2]),
     ("place_campfire", &[0, 1, 2]),
     ("get_water", &[0, 1, 2]),
     ("get_waterfalls", &[0, 1, 2]),
@@ -125,6 +126,7 @@ pub const COORDINATE_ARGUMENTS: &[(&str, &[usize])] = &[
     ("place_device", &[2, 3, 4]),
     ("get_campfire", &[0, 1, 2]),
     ("find_campfires", &[0, 1, 2]),
+    ("place_beehive", &[0, 1, 2]),
     ("place_campfire", &[0, 1, 2]),
     ("get_water", &[0, 1, 2]),
     ("get_waterfalls", &[0, 1, 2]),
@@ -187,6 +189,7 @@ pub const METHOD_NAMES: &[&str] = &[
     "place_device",
     "get_campfire",
     "find_campfires",
+    "place_beehive",
     "place_campfire",
     "get_water",
     "get_waterfalls",
@@ -347,6 +350,7 @@ pub const BLOCK_KINDS: &[&str] = &[
     "redstone",
     "crystal",
     "campfire",
+    "beehive",
 ];
 
 /// Valid `kind` strings for a creature. Not read by the validator yet --

@@ -36,7 +36,7 @@ RUST_OUT = ROOT / "src" / "world_api_gen.rs"
 GUIDE_OUT = ROOT / "world_api" / "USER_GUIDE.md"
 GUIDE_SECTIONS = ROOT / "world_api" / "user_guide_sections.md"
 
-NON_CSV_BLOCK_EXTRAS = ["air", "mud", "redstone", "crystal", "campfire"]
+NON_CSV_BLOCK_EXTRAS = ["air", "mud", "redstone", "crystal", "campfire", "beehive"]
 
 LUA_TYPE = {
     "integer": "integer",

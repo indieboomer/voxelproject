@@ -18,7 +18,7 @@
 # (air, mud, redstone, crystal, campfire), so it can't drift out of sync with the
 # actual block system the way a third hand-copied list would.
 
-version: "1.40.0"
+version: "1.41.0"
 title: World API
 description: >
   The Lua API exposed to sandboxed rule modules as the `api` table passed
@@ -948,6 +948,15 @@ methods:
     returns: {type: "CampfireSnapshot[]", desc: "At most find_results_max entries in scan order, not nearest order."}
     errors: []
     since: "1.20.0"
+  - name: place_beehive
+    namespace: world
+    category: action
+    summary: "Attach a recognizable beehive with orbiting bees, buzzing, honey harvesting and sting damage to a tree. Pass the empty hive cell beside wood/branches or beside/below leaves (oak, spruce, birch or cherry), including player-built giant trees at any valid height. Reads staged support edits. Uses one shared block edit; saved and replicated as the beehive block. Inspect using get_block/find_blocks('beehive',x,y,z,radius); remove with replace_block(x,y,z,'air'). Bee particles are visual, not separately spawned creatures."
+    params: [{name: x, type: integer}, {name: y, type: integer}, {name: z, type: integer}]
+    returns: {type: boolean, desc: "False for occupied, unsupported, unloaded, out-of-height, or exhausted-budget cells. Check the return value before reporting placement."}
+    errors: []
+    budget_ref: block_edits_per_call
+    since: "1.41.0"
   - name: place_campfire
     namespace: world
     category: action

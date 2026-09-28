@@ -72,6 +72,26 @@ pub(super) fn populate<'lua, 'scope>(
     api.set("campfire_light_radius", 8.0)?;
     api.set("fish_spawn_clearance", 3)?;
     api.set(
+        "place_beehive",
+        scope.create_function(move |_, (x, y, z): (i32, i32, i32)| {
+            if blocks.get() == 0 || !(0..CHUNK_Y - 1).contains(&y)
+                || !tx.world.chunks.contains_key(&world_to_chunk(x, z))
+                || tx.get_block(x, y, z) != BlockType::Air
+            {
+                return Ok(false);
+            }
+            let supported = [(0,1,0), (1,0,0), (-1,0,0), (0,0,1), (0,0,-1)]
+                .into_iter().any(|(dx,dy,dz)| {
+                    let b = tx.get_block(x+dx,y+dy,z+dz);
+                    b.is_wood() || matches!(b, BlockType::OakLeaves | BlockType::SpruceLeaves | BlockType::BirchLeaves | BlockType::CherryLeaves)
+                });
+            if !supported { return Ok(false); }
+            blocks.set(blocks.get() - 1);
+            tx.blocks.borrow_mut().push((x,y,z,BlockType::Beehive));
+            Ok(true)
+        })?,
+    )?;
+    api.set(
         "place_campfire_near_player",
         scope.create_function(move |lua, (id, radius): (u32, f32)| {
             if blocks.get() == 0 {

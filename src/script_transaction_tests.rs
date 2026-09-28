@@ -1,5 +1,35 @@
 use super::*;
 
+#[test]
+fn beehive_placement_supports_giant_trees_and_rolls_back() {
+    let mut f = shaping_fixture();
+    let body = r#"
+        assert(not api.place_beehive(2,90,2))
+        assert(api.replace_block(2,91,2,'spruce_leaves'))
+        assert(api.place_beehive(2,90,2))
+        assert(not api.place_beehive(2,90,2))
+        assert(api.replace_block(5,70,5,'birch_wood'))
+        assert(api.place_beehive(6,70,5))
+        assert(api.get_block(2,90,2)=='beehive')
+        assert(#api.find_blocks('beehive',2,90,2,1)==1)
+        assert(not api.place_beehive(1000,90,1000))
+        assert(not api.place_beehive(2,-1,2))
+    "#;
+    let mut failed = module("on_cast", &format!("{body}\nerror('rollback')"));
+    let (out, _) = f.invoke(&mut failed, "on_cast");
+    assert!(failed.error.as_deref().unwrap().contains("rollback"), "{:?}", failed.error);
+    assert!(out.block_edits.is_empty());
+    assert_eq!(f.world.get_block(2,90,2), BlockType::Air);
+    let mut ok = module("on_cast", body);
+    let (out, _) = f.invoke(&mut ok, "on_cast");
+    assert!(ok.error.is_none(), "{:?}", ok.error);
+    assert_eq!(out.block_edits.iter().filter(|e| e.3 == BlockType::Beehive).count(), 2);
+    for (x,y,z,block) in out.block_edits {
+        f.world.set_block(x,y,z,block);
+    }
+    assert_eq!(f.world.get_block(2,90,2), BlockType::Beehive);
+}
+
 fn shaping_fixture() -> Fixture {
     let mut f = Fixture::new();
     for x in -1..=0 {

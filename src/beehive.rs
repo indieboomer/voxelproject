@@ -1,10 +1,25 @@
 use crate::voxel::{BlockType, World};
 use glam::Vec3;
-/// Deterministic wild hive locations: a small subset of mature oak trees.
+pub fn is_placed(world: &World, pos: Vec3) -> bool {
+    world.get_block(
+        pos.x.floor() as i32,
+        pos.y.floor() as i32,
+        pos.z.floor() as i32,
+    ) == BlockType::Beehive
+}
+
+/// Placed hives plus deterministic wild hive locations.
 pub fn nearby(world: &World, center: Vec3) -> Vec<Vec3> {
     let cx = center.x.floor() as i32;
     let cz = center.z.floor() as i32;
-    let mut out = Vec::new();
+    let mut out: Vec<Vec3> = world
+        .edits
+        .iter()
+        .filter_map(|(&(x, y, z), &block)| {
+            (block == BlockType::Beehive && (x - cx).abs() <= 48 && (z - cz).abs() <= 48)
+                .then_some(Vec3::new(x as f32 + 0.5, y as f32, z as f32 + 0.5))
+        })
+        .collect();
     for x in (cx - 48)..=(cx + 48) {
         for z in (cz - 48)..=(cz + 48) {
             let y = world.terrain_height(x, z);
@@ -141,7 +156,9 @@ pub fn aimed(world: &World, eye: Vec3, direction: Vec3, positions: &[Vec3]) -> O
                     far = far.min(a.max(b));
                 }
             }
-            if near > far || crate::raycast::raycast(world, eye, direction, near).is_some() {
+            if near > far
+                || crate::raycast::raycast(world, eye, direction, (near - 0.001).max(0.0)).is_some()
+            {
                 None
             } else {
                 Some((near, pos))
@@ -154,6 +171,31 @@ pub fn aimed(world: &World, eye: Vec3, direction: Vec3, positions: &[Vec3]) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn placed_beehive_survives_serialization_and_chunk_reload_and_is_targetable() {
+        let mut world = World::new(42);
+        world.ensure_chunk_loaded(0, 0);
+        world.set_block(2, 90, 2, BlockType::Beehive);
+        let p = Vec3::new(2.5, 90.0, 2.5);
+        assert!(nearby(&world, p).contains(&p));
+        assert_eq!(
+            aimed(&world, p + Vec3::new(0., 0.5, 3.), -Vec3::Z, &[p]),
+            Some(p)
+        );
+        let edits: Vec<_> = world.edits.iter().map(|(&p, &b)| (p, b)).collect();
+        let bytes = bincode::serialize(&edits).unwrap();
+        let restored: Vec<((i32, i32, i32), BlockType)> = bincode::deserialize(&bytes).unwrap();
+        let mut loaded = World::new(42);
+        loaded.edits.extend(restored);
+        loaded.ensure_chunk_loaded(0, 0);
+        assert!(is_placed(&loaded, p));
+        assert!(nearby(&loaded, p).contains(&p));
+        loaded.unload_chunk(0, 0);
+        loaded.ensure_chunk_loaded(0, 0);
+        assert!(is_placed(&loaded, p));
+        loaded.set_block(2, 90, 2, BlockType::Air);
+        assert!(!nearby(&loaded, p).contains(&p));
+    }
     #[test]
     fn beehive_is_one_textured_voxel_with_eight_orbiting_bees() {
         let p = Vec3::new(0.5, 40.0, 0.5);
