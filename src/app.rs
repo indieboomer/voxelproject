@@ -866,6 +866,7 @@ impl App {
             creature_next_id: self.creatures.next_identity(),
             enchantments: self.scripting.save_enchantments(),
             spellbook: self.scripting.spellbook.clone(),
+            creature_groups: self.creatures.groups.clone(),
             creature_statuses: self.creatures.magic_statuses.clone(),
             starter_camp: self.world.starter_camp,
             chat_transcript: self.chat_transcript.clone(),
@@ -1794,6 +1795,9 @@ impl App {
         }
         let creature_ids: std::collections::HashSet<_> =
             creatures.snapshot_with_ids().iter().map(|c| c.0).collect();
+        creatures.groups = crafting_save.creature_groups.into_iter()
+            .filter(|(id, group)| creature_ids.contains(id) && !group.is_empty() && group.len() <= 64)
+            .collect();
         creatures.magic_statuses = crafting_save
             .creature_statuses
             .into_iter()

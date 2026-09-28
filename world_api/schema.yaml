@@ -18,7 +18,7 @@
 # (air, mud, redstone, crystal, campfire), so it can't drift out of sync with the
 # actual block system the way a third hand-copied list would.
 
-version: "1.38.0"
+version: "1.39.0"
 title: World API
 description: >
   The Lua API exposed to sandboxed rule modules as the `api` table passed
@@ -221,11 +221,11 @@ budgets:
     on_exhausted: "the call returns nil; not an error."
   find_radius_max:
     value: 10.0
-    applies_to: [find_creatures, find_blocks, spawn_creature_near_player]
+    applies_to: [find_creatures, find_blocks]
     note: >
       find_creatures/find_blocks clamp their radius argument into [0, 10];
-      spawn_creature_near_player clamps into [1, 10] (its floor is 1, not
-      0). nearest_creature/nearest_player take no radius at all -- they
+      spawn_creature_near_player clamps into [1, 32] for land creatures and [1, 10]
+      for fish habitat searches. nearest_creature/nearest_player take no radius at all -- they
       search every creature/player unconditionally and return the closest.
   find_results_max:
     value: 64
@@ -1169,6 +1169,37 @@ methods:
     errors: []
     since: "1.0.0"
 
+  - name: set_creature_group
+    namespace: world
+    category: action
+    summary: "Assign one persistent group label to a live creature; replaces its previous label. Labels are shared world metadata, not access control. Use a unique stable label per rule/wave and assign immediately after a successful spawn. Saved with creatures; survives Lua reload, revisions and world reload. Does not automatically despawn when a rule is disabled or deleted."
+    params:
+      - {name: id, type: integer}
+      - {name: group, type: string, desc: "1..64 UTF-8 bytes; empty/oversized labels raise an error."}
+    returns: {type: boolean, desc: "False if creature is missing."}
+    errors: []
+    since: "1.39.0"
+
+  - name: creatures_in_group
+    namespace: world
+    category: query
+    summary: "Return all live creature IDs in this saved group, regardless of distance (up to the global creature cap). Reads staged spawns, labels and removals. Re-query after changes. This is an ID array, not creature snapshots; use get_creature(id) for details."
+    params:
+      - {name: group, type: string}
+    returns: {type: "integer[]", desc: "Empty array for an unknown or empty group."}
+    errors: []
+    since: "1.39.0"
+
+  - name: despawn
+    namespace: world
+    category: action
+    summary: "Silently remove a creature, including its group metadata. No on_death event, kill credit, loot or death sound. Use for dawn/temporary summon cleanup; destroy/die instead count as deaths. Transactional and subject to normal API/work budgets. Missing IDs are safe to retry."
+    params:
+      - {name: id, type: integer}
+    returns: {type: boolean, desc: "True if removed; false if already missing."}
+    errors: []
+    since: "1.39.0"
+
   - name: destroy
     namespace: world
     category: action
@@ -1200,7 +1231,7 @@ methods:
     params:
       - {name: player_id, type: integer}
       - {name: kind, type: string, enum_ref: creature_kinds, desc: "Same kinds as spawn_creature, including zombie, skeleton, dragon_green and dragon_red. Use these exact singular identifiers, not model variant filenames, plurals or dragon. Unknown strings silently spawn sheep."}
-      - {name: radius, type: number, desc: "Clamped into [1, find_radius_max] -- note the floor is 1, not 0, unlike the find_* methods."}
+      - {name: radius, type: number, desc: "Horizontal radius clamped into [1, 32], or [1, 10] for fish habitat searches. A 40-block diameter means radius 20. Unlike find_* queries, land spawning does not scan a volume."}
     returns: {type: "integer | nil", desc: "The new creature's id, or nil for a missing player, exhausted spawn budget, creature population cap, insufficient fish habitat, or dragon territory overlap. Both dragon colors share a 320-block minimum home spacing, including spawns staged in this callback; nearby dragon packs cannot be spawned. Check for nil before using the id."}
     errors: []
     budget_ref: creature_spawns_per_call

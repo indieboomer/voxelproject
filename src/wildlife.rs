@@ -61,6 +61,7 @@ impl Creatures {
                 let _ = self.ecs.despawn(entity);
             }
             self.behaviors.remove(&id);
+            self.groups.remove(&id);
             if let Some(cell) = cell {
                 self.fish_regions.remove(&cell);
             }

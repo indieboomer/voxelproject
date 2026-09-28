@@ -405,7 +405,7 @@ pub fn install_rule(
             host.modules
                 .iter()
                 .position(|m| m.name == requested && m.attachment.is_none())
-                .ok_or("Rule missing or attached; inspect again")?,
+                .ok_or("Cannot revise this rule ID: missing or attached. To CREATE use id=\"\" and expected_source=\"\"; use the returned ID for later revisions. To REVISE call get_rule with an existing unattached ID first; do not invent a new ID.")?,
         )
     };
     let before = index.map(|i| host.modules[i].to_save_entry());
@@ -585,10 +585,11 @@ pub const INSTRUCTIONS: &str = r#"You are Astra, collaborating on this human's c
 Use capabilities and inspect before mutations. Read get_rule before revising; reuse the stable rule ID. execute runs a one-shot on_cast(api) script transactionally; upsert_rule registers persistent behavior. Inspect after mutations; registration is NOT proof of behavior. Check concrete changed state/events; otherwise say applied but unverified. Correct generated-code errors within budget. Never retry committed actions with a new action_id. All tool args are a JSON object encoded in the arguments string.
 Tools:
 capabilities: {query:"optional API substring"}; empty query returns overview; query returns matching signatures. Obtain relevant signatures before scripting.
-inspect: {center:[x,y,z],radius:1..8} (optional); bounded current player, nearby creatures, blocks, target, rules, recent events and backlog keys.
-verify: {path:"JSON pointer into an inspect result",equals:expected_value,center:[x,y,z],radius:2}. Optional center/radius. Reads live state and compares a concrete expected fact. Use after inspect to establish observed evidence. A rule registration alone cannot pass behavior verification; compare actual block/entity/player state. Time advances between calls; avoid exact equality for changing time/positions.
+inspect: {center:[x,y,z],radius:1..8,creature_group:"optional stable label"} (all optional); bounded current player, nearby creatures, blocks, target, rules, recent events and backlog keys. creature_groups includes all live grouped IDs regardless of distance; a requested empty group is [] for verification.
+verify: {path:"JSON pointer into an inspect result",equals:expected_value,center:[x,y,z],radius:2}. Optional center/radius and creature_group (includes an empty group as [] for cleanup verification). Reads live state and compares a concrete expected fact. Use after inspect to establish observed evidence. A rule registration alone cannot pass behavior verification; compare actual block/entity/player state. Time advances between calls; avoid exact equality for changing time/positions.
 get_rule: {id:"stable name"} returns current source/revision.
-upsert_rule: {action_id:"unique logical action",id:"existing id or empty for new",expected_source:"exact old source or empty",source:"Lua",enabled:true}. Requires current target still valid. Rules must not define on_cast.
+upsert_rule: {action_id:"unique logical action",id:"existing id or empty for new",expected_source:"exact old source or empty",source:"Lua",enabled:true}. Requires current target still valid. Rules must not define on_cast. CREATE example: {action_id:"night-horde-create",id:"",expected_source:"",source:"function on_tick(api) end",enabled:true}. Never invent a new ID; save the returned ID for revisions.
+For temporary creature waves: use api.is_night, spawn at most the documented per-callback budget, check the returned single id for nil, and immediately set_creature_group(id,"unique-stable-rule-group"). Query creatures_in_group for cleanup even after reload and regardless of distance. Use despawn(id) for disappearance without on_death; destroy/die are kills and fire death handlers. Never remove all creatures of a kind to clean up a wave. Lua globals reset on reload; groups persist, so reconcile existing members before spawning. State whether a rule maintains a bounded population (replaces casualties) or creates one wave per night; do not claim a saved once-per-night quota using globals alone. Disabling/removing a rule stops callbacks, so clean its group first when removal is requested. Verify actual group membership at night and emptiness after dawn; nearby inspect results alone cannot prove global cleanup. Do not change the world's time just to verify unless the player requested it.
 execute: {action_id:"unique logical action",source:"Lua defining on_cast(api)"}. Effects persist; no automatic world undo.
 report_gap: {key:"canonical underlying capability key; reuse existing backlog keys",title,category:"missing_capability|api_engine_bug|generated_code_error|permission_limit|uncertain",behavior,insufficient,proposal,workaround,impact:"completely_blocked|partially_blocked|quality_improvement",priority,acceptance}. All fields strings. REQUIRED for unavailable behavior; first inspect alternative names/compositions. Exact errors and inspected capabilities are attached automatically. Do useful independent portions; do not invent calls.
 resolve_gap: {id:"CAP-...",evidence:"observed acceptance result"}. Only on explicit human recheck and successful observed behavior in this build.
@@ -695,6 +696,19 @@ mod tests {
             )),
         )
         .unwrap()
+    }
+    #[test]
+    fn coplay_new_named_rule_error_explains_create_without_mutation() {
+        let mut host = crate::scripting::ScriptHost::new();
+        let mut s = Session::default();
+        let err = install_rule(&mut s, &mut host, "night", module(""),
+            &json!({"id":"night_horde_dawn_cleanup","expected_source":""})).unwrap_err();
+        assert!(err.contains("To CREATE use id=\"\""));
+        assert!(host.modules.is_empty());
+        assert!(s.changes.is_empty());
+        let id = install_rule(&mut s, &mut host, "night", module(""),
+            &json!({"id":"","expected_source":""})).unwrap();
+        assert_eq!(host.modules[0].name, id);
     }
     #[test]
     fn coplay_authority_and_budgets_are_enforced_at_execution() {

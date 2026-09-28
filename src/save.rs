@@ -15,6 +15,7 @@ pub struct CraftingSave {
     pub coplay: crate::coplay::Session,
     pub world_identity: crate::enchantment::WorldIdentity,
     pub creature_next_id: u32,
+    pub creature_groups: std::collections::BTreeMap<u32, String>,
     pub enchantments: Vec<crate::enchantment::Saved>,
     pub spellbook: crate::spellbook::Spellbook,
     pub creature_statuses: std::collections::BTreeMap<u32, crate::creature::magic::Status>,
@@ -390,6 +391,19 @@ pub fn load_playtest_snapshot(path: &Path) -> Option<LoadedWorld> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn lifecycle_groups_roundtrip_and_old_saves_default_empty() {
+        let mut crafting = super::CraftingSave::default();
+        crafting.creature_groups.insert(42, "night-horde".into());
+        let bytes = super::encode_save(world_save(), &crafting, &Default::default()).unwrap();
+        let (_, restored, _) = super::decode_save(&bytes).unwrap();
+        assert_eq!(restored.creature_groups, crafting.creature_groups);
+        let mut legacy: serde_json::Value = serde_json::from_slice(&bytes[super::MAGIC.len()..]).unwrap();
+        legacy["crafting"].as_object_mut().unwrap().remove("creature_groups");
+        let mut bytes = super::MAGIC.to_vec();
+        bytes.extend(serde_json::to_vec(&legacy).unwrap());
+        assert!(super::decode_save(&bytes).unwrap().1.creature_groups.is_empty());
+    }
     #[test]
     fn chat_export_retains_full_history_without_duplicates_across_saves() {
         let dir = std::path::PathBuf::from(format!("target/chat-save-test-{}", std::process::id()));

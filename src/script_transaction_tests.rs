@@ -718,6 +718,91 @@ fn creature_capacity_rejects_spawns_without_reserving_ids_and_destroy_frees_spac
     assert_eq!(fixture.creatures.snapshot_with_ids().len(), cap);
 }
 
+#[test]
+fn lifecycle_groups_are_transactional_and_despawn_is_not_death() {
+    let mut f = Fixture::new();
+    let mut m = module("on_cast", "assert(api.set_creature_group(1,'wave')); assert(#api.creatures_in_group('wave') == 1); assert(api.despawn(1)); assert(#api.creatures_in_group('wave') == 0); error('abort')");
+    let (_, deaths) = f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_some());
+    assert!(deaths.is_empty());
+    assert_eq!(f.creatures.snapshot_with_ids().len(), 3);
+    assert!(f.creatures.groups.is_empty());
+    let mut m = module("on_cast", "assert(api.set_creature_group(1,'wave')); assert(api.set_creature_group(2,'other')); assert(api.despawn(1)); assert(not api.despawn(1)); assert(#api.creatures_in_group('wave') == 0); assert(#api.creatures_in_group('other') == 1)");
+    let (_, deaths) = f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_none(), "{:?}", m.error);
+    assert!(deaths.is_empty());
+    assert!(f.creatures.take_audio_events().deaths.is_empty());
+    assert_eq!(f.creatures.snapshot_with_ids().len(), 2);
+    assert_eq!(f.creatures.groups.len(), 1);
+    let mut m = module("on_cast", "api.destroy(2)");
+    let (_, deaths) = f.invoke(&mut m, "on_cast");
+    assert_eq!(deaths.len(), 1);
+    assert!(f.creatures.groups.is_empty());
+}
+
+#[test]
+fn lifecycle_group_validation_and_relabeling() {
+    let mut f = Fixture::new();
+    for label in ["", &"x".repeat(65)] {
+        let mut m = module("on_cast", &format!("api.set_creature_group(1,{label:?})"));
+        f.invoke(&mut m, "on_cast");
+        assert!(m.error.is_some());
+        assert!(f.creatures.groups.is_empty());
+    }
+    let mut m = module("on_cast", "assert(not api.set_creature_group(999,'wave')); api.set_creature_group(1,'old'); api.set_creature_group(1,'new'); assert(#api.creatures_in_group('old') == 0); assert(api.creatures_in_group('new')[1] == 1)");
+    f.invoke(&mut m, "on_cast");
+    assert!(m.error.is_none(), "{:?}", m.error);
+}
+
+#[test]
+fn lifecycle_night_horde_reconciles_after_reload_and_cleans_only_its_group() {
+    let mut f = Fixture::new();
+    let source = include_str!("../modules/night_horde.lua");
+    assert!(crate::world_api_validate::validate_source(source).is_empty());
+    let load = || {
+        let mut m = Module::load("night-horde".into(), "test".into(), source.into()).unwrap();
+        m.enabled = true;
+        m
+    };
+    let mut m = load();
+    f.invoke(&mut m, "on_tick");
+    assert_eq!(f.creatures.snapshot_with_ids().len(), 3);
+    f.time = 0.75;
+    for _ in 0..6 {
+        f.invoke(&mut m, "on_tick");
+        assert!(m.error.is_none(), "{:?}", m.error);
+    }
+    assert_eq!(f.creatures.groups.len(), 16);
+    let wave = f.creatures.snapshot_with_ids();
+    assert_eq!(wave.iter().filter(|c| c.1 == CreatureKind::SkeletonSorcerer.to_u8()).count(), 1);
+    assert!(wave.iter().any(|c| f.creatures.groups.contains_key(&c.0) && c.2[0].hypot(c.2[2]) > 10.0), "radius 20 must not be clamped to the old query limit of 10");
+    for c in wave.iter().filter(|c| f.creatures.groups.contains_key(&c.0)) {
+        assert!(c.2[0].hypot(c.2[2]) <= 20.001);
+    }
+    // Persist actual creature identities and group metadata, then recreate the Lua VM.
+    let mut saved = f.creatures.snapshot_with_ids();
+    for c in &mut saved {
+        if f.creatures.groups.contains_key(&c.0) { c.2[0] = 1000.0; }
+    }
+    let groups = serde_json::to_vec(&f.creatures.groups).unwrap();
+    f.creatures = Creatures::new();
+    f.creatures.restore_saved(&saved, 1);
+    f.creatures.groups = serde_json::from_slice(&groups).unwrap();
+    m = load();
+    f.invoke(&mut m, "on_tick");
+    assert!(m.error.is_none(), "{:?}", m.error);
+    assert_eq!(f.creatures.snapshot_with_ids().len(), 19);
+    f.time = 0.25;
+    let (_, deaths) = f.invoke(&mut m, "on_tick");
+    assert!(m.error.is_none(), "{:?}", m.error);
+    assert!(deaths.is_empty());
+    assert_eq!(f.creatures.snapshot_with_ids().len(), 3);
+    assert!(f.creatures.groups.is_empty());
+    f.time = 0.75;
+    for _ in 0..4 { f.invoke(&mut m, "on_tick"); }
+    assert_eq!(f.creatures.groups.len(), 16);
+}
+
 struct Fixture {
     world: World,
     creatures: Creatures,

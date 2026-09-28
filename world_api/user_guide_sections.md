@@ -1,3 +1,25 @@
+## Temporary creatures and dawn cleanup
+
+Use `api.is_night` in `on_tick` for nighttime behavior. Spawn calls return one
+creature ID or nil; persistent callbacks allow four spawn attempts per invocation.
+A 40-block diameter is a radius of 20 (land spawn radii support up to 32).
+
+Immediately label successful summons with
+`api.set_creature_group(id, "my-unique-rule-group")`. Labels persist with creatures
+across save/reload and Lua revisions. Query `api.creatures_in_group(group)` to
+recover their IDs regardless of distance; Lua globals alone do not survive reload.
+Use `api.despawn(id)` when creatures should disappear without death effects.
+`destroy` and `die` trigger death callbacks and death audio.
+
+See `modules/night_horde.lua` for a bounded population of 15 zombies/skeletons and
+one skeleton sorcerer, removed at dawn. It replaces casualties during the night.
+It reconciles saved group members instead of spawning another full population on
+reload. A strict once-per-night quota requires durable rule state beyond groups;
+do not represent it as a saved guarantee using a Lua boolean. Removing/disabling
+a rule stops callbacks; clean up its group explicitly if its summons should go too.
+Co-Play `inspect` and `verify` accept `creature_group` to include an empty group
+as `[]` in `creature_groups`, enabling global cleanup verification.
+
 ## Start here
 
 The World API lets Lua modules change the shared game world. You can describe

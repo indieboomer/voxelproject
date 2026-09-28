@@ -686,6 +686,7 @@ pub struct Creatures {
     ecs: hecs::World,
     next_id: u32,
     pending_audio: CreatureAudioEvents,
+    pub groups: std::collections::BTreeMap<u32, String>,
     pub behaviors: std::collections::BTreeMap<u32, CreatureBehavior>,
     pub combat_deaths: Vec<DeathEvent>,
     pub attack_policies: std::collections::BTreeMap<(u64, u64), Vec<AttackPolicy>>,
@@ -704,6 +705,7 @@ pub(crate) struct CreatureDraft {
     pub snapshot: Vec<(u32, u8, [f32; 3], f32, f32)>,
     next_id: u32,
     commands: Vec<CreatureCommand>,
+    pub groups: std::collections::BTreeMap<u32, String>,
     pub behaviors: std::collections::BTreeMap<u32, CreatureBehavior>,
 }
 
@@ -716,6 +718,8 @@ enum CreatureCommand {
     Damage(u32, f32),
     Heal(u32, f32),
     Destroy(u32),
+    Despawn(u32),
+    Group(u32, String),
 }
 
 impl CreatureDraft {
@@ -744,6 +748,7 @@ impl CreatureDraft {
             snapshot,
             next_id: creatures.next_id,
             commands: Vec::new(),
+            groups: creatures.groups.clone(),
             behaviors: creatures.behaviors.clone(),
             dragon_homes,
             magic_statuses: creatures.magic_statuses.clone(),
@@ -843,6 +848,21 @@ impl CreatureDraft {
         })
     }
 
+    pub fn set_group(&mut self, id: u32, group: String) -> bool {
+        if !self.snapshot.iter().any(|c| c.0 == id) { return false; }
+        self.groups.insert(id, group.clone());
+        self.commands.push(CreatureCommand::Group(id, group));
+        true
+    }
+
+    pub fn despawn(&mut self, id: u32) -> bool {
+        let Some(index) = self.snapshot.iter().position(|c| c.0 == id) else { return false; };
+        self.snapshot.remove(index);
+        self.groups.remove(&id);
+        self.commands.push(CreatureCommand::Despawn(id));
+        true
+    }
+
     pub fn commit(self, creatures: &mut Creatures) {
         for command in self.commands {
             match command {
@@ -895,6 +915,8 @@ impl CreatureDraft {
                         }
                     }
                 }
+                CreatureCommand::Group(id, group) => { creatures.groups.insert(id, group); }
+                CreatureCommand::Despawn(id) => { creatures.despawn(id); }
                 CreatureCommand::Destroy(id) => {
                     creatures.destroy(id);
                 }
@@ -924,6 +946,7 @@ impl Creatures {
             ecs: hecs::World::new(),
             next_id: 1,
             pending_audio: CreatureAudioEvents::default(),
+            groups: Default::default(),
             behaviors: Default::default(),
             combat_deaths: Vec::new(),
             player_kills: Vec::new(),
@@ -1576,11 +1599,25 @@ impl Creatures {
         }
         if let Some((entity, event)) = target {
             let _ = self.ecs.despawn(entity);
+            self.groups.remove(&id);
             self.behaviors.remove(&id);
             self.pending_audio.deaths.push((event.kind, event.pos));
             return Some(event);
         }
         None
+    }
+
+    /// Administrative removal: no kill credit, loot, death audio or death callback.
+    pub fn despawn(&mut self, id: u32) -> bool {
+        let entity = self.ecs.query::<&CreatureId>().iter()
+            .find_map(|(entity, cid)| (cid.0 == id).then_some(entity));
+        let Some(entity) = entity else { return false; };
+        let _ = self.ecs.despawn(entity);
+        self.groups.remove(&id);
+        self.behaviors.remove(&id);
+        self.magic_statuses.remove(&id);
+        self.wildlife.remove(&id);
+        true
     }
 
     /// Called by the Lua `destroy` API function: removes the creature
@@ -1601,6 +1638,7 @@ impl Creatures {
         }
         if let Some((entity, event)) = target {
             let _ = self.ecs.despawn(entity);
+            self.groups.remove(&id);
             self.behaviors.remove(&id);
             self.pending_audio.deaths.push((event.kind, event.pos));
             return Some(event);

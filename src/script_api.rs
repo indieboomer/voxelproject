@@ -541,6 +541,22 @@ fn populate_api<'lua, 'scope>(
         })?,
     )?;
 
+    api.set("set_creature_group", scope.create_function(move |_, (id, group): (u32, String)| {
+        if group.is_empty() || group.len() > 64 {
+            return Err(mlua::Error::RuntimeError("group must be 1..64 UTF-8 bytes".into()));
+        }
+        Ok(creatures_cell.borrow_mut().set_group(id, group))
+    })?)?;
+    api.set("creatures_in_group", scope.create_function(move |lua, group: String| {
+        let creatures = creatures_cell.borrow();
+        let ids: Vec<_> = creatures.snapshot.iter()
+            .filter(|c| creatures.groups.get(&c.0) == Some(&group)).map(|c| c.0).collect();
+        lua.create_sequence_from(ids)
+    })?)?;
+    api.set("despawn", scope.create_function(move |_, id: u32| {
+        Ok(creatures_cell.borrow_mut().despawn(id))
+    })?)?;
+
     api.set(
         "destroy",
         scope.create_function(move |_, id: u32| {
@@ -586,14 +602,15 @@ fn populate_api<'lua, 'scope>(
             let Some(target) = tx.players().into_iter().find(|p| p.id == player_id) else {
                 return Ok(None);
             };
-            let radius = radius.clamp(1.0, MAX_FIND_RADIUS);
+            // Land spawns pick one point, unlike volume-scanning queries/fish searches.
+            let radius = radius.clamp(1.0, 32.0);
             spawn_budget.set(spawn_budget.get() - 1);
             let kind = parse_creature_kind(&kind);
             let seed = spawn_seed.get();
             spawn_seed.set(seed.wrapping_add(0x9E37_79B9_7F4A_7C15));
             let (dx, dz) = random_offset_in_disk(seed, radius);
             if kind == CreatureKind::Fish {
-                let Some(pos) = Creatures::fish_spawn_near(world, target.pos, radius, seed) else {
+                let Some(pos) = Creatures::fish_spawn_near(world, target.pos, radius.min(MAX_FIND_RADIUS), seed) else {
                     return Ok(None);
                 };
                 return Ok(creatures_cell

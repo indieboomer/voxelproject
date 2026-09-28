@@ -4,7 +4,7 @@
 // Consumed by src/world_api_validate.rs's pre-flight lint, which runs on
 // LLM-generated Lua before it's ever loaded into a real Lua VM.
 
-pub const VERSION: &str = "1.38.0";
+pub const VERSION: &str = "1.39.0";
 
 // Runtime execution limits, shared with the generated documentation.
 pub const SCRIPT_TIME_MS: u64 = 5;
@@ -84,6 +84,8 @@ pub const NUMERIC_ARGUMENTS: &[(&str, &[usize])] = &[
     ("ignore", &[0]),
     ("die", &[0]),
     ("damage", &[0, 1]),
+    ("set_creature_group", &[0]),
+    ("despawn", &[0]),
     ("destroy", &[0]),
     ("spawn_creature", &[1, 2, 3]),
     ("spawn_creature_near_player", &[0, 2]),
@@ -199,6 +201,9 @@ pub const METHOD_NAMES: &[&str] = &[
     "ignore",
     "die",
     "damage",
+    "set_creature_group",
+    "creatures_in_group",
+    "despawn",
     "destroy",
     "spawn_creature",
     "spawn_creature_near_player",

@@ -40,8 +40,18 @@ impl App {
             .filter(|c| Vec3::from_array(c.2).distance(center) <= 32.)
             .take(64)
             .collect();
+        let mut groups = std::collections::BTreeMap::<String, Vec<u32>>::new();
+        for c in self.creatures.snapshot_with_ids() {
+            if let Some(group) = self.creatures.groups.get(&c.0) {
+                groups.entry(group.clone()).or_default().push(c.0);
+            }
+        }
+        for ids in groups.values_mut() { ids.sort_unstable(); }
+        if let Some(group) = args["creature_group"].as_str() {
+            groups.entry(group.to_owned()).or_default();
+        }
         let properties: Vec<_> = creatures.iter().map(|c| json!({"id":c.0,
-            "behavior":self.creatures.behaviors.get(&c.0),"statuses":self.creatures.magic_statuses.get(&c.0)})).collect();
+            "group":self.creatures.groups.get(&c.0),"behavior":self.creatures.behaviors.get(&c.0),"statuses":self.creatures.magic_statuses.get(&c.0)})).collect();
         let devices: Vec<_> = self
             .world
             .automation
@@ -62,7 +72,7 @@ impl App {
             "selection":format!("{:?}",self.player.crafting.hotbar.entry()),
             "time":self.time_of_day,"weather":self.weather,"target":panel.run.as_ref().and_then(|r| r.target.as_ref()),
             "creatures_id_kind_position_health_facing":creatures,"blocks":blocks,"blocks_truncated":blocks.len()==512,
-            "creature_properties":properties,"devices":devices,
+            "creature_properties":properties,"creature_groups":groups,"devices":devices,
             "target_availability":panel.run.as_ref().and_then(|r|r.target.as_ref()).map(|t|t.available(&self.world,&self.creatures)),
             "rules":self.scripting.modules.iter().map(|m|json!({"id":m.name,"enabled":m.enabled,"error":m.error,"instant":m.is_instant,"api":m.api_version()})).collect::<Vec<_>>(),
             "recent_events":self.chat_transcript.iter().rev().take(12).collect::<Vec<_>>(),
