@@ -38,6 +38,14 @@ impl Roofs {
             let mut p = Vec3::from_array(v.position) + Vec3::from_array(v.normal) * 0.02;
             // Shaped terrain surfaces lie inside their owner's cell; light
             // them from the open cell above rather than from inside the solid.
+            // Round living wood lies inside its own cell: light it from outside.
+            if world.terrain_shaping {
+                let (x, y, z) = (p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
+                let block = world.get_block(x, y, z);
+                if block.is_wood() && crate::voxel::organic::is_living(world, block, (x, y, z)) {
+                    p += Vec3::from_array(v.normal) * 0.6;
+                }
+            }
             // A bank surface can sit several cells below its column's top.
             if world.terrain_shaping {
                 let (x, z) = (p.x.floor() as i32, p.z.floor() as i32);

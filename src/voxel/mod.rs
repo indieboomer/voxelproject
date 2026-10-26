@@ -6,6 +6,7 @@ pub mod chunk;
 pub mod coast;
 pub mod mesher;
 pub mod natural;
+pub mod organic;
 pub mod noise;
 pub mod resource_catalog;
 pub mod shaping;

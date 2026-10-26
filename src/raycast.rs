@@ -43,7 +43,11 @@ pub fn raycast(world: &World, origin: Vec3, dir: Vec3, max_dist: f32) -> Option<
                     shape
                 }
             };
-            if shaping::cell_contains(shape.as_ref(), voxel, p) {
+            let inside = match crate::voxel::organic::tree_cell(world, voxel.0, voxel.1, voxel.2) {
+                Some(tree) => tree.contains(p),
+                None => shaping::cell_contains(shape.as_ref(), voxel, p),
+            };
+            if inside {
                 let place = match last_voxel {
                     Some(v) if world.get_block(v.0, v.1, v.2).is_targetable() => (v.0, v.1 + 1, v.2),
                     Some(v) => v,

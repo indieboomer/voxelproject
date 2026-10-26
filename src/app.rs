@@ -6358,7 +6358,13 @@ impl App {
         let target_shape = target.as_ref().and_then(|(hit, _, _)| {
             crate::voxel::shaping::shape_at(&self.world, hit.target.0, hit.target.1, hit.target.2)
         });
-        self.block_target.update(&self.queue, target, target_shape);
+        let target_wood = target.as_ref().and_then(|(hit, _, _)| {
+            let tree = crate::voxel::organic::tree_cell(&self.world, hit.target.0, hit.target.1, hit.target.2)?;
+            let cell = glam::Vec3::new(hit.target.0 as f32, hit.target.1 as f32, hit.target.2 as f32);
+            let (lo, hi) = tree.boxes().into_iter().fold((glam::Vec3::splat(f32::MAX), glam::Vec3::splat(f32::MIN)), |(lo, hi), (a, b)| (lo.min(a), hi.max(b)));
+            Some((lo.max(cell), hi.min(cell + glam::Vec3::ONE)))
+        });
+        self.block_target.update(&self.queue, target, target_shape, target_wood);
 
         self.wind.prepare(
             &self.queue,

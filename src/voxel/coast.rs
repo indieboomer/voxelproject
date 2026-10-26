@@ -182,6 +182,38 @@ pub fn steep_bank(origin: (i32, i32, i32)) -> Vec<(i32, i32, i32, BlockType)> {
     edits
 }
 
+/// Tree test grove (docs/TREES.md): grass ground at layer `origin.1 - 1`,
+/// four generated trees of different species, and a player-built oak post
+/// and beam touching one trunk. Returns `(generated, placed)` blocks: the
+/// generated ones must be written as chunk data so they count as living.
+#[cfg(test)]
+pub fn tree_grove(origin: (i32, i32, i32)) -> (Vec<(i32, i32, i32, BlockType)>, Vec<(i32, i32, i32, BlockType)>) {
+    let (ox, y0, oz) = origin;
+    let mut generated = Vec::new();
+    for x in -6..18 {
+        for z in -6..18 {
+            for y in y0 - 3..y0 + 16 {
+                let block = if y >= y0 { BlockType::Air } else if y == y0 - 1 { BlockType::Grass } else { BlockType::Soil };
+                generated.push((ox + x, y, oz + z, block));
+            }
+        }
+    }
+    for (x, z, species) in [(2, 3, 0), (10, 2, 3), (4, 11, 2), (12, 10, 1)] {
+        for ((dx, dy, dz), block) in super::trees::tree_blocks(SEED, ox + x, oz + z, species) {
+            generated.push((ox + x + dx, y0 - 1 + dy, oz + z + dz, block));
+        }
+    }
+    // A post and beam built against the oak's trunk: construction, not tree.
+    let placed = vec![
+        (ox + 3, y0, oz + 3, BlockType::OakWood),
+        (ox + 3, y0 + 1, oz + 3, BlockType::OakWood),
+        (ox + 3, y0 + 2, oz + 3, BlockType::OakWood),
+        (ox + 4, y0 + 2, oz + 3, BlockType::OakWood),
+        (ox + 5, y0 + 2, oz + 3, BlockType::OakWood),
+    ];
+    (generated, placed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

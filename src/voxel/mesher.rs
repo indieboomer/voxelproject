@@ -444,6 +444,15 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                 let wz = oz + lz;
                 let def = block.def();
 
+                // Living trees: organic tapered trunks and limbs (shaped mode).
+                if world.terrain_shaping && block.is_wood() {
+                    let living = |p: (i32, i32, i32), b: BlockType| super::organic::is_living(world, b, p);
+                    if let Some(tree) = super::organic::cell_with(&sample, &living, wx, ly, wz) {
+                        push_tree(&mut vertices, &mut indices, &tree, block, [wx, ly, wz]);
+                        continue;
+                    }
+                }
+
                 if block.is_branch() {
                     let connected = FACE_NORMALS.map(|n| {
                         let neighbor = sample(wx + n[0], ly + n[1], wz + n[2]);
@@ -537,6 +546,14 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                     } else {
                         !neighbor.is_opaque() && neighbor != block
                     };
+                    // A living trunk no longer fills its cell: show what it touches.
+                    if !visible
+                        && world.terrain_shaping
+                        && neighbor.is_wood()
+                        && super::organic::is_living(world, neighbor, (nx, ny, nz))
+                    {
+                        visible = true;
+                    }
                     // With shaping, a side may be only partly covered: draw the
                     // (below, top) band between the neighbor's profile and ours.
                     let mut band = None;
@@ -823,6 +840,118 @@ fn push_shaped_top(
             });
         }
         indices.extend_from_slice(&[base_index, base_index + 1, base_index + 2]);
+    }
+}
+
+/// Emits a living wood cell's tube pieces, knot and end-grain caps with
+/// smooth radial normals and bark wrapped once around each ring.
+fn push_tree(vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>, tree: &super::organic::TreeCell, block: BlockType, cell: [i32; 3]) {
+    use super::organic::ring_point;
+    let wood = block.wood_resource();
+    let bark = atlas::uv_rect(atlas::tile_for(wood, 0));
+    let grain = atlas::uv_rect(atlas::tile_for(wood, 2));
+    let origin = Vec3::new(cell[0] as f32, cell[1] as f32, cell[2] as f32);
+    let vertex = |position: Vec3, normal: Vec3, uv: [f32; 2]| Vertex {
+        position: position.to_array(),
+        color: [0.95; 3],
+        normal: normal.to_array(),
+        uv,
+        ao: 1.0,
+        reflectivity: block.reflectivity(),
+        emission: 0.0,
+        wind: 0.0,
+        tex_layer: 0.0,
+        glimmer: 0.0,
+        skylight: 1.0,
+        wet: [crate::wetness::absorption(block), -1.],
+    };
+    let at = |rect: [f32; 4], u: f32, v: f32| {
+        [rect[0] + u.clamp(0.0, 1.0) * (rect[2] - rect[0]), rect[1] + v.clamp(0.0, 1.0) * (rect[3] - rect[1])]
+    };
+    // Emits a quad/triangle facing `outward` (mesher winding is inward).
+    let mut emit = |vertices: &mut Vec<Vertex>, polygon: [u32; 3], outward: Vec3| {
+        let [a, b, c] = polygon.map(|i| Vec3::from(vertices[i as usize].position));
+        if (b - a).cross(c - a).dot(outward) > 0.0 {
+            indices.extend_from_slice(&[polygon[0], polygon[2], polygon[1]]);
+        } else {
+            indices.extend_from_slice(&polygon);
+        }
+    };
+    for piece in &tree.pieces {
+        let n = piece.sides;
+        let base = vertices.len() as u32;
+        // Pair each ring-a vertex with the ring-b vertex it faces after
+        // turning ring a's axis onto ring b's, so angled pieces don't twist.
+        let along = piece.b - piece.a;
+        let unit = |axis: usize| {
+            let mut e = Vec3::ZERO;
+            e[axis] = if along[axis] < 0.0 { -1.0 } else { 1.0 };
+            e
+        };
+        let turn = glam::Quat::from_rotation_arc(unit(piece.axis_a), unit(piece.axis_b));
+        let order: Vec<usize> = (0..n)
+            .map(|k| {
+                let (_, out_a) = ring_point(piece.a, piece.axis_a, piece.ra, piece.key_a, k, n);
+                let target = turn * out_a;
+                (0..n)
+                    .max_by(|&i, &j| {
+                        let d = |m| ring_point(piece.b, piece.axis_b, piece.rb, piece.key_b, m, n).1.dot(target);
+                        d(i).total_cmp(&d(j))
+                    })
+                    .unwrap()
+            })
+            .collect();
+        for (end, axis, radius, key, is_b) in [(piece.a, piece.axis_a, piece.ra, piece.key_a, false), (piece.b, piece.axis_b, piece.rb, piece.key_b, true)] {
+            // Bark runs along the piece; its texture row follows the cell height.
+            let v = (end - origin)[axis].clamp(0.0, 1.0);
+            for k in 0..=n {
+                let index = if is_b { order[k % n] } else { k % n };
+                let (p, out) = ring_point(end, axis, radius, key, index, n);
+                vertices.push(vertex(p, out, at(bark, k as f32 / n as f32, 1.0 - v)));
+            }
+        }
+        for k in 0..n as u32 {
+            let (a0, a1, b0, b1) = (base + k, base + k + 1, base + n as u32 + 1 + k, base + n as u32 + 2 + k);
+            let out = Vec3::from(vertices[a0 as usize].normal) + Vec3::from(vertices[b0 as usize].normal);
+            emit(vertices, [a0, a1, b1], out);
+            emit(vertices, [a0, b1, b0], out);
+        }
+        if piece.cap_b {
+            // End grain on a tip or a fresh cut.
+            let normal = along.normalize_or_zero();
+            let hub = vertices.len() as u32;
+            vertices.push(vertex(piece.b, normal, at(grain, 0.5, 0.5)));
+            for k in 0..n {
+                let (p, out) = ring_point(piece.b, piece.axis_b, piece.rb, piece.key_b, k, n);
+                let uv = at(grain, 0.5 + out.x * 0.45 + out.z * 0.0, 0.5 + out.y * 0.45 + out.z * 0.45);
+                vertices.push(vertex(p, normal, uv));
+            }
+            for k in 0..n as u32 {
+                emit(vertices, [hub, hub + 1 + k, hub + 1 + (k + 1) % n as u32], normal);
+            }
+        }
+    }
+    if let Some((center, radius)) = tree.knot {
+        // A low-poly rounded knot closing elbows and forks.
+        let (rings, segments) = (5u32, 8u32);
+        let base = vertices.len() as u32;
+        for i in 0..=rings {
+            let phi = std::f32::consts::PI * i as f32 / rings as f32;
+            for j in 0..=segments {
+                let theta = std::f32::consts::TAU * j as f32 / segments as f32;
+                let out = Vec3::new(phi.sin() * theta.cos(), phi.cos(), phi.sin() * theta.sin());
+                vertices.push(vertex(center + out * radius, out, at(bark, j as f32 / segments as f32, i as f32 / rings as f32)));
+            }
+        }
+        for i in 0..rings {
+            for j in 0..segments {
+                let a = base + i * (segments + 1) + j;
+                let b = a + segments + 1;
+                let out = Vec3::from(vertices[a as usize].normal);
+                emit(vertices, [a, b, b + 1], out);
+                emit(vertices, [a, b + 1, a + 1], out);
+            }
+        }
     }
 }
 

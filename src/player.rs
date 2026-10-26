@@ -518,6 +518,18 @@ impl Player {
                         }
                     }
                     if world.is_solid(bx, by, bz) {
+                        // Living trees collide with their round trunks and limbs.
+                        if let Some(tree) = crate::voxel::organic::tree_cell(world, bx, by, bz) {
+                            let hit = tree.boxes().iter().any(|(lo, hi)| {
+                                max_x > lo.x + 1e-4 && min_x < hi.x - 1e-4
+                                    && max_y > lo.y + 1e-4 && min_y < hi.y - 1e-4
+                                    && max_z > lo.z + 1e-4 && min_z < hi.z - 1e-4
+                            });
+                            if hit {
+                                return true;
+                            }
+                            continue;
+                        }
                         // Shaped terrain collides with its actual surface.
                         if let Some(shape) = crate::voxel::shaping::shape_at(world, bx, by, bz) {
                             let top = by as f32
@@ -672,6 +684,31 @@ mod tests {
         }
         // A single jump (about 1.3 cells) may reach partway up, never the top.
         assert!(highest < 4.6, "climbed the bank to {highest}");
+    }
+
+        #[test]
+    fn living_limbs_collide_with_their_wood_not_their_cube() {
+        let mut world = World::new(3);
+        let mut chunk = crate::voxel::chunk::Chunk::new(0, 0);
+        for x in 0..16 {
+            for z in 0..16 {
+                chunk.set_local(x, 0, z, BlockType::Grass);
+            }
+        }
+        // Generated (living) trunk with a limb at head height.
+        for y in 1..6 {
+            chunk.set_local(5, y, 5, BlockType::OakWood);
+        }
+        chunk.set_local(6, 2, 5, BlockType::OakBranch);
+        chunk.set_local(7, 2, 5, BlockType::OakBranch);
+        world.chunks.insert((0, 0), chunk);
+        // Beside the limb, inside its cell's empty part.
+        let beside = Vec3::new(7.5, 1.0, 4.95);
+        world.terrain_shaping = false;
+        assert!(Player::collides(&world, beside), "the cube blocks");
+        world.terrain_shaping = true;
+        assert!(!Player::collides(&world, beside), "the thin limb does not");
+        assert!(Player::collides(&world, Vec3::new(7.5, 1.0, 5.5)), "walking into the limb does");
     }
 
         #[test]

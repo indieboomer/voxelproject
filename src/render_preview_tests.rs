@@ -583,6 +583,22 @@ fn render_weather_previews() {
         ..Default::default()
     };
     world.bevel_blocks = style_graphics.bevel_blocks;
+    // VOXEL_TREE_PREVIEW=on|off: the tree grove with shaping on or off.
+    let tree_preview = std::env::var("VOXEL_TREE_PREVIEW").ok();
+    if let Some(mode) = &tree_preview {
+        let (generated, placed) = crate::voxel::coast::tree_grove((-6, 7, -6));
+        for (x, y, z, block) in generated {
+            let key = crate::voxel::chunk::world_to_chunk(x, z);
+            if let Some(chunk) = world.chunks.get_mut(&key) {
+                chunk.set_local(x.rem_euclid(16), y, z.rem_euclid(16), block);
+            }
+        }
+        for (x, y, z, block) in placed {
+            world.set_block(x, y, z, block);
+        }
+        world.terrain_shaping = mode == "on";
+        target = Vec3::new(-2.0, 11.0, -1.0);
+    }
     // VOXEL_BANK_PREVIEW=on|off: the steep-bank scene with shaping on or off.
     let bank_preview = std::env::var("VOXEL_BANK_PREVIEW").ok();
     if let Some(mode) = &bank_preview {
@@ -676,6 +692,11 @@ fn render_weather_previews() {
         Vec3::new(-3.,8.,-4.)
     } else if shaping_garden {
         Vec3::new(3.0, 15.0, 19.0)
+    } else if tree_preview.is_some() {
+        // VOXEL_TREE_EYE=x,y,z overrides the grove camera (it looks at the grove center).
+        std::env::var("VOXEL_TREE_EYE").ok()
+            .and_then(|v| { let p: Vec<f32> = v.split(',').filter_map(|c| c.parse().ok()).collect(); (p.len() == 3).then(|| Vec3::new(p[0], p[1], p[2])) })
+            .unwrap_or(Vec3::new(-10.0, 9.0, -13.0))
     } else if bank_preview.is_some() {
         Vec3::new(-14.0, 17.0, -16.0)
     } else if coast_preview.is_some() {
@@ -1017,6 +1038,10 @@ fn render_weather_previews() {
         image::save_buffer(
             if let Some(mode) = &ray_preview { format!("target/rays-{mode}-{}.png", if rays_enabled { "on" } else { "off" }) }
             else if dof_preview { format!("target/dof-{}.png", if dof_enabled { "on" } else { "off" }) }
+            else if let Some(mode) = &tree_preview {
+                let style = if style.is_empty() { String::new() } else { format!("-{}", style.replace(',', "+")) };
+                format!("target/trees-{mode}{style}-{name}.png")
+            }
             else if let Some(mode) = &bank_preview {
                 let style = if style.is_empty() { String::new() } else { format!("-{}", style.replace(',', "+")) };
                 format!("target/bank-{mode}{style}-{name}.png")

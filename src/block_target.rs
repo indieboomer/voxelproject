@@ -83,6 +83,7 @@ impl BlockTarget {
         queue: &wgpu::Queue,
         hit: Option<(crate::raycast::RaycastHit, bool, bool)>,
         shape: Option<crate::voxel::shaping::CellShape>,
+        wood: Option<(glam::Vec3, glam::Vec3)>,
     ) {
         let mut vertices = Vec::with_capacity(MAX_VERTICES);
         if let Some((hit, breakable, placeable)) = hit {
@@ -93,7 +94,11 @@ impl BlockTarget {
             };
             match shape {
                 Some(shape) => append_shape(&mut vertices, hit.target, &shape, color, 0.006),
-                None => append_box(&mut vertices, hit.target, color, 0.004),
+                // A living tree cell outlines its round wood, not the cube.
+                None => match wood {
+                    Some((lo, hi)) => append_bounds(&mut vertices, lo, hi, color, 0.004),
+                    None => append_box(&mut vertices, hit.target, color, 0.004),
+                },
             }
             if placeable {
                 // Slightly inset to separate shared edges from the break outline.
@@ -148,6 +153,22 @@ fn append_shape(
         for step in 0..GRID - 1 {
             line(point(k, step), point(k, step + 1));
             line(point(step, k), point(step + 1, k));
+        }
+    }
+}
+
+fn append_bounds(vertices: &mut Vec<Vertex>, lo: glam::Vec3, hi: glam::Vec3, color: [f32; 3], expand: f32) {
+    for corner in 0..8 {
+        for axis in 0..3 {
+            if corner & (1 << axis) != 0 {
+                continue;
+            }
+            for endpoint in [corner, corner | (1 << axis)] {
+                let position = std::array::from_fn(|i| {
+                    if endpoint & (1 << i) == 0 { lo[i] - expand } else { hi[i] + expand }
+                });
+                vertices.push(Vertex { position, color });
+            }
         }
     }
 }
