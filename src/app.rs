@@ -3153,6 +3153,7 @@ impl App {
             crate::visibility::within_terrain_range(cell, center, RENDER_RADIUS)
                 && self.chunk_meshes.contains_key(&cell)
         });
+        crate::creature::settle_on_shaped_terrain(&self.world, &mut visible_creatures);
         self.wet_actors.begin();
         let creature_wet =
             self.wet_actors

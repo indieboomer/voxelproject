@@ -79,6 +79,11 @@ stays watertight. The band belongs to the higher cell.
   0.6 without jumping and snaps down slopes instead of hopping, so a 45° ramp
   is walkable. Cubic terrain behaves exactly as before.
 - **Plants** on a shaped cell root at its fan apex.
+- **Creatures** are drawn resting on the shaped surface under their footprint
+  (`creature::settle_on_shaped_terrain`, `shaping::rest_height`). This is
+  display only. Host simulation, AI and hit detection stay on the voxel grid,
+  so every viewer's creatures sit on their own terrain whatever their setting.
+  Flying, swimming and jumping bodies are not adjusted.
 - **Lighting**: shaped surfaces take skylight from the cell above their owner (`shelter.rs`).
 - **Invalidation**: a shape reads cells at most two away, which is inside the
   existing 8-cell remesh halo of `World::set_block`. Chunk loads re-dirty all
@@ -122,8 +127,9 @@ better, feel right underfoot, and clearly behave as one removable cell?) as open
 
 ## Unsupported cases and limits
 
-- Creatures, NPCs and remote-player avatars still use cube collision, so they
-  can stand up to one cell above a ramp's surface.
+- Creature hit boxes and AI still use the voxel grid. Weapon reach is measured
+  from up to one cell above a creature's drawn position on a ramp. NPCs and
+  remote-player avatars are not settled yet.
 - Multiplayer: the toggle is local. Each client shapes and collides its own
   player against its own setting; the host does not check movement.
 - Shores, saddles and overhang lips fall back to cubes. Where they meet ramps,
@@ -137,8 +143,7 @@ better, feel right underfoot, and clearly behave as one removable cell?) as open
 
 1. Playtest the straight-slope gate in-game, including hover readability with
    and without the outline, and record misunderstandings.
-2. Give creatures shape-aware ground height (`creature_collision.rs`) so they
-   stand on ramps.
+2. Settle NPCs and remote-player avatars the same way creatures are settled.
 3. Shape shores by teaching water meshing to emit faces against partial
    neighbors, removing the largest fallback class.
 4. Cache shapes per chunk during meshing to recover most of the 1.9× cost.

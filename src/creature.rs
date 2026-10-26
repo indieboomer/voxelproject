@@ -1684,6 +1684,24 @@ pub fn mesh_for_snapshot_wet(
     MeshData { vertices, indices }
 }
 
+/// Lowers standing creatures onto this viewer's shaped terrain. Display only:
+/// host simulation stays on the voxel grid, so every player sees creatures on
+/// their own terrain whichever shaping setting they use.
+pub fn settle_on_shaped_terrain(world: &World, entries: &mut [([f32; 3], u8, f32, u8, f32)]) {
+    if !world.terrain_shaping {
+        return;
+    }
+    for entry in entries {
+        let kind = CreatureKind::from_u8(entry.1 & 0x0f);
+        if kind == CreatureKind::Fish {
+            continue;
+        }
+        // Sample inside the body so overhanging edges don't hold it up.
+        let radius = collision::body(kind).0 * 0.7;
+        entry.0[1] = crate::voxel::shaping::rest_height(world, Vec3::from_array(entry.0), radius);
+    }
+}
+
 fn find_land_spot(
     world: &World,
     rng: &mut SimpleRng,

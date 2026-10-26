@@ -151,6 +151,32 @@ pub fn shape_at(world: &World, x: i32, y: i32, z: i32) -> Option<CellShape> {
     shape_with(&|a, b, c| world.get_block(a, b, c), x, y, z)
 }
 
+/// Display height for a body standing at `feet` on the voxel grid: lowered
+/// onto shaped terrain under its footprint (center and four corners at
+/// `radius`), never raised and never by more than one cell. Bodies that are
+/// not standing on a cell top (flying, swimming, mid-jump) are unchanged.
+pub fn rest_height(world: &World, feet: glam::Vec3, radius: f32) -> f32 {
+    if !world.terrain_shaping || (feet.y - feet.y.round()).abs() > 0.02 {
+        return feet.y;
+    }
+    let base = feet.y.round() as i32;
+    let mut top = f32::NEG_INFINITY;
+    for (dx, dz) in [(0.0, 0.0), (-radius, -radius), (radius, -radius), (-radius, radius), (radius, radius)] {
+        let (x, z) = (feet.x + dx, feet.z + dz);
+        let (cx, cz) = (x.floor() as i32, z.floor() as i32);
+        // Two cells down covers bodies stepped up onto a ramp they overlap.
+        if let Some(y) = (base - 2..base).rev().find(|&y| world.is_solid(cx, y, cz)) {
+            let height = shape_at(world, cx, y, cz).map_or(1.0, |s| s.height(x - cx as f32, z - cz as f32));
+            top = top.max(y as f32 + height);
+        }
+    }
+    if top.is_finite() && top < feet.y {
+        top.max(feet.y - 1.0)
+    } else {
+        feet.y
+    }
+}
+
 /// Whether world point `p` lies inside the visible solid of the targetable
 /// cell `voxel` (always true for unshaped cells).
 pub fn cell_contains(shape: Option<&CellShape>, voxel: (i32, i32, i32), p: glam::Vec3) -> bool {
@@ -678,6 +704,22 @@ mod tests {
         world.set_block(15, 4, 15, BlockType::Air);
         assert!(world.chunks[&(1, 0)].dirty, "neighbor chunk must remesh");
         assert_ne!(mesh(&world), before);
+    }
+
+    #[test]
+    fn standing_bodies_rest_on_shaped_surfaces_only() {
+        let mut world = terrain(plateau);
+        // Grid-standing on the -X rim ramp (top of cell layer 2 is y = 3).
+        let on_ramp = rest_height(&world, Vec3::new(5.5, 3.0, 7.5), 0.2);
+        assert!((on_ramp - 2.7).abs() < 1e-5, "{on_ramp}");
+        // Stepped up while overlapping the ramp, center still over low ground.
+        let overlapping = rest_height(&world, Vec3::new(4.9, 3.0, 7.5), 0.2);
+        assert!((overlapping - 2.1).abs() < 1e-5, "{overlapping}");
+        assert_eq!(rest_height(&world, Vec3::new(7.5, 3.0, 7.5), 0.2), 3.0, "flat plateau");
+        assert_eq!(rest_height(&world, Vec3::new(2.5, 2.0, 7.5), 0.2), 2.0, "flat ground");
+        assert_eq!(rest_height(&world, Vec3::new(5.5, 3.4, 7.5), 0.2), 3.4, "airborne");
+        world.terrain_shaping = false;
+        assert_eq!(rest_height(&world, Vec3::new(5.5, 3.0, 7.5), 0.2), 3.0);
     }
 
     #[test]
