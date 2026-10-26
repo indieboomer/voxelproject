@@ -8,3 +8,4 @@ Cargo.lock.bak
 /settings.json.tmp
 
 /tools/__pycache__/
+/coplay/
