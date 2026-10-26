@@ -619,8 +619,61 @@ fn render_weather_previews() {
         }
         world.terrain_shaping = mode == "on";
     }
+    // VOXEL_FALL_PREVIEW=seconds (with VOXEL_TREE_PREVIEW): a stone post with
+    // an arm carrying a granite block hangs in the grove; cutting the arm's
+    // link drops the arm and block straight down. Simulates that long, then
+    // draws the falling body, or the landed result once it finished.
+    let mut falling_mesh = None;
+    if let (Some(_), Ok(seconds)) = (&tree_preview, std::env::var("VOXEL_FALL_PREVIEW")) {
+        let seconds: f32 = seconds.parse().unwrap_or(1.0);
+        for y in 7..=12 {
+            world.set_block(-8, y, -9, BlockType::Stone);
+        }
+        for x in -7..=-5 {
+            world.set_block(x, 12, -9, BlockType::Stone);
+        }
+        for (x, y, z) in [(-5, 11, -9), (-5, 10, -9), (-4, 10, -9), (-5, 10, -8), (-4, 11, -9)] {
+            world.set_block(x, y, z, BlockType::Granite);
+        }
+        let cut = (-7, 12, -9);
+        world.set_block(cut.0, cut.1, cut.2, BlockType::Air);
+        let mut falling = crate::falling::Falling::default();
+        falling.note_removed(cut);
+        for cells in falling.take_detached(&world) {
+            for &((x, y, z), _) in &cells {
+                world.set_block(x, y, z, BlockType::Air);
+            }
+            falling.spawn(&cells);
+        }
+        let mut t = 0.0;
+        while t < seconds && !falling.bodies.is_empty() {
+            for (_, outcome) in falling.step(&world, 1.0 / 60.0, &[]) {
+                match &outcome {
+                    crate::falling::Outcome::Placed { cells, crushed, .. } => {
+                        let (lo, hi) = cells.iter().fold(((i32::MAX, i32::MAX, i32::MAX), (i32::MIN, i32::MIN, i32::MIN)), |(l, h), (p, _)| ((l.0.min(p.0), l.1.min(p.1), l.2.min(p.2)), (h.0.max(p.0), h.1.max(p.1), h.2.max(p.2))));
+                        println!("Fall settled at t={t:.2}: {} cells in {lo:?}..{hi:?}, crushed {crushed:?}", cells.len());
+                    }
+                    crate::falling::Outcome::Dropped(at, contents) => println!("Fall dropped at {at}: {contents:?}"),
+                }
+                if let crate::falling::Outcome::Placed { cells, .. } = outcome {
+                    for ((x, y, z), block) in cells {
+                        world.set_block(x, y, z, block);
+                    }
+                }
+            }
+            t += 1.0 / 60.0;
+        }
+        if let Some(body) = falling.bodies.first() {
+            let local = crate::falling::body_mesh(&body.info(), world.terrain_shaping);
+            falling_mesh = Some(crate::falling::posed(&local, body.pos, body.rot));
+        }
+    }
     let mut meshes = Vec::new();
     let mut old_meshes = Vec::new();
+    if let Some(mesh) = &falling_mesh {
+        meshes.push(upload_mesh(&device, mesh).unwrap());
+        old_meshes.push(upload_mesh(&device, mesh).unwrap());
+    }
     for chunk in world.chunks.values() {
         let mut mesh = crate::voxel::mesher::build_chunk_mesh(&world, chunk);
         for v in &mut mesh.vertices {
@@ -1040,7 +1093,8 @@ fn render_weather_previews() {
             else if dof_preview { format!("target/dof-{}.png", if dof_enabled { "on" } else { "off" }) }
             else if let Some(mode) = &tree_preview {
                 let style = if style.is_empty() { String::new() } else { format!("-{}", style.replace(',', "+")) };
-                format!("target/trees-{mode}{style}-{name}.png")
+                let fall = std::env::var("VOXEL_FALL_PREVIEW").map(|t| format!("-fall{t}")).unwrap_or_default();
+                format!("target/trees-{mode}{style}{fall}-{name}.png")
             }
             else if let Some(mode) = &bank_preview {
                 let style = if style.is_empty() { String::new() } else { format!("-{}", style.replace(',', "+")) };
