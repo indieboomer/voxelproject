@@ -20,6 +20,7 @@ work. [Archived plans and reports](archive/README.md) retain historical material
 | [Automation](AUTOMATION_GUIDE.md) | Devices, connections, production and World API |
 | [Prompt pipeline](PROMPT_PIPELINE.md) | Interpretation, validation, review, guest proposals and measured latency |
 | [World generation](WORLD_GENERATION.md) / [Terrain](TERRAIN.md) | Prompted presets, geography and underwater presentation |
+| [Terrain shaping (experimental)](TERRAIN_SHAPING.md) | Neighborhood ramps/caps/rock facets, picking, collision, validation and limits |
 | [UI and settings](UI_SETTINGS.md) | Themes, preferences and targeting feedback |
 | [Player animations and chat](PLAYER_ANIMATIONS.md) | Gestures, held items, bubbles and emoticons |
 | [Adventure](ADVENTURE_GUIDE.md) / [Storage and underground](STORAGE_AND_UNDERGROUND.md) | Camp progression, exploration, chests and saves |

@@ -29,10 +29,12 @@ pub struct Graphics {
     pub water_fresnel: bool,
     pub depth_of_field: bool,
     pub god_rays: bool,
+    /// Experimental neighborhood-driven terrain shapes (ramps, caps, rock facets).
+    pub terrain_shaping: bool,
 }
 impl Default for Graphics {
     fn default() -> Self {
-        Self { water_fresnel: true, depth_of_field: true, god_rays: true }
+        Self { water_fresnel: true, depth_of_field: true, god_rays: true, terrain_shaping: false }
     }
 }
 
@@ -270,6 +272,8 @@ impl SettingsPanel {
                 ui.small("Subtle near-surface blur at the sides. The central 40% of the screen, distant scenery and held items stay sharp.");
                 ui.checkbox(&mut self.values.graphics.god_rays, "God rays (sunlight shafts)");
                 ui.small("Soft sunlight through clouds and canopy gaps when looking toward the sun.");
+                ui.checkbox(&mut self.values.graphics.terrain_shaping, "Shaped terrain (experimental, F7)");
+                ui.small("Ramps and rock facets from neighboring blocks. Each piece is still one block to dig or place.");
                 ui.separator();
                 ui.heading("Gameplay");
                 ui.checkbox(&mut self.values.gameplay.mana_free, "Mana-free actions (testing)");
@@ -337,7 +341,7 @@ impl SettingsPanel {
         }
     }
 
-    fn persist(&mut self) {
+    pub fn persist(&mut self) {
         self.message = self
             .values
             .save(Path::new("settings.json"))

@@ -145,6 +145,10 @@ pub struct World {
     /// incrementally by `set_block` so the passive "heal nearby creatures"
     /// effect doesn't need to rescan the world every tick.
     pub redstone_positions: Vec<(i32, i32, i32)>,
+    /// Experimental local presentation mode: derive ramps/caps from voxel
+    /// neighborhoods (see `shaping.rs`). Never saved; rendering, picking and
+    /// local player collision all read this same flag.
+    pub terrain_shaping: bool,
 }
 
 impl World {
@@ -161,6 +165,7 @@ impl World {
             chunks: HashMap::new(),
             edits: HashMap::new(),
             redstone_positions: Vec::new(),
+            terrain_shaping: false,
         }
     }
 

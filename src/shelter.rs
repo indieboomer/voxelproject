@@ -35,7 +35,14 @@ impl Roofs {
     }
     pub fn shade(&mut self, world: &World, mesh: &mut MeshData) {
         for v in &mut mesh.vertices {
-            let p = Vec3::from_array(v.position) + Vec3::from_array(v.normal) * 0.02;
+            let mut p = Vec3::from_array(v.position) + Vec3::from_array(v.normal) * 0.02;
+            // Shaped terrain surfaces lie inside their owner's cell; light
+            // them from the open cell above rather than from inside the solid.
+            if world.terrain_shaping
+                && world.is_solid(p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32)
+            {
+                p.y = p.y.floor() + 1.0;
+            }
             // Keep contact AO independent from light arriving through openings.
             if self.covered(world, p) {
                 v.skylight = skylight(world, p);

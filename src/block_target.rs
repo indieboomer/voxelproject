@@ -6,6 +6,9 @@ struct Vertex {
     color: [f32; 3],
 }
 
+/// Break outline (cube or shaped, at most 16 edges) plus the build box.
+const MAX_VERTICES: usize = 64;
+
 pub struct BlockTarget {
     pipeline: wgpu::RenderPipeline,
     buffer: wgpu::Buffer,
@@ -64,7 +67,7 @@ impl BlockTarget {
         });
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("block target vertices"),
-            size: (48 * std::mem::size_of::<Vertex>()) as u64,
+            size: (MAX_VERTICES * std::mem::size_of::<Vertex>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -79,19 +82,19 @@ impl BlockTarget {
         &mut self,
         queue: &wgpu::Queue,
         hit: Option<(crate::raycast::RaycastHit, bool, bool)>,
+        shape: Option<crate::voxel::shaping::CellShape>,
     ) {
-        let mut vertices = Vec::with_capacity(48);
+        let mut vertices = Vec::with_capacity(MAX_VERTICES);
         if let Some((hit, breakable, placeable)) = hit {
-            append_box(
-                &mut vertices,
-                hit.target,
-                if breakable {
-                    [1.0, 0.65, 0.12]
-                } else {
-                    [1.0, 0.12, 0.08]
-                },
-                0.004,
-            );
+            let color = if breakable {
+                [1.0, 0.65, 0.12]
+            } else {
+                [1.0, 0.12, 0.08]
+            };
+            match shape {
+                Some(shape) => append_shape(&mut vertices, hit.target, &shape, color, 0.006),
+                None => append_box(&mut vertices, hit.target, color, 0.004),
+            }
             if placeable {
                 // Slightly inset to separate shared edges from the break outline.
                 append_box(&mut vertices, hit.place, [0.12, 1.0, 0.45], -0.008);
@@ -111,6 +114,37 @@ impl BlockTarget {
         pass.set_bind_group(0, camera, &[]);
         pass.set_vertex_buffer(0, self.buffer.slice(..));
         pass.draw(0..self.count, 0..1);
+    }
+}
+
+/// Outlines the cell's actual shaped solid -- floor, corner posts, top rim and
+/// fan creases -- so the highlight shows exactly the portion a dig removes.
+fn append_shape(
+    vertices: &mut Vec<Vertex>,
+    pos: (i32, i32, i32),
+    shape: &crate::voxel::shaping::CellShape,
+    color: [f32; 3],
+    expand: f32,
+) {
+    use crate::voxel::shaping::CORNERS;
+    let at = |u: f32, y: f32, v: f32| {
+        // Push points slightly away from the cell center to avoid z-fighting.
+        let out = |c: f32| (c - 0.5).signum() * expand * ((c - 0.5).abs() > 1e-3) as i32 as f32;
+        [pos.0 as f32 + u + out(u), pos.1 as f32 + y + expand, pos.2 as f32 + v + out(v)]
+    };
+    let mut line = |a: [f32; 3], b: [f32; 3]| {
+        vertices.push(Vertex { position: a, color });
+        vertices.push(Vertex { position: b, color });
+    };
+    for i in 0..4 {
+        let (x0, z0) = CORNERS[i];
+        let (x1, z1) = CORNERS[(i + 1) % 4];
+        let (u0, v0, u1, v1) = (x0 as f32, z0 as f32, x1 as f32, z1 as f32);
+        let (h0, h1) = (shape.corners[i], shape.corners[(i + 1) % 4]);
+        line(at(u0, -2.0 * expand, v0), at(u1, -2.0 * expand, v1));
+        line(at(u0, -2.0 * expand, v0), at(u0, h0, v0));
+        line(at(u0, h0, v0), at(u1, h1, v1));
+        line(at(0.5, shape.center, 0.5), at(u0, h0, v0));
     }
 }
 

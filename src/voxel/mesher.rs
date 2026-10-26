@@ -4,6 +4,7 @@ use glam::Vec3;
 use super::atlas;
 use super::block::BlockType;
 use super::chunk::{Chunk, CHUNK_X, CHUNK_Z};
+use super::shaping::{self, CellShape, Material};
 use super::world::World;
 
 #[repr(C)]
@@ -465,6 +466,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                     // Billboard decoration (short grass): not part of the
                     // cube grid, never culled against neighbors.
                     let uv_rect = atlas::uv_rect(atlas::tile_for(block, 2));
+                    let first = vertices.len();
                     push_cross(
                         &mut vertices,
                         &mut indices,
@@ -475,20 +477,71 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                         def.emission,
                         plant_size(world.seed, block, wx, ly, wz),
                     );
+                    // A plant on shaped ground roots at the fan apex.
+                    if world.terrain_shaping {
+                        if let Some(below) = shaping::shape_with(&sample, wx, ly - 1, wz) {
+                            for v in &mut vertices[first..] {
+                                v.position[1] += below.center - 1.0;
+                            }
+                        }
+                    }
                     continue;
                 }
 
+                let shape = if world.terrain_shaping {
+                    shaping::shape_with(&sample, wx, ly, wz)
+                } else {
+                    None
+                };
+                if let Some(shape) = &shape {
+                    let rain_exposed = !def.cutout && ly >= rain_height[lx as usize][lz as usize];
+                    let reflectivity = block.reflectivity() + if rain_exposed { 2.0 } else { 0.0 };
+                    push_shaped_top(
+                        &mut vertices,
+                        &mut indices,
+                        &sample,
+                        block,
+                        shape,
+                        (wx, ly, wz),
+                        reflectivity,
+                    );
+                }
+
                 for (face_idx, normal) in FACE_NORMALS.iter().enumerate() {
+                    if shape.is_some() && face_idx == 2 {
+                        continue; // replaced by the shaped top fan
+                    }
                     let nx = wx + normal[0];
                     let ny = ly + normal[1];
                     let nz = wz + normal[2];
                     let neighbor = sample(nx, ny, nz);
 
-                    let visible = if def.opacity < 1.0 {
+                    let mut visible = if def.opacity < 1.0 {
                         neighbor == BlockType::Air
                     } else {
                         !neighbor.is_opaque() && neighbor != block
                     };
+                    // With shaping, a side may be only partly covered: draw the
+                    // (below, top) band between the neighbor's profile and ours.
+                    let mut band = None;
+                    if world.terrain_shaping && normal[1] == 0 {
+                        let top = shaping::face_edge_heights(shape.as_ref(), face_idx, [0; 3]);
+                        if visible {
+                            if shape.is_some() {
+                                band = Some(([0.0; 2], top));
+                            }
+                        } else if neighbor.is_opaque() {
+                            if let Some(other) = shaping::shape_with(&sample, nx, ny, nz) {
+                                visible = true;
+                                let below = if block.is_opaque() {
+                                    shaping::face_edge_heights(Some(&other), face_idx, *normal)
+                                } else {
+                                    [0.0; 2]
+                                };
+                                band = Some((below, top));
+                            }
+                        }
+                    }
                     if !visible {
                         continue;
                     }
@@ -531,10 +584,9 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                         0.0
                     };
                     let base_index = vertices.len() as u32;
-
-                    for (corner_idx, corner) in FACE_VERTS[face_idx].iter().enumerate() {
+                    let corner_ao: [f32; 4] = std::array::from_fn(|corner_idx| {
                         let (s1, s2, c) = AO_OFFSETS[face_idx][corner_idx];
-                        let ao = if atlas::is_cutout(block) {
+                        if atlas::is_cutout(block) {
                             // Leaves shouldn't darken their own edges from
                             // neighboring leaves -- looks muddy fast.
                             1.0
@@ -544,7 +596,48 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                                 ao_occluder(sample(wx + s2.0, ly + s2.1, wz + s2.2)),
                                 ao_occluder(sample(wx + c.0, ly + c.1, wz + c.2)),
                             )
-                        };
+                        }
+                    });
+
+                    if let Some((below, top)) = band {
+                        let polygon = shaping::exposed_region(below, top);
+                        let [c0, c1, ..] = FACE_VERTS[face_idx];
+                        for &[t, y] in &polygon {
+                            let lerp = |a: f32, b: f32| a + (b - a) * t;
+                            let (ao_low, ao_high) =
+                                (lerp(corner_ao[0], corner_ao[1]), lerp(corner_ao[3], corner_ao[2]));
+                            // The texture's top row follows this cell's own top edge.
+                            let v = (lerp(top[0], top[1]) - y).clamp(0.0, 1.0);
+                            vertices.push(Vertex {
+                                position: [
+                                    wx as f32 + lerp(c0[0], c1[0]),
+                                    ly as f32 + y,
+                                    wz as f32 + lerp(c0[2], c1[2]),
+                                ],
+                                color,
+                                normal: [normal[0] as f32, normal[1] as f32, normal[2] as f32],
+                                uv: [
+                                    uv_rect[0] + t * (uv_rect[2] - uv_rect[0]),
+                                    uv_rect[1] + v * (uv_rect[3] - uv_rect[1]),
+                                ],
+                                ao: ao_low + (ao_high - ao_low) * y,
+                                reflectivity,
+                                emission,
+                                wind,
+                                tex_layer: 0.0,
+                                glimmer: block.glimmer(),
+                                skylight: 1.0,
+                                wet: [crate::wetness::absorption(block), -1.],
+                            });
+                        }
+                        for i in 1..polygon.len().saturating_sub(1) as u32 {
+                            indices.extend_from_slice(&[base_index, base_index + i, base_index + i + 1]);
+                        }
+                        continue;
+                    }
+
+                    for (corner_idx, corner) in FACE_VERTS[face_idx].iter().enumerate() {
+                        let ao = corner_ao[corner_idx];
                         let [uc, vc] = FACE_UV_CORNERS[corner_idx];
                         vertices.push(Vertex {
                             position: [
@@ -588,6 +681,74 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
 
 fn ao_occluder(block: BlockType) -> bool {
     block.is_solid() && !block.is_branch()
+}
+
+/// Brightness for a sloped normal, blending the fixed per-face factors.
+fn slope_shade(n: [f32; 3]) -> f32 {
+    let side = if n[0].abs() >= n[2].abs() { face_shade(0) } else { face_shade(4) };
+    0.85 + 0.15 * (side + (face_shade(2) - side) * n[1].max(0.0))
+}
+
+/// Emits a shaped cell's top as its four-triangle fan. Soil facets blend
+/// toward the cell's mean slope (restrained smoothing); rock keeps broad
+/// flat facets. A small per-cell brightness variation hints at the editable
+/// unit without drawing seams.
+fn push_shaped_top(
+    vertices: &mut Vec<Vertex>,
+    indices: &mut Vec<u32>,
+    sample: &impl Fn(i32, i32, i32) -> BlockType,
+    block: BlockType,
+    shape: &CellShape,
+    (wx, ly, wz): (i32, i32, i32),
+    reflectivity: f32,
+) {
+    let def = block.def();
+    let uv_rect = atlas::uv_rect(atlas::tile_for(block, 2));
+    let corner_ao: [f32; 4] = std::array::from_fn(|i| {
+        let (s1, s2, c) = AO_OFFSETS[2][i];
+        ao_brightness(
+            ao_occluder(sample(wx + s1.0, ly + s1.1, wz + s1.2)),
+            ao_occluder(sample(wx + s2.0, ly + s2.1, wz + s2.2)),
+            ao_occluder(sample(wx + c.0, ly + c.1, wz + c.2)),
+        )
+    });
+    let center_ao = corner_ao.iter().sum::<f32>() / 4.0;
+    let triangles = shape.top_triangles();
+    let facets = triangles.map(|[a, b, c]| normalize3(cross3(sub3(c, a), sub3(b, a))));
+    let mean = normalize3(facets.iter().fold([0.0; 3], |s, n| [s[0] + n[0], s[1] + n[1], s[2] + n[2]]));
+    let (smoothing, spread) = match shape.material {
+        Material::Soil => (0.6, 0.06),
+        Material::Rock => (0.0, 0.10),
+    };
+    let variation = 1.0
+        + spread * (super::noise::block_rand(wx, ly, wz, shaping::SHAPING_VERSION, 0x7E11_0002) - 0.5);
+    for (i, triangle) in triangles.iter().enumerate() {
+        let f = facets[i];
+        let normal = normalize3(std::array::from_fn(|k| f[k] + (mean[k] - f[k]) * smoothing));
+        let shade = slope_shade(normal) * variation;
+        let base_index = vertices.len() as u32;
+        for (k, p) in triangle.iter().enumerate() {
+            vertices.push(Vertex {
+                position: [wx as f32 + p[0], ly as f32 + p[1], wz as f32 + p[2]],
+                color: [shade; 3],
+                normal,
+                // Same orientation as the cube's +Y face: u = x, v = 1 - z.
+                uv: [
+                    uv_rect[0] + p[0] * (uv_rect[2] - uv_rect[0]),
+                    uv_rect[1] + (1.0 - p[2]) * (uv_rect[3] - uv_rect[1]),
+                ],
+                ao: if k == 0 { center_ao } else { corner_ao[(i + k - 1) % 4] },
+                reflectivity,
+                emission: def.emission,
+                wind: 0.0,
+                tex_layer: 0.0,
+                glimmer: block.glimmer(),
+                skylight: 1.0,
+                wet: [crate::wetness::absorption(block), -1.],
+            });
+        }
+        indices.extend_from_slice(&[base_index, base_index + 1, base_index + 2]);
+    }
 }
 
 /// Straight beams occupy exactly 1 x 0.5 x 0.5, rotated along their neighbors.

@@ -555,6 +555,19 @@ fn render_weather_previews() {
         multisample: Default::default(),
         multiview: None,
     });
+    // VOXEL_SHAPING_PREVIEW=on|off: matched terrain-shaping screenshots. Alone
+    // it renders the test garden; with VOXEL_LANDSCAPE_PREVIEW, real terrain.
+    let shaping_preview = std::env::var("VOXEL_SHAPING_PREVIEW").ok();
+    let shaping_garden = shaping_preview.is_some() && landscape_preview.is_none();
+    if let Some(mode) = &shaping_preview {
+        if shaping_garden {
+            for (x, y, z, block) in crate::voxel::shaping::test_garden((-16, 7, -8)) {
+                world.set_block(x, y, z, block);
+            }
+            target = Vec3::new(0.0, 7.0, 0.0);
+        }
+        world.terrain_shaping = mode == "on";
+    }
     let mut meshes = Vec::new();
     let mut old_meshes = Vec::new();
     for chunk in world.chunks.values() {
@@ -626,6 +639,8 @@ fn render_weather_previews() {
     });
     let eye = if ray_preview.is_some() {
         Vec3::new(-3.,8.,-4.)
+    } else if shaping_garden {
+        Vec3::new(3.0, 15.0, 19.0)
     } else if dof_preview {
         Vec3::new(0.5, 8.5, 5.0)
     } else if reflection_preview {
@@ -958,6 +973,9 @@ fn render_weather_previews() {
         image::save_buffer(
             if let Some(mode) = &ray_preview { format!("target/rays-{mode}-{}.png", if rays_enabled { "on" } else { "off" }) }
             else if dof_preview { format!("target/dof-{}.png", if dof_enabled { "on" } else { "off" }) }
+            else if let Some(mode) = &shaping_preview {
+                format!("target/shaping-{}-{mode}-{name}.png", landscape_preview.as_deref().unwrap_or("garden"))
+            }
             else { format!("target/render-{name}.png") },
             &pixels,
             width,

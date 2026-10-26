@@ -2100,6 +2100,18 @@ impl App {
                     self.sync_settings_input();
                     return;
                 }
+                if code == KeyCode::F7 && !key_event.repeat {
+                    let graphics = &mut self.ui.settings.values.graphics;
+                    graphics.terrain_shaping = !graphics.terrain_shaping;
+                    let on = graphics.terrain_shaping;
+                    self.ui.settings.persist();
+                    self.notify_important(format!("Shaped terrain {}", if on { "on" } else { "off" }));
+                    return;
+                }
+                if code == KeyCode::F8 && !key_event.repeat && self.cursor_grabbed {
+                    self.build_shaping_test_garden();
+                    return;
+                }
                 if code == KeyCode::KeyM
                     && !key_event.repeat
                     && !self.console_open
@@ -2948,6 +2960,14 @@ impl App {
                     client.server_addr,
                     ReliableMsg::DisplayName(display),
                 );
+            }
+        }
+        let shaping = self.ui.settings.values.graphics.terrain_shaping;
+        if self.world.terrain_shaping != shaping {
+            // Shapes are derived at mesh time; collision/picking follow at once.
+            self.world.terrain_shaping = shaping;
+            for chunk in self.world.chunks.values_mut() {
+                chunk.dirty = true;
             }
         }
         self.update_chunks();
@@ -4189,6 +4209,27 @@ impl App {
                 self.notify_important(format!("{noun} generation failed: {err}"));
             }
         }
+    }
+
+    /// Host-only debug scene for comparing cubic and shaped terrain (F8):
+    /// every shape case from docs/TERRAIN_SHAPING.md, built just ahead of the
+    /// player through ordinary replicated block edits.
+    fn build_shaping_test_garden(&mut self) {
+        if !matches!(self.net, NetRole::Host(_)) {
+            self.notify_important("Only the host can build the terrain test garden.".into());
+            return;
+        }
+        let feet = self.player.position;
+        let origin = (feet.x.floor() as i32 + 2, feet.y.floor() as i32, feet.z.floor() as i32 - 8);
+        for (x, y, z, block) in crate::voxel::shaping::test_garden(origin) {
+            if self.world.get_block(x, y, z) != block {
+                self.apply_block_edit(x, y, z, block);
+            }
+        }
+        self.notify_important(format!(
+            "Terrain test garden built at {}, {}, {} (F7 toggles shaping)",
+            origin.0, origin.1, origin.2
+        ));
     }
 
     fn apply_block_edit(&mut self, x: i32, y: i32, z: i32, block: BlockType) {
@@ -6280,7 +6321,10 @@ impl App {
         } else {
             None
         };
-        self.block_target.update(&self.queue, target);
+        let target_shape = target.as_ref().and_then(|(hit, _, _)| {
+            crate::voxel::shaping::shape_at(&self.world, hit.target.0, hit.target.1, hit.target.2)
+        });
+        self.block_target.update(&self.queue, target, target_shape);
 
         self.wind.prepare(
             &self.queue,

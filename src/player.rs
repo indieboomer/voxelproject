@@ -50,6 +50,9 @@ pub const DROWNING_DAMAGE_PER_SEC: f32 = 1.0 / 10.0;
 /// to any particular speed, so sprinting naturally produces steps more
 /// often in real time than walking does, the same way real footsteps work.
 const STEP_LENGTH: f32 = 1.5;
+/// Highest shaped-terrain rise the controller climbs or follows down without
+/// jumping. Above one 45-degree ramp cell's 0.5 midpoint, below a full cube.
+const TERRAIN_STEP: f32 = 0.6;
 
 pub struct Player {
     /// Feet position (bottom-center of the collision box).
@@ -294,7 +297,19 @@ impl Player {
 
         let delta = self.velocity * dt;
         let before = self.position;
+        let was_on_ground = self.on_ground;
         self.move_and_collide(world, delta);
+        // Follow shaped ramps down instead of hopping off each cell.
+        if world.terrain_shaping && was_on_ground && !self.on_ground && self.velocity.y <= 0.0 {
+            if let Some(top) = Self::terrain_top(world, self.position, -TERRAIN_STEP, 0.0) {
+                let snapped = Vec3::new(self.position.x, top, self.position.z);
+                if top < self.position.y && !Self::collides(world, snapped) {
+                    self.position = snapped;
+                    self.velocity.y = 0.0;
+                    self.on_ground = true;
+                }
+            }
+        }
 
         if self.on_ground {
             let moved = Vec3::new(self.position.x - before.x, 0.0, self.position.z - before.z);
@@ -326,7 +341,7 @@ impl Player {
         let attempt = self.position + Vec3::new(delta.x, 0.0, 0.0);
         if !Self::collides(world, attempt) {
             self.position.x = attempt.x;
-        } else if self.step_stairs(world, attempt) {
+        } else if self.step_stairs(world, attempt) || self.step_terrain(world, attempt) {
         } else {
             self.velocity.x = 0.0;
         }
@@ -335,7 +350,7 @@ impl Player {
         let attempt = self.position + Vec3::new(0.0, 0.0, delta.z);
         if !Self::collides(world, attempt) {
             self.position.z = attempt.z;
-        } else if self.step_stairs(world, attempt) {
+        } else if self.step_stairs(world, attempt) || self.step_terrain(world, attempt) {
         } else {
             self.velocity.z = 0.0;
         }
@@ -375,6 +390,56 @@ impl Player {
             }
         }
         false
+    }
+
+    /// Climbs onto a shaped ramp (or the cube behind it) whose surface under
+    /// the footprint is at most `TERRAIN_STEP` above the feet.
+    fn step_terrain(&mut self, world: &World, attempt: Vec3) -> bool {
+        if !world.terrain_shaping || self.velocity.y > 0.0 {
+            return false;
+        }
+        let Some(top) = Self::terrain_top(world, attempt, 0.0, TERRAIN_STEP) else {
+            return false;
+        };
+        let raised = Vec3::new(attempt.x, top + 0.0001, attempt.z);
+        if !Self::collides(world, raised)
+            && !Self::collides(world, Vec3::new(self.position.x, raised.y, self.position.z))
+        {
+            self.position = raised;
+            self.on_ground = true;
+            return true;
+        }
+        false
+    }
+
+    /// Highest solid surface under the footprint at `feet` whose height lies
+    /// in `feet.y + lo ..= feet.y + hi`, using shaped tops where they exist.
+    fn terrain_top(world: &World, feet: Vec3, lo: f32, hi: f32) -> Option<f32> {
+        let (min_x, max_x) = (feet.x - HALF_WIDTH, feet.x + HALF_WIDTH);
+        let (min_z, max_z) = (feet.z - HALF_WIDTH, feet.z + HALF_WIDTH);
+        let mut best: Option<f32> = None;
+        for bx in min_x.floor() as i32..=(max_x - 1e-4).floor() as i32 {
+            for bz in min_z.floor() as i32..=(max_z - 1e-4).floor() as i32 {
+                for by in (feet.y + lo).floor() as i32 - 1..=(feet.y + hi).floor() as i32 {
+                    if world.automation.device_at((bx, by, bz)).is_some() || !world.is_solid(bx, by, bz) {
+                        continue;
+                    }
+                    let top = by as f32
+                        + crate::voxel::shaping::shape_at(world, bx, by, bz).map_or(1.0, |s| {
+                            s.max_height_in(
+                                min_x - bx as f32,
+                                max_x - bx as f32,
+                                min_z - bz as f32,
+                                max_z - bz as f32,
+                            )
+                        });
+                    if top >= feet.y + lo - 1e-4 && top <= feet.y + hi + 1e-4 {
+                        best = Some(best.map_or(top, |b: f32| b.max(top)));
+                    }
+                }
+            }
+        }
+        best
     }
 
     fn stair_boxes(d: &crate::automation::Device) -> impl Iterator<Item = (Vec3, Vec3)> {
@@ -420,6 +485,20 @@ impl Player {
                         }
                     }
                     if world.is_solid(bx, by, bz) {
+                        // Shaped terrain collides with its actual surface.
+                        if let Some(shape) = crate::voxel::shaping::shape_at(world, bx, by, bz) {
+                            let top = by as f32
+                                + shape.max_height_in(
+                                    min_x - bx as f32,
+                                    max_x - bx as f32,
+                                    min_z - bz as f32,
+                                    max_z - bz as f32,
+                                );
+                            if min_y < top - 1e-4 {
+                                return true;
+                            }
+                            continue;
+                        }
                         return true;
                     }
                 }
@@ -481,6 +560,61 @@ mod tests {
     }
     use super::*;
     use winit::event::ElementState;
+
+    /// Ground at height 2 rising to a one-cell plateau at x >= 8.
+    fn ramp_world(shaping: bool) -> World {
+        let mut world = World::new(3);
+        world.chunks.insert((0, 0), crate::voxel::chunk::Chunk::new(0, 0));
+        for x in 0..16 {
+            for z in 0..16 {
+                for y in 0..if x >= 8 { 3 } else { 2 } {
+                    world.set_block(x, y, z, BlockType::Grass);
+                }
+            }
+        }
+        world.terrain_shaping = shaping;
+        world
+    }
+
+    fn walk(world: &World, player: &mut Player, key: KeyCode, seconds: f32) -> u32 {
+        let mut input = Input::new();
+        input.key_event(key, ElementState::Pressed);
+        let mut airborne = 0;
+        for _ in 0..(seconds * 60.0) as u32 {
+            player.update(world, &input, Vec3::X, Vec3::Z, 1.0 / 60.0);
+            airborne += !player.on_ground as u32;
+        }
+        airborne
+    }
+
+    #[test]
+    fn shaped_ramps_are_walkable_up_and_down_without_jumping() {
+        let world = ramp_world(true);
+        let mut player = Player::new(Vec3::new(5.5, 2.0, 7.5));
+        player.on_ground = true;
+        walk(&world, &mut player, KeyCode::KeyW, 1.0);
+        assert!(player.position.x > 9.0, "climbed onto the plateau: {}", player.position);
+        assert!((player.position.y - 3.0).abs() < 0.01, "standing on its top: {}", player.position);
+        let airborne = walk(&world, &mut player, KeyCode::KeyS, 1.0);
+        assert!(player.position.x < 7.0 && (player.position.y - 2.0).abs() < 0.01, "{}", player.position);
+        assert!(airborne <= 2, "followed the ramp down instead of hopping ({airborne} frames airborne)");
+
+        // The same voxels without shaping are a one-block wall.
+        let cubic = ramp_world(false);
+        let mut player = Player::new(Vec3::new(5.5, 2.0, 7.5));
+        walk(&cubic, &mut player, KeyCode::KeyW, 0.8);
+        assert!(player.position.x < 7.8 && player.position.y < 2.01, "{}", player.position);
+    }
+
+    #[test]
+    fn shaped_collision_follows_the_ramp_surface() {
+        let world = ramp_world(true);
+        // Feet over the ramp's low half are clear above the surface only.
+        assert!(!Player::collides(&world, Vec3::new(8.2 - HALF_WIDTH + 0.0, 2.55, 7.5)));
+        assert!(Player::collides(&world, Vec3::new(8.5, 2.3, 7.5)));
+        let cubic = ramp_world(false);
+        assert!(Player::collides(&cubic, Vec3::new(8.2 - HALF_WIDTH, 2.55, 7.5)));
+    }
 
     #[test]
     fn fast_movement_cannot_skip_a_thin_cave_wall_or_floor() {
