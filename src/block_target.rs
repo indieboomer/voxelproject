@@ -139,10 +139,11 @@ fn append_shape(
     for (i, &(x0, z0)) in CORNERS.iter().enumerate() {
         let (x1, z1) = CORNERS[(i + 1) % 4];
         line(at(x0 as f32, -2.0 * expand, z0 as f32), at(x1 as f32, -2.0 * expand, z1 as f32));
-        line(at(x0 as f32, -2.0 * expand, z0 as f32), at(x0 as f32, shape.corners[i], z0 as f32));
+        line(at(x0 as f32, -2.0 * expand, z0 as f32), at(x0 as f32, shape.corners[i].clamp(0.0, 1.0), z0 as f32));
     }
     // Every grid line across the top, rim included.
-    let point = |i: usize, j: usize| at(i as f32 / 3.0, shape.grid[i][j], j as f32 / 3.0);
+    // Clamped to this cell: a bank cell outlines only its own slab's part.
+    let point = |i: usize, j: usize| at(i as f32 / 3.0, shape.grid[i][j].clamp(0.0, 1.0), j as f32 / 3.0);
     for k in 0..GRID {
         for step in 0..GRID - 1 {
             line(point(k, step), point(k, step + 1));

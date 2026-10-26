@@ -418,6 +418,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
             world.get_block(x, y, z)
         }
     };
+    let shapes = shaping::ShapeCache::new(&sample);
     // One short column scan per mesh build, never per weather change/frame.
     // A roof, leaves, or water above a face shields it from surface rain.
     let rain_height: [[i32; CHUNK_Z as usize]; CHUNK_X as usize] = std::array::from_fn(|x| {
@@ -480,7 +481,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                     );
                     // A plant on shaped ground roots at the fan apex.
                     if world.terrain_shaping {
-                        if let Some(below) = shaping::shape_with(&sample, wx, ly - 1, wz) {
+                        if let Some(below) = shapes.get(wx, ly - 1, wz) {
                             for v in &mut vertices[first..] {
                                 v.position[1] += below.center() - 1.0;
                             }
@@ -490,7 +491,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                 }
 
                 let shape = if world.terrain_shaping {
-                    shaping::shape_with(&sample, wx, ly, wz)
+                    shapes.get(wx, ly, wz)
                 } else {
                     None
                 };
@@ -512,7 +513,10 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                 if world.terrain_shaping && block == BlockType::Grass && !sample(wx, ly + 1, wz).is_solid()
                     && sample(wx, ly + 1, wz) != BlockType::Water
                 {
-                    push_tufts(&mut vertices, &mut indices, shape.as_ref(), (wx, ly, wz));
+                    // No tufts on steep banks (their surface dips below this cell).
+                    if shape.as_ref().map_or(true, |s| s.corners.iter().all(|&h| h >= -0.01)) {
+                        push_tufts(&mut vertices, &mut indices, shape.as_ref(), (wx, ly, wz));
+                    }
                 }
 
                 let leaf = (world.terrain_shaping && def.cutout).then(|| LeafVariant::at(wx, ly, wz));
@@ -543,7 +547,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                                 band = Some(([0.0; 2], top));
                             }
                         } else if neighbor.is_opaque() {
-                            if let Some(other) = shaping::shape_with(&sample, nx, ny, nz) {
+                            if let Some(other) = shapes.get(nx, ny, nz) {
                                 visible = true;
                                 // Non-opaque blocks (leaves) draw their whole face.
                                 if block.is_opaque() {
@@ -624,15 +628,20 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                         };
                         match natural {
                             // Earth side under a grass lip that follows the top edge.
+                            // Only a near-level shelf edge gets the lip; steep
+                            // bank edges stay earth rather than a green stripe.
                             Some(Palette::Grass) => {
-                                let lip = top.map(|h| (h - natural::GRASS_LIP).max(0.0));
+                                let shelf = top.iter().all(|&h| (0.4..=1.0001).contains(&h))
+                                    && (top[1] - top[0]).abs() <= 1.0;
+                                let lip = top.map(|h| if shelf { (h - natural::GRASS_LIP).max(0.0) } else { 2.0 });
                                 let soil = atlas::uv_rect(atlas::tile_for(BlockType::Soil, face_idx));
                                 let grass = atlas::uv_rect(atlas::tile_for(BlockType::Grass, 2));
-                                let band = shaping::exposed_region(below, top);
-                                let earth = shaping::clip_band(&band, lip, false);
-                                let turf = shaping::clip_band(&band, lip, true);
-                                side.push_polygon(&mut vertices, &mut indices, &earth, top, soil, Some(Palette::Soil));
-                                side.push_polygon(&mut vertices, &mut indices, &turf, top, grass, Some(Palette::Grass));
+                                for band in shaping::exposed_region(below, top) {
+                                    let earth = shaping::clip_band(&band, lip, false);
+                                    let turf = shaping::clip_band(&band, lip, true);
+                                    side.push_polygon(&mut vertices, &mut indices, &earth, top, soil, Some(Palette::Soil));
+                                    side.push_polygon(&mut vertices, &mut indices, &turf, top, grass, Some(Palette::Grass));
+                                }
                             }
                             Some(Palette::Rock) => {
                                 side.push(&mut vertices, &mut indices, below, top, uv_rect, natural, true)
@@ -752,12 +761,15 @@ fn push_shaped_top(
 ) {
     let def = block.def();
     let uv_rect = atlas::uv_rect(atlas::tile_for(block, 2));
+    // Bank cells lie under their column's top cell: take contact AO at the
+    // column's open surface layer rather than from the solid cell above.
+    let surface = (ly..ly + 4).find(|&y| !sample(wx, y + 1, wz).is_solid()).unwrap_or(ly);
     let corner_ao: [f32; 4] = std::array::from_fn(|i| {
         let (s1, s2, c) = AO_OFFSETS[2][i];
         ao_brightness(
-            ao_occluder(sample(wx + s1.0, ly + s1.1, wz + s1.2)),
-            ao_occluder(sample(wx + s2.0, ly + s2.1, wz + s2.2)),
-            ao_occluder(sample(wx + c.0, ly + c.1, wz + c.2)),
+            ao_occluder(sample(wx + s1.0, surface + s1.1, wz + s1.2)),
+            ao_occluder(sample(wx + s2.0, surface + s2.1, wz + s2.2)),
+            ao_occluder(sample(wx + c.0, surface + c.1, wz + c.2)),
         )
     });
     // Corner order (0,0), (1,0), (1,1), (0,1), interpolated across the cell.
@@ -777,9 +789,15 @@ fn push_shaped_top(
     };
     let variation = 1.0
         + spread * (super::noise::block_rand(wx, ly, wz, shaping::SHAPING_VERSION, 0x7E11_0002) - 0.5);
-    let palette = natural::palette(block);
+    let natural = natural::palette(block);
+    let soil_rect = atlas::uv_rect(atlas::tile_for(BlockType::Soil, 2));
     for (triangle, f) in triangles.iter().zip(&facets) {
         let normal = normalize3(std::array::from_fn(|k| f[k] + (mean[k] - f[k]) * smoothing));
+        // Grass grows on shelves and gentle slopes; steep bank faces are earth.
+        // Judged mostly by the cell's overall slope so bumpy variants don't speckle.
+        let steep = block == BlockType::Grass && f[1] * 0.3 + mean[1] * 0.7 < 0.6;
+        let palette = if steep { natural.map(|_| Palette::Soil) } else { natural };
+        let uv_rect = if steep { soil_rect } else { uv_rect };
         let shade = slope_shade(normal) * variation;
         let base_index = vertices.len() as u32;
         for p in triangle {
@@ -1032,7 +1050,7 @@ impl Side {
         let point = |t: f32, y: f32| {
             [wx as f32 + c0[0] + (c1[0] - c0[0]) * t, ly as f32 + y, wz as f32 + c0[2] + (c1[2] - c0[2]) * t]
         };
-        let full = below == [0.0; 2] && top == [1.0; 2];
+        let full = below.iter().all(|&h| h <= 0.0) && top.iter().all(|&h| h >= 1.0);
         let push = |vertices: &mut Vec<Vertex>, t: f32, y: f32, position: [f32; 3], normal: [f32; 3]| {
             let lerp = |a: f32, b: f32| a + (b - a) * t;
             let (ao_low, ao_high) = (lerp(self.corner_ao[0], self.corner_ao[1]), lerp(self.corner_ao[3], self.corner_ao[2]));
@@ -1083,7 +1101,9 @@ impl Side {
             }
             return;
         }
-        self.push_polygon(vertices, indices, &shaping::exposed_region(below, top), top, uv_rect, palette);
+        for band in shaping::exposed_region(below, top) {
+            self.push_polygon(vertices, indices, &band, top, uv_rect, palette);
+        }
     }
 
     /// Emits one flat `(t, y)` polygon of this face as a triangle fan.

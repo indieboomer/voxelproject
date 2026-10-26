@@ -147,6 +147,41 @@ pub fn coast_scene(origin: (i32, i32, i32)) -> Vec<(i32, i32, i32, BlockType)> {
     cells.into_iter().map(|((x, y, z), b)| (x, y, z, b)).collect()
 }
 
+/// Steep-bank test scene (docs/TERRAIN_SHAPING.md): one hillside, 24 x 20
+/// cells, whose rows climb at different steepness: one cell per column (45
+/// degrees), two per column (steep bank), three per column (cliff steps), and
+/// a two-per-column bank broken by a one-cell ledge. Grass over soil, ground
+/// layer at `origin.1 - 1`.
+pub fn steep_bank(origin: (i32, i32, i32)) -> Vec<(i32, i32, i32, BlockType)> {
+    let (ox, y0, oz) = origin;
+    let mut edits = Vec::new();
+    for x in 0..24 {
+        for z in 0..20 {
+            let step = (x - 4).clamp(0, 8);
+            let rise = match z / 5 {
+                0 => step,
+                1 => 2 * step,
+                2 => 3 * step.min(5),
+                // A ledge: the bank pauses for a column halfway up.
+                _ => 2 * step.min(3) + 2 * (step - 4).max(0),
+            };
+            for y in -3..20 {
+                let block = if y >= rise {
+                    BlockType::Air
+                } else if y == rise - 1 {
+                    BlockType::Grass
+                } else if y >= rise - 4 {
+                    BlockType::Soil
+                } else {
+                    BlockType::Stone
+                };
+                edits.push((ox + x, y0 + y, oz + z, block));
+            }
+        }
+    }
+    edits
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

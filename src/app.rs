@@ -4233,7 +4233,9 @@ impl App {
         }
         let feet = self.player.position;
         let origin = (feet.x.floor() as i32 + 2, feet.y.floor() as i32, feet.z.floor() as i32 - 8);
-        for (x, y, z, block) in crate::voxel::shaping::test_garden(origin) {
+        // The steep-bank hillside sits beside the garden.
+        let bank = crate::voxel::coast::steep_bank((origin.0 + 34, origin.1, origin.2));
+        for (x, y, z, block) in crate::voxel::shaping::test_garden(origin).into_iter().chain(bank) {
             if self.world.get_block(x, y, z) != block {
                 self.apply_block_edit(x, y, z, block);
             }

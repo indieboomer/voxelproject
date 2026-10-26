@@ -19,30 +19,49 @@ The images are matched offscreen renders with the same camera, meshes and lighti
 `VOXEL_SHAPING_PREVIEW=off|on cargo test --release render_weather_previews -- --ignored`.
 Add `VOXEL_LANDSCAPE_PREVIEW=hills` to render generated terrain instead of the garden.
 
-## Rules (shaping version 2)
+## Rules (shaping version 3)
 
 Code: `src/voxel/shaping.rs`. A cell is shaped only when every one of these holds:
 
 - Its material is soil-like (grass, soil, sand, mud, clay, peat, snow) or rock
   (stone, basalt, granite, limestone, marble). Ores, cobblestone, bricks, wood,
   devices and every other block keep their cube.
-- Its top is exposed: the cell above is not solid and not water.
-- The cell below is a supporting opaque solid, so ceilings and overhang lips stay cubic.
-- No water lies in its 3×3 neighborhood on its own layer or the one above. Shores
-  stay cubic because water faces are culled against opaque neighbors.
+- Its column's exposed top is this cell or at most `BANK_DROP` (3) cells above
+  it, with shapeable terrain all the way up. The cell above that top is not
+  solid and not water.
+- Every cell the surface cuts into rests on a supporting opaque solid, so
+  ceilings and overhang lips stay cubic.
+- No water lies in its 3×3 neighborhood at the top's layer, the layer above it,
+  or this cell's own layer. Shores stay cubic because water faces are culled
+  against opaque neighbors.
 
-The top becomes a 4×4 height grid (18 triangles) over the full square floor. Each top corner
-height depends only on its lattice point, using the four cells that meet there:
+**One surface per column.** Each terrain column gets a single top surface: a
+4×4 height grid (18 triangles) whose corner heights depend only on lattice
+points. A lattice point's height comes from the tops of the four columns that
+meet there:
 
-| Four cells on the cell's layer | Four cells one layer down | Corner height |
-| --- | --- | --- |
-| all supporting | — | 1 (flat) |
-| any open | all supporting | 0 (ramp down to the lower neighbor's top) |
-| any open | any open | 0.6 shoulder (drop of more than one cell) |
+| Rise between the lowest and highest top | Corner height |
+| --- | --- |
+| 0 | flat |
+| 1 | the lowest top (a 45° ramp) |
+| 2–3, and every cell it cuts is soil-like | the lowest top (a continuous steep bank) |
+| 2–3 through rock, or more than 3 | the highest top minus 0.4 (a cliff shoulder) |
 
-Neighbors that share a corner therefore always agree on it, and the result does
-not depend on chunk loading or edit order. Architecture and devices count as
-support, so terrain meets walls flush instead of ramping away from them.
+Neighbors that share a corner always agree on it, and the result does not
+depend on chunk loading or edit order. Architecture and devices count as high
+columns, so terrain meets walls flush instead of ramping away from them.
+
+**Partitioned by layer.** The column surface is split between the column's
+cells. Each cell owns the part of the surface inside its own slab (heights are
+stored relative to that cell's floor; `CellShape::top_triangles` clips the
+grid). A surface lying exactly on a layer plane belongs to the cell above. A
+steep bank two or three cells tall is therefore one landform shared by the
+stacked cells, not a stack of separately capped blocks. Cells below the column
+top that the surface cuts are of kind `Bank`.
+
+On grass, the parts of the surface steeper than about 53° use earth colour and
+texture, so grass sits on shelves and gentle slopes. Side faces get a grass lip
+only along near-level shelf edges. No tufts grow on banks.
 
 How many corners are high (at 1) picks the shape:
 
@@ -108,12 +127,34 @@ stays watertight. The band belongs to the higher cell.
   existing 8-cell remesh halo of `World::set_block`. Chunk loads re-dirty all
   neighbors. Shapes are never saved; toggling the mode remeshes loaded chunks.
 
+## Steep banks
+
+Before this change, steep hillsides showed a separately capped green block
+on every step. The test hillside (`coast::steep_bank`) has four rows: one, two
+and three cells of rise per column, and a bank broken by a ledge. Build it in
+game with **F8**, beside the shaping test garden, or render it with
+`VOXEL_BANK_PREVIEW=on|off`.
+
+| Cubic | Shaping before banks |
+| --- | --- |
+| ![](terrain_shaping/bank-cubic.jpg) | ![](terrain_shaping/bank-before.jpg) |
+| **Banks** | **Banks with ink and toon** |
+| ![](terrain_shaping/bank-after.jpg) | ![](terrain_shaping/bank-after-styled.jpg) |
+
 ## Validation
 
 Automated tests in `src/voxel/shaping.rs` and `src/player.rs`:
 
 - Four ramp orientations, convex, concave, cap, ridge, saddle fallback, cliff
   shoulder, overhang, water and wall contact cases.
+- A two- or three-cell soil rise is one bank: the top cell and the cells below
+  it share one surface, and the ground below stays whole. The same rise in rock
+  keeps its shoulder.
+- On the steep-bank scene, the mesh is watertight. Bank surfaces meet exactly
+  at column boundaries. Digging a bank cell removes exactly that cell, and
+  refilling it restores identical geometry.
+- The player cannot walk or jump up a 2:1 bank. Disabling the slope limit makes
+  this test fail.
 - A quarter-turn of a neighborhood rotates the shapes to match.
 - Watertightness: parity along more than 10,000 axis lines through the whole
   test garden matches the logical solid, in both modes. Disabling partial side
@@ -132,12 +173,15 @@ Automated tests in `src/voxel/shaping.rs` and `src/player.rs`:
 
 | Mode | ms per chunk | Triangles | Shaped cells |
 | --- | --- | --- | --- |
-| Cubic | 1.61 | 80,548 | 0 |
-| Shaped | 3.62 | 107,919 | 1,934 |
+| Cubic | 1.62 | 80,548 | 0 |
+| Shaped, with the natural look | 7.08 | 154,331 | 1,877 |
 
-Meshing takes about 2.2× as long, mostly from neighbor shape lookups on buried
-cells. Triangles rise by about 34% because each shaped top is 18 triangles
-instead of 2. Edits still remesh within the existing per-frame mesh budget.
+Banks made shaped meshing more expensive: 4.97 ms per chunk before them,
+7.08 now. Each top cell looks up its column and the tops of nine neighboring
+columns, and the cells of a bank repeat that. A per-build `ShapeCache` (shapes
+and column tops), plus a cheap rejection for buried and non-terrain cells,
+brought it down from 11.2 ms. Edits still remesh within the existing per-frame
+mesh budget, nearest chunk first.
 
 **Not yet done.** No manual in-game walking test has been run. The playtest the
 brief asks for, with a player who doesn't know the rules, also hasn't happened,
@@ -153,8 +197,12 @@ better, feel right underfoot, and clearly behave as one removable cell?) as open
   player against its own setting; the host does not check movement.
 - Shores, saddles and overhang lips fall back to cubes. Where they meet ramps,
   small triangular side patches show.
-- Drops of more than one cell keep a cliff with a 0.6 shoulder. There are no
-  gentle multi-cell slopes yet.
+- Rises of four or more cells, and rock rises of two or more, keep a cliff with
+  a 0.4 shoulder. Wider, gentler multi-cell slopes are not generated.
+- On banks, ink outlines also mark folds between neighboring columns' planes
+  where a surface variant bends them.
+- Steep banks hold the player up but give no footing. The player cannot walk up
+  them (limit about 58°) or jump from them, matching the cube walls they replace.
 - No dig emphasis animation and no placement preview of neighbor reshaping.
 - Dirt-to-grass side texturing follows the cell's own top edge only.
 
@@ -165,5 +213,6 @@ better, feel right underfoot, and clearly behave as one removable cell?) as open
 2. Settle NPCs and remote-player avatars the same way creatures are settled.
 3. Shape shores by teaching water meshing to emit faces against partial
    neighbors, removing the largest fallback class.
-4. Cache shapes per chunk during meshing to recover most of the 2.2× cost.
+4. Keep a shape cache across rebuilds, or precompute column tops per chunk, to
+   recover more of the meshing cost.
 5. Try wider transitions using several explicitly owned surface cells for gentler hills.

@@ -53,6 +53,10 @@ const STEP_LENGTH: f32 = 1.5;
 /// Highest shaped-terrain rise the controller climbs or follows down without
 /// jumping. Above one 45-degree ramp cell's 0.5 midpoint, below a full cube.
 const TERRAIN_STEP: f32 = 0.6;
+/// Steepest shaped surface (rise per run, about 58 degrees) the player can walk
+/// up or stand on firmly enough to jump: 45-degree ramps and their bumpy
+/// variants qualify, steep banks do not, matching the cube walls they replace.
+const MAX_WALK_SLOPE: f32 = 1.6;
 
 pub struct Player {
     /// Feet position (bottom-center of the collision box).
@@ -364,7 +368,8 @@ impl Player {
             }
         } else {
             if delta.y < 0.0 {
-                self.on_ground = true;
+                // Steep banks hold the player up but give no footing to jump from.
+                self.on_ground = !Self::steep_ground(world, self.position);
             }
             self.velocity.y = 0.0;
         }
@@ -401,6 +406,10 @@ impl Player {
         let Some(top) = Self::terrain_top(world, attempt, 0.0, TERRAIN_STEP) else {
             return false;
         };
+        let run = Vec3::new(attempt.x - self.position.x, 0.0, attempt.z - self.position.z).length();
+        if top - self.position.y > run * MAX_WALK_SLOPE + 0.02 {
+            return false; // too steep to walk up
+        }
         let raised = Vec3::new(attempt.x, top + 0.0001, attempt.z);
         if !Self::collides(world, raised)
             && !Self::collides(world, Vec3::new(self.position.x, raised.y, self.position.z))
@@ -410,6 +419,30 @@ impl Player {
             return true;
         }
         false
+    }
+
+    /// Whether the shaped ground under the footprint is steeper than
+    /// `MAX_WALK_SLOPE`: such ground holds the player up but gives no footing.
+    fn steep_ground(world: &World, feet: Vec3) -> bool {
+        if !world.terrain_shaping {
+            return false;
+        }
+        let mut heights = Vec::with_capacity(5);
+        for (dx, dz) in [(0.0, 0.0), (-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+            let (x, z) = (feet.x + dx * HALF_WIDTH, feet.z + dz * HALF_WIDTH);
+            let (cx, cz) = (x.floor() as i32, z.floor() as i32);
+            let base = (feet.y - 0.01).floor() as i32;
+            for y in [base + 1, base, base - 1] {
+                if world.is_solid(cx, y, cz) {
+                    let h = crate::voxel::shaping::shape_at(world, cx, y, cz)
+                        .map_or(1.0, |s| s.height(x - cx as f32, z - cz as f32));
+                    heights.push(y as f32 + h);
+                    break;
+                }
+            }
+        }
+        let (low, high) = heights.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(l, h), &v| (l.min(v), h.max(v)));
+        heights.len() >= 2 && (high - low) / (2.0 * HALF_WIDTH) > MAX_WALK_SLOPE
     }
 
     /// Highest solid surface under the footprint at `feet` whose height lies
@@ -614,6 +647,34 @@ mod tests {
     }
 
     #[test]
+    fn steep_banks_cannot_be_walked_or_jumped_up() {
+        let mut world = World::new(3);
+        world.chunks.insert((0, 0), crate::voxel::chunk::Chunk::new(0, 0));
+        // Ground at height 2, then a bank rising two cells per column.
+        for x in 0..16 {
+            for z in 0..16 {
+                let h = 2 + 2 * (x - 7).clamp(0, 3);
+                for y in 0..h {
+                    world.set_block(x, y, z, BlockType::Grass);
+                }
+            }
+        }
+        world.terrain_shaping = true;
+        let mut player = Player::new(Vec3::new(5.5, 2.0, 7.5));
+        player.on_ground = true;
+        let mut input = Input::new();
+        input.key_event(KeyCode::KeyW, ElementState::Pressed);
+        input.key_event(KeyCode::Space, ElementState::Pressed);
+        let mut highest = 0.0f32;
+        for _ in 0..240 {
+            player.update(&world, &input, Vec3::X, Vec3::Z, 1.0 / 60.0);
+            highest = highest.max(player.position.y);
+        }
+        // A single jump (about 1.3 cells) may reach partway up, never the top.
+        assert!(highest < 4.6, "climbed the bank to {highest}");
+    }
+
+        #[test]
     fn shaped_collision_follows_the_ramp_surface() {
         let world = ramp_world(true);
         // Feet over the ramp's low half are clear above the surface only.

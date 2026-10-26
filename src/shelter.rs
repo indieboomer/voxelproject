@@ -38,10 +38,15 @@ impl Roofs {
             let mut p = Vec3::from_array(v.position) + Vec3::from_array(v.normal) * 0.02;
             // Shaped terrain surfaces lie inside their owner's cell; light
             // them from the open cell above rather than from inside the solid.
-            if world.terrain_shaping
-                && world.is_solid(p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32)
-            {
-                p.y = p.y.floor() + 1.0;
+            // A bank surface can sit several cells below its column's top.
+            if world.terrain_shaping {
+                let (x, z) = (p.x.floor() as i32, p.z.floor() as i32);
+                for _ in 0..4 {
+                    if !world.is_solid(x, p.y.floor() as i32, z) {
+                        break;
+                    }
+                    p.y = p.y.floor() + 1.0;
+                }
             }
             // Keep contact AO independent from light arriving through openings.
             if self.covered(world, p) {
