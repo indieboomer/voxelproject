@@ -168,11 +168,12 @@ pub struct ShapeCache<'a, F: Fn(i32, i32, i32) -> BlockType> {
     sample: &'a F,
     shapes: std::cell::RefCell<std::collections::HashMap<(i32, i32, i32), Option<CellShape>>>,
     tops: std::cell::RefCell<std::collections::HashMap<(i32, i32, i32), i32>>,
+    steepness: std::cell::RefCell<std::collections::HashMap<(i32, i32, i32), f32>>,
 }
 
 impl<'a, F: Fn(i32, i32, i32) -> BlockType> ShapeCache<'a, F> {
     pub fn new(sample: &'a F) -> Self {
-        Self { sample, shapes: Default::default(), tops: Default::default() }
+        Self { sample, shapes: Default::default(), tops: Default::default(), steepness: Default::default() }
     }
 
     pub fn get(&self, x: i32, y: i32, z: i32) -> Option<CellShape> {
@@ -196,6 +197,44 @@ impl<'a, F: Fn(i32, i32, i32) -> BlockType> ShapeCache<'a, F> {
         let shape = shape_with_tops(self.sample, &top_of, x, y, z);
         self.shapes.borrow_mut().insert((x, y, z), shape);
         shape
+    }
+
+    fn top(&self, x: i32, z: i32, reference: i32) -> i32 {
+        if let Some(&top) = self.tops.borrow().get(&(x, z, reference)) {
+            return top;
+        }
+        let top = column_top(self.sample, x, z, reference);
+        self.tops.borrow_mut().insert((x, z, reference), top);
+        top
+    }
+
+    /// How much grass covers world point `p`, 0..=1: one minus a smooth
+    /// world-space steepness field. The field is the terrain gradient from
+    /// neighboring column tops (central differences, rise per cell),
+    /// bilinearly interpolated between column centers. It is continuous
+    /// across cells, so grass and earth form coherent areas instead of a
+    /// per-cell patchwork: a one-cell ledge inside a steep bank reads as bank,
+    /// and wide shelves and gentle slopes stay green.
+    pub fn grass_cover(&self, p: [f32; 3]) -> f32 {
+        let reference = p[1].floor() as i32;
+        let steepness = |x: i32, z: i32| {
+            if let Some(&s) = self.steepness.borrow().get(&(x, z, reference)) {
+                return s;
+            }
+            let t = |dx: i32, dz: i32| self.top(x + dx, z + dz, reference) as f32;
+            let gx = (t(1, 0) - t(-1, 0)) * 0.5;
+            let gz = (t(0, 1) - t(0, -1)) * 0.5;
+            let s = (gx * gx + gz * gz).sqrt();
+            self.steepness.borrow_mut().insert((x, z, reference), s);
+            s
+        };
+        let (fx, fz) = (p[0] - 0.5, p[2] - 0.5);
+        let (x0, z0) = (fx.floor() as i32, fz.floor() as i32);
+        let (tx, tz) = (fx - x0 as f32, fz - z0 as f32);
+        let low = steepness(x0, z0) + (steepness(x0 + 1, z0) - steepness(x0, z0)) * tx;
+        let high = steepness(x0, z0 + 1) + (steepness(x0 + 1, z0 + 1) - steepness(x0, z0 + 1)) * tx;
+        let s = low + (high - low) * tz;
+        1.0 - ((s - 1.1) / 0.6).clamp(0.0, 1.0)
     }
 }
 
@@ -1009,6 +1048,32 @@ mod tests {
         assert_watertight(&world, Vec3::new(24.0, 26.0, 20.0));
         world.set_block(dug.0, dug.1, dug.2, original);
         assert_eq!(positions(&world), before);
+    }
+
+        #[test]
+    fn grass_cover_follows_landform_steepness_continuously() {
+        let world = world_of(&[(0, 0), (1, 0), (0, 1), (1, 1)], crate::voxel::coast::steep_bank((0, 4, 0)));
+        let sample = |x, y, z| world.get_block(x, y, z);
+        let cache = ShapeCache::new(&sample);
+        // Flat ground before the hill, and the middle of the 45-degree row.
+        assert_eq!(cache.grass_cover([1.5, 4.0, 2.5]), 1.0);
+        assert_eq!(cache.grass_cover([7.5, 7.0, 2.5]), 1.0);
+        // The 2:1 bank is earth; the two-column ledge breaking the last row
+        // is a real shelf and stays green.
+        assert_eq!(cache.grass_cover([7.5, 10.0, 7.5]), 0.0);
+        assert!(cache.grass_cover([8.0, 10.0, 17.5]) > 0.5);
+        // A single flat cell between two steep rises reads as bank.
+        let mut notch = world_of(&[(0, 0)], crate::voxel::coast::steep_bank((0, 4, 0)).into_iter().filter(|c| c.0 < 16 && c.2 < 16));
+        notch.set_block(8, 11, 7, BlockType::Air);
+        notch.set_block(8, 10, 7, BlockType::Air);
+        let sample = |x, y, z| notch.get_block(x, y, z);
+        assert!(ShapeCache::new(&sample).grass_cover([8.5, 10.0, 7.5]) < 0.5);
+        // Continuous: tiny moves never jump.
+        for i in 0..200 {
+            let p = [4.0 + i as f32 * 0.07, 9.0, 7.3];
+            let q = [p[0] + 0.01, p[1], p[2]];
+            assert!((cache.grass_cover(p) - cache.grass_cover(q)).abs() < 0.05);
+        }
     }
 
         #[test]

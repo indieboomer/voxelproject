@@ -511,6 +511,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                         &mut vertices,
                         &mut indices,
                         &sample,
+                        &shapes,
                         block,
                         shape,
                         (wx, ly, wz),
@@ -523,7 +524,9 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                     && sample(wx, ly + 1, wz) != BlockType::Water
                 {
                     // No tufts on steep banks (their surface dips below this cell).
-                    if shape.as_ref().map_or(true, |s| s.corners.iter().all(|&h| h >= -0.01)) {
+                    if shape.as_ref().map_or(true, |s| s.corners.iter().all(|&h| h >= -0.01))
+                        && shapes.grass_cover([wx as f32 + 0.5, ly as f32 + 1.0, wz as f32 + 0.5]) > 0.5
+                    {
                         push_tufts(&mut vertices, &mut indices, shape.as_ref(), (wx, ly, wz));
                     }
                 }
@@ -654,8 +657,13 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                             // Only a near-level shelf edge gets the lip; steep
                             // bank edges stay earth rather than a green stripe.
                             Some(Palette::Grass) => {
+                                let edge_mid = {
+                                    let [c0, c1, ..] = FACE_VERTS[face_idx];
+                                    [wx as f32 + (c0[0] + c1[0]) * 0.5, ly as f32 + 1.0, wz as f32 + (c0[2] + c1[2]) * 0.5]
+                                };
                                 let shelf = top.iter().all(|&h| (0.4..=1.0001).contains(&h))
-                                    && (top[1] - top[0]).abs() <= 1.0;
+                                    && (top[1] - top[0]).abs() <= 1.0
+                                    && shapes.grass_cover(edge_mid) > 0.5;
                                 let lip = top.map(|h| if shelf { (h - natural::GRASS_LIP).max(0.0) } else { 2.0 });
                                 let soil = atlas::uv_rect(atlas::tile_for(BlockType::Soil, face_idx));
                                 let grass = atlas::uv_rect(atlas::tile_for(BlockType::Grass, 2));
@@ -713,7 +721,12 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                             });
                             tex_layer = natural::NATURAL_FOLIAGE;
                         } else if let Some(palette) = natural {
-                            let albedo = natural::tint(palette, position);
+                            let mut albedo = natural::tint(palette, position);
+                            if palette == Palette::Grass && face_idx == 2 {
+                                let cover = shapes.grass_cover(position);
+                                let soil = natural::tint(Palette::Soil, position);
+                                albedo = std::array::from_fn(|k| soil[k] + (albedo[k] - soil[k]) * cover);
+                            }
                             color = std::array::from_fn(|k| color[k] * albedo[k]);
                             tex_layer = natural::NATURAL_TEX;
                         } else if world.terrain_shaping && block == BlockType::Water && face_idx == 2 {
@@ -773,10 +786,12 @@ fn slope_shade(n: [f32; 3]) -> f32 {
 /// toward the cell's mean slope (restrained smoothing); rock, terraced and
 /// rocky variants keep crisp facets. A small per-cell brightness variation
 /// hints at the editable unit without drawing seams.
-fn push_shaped_top(
+#[allow(clippy::too_many_arguments)]
+fn push_shaped_top<F: Fn(i32, i32, i32) -> BlockType>(
     vertices: &mut Vec<Vertex>,
     indices: &mut Vec<u32>,
-    sample: &impl Fn(i32, i32, i32) -> BlockType,
+    sample: &F,
+    shapes: &shaping::ShapeCache<F>,
     block: BlockType,
     shape: &CellShape,
     (wx, ly, wz): (i32, i32, i32),
@@ -816,16 +831,28 @@ fn push_shaped_top(
     let soil_rect = atlas::uv_rect(atlas::tile_for(BlockType::Soil, 2));
     for (triangle, f) in triangles.iter().zip(&facets) {
         let normal = normalize3(std::array::from_fn(|k| f[k] + (mean[k] - f[k]) * smoothing));
-        // Grass grows on shelves and gentle slopes; steep bank faces are earth.
-        // Judged mostly by the cell's overall slope so bumpy variants don't speckle.
-        let steep = block == BlockType::Grass && f[1] * 0.3 + mean[1] * 0.7 < 0.6;
-        let palette = if steep { natural.map(|_| Palette::Soil) } else { natural };
+        // Grass grows on shelves and gentle slopes, earth on steep banks,
+        // blended by the continuous world-space cover field (no patchwork).
+        let world_point = |p: &[f32; 3]| [wx as f32 + p[0], ly as f32 + p[1], wz as f32 + p[2]];
+        let cover = if block == BlockType::Grass && natural.is_some() {
+            triangle.map(|p| shapes.grass_cover(world_point(&p)))
+        } else {
+            [1.0; 3]
+        };
+        let steep = block == BlockType::Grass && cover.iter().sum::<f32>() < 1.5;
         let uv_rect = if steep { soil_rect } else { uv_rect };
         let shade = slope_shade(normal) * variation;
         let base_index = vertices.len() as u32;
-        for p in triangle {
-            let position = [wx as f32 + p[0], ly as f32 + p[1], wz as f32 + p[2]];
-            let albedo = palette.map_or([1.0; 3], |palette| natural::tint(palette, position));
+        for (p, cover) in triangle.iter().zip(cover) {
+            let position = world_point(p);
+            let albedo = match natural {
+                Some(Palette::Grass) => {
+                    let (grass, soil) = (natural::tint(Palette::Grass, position), natural::tint(Palette::Soil, position));
+                    std::array::from_fn(|k| soil[k] + (grass[k] - soil[k]) * cover)
+                }
+                Some(palette) => natural::tint(palette, position),
+                None => [1.0; 3],
+            };
             vertices.push(Vertex {
                 position,
                 color: albedo.map(|a| a * shade),
@@ -839,7 +866,7 @@ fn push_shaped_top(
                 reflectivity,
                 emission: def.emission,
                 wind: 0.0,
-                tex_layer: if palette.is_some() { natural::NATURAL_TEX } else { 0.0 },
+                tex_layer: if natural.is_some() { natural::NATURAL_TEX } else { 0.0 },
                 glimmer: block.glimmer(),
                 skylight: 1.0,
                 wet: [crate::wetness::absorption(block), -1.],

@@ -59,9 +59,15 @@ steep bank two or three cells tall is therefore one landform shared by the
 stacked cells, not a stack of separately capped blocks. Cells below the column
 top that the surface cuts are of kind `Bank`.
 
-On grass, the parts of the surface steeper than about 53° use earth colour and
-texture, so grass sits on shelves and gentle slopes. Side faces get a grass lip
-only along near-level shelf edges. No tufts grow on banks.
+**Grass versus earth.** This is decided by a continuous world-space
+steepness field (`ShapeCache::grass_cover`), not per cell. The field is the
+terrain gradient from neighbouring column tops (central differences), bilinearly
+interpolated between column centres. Grass blends to earth as the local slope
+rises from 1.1 to 1.7 cells per cell (about 48°–60°). The blend applies to
+shaped tops, flat cube tops, grass lips and tufts. Irregular hillsides
+therefore read as one coherent earth bank rather than a per-cell patchwork:
+a single flat cell between steep rises reads as bank, while a two-cell ledge
+or a 45° slope stays green.
 
 How many corners are high (at 1) picks the shape:
 
