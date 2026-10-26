@@ -19,8 +19,8 @@ use super::world::World;
 
 const SEED: u32 = 0x0A6A_7001;
 /// Ring sides for trunks and limbs.
-const TRUNK_SIDES: usize = 10;
-const LIMB_SIDES: usize = 6;
+const TRUNK_SIDES: usize = 8;
+const LIMB_SIDES: usize = 5;
 /// Keep every ring this far inside its owner cell.
 const MARGIN: f32 = 0.02;
 /// Largest ring irregularity (see `ring_point`); radii leave room for it.

@@ -22,6 +22,8 @@ mod equipment;
 mod equipment_ui;
 mod fantasy_name;
 mod falling;
+#[cfg(test)]
+mod perf_tests;
 mod food;
 mod gear_catalog;
 mod god_rays;

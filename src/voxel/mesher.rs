@@ -5,7 +5,8 @@ use super::atlas;
 use super::block::BlockType;
 use super::chunk::{Chunk, CHUNK_X, CHUNK_Z};
 use super::natural::{self, Palette};
-use super::shaping::{self, CellShape, Material};
+use super::shaping::{self, CellShape, Material, GRID};
+use std::collections::HashMap;
 use super::world::World;
 
 #[repr(C)]
@@ -390,7 +391,20 @@ fn ao_brightness(side1: bool, side2: bool, corner: bool) -> f32 {
 /// culled correctly too), textured from the shared atlas, and shaded with
 /// both a fixed per-face factor and real per-vertex ambient occlusion from
 /// neighboring geometry.
+/// How much shaped-mode detail a chunk mesh carries. Distant chunks use
+/// simpler tops, clumps and trunks and skip grass tufts; cubic mode is the
+/// same at either level.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Detail {
+    Full,
+    Far,
+}
+
 pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
+    build_chunk_mesh_with(world, chunk, Detail::Full)
+}
+
+pub fn build_chunk_mesh_with(world: &World, chunk: &Chunk, detail: Detail) -> MeshData {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     let (ox, oz) = chunk.world_origin();
@@ -448,7 +462,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                 if world.terrain_shaping && block.is_wood() {
                     let living = |p: (i32, i32, i32), b: BlockType| super::organic::is_living(world, b, p);
                     if let Some(tree) = super::organic::cell_with(&sample, &living, wx, ly, wz) {
-                        push_tree(&mut vertices, &mut indices, &tree, block, [wx, ly, wz]);
+                        push_tree(&mut vertices, &mut indices, &tree, block, [wx, ly, wz], detail);
                         continue;
                     }
                 }
@@ -516,11 +530,12 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                         shape,
                         (wx, ly, wz),
                         reflectivity,
+                        detail,
                     );
                 }
                 let natural = if world.terrain_shaping { natural::palette(block) } else { None };
                 let bevel = world.bevel_blocks && bevel_eligible(world, block);
-                if world.terrain_shaping && block == BlockType::Grass && !sample(wx, ly + 1, wz).is_solid()
+                if world.terrain_shaping && detail == Detail::Full && block == BlockType::Grass && !sample(wx, ly + 1, wz).is_solid()
                     && sample(wx, ly + 1, wz) != BlockType::Water
                 {
                     // No tufts on steep banks (their surface dips below this cell).
@@ -538,7 +553,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                 // Growing crowns in shaped mode: foliage clumps instead of
                 // cube faces. Placed leaves keep their static block form.
                 if world.terrain_shaping && def.cutout && !placed {
-                    push_foliage(&mut vertices, &mut indices, &sample, block, [wx, ly, wz]);
+                    push_foliage(&mut vertices, &mut indices, &sample, block, [wx, ly, wz], detail);
                     continue;
                 }
                 for (face_idx, normal) in FACE_NORMALS.iter().enumerate() {
@@ -796,6 +811,7 @@ fn push_shaped_top<F: Fn(i32, i32, i32) -> BlockType>(
     shape: &CellShape,
     (wx, ly, wz): (i32, i32, i32),
     reflectivity: f32,
+    detail: Detail,
 ) {
     let def = block.def();
     let uv_rect = atlas::uv_rect(atlas::tile_for(block, 2));
@@ -816,7 +832,8 @@ fn push_shaped_top<F: Fn(i32, i32, i32) -> BlockType>(
         let high = corner_ao[3] + (corner_ao[2] - corner_ao[3]) * u;
         low + (high - low) * v
     };
-    let triangles = shape.top_triangles();
+    // Far chunks and plain planar tops need only the two corner triangles.
+    let triangles = if detail == Detail::Far || shape.is_planar() { shape.coarse_triangles() } else { shape.top_triangles() };
     let facets: Vec<[f32; 3]> =
         triangles.iter().map(|&[a, b, c]| normalize3(cross3(sub3(c, a), sub3(b, a)))).collect();
     let mean = normalize3(facets.iter().fold([0.0; 3], |s, n| [s[0] + n[0], s[1] + n[1], s[2] + n[2]]));
@@ -829,8 +846,41 @@ fn push_shaped_top<F: Fn(i32, i32, i32) -> BlockType>(
         + spread * (super::noise::block_rand(wx, ly, wz, shaping::SHAPING_VERSION, 0x7E11_0002) - 0.5);
     let natural = natural::palette(block);
     let soil_rect = atlas::uv_rect(atlas::tile_for(BlockType::Soil, 2));
+    // Smooth variants: one normal per surface position (grid vertex normals,
+    // interpolated, eased toward the cell's mean slope), so neighboring
+    // triangles share vertices. Faceted variants keep a normal per triangle.
+    let smooth = smoothing >= 0.3;
+    let grid_normals: [[[f32; 3]; GRID]; GRID] = std::array::from_fn(|i| {
+        std::array::from_fn(|j| {
+            let p = |i: usize, j: usize| [i as f32 / 3.0, shape.grid[i][j], j as f32 / 3.0];
+            let mut sum = [0.0f32; 3];
+            for (qi, qj) in [(i.wrapping_sub(1), j.wrapping_sub(1)), (i, j.wrapping_sub(1)), (i.wrapping_sub(1), j), (i, j)] {
+                if qi >= GRID - 1 || qj >= GRID - 1 {
+                    continue;
+                }
+                let (a, b, c, d) = (p(qi, qj), p(qi + 1, qj), p(qi + 1, qj + 1), p(qi, qj + 1));
+                for [x, y, z] in [[a, b, c], [a, c, d]] {
+                    let n = normalize3(cross3(sub3(z, x), sub3(y, x)));
+                    sum = std::array::from_fn(|k| sum[k] + n[k]);
+                }
+            }
+            normalize3(sum)
+        })
+    });
+    let normal_at = |p: &[f32; 3]| {
+        let (u, v) = ((p[0] * 3.0).clamp(0.0, 2.9999), (p[2] * 3.0).clamp(0.0, 2.9999));
+        let (i, j) = (u as usize, v as usize);
+        let (fu, fv) = (u - i as f32, v - j as f32);
+        let n: [f32; 3] = std::array::from_fn(|k| {
+            let low = grid_normals[i][j][k] + (grid_normals[i + 1][j][k] - grid_normals[i][j][k]) * fu;
+            let high = grid_normals[i][j + 1][k] + (grid_normals[i + 1][j + 1][k] - grid_normals[i][j + 1][k]) * fu;
+            low + (high - low) * fv
+        });
+        normalize3(std::array::from_fn(|k| n[k] + (mean[k] - n[k]) * 0.3))
+    };
+    let mut shared: HashMap<[u32; 8], u32> = HashMap::new();
     for (triangle, f) in triangles.iter().zip(&facets) {
-        let normal = normalize3(std::array::from_fn(|k| f[k] + (mean[k] - f[k]) * smoothing));
+        let facet_normal = normalize3(std::array::from_fn(|k| f[k] + (mean[k] - f[k]) * smoothing));
         // Grass grows on shelves and gentle slopes, earth on steep banks,
         // blended by the continuous world-space cover field (no patchwork).
         let world_point = |p: &[f32; 3]| [wx as f32 + p[0], ly as f32 + p[1], wz as f32 + p[2]];
@@ -841,10 +891,26 @@ fn push_shaped_top<F: Fn(i32, i32, i32) -> BlockType>(
         };
         let steep = block == BlockType::Grass && cover.iter().sum::<f32>() < 1.5;
         let uv_rect = if steep { soil_rect } else { uv_rect };
-        let shade = slope_shade(normal) * variation;
-        let base_index = vertices.len() as u32;
-        for (p, cover) in triangle.iter().zip(cover) {
+        let mut corner = [0u32; 3];
+        for (k, (p, cover)) in triangle.iter().zip(cover).enumerate() {
             let position = world_point(p);
+            let normal = if smooth { normal_at(p) } else { facet_normal };
+            let shade = slope_shade(normal) * variation;
+            let uv = [
+                uv_rect[0] + p[0] * (uv_rect[2] - uv_rect[0]),
+                uv_rect[1] + (1.0 - p[2]) * (uv_rect[3] - uv_rect[1]),
+            ];
+            let key = [
+                position[0].to_bits(), position[1].to_bits(), position[2].to_bits(),
+                normal[0].to_bits(), normal[1].to_bits(), normal[2].to_bits(),
+                uv[0].to_bits(), uv[1].to_bits(),
+            ];
+            if let Some(&index) = shared.get(&key) {
+                corner[k] = index;
+                continue;
+            }
+            corner[k] = vertices.len() as u32;
+            shared.insert(key, corner[k]);
             let albedo = match natural {
                 Some(Palette::Grass) => {
                     let (grass, soil) = (natural::tint(Palette::Grass, position), natural::tint(Palette::Soil, position));
@@ -858,10 +924,7 @@ fn push_shaped_top<F: Fn(i32, i32, i32) -> BlockType>(
                 color: albedo.map(|a| a * shade),
                 normal,
                 // Same orientation as the cube's +Y face: u = x, v = 1 - z.
-                uv: [
-                    uv_rect[0] + p[0] * (uv_rect[2] - uv_rect[0]),
-                    uv_rect[1] + (1.0 - p[2]) * (uv_rect[3] - uv_rect[1]),
-                ],
+                uv,
                 ao: ao_at(p[0], p[2]),
                 reflectivity,
                 emission: def.emission,
@@ -872,20 +935,28 @@ fn push_shaped_top<F: Fn(i32, i32, i32) -> BlockType>(
                 wet: [crate::wetness::absorption(block), -1.],
             });
         }
-        indices.extend_from_slice(&[base_index, base_index + 1, base_index + 2]);
+        indices.extend_from_slice(&corner);
     }
 }
 
+/// Octahedron directions and faces: distant foliage clumps.
+fn octahedron() -> (Vec<Vec3>, Vec<[usize; 3]>) {
+    let v = vec![Vec3::X, Vec3::NEG_X, Vec3::Y, Vec3::NEG_Y, Vec3::Z, Vec3::NEG_Z];
+    let f = vec![[2, 0, 4], [2, 4, 1], [2, 1, 5], [2, 5, 0], [3, 4, 0], [3, 1, 4], [3, 5, 1], [3, 0, 5]];
+    (v, f)
+}
+
 /// Icosahedron directions and faces for foliage clumps.
-fn icosahedron() -> ([Vec3; 12], [[usize; 3]; 20]) {
+fn icosahedron() -> (Vec<Vec3>, Vec<[usize; 3]>) {
     let t = (1.0 + 5f32.sqrt()) / 2.0;
     let v = [
         [-1.0, t, 0.0], [1.0, t, 0.0], [-1.0, -t, 0.0], [1.0, -t, 0.0],
         [0.0, -1.0, t], [0.0, 1.0, t], [0.0, -1.0, -t], [0.0, 1.0, -t],
         [t, 0.0, -1.0], [t, 0.0, 1.0], [-t, 0.0, -1.0], [-t, 0.0, 1.0],
     ]
-    .map(|p| Vec3::from(p).normalize());
-    let f = [
+    .map(|p| Vec3::from(p).normalize())
+    .to_vec();
+    let f = vec![
         [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
         [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
         [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
@@ -905,6 +976,7 @@ fn push_foliage(
     sample: &impl Fn(i32, i32, i32) -> BlockType,
     block: BlockType,
     [x, y, z]: [i32; 3],
+    detail: Detail,
 ) {
     let leafy = |b: BlockType| b.def().cutout || b.is_wood();
     let exposed = FACE_NORMALS.iter().any(|n| !leafy(sample(x + n[0], y + n[1], z + n[2])));
@@ -930,7 +1002,8 @@ fn push_foliage(
     let radius = 0.42 + 0.36 * density.sqrt();
     // Flattened slightly, like a leaf cluster rather than a ball.
     let squash = Vec3::new(1.0 + (r(4) - 0.5) * 0.3, 0.78 + r(5) * 0.18, 1.0 + (r(6) - 0.5) * 0.3);
-    let (dirs, faces) = icosahedron();
+    // Small sprigs at sparse crown edges and all distant clumps use 8 faces.
+    let (dirs, faces) = if detail == Detail::Far || density < 0.35 { octahedron() } else { icosahedron() };
     let points: Vec<Vec3> = dirs
         .iter()
         .enumerate()
@@ -938,50 +1011,44 @@ fn push_foliage(
         .collect();
     let uv_rect = atlas::uv_rect(atlas::tile_for(block, 2));
     let shade = 0.7 + 0.3 * (1.0 - density); // deeper inside the crown
+    // Shared corners: a radial normal and a texture coordinate wrapped once
+    // around the clump by direction, so every face reuses the same vertices.
+    let base_index = vertices.len() as u32;
+    for (point, dir) in points.iter().zip(&dirs) {
+        let normal = ((*point - center).normalize_or_zero() + Vec3::Y * 0.15).normalize_or_zero();
+        let (u, v) = (0.5 + 0.48 * (dir.x * 0.8 + dir.z * 0.6), 0.5 - 0.48 * dir.y);
+        let albedo = natural::foliage(block, point.to_array());
+        vertices.push(Vertex {
+            position: point.to_array(),
+            color: albedo.map(|c| c * shade * (0.9 + 0.2 * normal.y.max(0.0))),
+            normal: normal.to_array(),
+            uv: [uv_rect[0] + u * (uv_rect[2] - uv_rect[0]), uv_rect[1] + v * (uv_rect[3] - uv_rect[1])],
+            ao: 1.0,
+            reflectivity: 0.0, // matte foliage: no sky sheen on clumps
+            emission: 0.0,
+            wind: 0.5,
+            tex_layer: natural::NATURAL_FOLIAGE,
+            glimmer: 0.0,
+            skylight: 1.0,
+            wet: [crate::wetness::absorption(block), -1.],
+        });
+    }
     for face in faces {
         let [a, b, c] = face.map(|i| points[i]);
         let outward = (a + b + c) / 3.0 - center;
-        let mut tri = [a, b, c];
+        let [i, j, k] = face.map(|i| base_index + i as u32);
+        // Mesher winding is inward.
         if (b - a).cross(c - a).dot(outward) > 0.0 {
-            tri = [a, c, b]; // mesher winding is inward
-        }
-        let normal = outward.normalize_or_zero();
-        // Planar leaf texture across the triangle's dominant plane.
-        let (u_axis, v_axis) = if normal.y.abs() > normal.x.abs().max(normal.z.abs()) {
-            (0, 2)
-        } else if normal.x.abs() > normal.z.abs() {
-            (2, 1)
+            indices.extend_from_slice(&[i, k, j]);
         } else {
-            (0, 1)
-        };
-        let base_index = vertices.len() as u32;
-        for p in tri {
-            let local = p - Vec3::new(x as f32, y as f32, z as f32);
-            let (u, v) = (local[u_axis].rem_euclid(1.0), 1.0 - local[v_axis].rem_euclid(1.0));
-            let smooth = ((p - center).normalize_or_zero() * 0.7 + normal * 0.3 + Vec3::Y * 0.15).normalize_or_zero();
-            let albedo = natural::foliage(block, p.to_array());
-            vertices.push(Vertex {
-                position: p.to_array(),
-                color: albedo.map(|c| c * shade * (0.9 + 0.2 * smooth.y.max(0.0))),
-                normal: smooth.to_array(),
-                uv: [uv_rect[0] + u * (uv_rect[2] - uv_rect[0]), uv_rect[1] + v * (uv_rect[3] - uv_rect[1])],
-                ao: 1.0,
-                reflectivity: 0.0, // matte foliage: no sky sheen on clumps
-                emission: 0.0,
-                wind: 0.5,
-                tex_layer: natural::NATURAL_FOLIAGE,
-                glimmer: 0.0,
-                skylight: 1.0,
-                wet: [crate::wetness::absorption(block), -1.],
-            });
+            indices.extend_from_slice(&[i, j, k]);
         }
-        indices.extend_from_slice(&[base_index, base_index + 1, base_index + 2]);
     }
 }
 
 /// Emits a living wood cell's tube pieces, knot and end-grain caps with
 /// smooth radial normals and bark wrapped once around each ring.
-fn push_tree(vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>, tree: &super::organic::TreeCell, block: BlockType, cell: [i32; 3]) {
+fn push_tree(vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>, tree: &super::organic::TreeCell, block: BlockType, cell: [i32; 3], detail: Detail) {
     use super::organic::ring_point;
     let wood = block.wood_resource();
     let bark = atlas::uv_rect(atlas::tile_for(wood, 0));
@@ -1014,7 +1081,8 @@ fn push_tree(vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>, tree: &super::o
         }
     };
     for piece in &tree.pieces {
-        let n = piece.sides;
+        // Distant trunks use fewer ring sides (limbs at least four).
+        let n = if detail == Detail::Far { (piece.sides * 3 / 5).max(4) } else { piece.sides };
         let base = vertices.len() as u32;
         // Pair each ring-a vertex with the ring-b vertex it faces after
         // turning ring a's axis onto ring b's, so angled pieces don't twist.
@@ -1069,7 +1137,7 @@ fn push_tree(vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>, tree: &super::o
     }
     if let Some((center, radius)) = tree.knot {
         // A low-poly rounded knot closing elbows and forks.
-        let (rings, segments) = (5u32, 8u32);
+        let (rings, segments) = if detail == Detail::Far { (3u32, 5u32) } else { (4u32, 6u32) };
         let base = vertices.len() as u32;
         for i in 0..=rings {
             let phi = std::f32::consts::PI * i as f32 / rings as f32;
@@ -1612,7 +1680,7 @@ mod tests {
             assert!(vertices.iter().any(|v| v.position == point));
         }
     }
-    use std::collections::HashMap;
+
 
     #[test]
     fn shiny_material_reaches_all_faces_without_affecting_matte_or_water() {

@@ -56,7 +56,7 @@ use crate::ui::{
 };
 use crate::voxel::atlas::ATLAS_BYTES;
 use crate::voxel::chunk::world_to_chunk;
-use crate::voxel::mesher::{build_chunk_mesh, MeshData, Vertex};
+use crate::voxel::mesher::{MeshData, Vertex};
 use crate::voxel::{BlockType, World, CHUNK_X, CHUNK_Z};
 use crate::weather::{Weather, WeatherState};
 use crate::world_api_validate;
@@ -322,6 +322,8 @@ impl BirdVertex {
 }
 
 const RENDER_RADIUS: i32 = 5;
+/// Shaped mode keeps full mesh detail this many chunks around the player.
+const FULL_DETAIL_RADIUS: i32 = 2;
 const UNLOAD_RADIUS: i32 = RENDER_RADIUS + 2;
 const MESH_BUDGET_PER_FRAME: usize = 2;
 const CHUNK_GENERATION_BUDGET: Duration = Duration::from_millis(2);
@@ -746,6 +748,8 @@ pub struct App {
     return_to_menu: bool,
 
     chunk_meshes: HashMap<(i32, i32), GpuMesh>,
+    /// Detail each chunk mesh was built with (shaped mode: far chunks simpler).
+    chunk_detail: HashMap<(i32, i32), crate::voxel::mesher::Detail>,
     entity_mesh: DynamicMesh,
     held_mesh: DynamicMesh,
     /// Host-owned mining progress and cooldowns, shared by local and remote interactions.
@@ -1901,6 +1905,7 @@ impl App {
             quit_dialog_open: false,
             return_to_menu: false,
             chunk_meshes: HashMap::new(),
+            chunk_detail: HashMap::new(),
             entity_mesh,
             held_mesh,
             interaction_states: HashMap::new(),
@@ -6143,6 +6148,27 @@ impl App {
             self.world.ensure_chunk_loaded(cx, cz);
         }
 
+        // Shaped mode: full detail within FULL_DETAIL_RADIUS chunks, simpler
+        // meshes beyond. Chunks whose class changed are rebuilt in budget.
+        let shaping = self.world.terrain_shaping;
+        let detail_for = |key: (i32, i32)| {
+            if shaping && ((key.0 - pcx).abs() > FULL_DETAIL_RADIUS || (key.1 - pcz).abs() > FULL_DETAIL_RADIUS) {
+                crate::voxel::mesher::Detail::Far
+            } else {
+                crate::voxel::mesher::Detail::Full
+            }
+        };
+        let stale: Vec<(i32, i32)> = self
+            .chunk_detail
+            .iter()
+            .filter(|(key, detail)| detail_for(**key) != **detail)
+            .map(|(key, _)| *key)
+            .collect();
+        for key in stale {
+            if let Some(chunk) = self.world.chunks.get_mut(&key) {
+                chunk.dirty = true;
+            }
+        }
         let mut rebuilt = 0usize;
         let mut dirty_keys: Vec<(i32, i32)> = self
             .world
@@ -6167,7 +6193,9 @@ impl App {
                     .insert(key, crate::water::scan_chunk(&self.world, chunk));
                 self.campfires
                     .insert(key, crate::campfire::positions(chunk));
-                build_chunk_mesh(&self.world, chunk)
+                let detail = detail_for(key);
+                self.chunk_detail.insert(key, detail);
+                crate::voxel::mesher::build_chunk_mesh_with(&self.world, chunk, detail)
             };
             match upload_mesh(&self.device, &mesh_data) {
                 Some(gpu_mesh) => {
@@ -6199,6 +6227,7 @@ impl App {
         for key in unload {
             self.world.unload_chunk(key.0, key.1);
             self.chunk_meshes.remove(&key);
+            self.chunk_detail.remove(&key);
             self.waterfalls.remove(&key);
             self.campfires.remove(&key);
         }

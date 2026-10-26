@@ -269,7 +269,12 @@ mod tests {
             }
         }
         let mesh = crate::voxel::mesher::build_chunk_mesh(&world, &world.chunks[&(0, 0)]);
-        assert_eq!(mesh.vertices.len(), 26 * 60, "26 exposed clumps of 20 triangles, none for the buried center");
+        // 26 exposed clumps, none for the buried center: dense ones with 20
+        // triangles on 12 shared corners, sparse corner sprigs with 8 on 6.
+        let sprigs = (26 * 12 - mesh.vertices.len()) / 6;
+        assert!(sprigs > 0 && sprigs < 26, "{sprigs}");
+        assert_eq!(mesh.vertices.len(), (26 - sprigs) * 12 + sprigs * 6);
+        assert_eq!(mesh.indices.len(), ((26 - sprigs) * 20 + sprigs * 8) * 3);
         assert!(mesh.vertices.iter().all(|v| v.wind > 0.0 && v.tex_layer == NATURAL_FOLIAGE));
         // Clumps stay close to their cell (they may overlap neighbors slightly).
         for v in &mesh.vertices {

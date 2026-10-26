@@ -539,21 +539,54 @@ impl CellShape {
         for i in 0..GRID - 1 {
             for j in 0..GRID - 1 {
                 let (a, b, c, d) = (point(i, j), point(i + 1, j), point(i + 1, j + 1), point(i, j + 1));
-                for triangle in [[a, b, c], [a, c, d]] {
-                    let ceiling = if self.kind == ShapeKind::Bank { 1.0 - 1e-4 } else { 1.0 };
-                    let clipped = clip_y(&clip_y(&triangle, 0.0, true), ceiling, false);
-                    for k in 1..clipped.len().saturating_sub(1) {
-                        let t = [clipped[0], clipped[k], clipped[k + 1]];
-                        let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
-                        let area = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
-                        if area.iter().map(|a| a * a).sum::<f32>() > 1e-12 {
-                            triangles.push(t); // skip clipping slivers
-                        }
-                    }
-                }
+                self.clip_into(&mut triangles, [[a, b, c], [a, c, d]]);
             }
         }
         triangles
+    }
+
+    /// A two-triangle top through the corners only, clipped to this cell's
+    /// slab like `top_triangles`. Used for distant chunks; the rim matches
+    /// the full grid exactly, so neighbors at full detail still meet it.
+    pub fn coarse_triangles(&self) -> Vec<[[f32; 3]; 3]> {
+        let corner = |k: usize| {
+            let (cx, cz) = CORNERS[k];
+            [cx as f32, self.corners[k], cz as f32]
+        };
+        let mut triangles = Vec::with_capacity(4);
+        self.clip_into(&mut triangles, [[corner(0), corner(1), corner(2)], [corner(0), corner(2), corner(3)]]);
+        triangles
+    }
+
+    /// Whether the whole top is one plane through its corners (a plain ramp
+    /// or bank), so two triangles describe it exactly.
+    pub fn is_planar(&self) -> bool {
+        let c = self.corners;
+        if (c[0] + c[2] - c[1] - c[3]).abs() > 1e-4 {
+            return false;
+        }
+        (0..GRID).all(|i| {
+            (0..GRID).all(|j| {
+                let (u, v) = (i as f32 / 3.0, j as f32 / 3.0);
+                let plane = c[0] + (c[1] - c[0]) * u + (c[3] - c[0]) * v;
+                (self.grid[i][j] - plane).abs() < 1e-4
+            })
+        })
+    }
+
+    fn clip_into(&self, out: &mut Vec<[[f32; 3]; 3]>, triangles: [[[f32; 3]; 3]; 2]) {
+        let ceiling = if self.kind == ShapeKind::Bank { 1.0 - 1e-4 } else { 1.0 };
+        for triangle in triangles {
+            let clipped = clip_y(&clip_y(&triangle, 0.0, true), ceiling, false);
+            for k in 1..clipped.len().saturating_sub(1) {
+                let t = [clipped[0], clipped[k], clipped[k + 1]];
+                let (e1, e2) = (sub(t[1], t[0]), sub(t[2], t[0]));
+                let area = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+                if area.iter().map(|a| a * a).sum::<f32>() > 1e-12 {
+                    out.push(t); // skip clipping slivers
+                }
+            }
+        }
     }
 
     /// Solid height at local `(u, v)` (x, z) within this cell, 0..=1.
