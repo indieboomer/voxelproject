@@ -2,14 +2,17 @@
 
 In shaped mode (**F7**), living trees render as round, tapered trunks and limbs
 instead of cubes (`src/voxel/organic.rs`). This is the first tree pass from
-`Voxel_Project_Material_Shaping_and_Trees.md`: straight trunks with mild taper,
-angled limbs and forks. Foliage is unchanged in this pass, so trunks can be
-judged on their own.
+`Voxel_Project_Material_Shaping_and_Trees.md`. It covers straight trunks with
+mild taper, angled limbs and forks, then crowns of foliage clumps.
 
-| | Cubic | Organic |
-| --- | --- | --- |
-| Grove | ![](trees/wide-cubic.jpg) | ![](trees/wide-organic.jpg) |
-| Close | ![](trees/close-cubic.jpg) | ![](trees/close-organic.jpg) |
+| | Cubic | Organic trunks | With foliage clumps |
+| --- | --- | --- | --- |
+| Grove | ![](trees/wide-cubic.jpg) | ![](trees/wide-organic.jpg) | ![](trees/wide-crowns.jpg) |
+| Close | ![](trees/close-cubic.jpg) | ![](trees/close-organic.jpg) | ![](trees/close-crowns.jpg) |
+
+Generated hills with the whole shaped look:
+
+![](trees/hills-crowns.jpg)
 
 Render with `VOXEL_TREE_PREVIEW=off|on cargo test --release render_weather_previews -- --ignored`.
 `VOXEL_TREE_EYE=x,y,z` moves the camera. The grove has four species and a
@@ -59,6 +62,25 @@ round wood is sampled outside the cell, so trunks under a canopy aren't
 darkened as if buried. Cells beside a trunk (ground, leaves, placed blocks)
 now draw the faces they used to hide against it.
 
+## Crowns
+
+Each exposed living leaf cell renders as one irregular foliage clump
+(`push_foliage` in `mesher.rs`): a jittered, slightly flattened low-poly
+icosahedron (20 triangles), with leaf-texture cutout edges. Cells buried
+inside the crown emit nothing, since they would be hidden anyway.
+
+- **Lobes and gaps.** Clump size follows how many of the 26 surrounding cells
+  are leaves: from 0.42 at sparse edges to 0.78 inside. Dense parts merge into
+  lobed masses, and sparse ends shrink to sprigs, which opens gaps onto the
+  limbs and the sky.
+- **Colour.** Crown colour comes from the per-crown foliage palette (warm
+  greens; deeper for spruce; blossom for cherry). Clumps deep inside are
+  darker, and tops facing the sky slightly lighter.
+- **Matte.** Clumps have no sky reflection or sheen, so they don't read as glass.
+- **Sway.** Growing foliage sways. Placed leaves keep their static block form
+  and never animate, even inside a crown's reach.
+- **Picking and collision.** These still use each leaf cell's cube, as before.
+
 ## Interaction
 
 - **Aiming.** A ray selects a living cell only where it meets the wood
@@ -83,7 +105,9 @@ Tests in `voxel::organic::tests` and `player::tests`:
 - the player can stand beside a thin limb where the cube collided, but still
   can't walk into the limb.
 
-655 tests pass.
+Clump tests: a generated 3×3×3 crown draws exactly 26 clumps, with nothing for
+the buried centre. Every clump sways and stays near its cell. A placed leaf
+next to the crown stays static. 656 tests pass.
 
 ## Performance
 
@@ -91,9 +115,10 @@ Measured on an RTX 3060 at 1280×720 with the release build.
 
 | | Cubic | Shaped mode |
 | --- | --- | --- |
-| Meshing, 25 generated chunks (ms/chunk) | 1.67 | 8.04 (7.08 before trees) |
-| Triangles, same chunks | 80,548 | 176,467 (154,331 before trees) |
+| Meshing, 25 generated chunks (ms/chunk) | 1.67 | 9.27 (7.08 before trees, 8.04 with trunks only) |
+| Triangles, same chunks | 80,548 | 218,695 (154,331 before trees, 176,467 with trunks only) |
 | GPU frame, tree grove (median ms) | 0.66 | 1.53 |
+| GPU frame, generated hills (median ms) | — | 1.58 |
 
 The GPU figure covers the whole shaped look in that scene: dense grass tufts
 over the entire lawn, natural foliage and the trees. It does not isolate the
@@ -108,9 +133,15 @@ trees.
   block about their full cell.
 - **Knots.** A knot at a three-way fork is a sphere. Dedicated fork templates
   with blended junction patches would read more naturally.
-- **Foliage.** Crowns have not been reworked yet: clusters around limb ends,
-  branch-to-canopy links and fewer leaf-face artifacts. Thin, stretched leaf
-  faces are visible near some limbs.
+- **Close-up leaves.** Up close, clump undersides show large leaf-texture
+  pixels and shard-like cutout edges. A finer foliage texture, or texture
+  repeats inside the clump, would fix it.
+- **Crown shapes.** Crown silhouettes still follow the generator's leaf
+  clusters (stacked discs on some species). Reshaping crowns into lobes around
+  limb ends needs generator changes.
+- **Coast scene.** Its trees are built with F9 from edits, so they count as
+  placed. They keep block leaves and cube trunks; generated forests show the
+  new look.
 - **Ink.** Ink outlines treat trunks like any other geometry; trunk rings
   produce no extra lines because the surface is smooth.
 - **Next.** The post-and-beam timber junction, then material connections (brief §2 and §4).

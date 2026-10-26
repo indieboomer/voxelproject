@@ -532,6 +532,12 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                 // Only growing (generated) foliage sways; leaves a player or
                 // rule placed are recorded edits and stay completely still.
                 let placed = def.cutout && world.edits.get(&(wx, ly, wz)) == Some(&block);
+                // Growing crowns in shaped mode: foliage clumps instead of
+                // cube faces. Placed leaves keep their static block form.
+                if world.terrain_shaping && def.cutout && !placed {
+                    push_foliage(&mut vertices, &mut indices, &sample, block, [wx, ly, wz]);
+                    continue;
+                }
                 for (face_idx, normal) in FACE_NORMALS.iter().enumerate() {
                     if shape.is_some() && face_idx == 2 {
                         continue; // replaced by the shaped top fan
@@ -835,6 +841,109 @@ fn push_shaped_top(
                 wind: 0.0,
                 tex_layer: if palette.is_some() { natural::NATURAL_TEX } else { 0.0 },
                 glimmer: block.glimmer(),
+                skylight: 1.0,
+                wet: [crate::wetness::absorption(block), -1.],
+            });
+        }
+        indices.extend_from_slice(&[base_index, base_index + 1, base_index + 2]);
+    }
+}
+
+/// Icosahedron directions and faces for foliage clumps.
+fn icosahedron() -> ([Vec3; 12], [[usize; 3]; 20]) {
+    let t = (1.0 + 5f32.sqrt()) / 2.0;
+    let v = [
+        [-1.0, t, 0.0], [1.0, t, 0.0], [-1.0, -t, 0.0], [1.0, -t, 0.0],
+        [0.0, -1.0, t], [0.0, 1.0, t], [0.0, -1.0, -t], [0.0, 1.0, -t],
+        [t, 0.0, -1.0], [t, 0.0, 1.0], [-t, 0.0, -1.0], [-t, 0.0, 1.0],
+    ]
+    .map(|p| Vec3::from(p).normalize());
+    let f = [
+        [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
+        [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
+        [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
+        [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1],
+    ];
+    (v, f)
+}
+
+/// One irregular foliage clump for an exposed living leaf cell (shaped mode).
+/// Buried cells emit nothing. Clumps are fuller where the crown is dense and
+/// smaller at its sparse edges, which opens gaps onto limbs and sky; color is
+/// the crown palette, darker inside, with leaf-texture cutout edges. Picking
+/// and collision keep the cell's cube.
+fn push_foliage(
+    vertices: &mut Vec<Vertex>,
+    indices: &mut Vec<u32>,
+    sample: &impl Fn(i32, i32, i32) -> BlockType,
+    block: BlockType,
+    [x, y, z]: [i32; 3],
+) {
+    let leafy = |b: BlockType| b.def().cutout || b.is_wood();
+    let exposed = FACE_NORMALS.iter().any(|n| !leafy(sample(x + n[0], y + n[1], z + n[2])));
+    if !exposed {
+        return;
+    }
+    let mut dense = 0;
+    for dx in -1..=1 {
+        for dy in -1..=1 {
+            for dz in -1..=1 {
+                dense += ((dx, dy, dz) != (0, 0, 0) && sample(x + dx, y + dy, z + dz).def().cutout) as i32;
+            }
+        }
+    }
+    let density = dense as f32 / 26.0;
+    let r = |salt: u32| super::noise::block_rand(x, y, z, shaping::SHAPING_VERSION, 0xF011_0000 + salt);
+    let center = Vec3::new(
+        x as f32 + 0.5 + (r(1) - 0.5) * 0.24,
+        y as f32 + 0.5 + (r(2) - 0.5) * 0.2,
+        z as f32 + 0.5 + (r(3) - 0.5) * 0.24,
+    );
+    // Sparse edges shrink to small sprigs; dense interiors swell into masses.
+    let radius = 0.42 + 0.36 * density.sqrt();
+    // Flattened slightly, like a leaf cluster rather than a ball.
+    let squash = Vec3::new(1.0 + (r(4) - 0.5) * 0.3, 0.78 + r(5) * 0.18, 1.0 + (r(6) - 0.5) * 0.3);
+    let (dirs, faces) = icosahedron();
+    let points: Vec<Vec3> = dirs
+        .iter()
+        .enumerate()
+        .map(|(i, d)| center + *d * squash * radius * (0.8 + 0.4 * r(10 + i as u32)))
+        .collect();
+    let uv_rect = atlas::uv_rect(atlas::tile_for(block, 2));
+    let shade = 0.7 + 0.3 * (1.0 - density); // deeper inside the crown
+    for face in faces {
+        let [a, b, c] = face.map(|i| points[i]);
+        let outward = (a + b + c) / 3.0 - center;
+        let mut tri = [a, b, c];
+        if (b - a).cross(c - a).dot(outward) > 0.0 {
+            tri = [a, c, b]; // mesher winding is inward
+        }
+        let normal = outward.normalize_or_zero();
+        // Planar leaf texture across the triangle's dominant plane.
+        let (u_axis, v_axis) = if normal.y.abs() > normal.x.abs().max(normal.z.abs()) {
+            (0, 2)
+        } else if normal.x.abs() > normal.z.abs() {
+            (2, 1)
+        } else {
+            (0, 1)
+        };
+        let base_index = vertices.len() as u32;
+        for p in tri {
+            let local = p - Vec3::new(x as f32, y as f32, z as f32);
+            let (u, v) = (local[u_axis].rem_euclid(1.0), 1.0 - local[v_axis].rem_euclid(1.0));
+            let smooth = ((p - center).normalize_or_zero() * 0.7 + normal * 0.3 + Vec3::Y * 0.15).normalize_or_zero();
+            let albedo = natural::foliage(block, p.to_array());
+            vertices.push(Vertex {
+                position: p.to_array(),
+                color: albedo.map(|c| c * shade * (0.9 + 0.2 * smooth.y.max(0.0))),
+                normal: smooth.to_array(),
+                uv: [uv_rect[0] + u * (uv_rect[2] - uv_rect[0]), uv_rect[1] + v * (uv_rect[3] - uv_rect[1])],
+                ao: 1.0,
+                reflectivity: 0.0, // matte foliage: no sky sheen on clumps
+                emission: 0.0,
+                wind: 0.5,
+                tex_layer: natural::NATURAL_FOLIAGE,
+                glimmer: 0.0,
                 skylight: 1.0,
                 wet: [crate::wetness::absorption(block), -1.],
             });

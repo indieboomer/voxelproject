@@ -149,7 +149,7 @@ pub fn foliage(block: BlockType, p: [f32; 3]) -> [f32; 3] {
         BlockType::SpruceLeaves => mix(linear([0.30, 0.46, 0.24]), linear([0.22, 0.38, 0.22]), t),
         BlockType::CherryLeaves => mix(linear([0.94, 0.66, 0.74]), linear([0.86, 0.56, 0.66]), t),
         BlockType::BirchLeaves => mix(linear([0.60, 0.70, 0.26]), linear([0.44, 0.58, 0.20]), t),
-        _ => mix(linear([0.50, 0.62, 0.20]), linear([0.30, 0.46, 0.15]), t),
+        _ => mix(linear([0.58, 0.70, 0.24]), linear([0.38, 0.54, 0.17]), t),
     }
 }
 
@@ -255,5 +255,29 @@ mod tests {
             }
         }
         assert_eq!(tufts(&world), 0, "no tufts left under new blocks");
+    }
+
+    #[test]
+    fn growing_crowns_become_clumps_and_buried_leaves_emit_nothing() {
+        let mut world = world();
+        // A generated 3x3x3 crown: only exposed cells draw a clump.
+        for x in 4..7 {
+            for y in 9..12 {
+                for z in 4..7 {
+                    world.chunks.get_mut(&(0, 0)).unwrap().set_local(x, y, z, BlockType::OakLeaves);
+                }
+            }
+        }
+        let mesh = crate::voxel::mesher::build_chunk_mesh(&world, &world.chunks[&(0, 0)]);
+        assert_eq!(mesh.vertices.len(), 26 * 60, "26 exposed clumps of 20 triangles, none for the buried center");
+        assert!(mesh.vertices.iter().all(|v| v.wind > 0.0 && v.tex_layer == NATURAL_FOLIAGE));
+        // Clumps stay close to their cell (they may overlap neighbors slightly).
+        for v in &mesh.vertices {
+            assert!(v.position.iter().zip([4.0, 9.0, 4.0]).all(|(c, lo)| *c > lo - 0.4 && *c < lo + 3.4));
+        }
+        // A placed leaf stays a static block, even inside the crown's reach.
+        world.set_block(8, 10, 5, BlockType::OakLeaves);
+        let mesh = crate::voxel::mesher::build_chunk_mesh(&world, &world.chunks[&(0, 0)]);
+        assert!(mesh.vertices.iter().filter(|v| v.position[0] > 7.9).all(|v| v.wind == 0.0));
     }
 }
