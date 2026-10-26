@@ -11,6 +11,9 @@ pub struct Chunk {
     pub cz: i32,
     blocks: Vec<BlockType>,
     pub dirty: bool,
+    /// Set by an edit in or right next to this chunk: remesh it in full the
+    /// same frame instead of in time-sliced background steps.
+    pub urgent: bool,
     pub revision: u64,
     pub(crate) sky_cache: std::cell::RefCell<Option<crate::shelter::SkyField>>,
     roof: [u8; 256],
@@ -24,6 +27,7 @@ impl Chunk {
             cz,
             blocks: Vec::with_capacity((CHUNK_X * TERRAIN_HEIGHT * CHUNK_Z) as usize),
             dirty: true,
+            urgent: false,
             revision: 0,
             sky_cache: Default::default(),
             roof: [0; 256],

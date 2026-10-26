@@ -22,6 +22,7 @@ mod equipment;
 mod equipment_ui;
 mod fantasy_name;
 mod falling;
+mod mesh_schedule;
 #[cfg(test)]
 mod perf_tests;
 mod food;

@@ -221,9 +221,19 @@ impl<'a, F: Fn(i32, i32, i32) -> BlockType> ShapeCache<'a, F> {
             if let Some(&s) = self.steepness.borrow().get(&(x, z, reference)) {
                 return s;
             }
-            let t = |dx: i32, dz: i32| self.top(x + dx, z + dz, reference) as f32;
-            let gx = (t(1, 0) - t(-1, 0)) * 0.5;
-            let gz = (t(0, 1) - t(0, -1)) * 0.5;
+            // Rise to each neighbor, counting only rises that form slopes or
+            // soil banks: a rock cliff or a drop taller than BANK_DROP keeps
+            // a flat, shouldered top, which stays grassy up to its rim.
+            let here = self.top(x, z, reference);
+            let rise = |dx: i32, dz: i32| {
+                let there = self.top(x + dx, z + dz, reference);
+                let d = there - here;
+                let (high, low, hx, hz) = if d > 0 { (there, here, x + dx, z + dz) } else { (here, there, x, z) };
+                let earthen = (low..high).all(|y| material((self.sample)(hx, y, hz)) == Some(Material::Soil));
+                if d.abs() <= 1 || (d.abs() <= BANK_DROP && earthen) { d as f32 } else { 0.0 }
+            };
+            let gx = (rise(1, 0) - rise(-1, 0)) * 0.5;
+            let gz = (rise(0, 1) - rise(0, -1)) * 0.5;
             let s = (gx * gx + gz * gz).sqrt();
             self.steepness.borrow_mut().insert((x, z, reference), s);
             s
@@ -1095,12 +1105,19 @@ mod tests {
         // is a real shelf and stays green.
         assert_eq!(cache.grass_cover([7.5, 10.0, 7.5]), 0.0);
         assert!(cache.grass_cover([8.0, 10.0, 17.5]) > 0.5);
-        // A single flat cell between two steep rises reads as bank.
+        // A one-cell nick dug into a soil bank still reads as bank, while a
+        // flat top beside a rock cliff stays green to its rim.
         let mut notch = world_of(&[(0, 0)], crate::voxel::coast::steep_bank((0, 4, 0)).into_iter().filter(|c| c.0 < 16 && c.2 < 16));
         notch.set_block(8, 11, 7, BlockType::Air);
-        notch.set_block(8, 10, 7, BlockType::Air);
         let sample = |x, y, z| notch.get_block(x, y, z);
-        assert!(ShapeCache::new(&sample).grass_cover([8.5, 10.0, 7.5]) < 0.5);
+        assert!(ShapeCache::new(&sample).grass_cover([8.5, 11.0, 7.5]) < 0.5);
+        let mut cliff = world_of(&[(0, 0)], (0..16).flat_map(|x| (0..16).flat_map(move |z| {
+            let h = if x >= 8 { 6 } else { 3 };
+            (0..h).map(move |y| (x, y, z, if y == h - 1 { BlockType::Grass } else { BlockType::Stone }))
+        })));
+        cliff.terrain_shaping = true;
+        let sample = |x, y, z| cliff.get_block(x, y, z);
+        assert_eq!(ShapeCache::new(&sample).grass_cover([8.5, 6.0, 7.5]), 1.0, "rock cliff rim stays grassy");
         // Continuous: tiny moves never jump.
         for i in 0..200 {
             let p = [4.0 + i as f32 * 0.07, 9.0, 7.3];

@@ -212,9 +212,16 @@ fn ink(frag: vec4<f32>, color: vec3<f32>) -> vec3<f32> {
     return mix(color, color * vec3<f32>(0.26, 0.23, 0.22), edge * 0.85);
 }
 
+// Final grade: +20% saturation over the whole scene (the UI is drawn after
+// this pass and is unaffected).
+fn saturate_more(color: vec3<f32>) -> vec3<f32> {
+    let luma = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
+    return clamp(mix(vec3<f32>(luma), color, 1.2), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
 @fragment fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let color = resolve_scene(frag);
-    return vec4<f32>(ink(frag, color.rgb), color.a);
+    return vec4<f32>(saturate_more(ink(frag, color.rgb)), color.a);
 }
 
 @fragment fn fs_rays(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
@@ -225,5 +232,5 @@ fn ink(frag: vec4<f32>, color: vec3<f32>) -> vec3<f32> {
     // Keep nearby walls/held geometry from receiving an artificial glowing veil.
     let visibility = select(smoothstep(1.0,4.0,eye_depth(z)),1.0,z >= 1.0);
     let rays = textureSampleLevel(sunlight_rays,blur_sampler,uv,0.0).rgb * visibility;
-    return vec4<f32>(color.rgb + rays * (vec3<f32>(1.0)-color.rgb),1.0);
+    return vec4<f32>(saturate_more(color.rgb + rays * (vec3<f32>(1.0)-color.rgb)),1.0);
 }

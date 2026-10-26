@@ -676,6 +676,15 @@ impl World {
         if let Some(chunk) = self.chunks.get_mut(&(cx, cz)) {
             chunk.set_local(lx, wy, lz, block);
         }
+        // The edited chunk (and any within two cells, the shaping reach) must
+        // show the edit at once; the wider halo can catch up over frames.
+        for z in (wz - 2).div_euclid(CHUNK_Z)..=(wz + 2).div_euclid(CHUNK_Z) {
+            for x in (wx - 2).div_euclid(CHUNK_X)..=(wx + 2).div_euclid(CHUNK_X) {
+                if let Some(chunk) = self.chunks.get_mut(&(x, z)) {
+                    chunk.urgent = true;
+                }
+            }
+        }
         // Only chunks within the skylight halo can change (also covers AO and
         // boundary faces). Avoid rebuilding all nine chunks for every edit.
         for z in (wz - 8).div_euclid(CHUNK_Z)..=(wz + 8).div_euclid(CHUNK_Z) {

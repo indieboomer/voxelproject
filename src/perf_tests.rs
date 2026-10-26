@@ -53,6 +53,29 @@ fn perf_breakdown() {
             kinds.entry("~ (distinct vertex positions)").or_default().1 += distinct.len();
         }
         println!("  shaping={shaping} triangles by feature: {kinds:?}");
+        // Hitch size: the longest single step of mesh work in a frame, whole
+        // chunks (before) versus one-layer prepared steps (now), and what
+        // slicing adds in total.
+        let (mut worst_chunk, mut worst_step, mut whole, mut sliced) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+        for (key, chunk) in &world.chunks {
+            let detail = if shaping && (key.0.abs() > 2 || key.1.abs() > 2) { Detail::Far } else { Detail::Full };
+            let start = Instant::now();
+            let _ = build_chunk_mesh_with(&world, chunk, detail);
+            let t = start.elapsed().as_secs_f64() * 1000.0;
+            worst_chunk = worst_chunk.max(t);
+            whole += t;
+            let start = Instant::now();
+            let prep = crate::voxel::mesher::MeshPrep::new(&world, chunk);
+            sliced += start.elapsed().as_secs_f64() * 1000.0;
+            for layer in 0..chunk.stored_height() {
+                let start = Instant::now();
+                let _ = crate::voxel::mesher::build_chunk_mesh_prepared(&world, chunk, detail, layer..layer + 1, &prep);
+                let t = start.elapsed().as_secs_f64() * 1000.0;
+                worst_step = worst_step.max(t);
+                sliced += t;
+            }
+        }
+        println!("  shaping={shaping}: worst whole-chunk build {worst_chunk:.1} ms, worst one-layer step {worst_step:.1} ms; all chunks {whole:.0} ms whole vs {sliced:.0} ms sliced");
         // Per-frame work that reads shapes: player physics, aim ray, creatures.
         let feet = Vec3::new(8.5, world.terrain_height(8, 8) as f32 + 1.0, 8.5);
         let mut player = crate::player::Player::new(feet);

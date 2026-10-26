@@ -325,7 +325,7 @@ const RENDER_RADIUS: i32 = 5;
 /// Shaped mode keeps full mesh detail this many chunks around the player.
 const FULL_DETAIL_RADIUS: i32 = 2;
 const UNLOAD_RADIUS: i32 = RENDER_RADIUS + 2;
-const MESH_BUDGET_PER_FRAME: usize = 2;
+
 const CHUNK_GENERATION_BUDGET: Duration = Duration::from_millis(2);
 const CHUNK_MESH_BUDGET: Duration = Duration::from_millis(3);
 const REACH: f32 = 6.0;
@@ -750,6 +750,8 @@ pub struct App {
     chunk_meshes: HashMap<(i32, i32), GpuMesh>,
     /// Detail each chunk mesh was built with (shaped mode: far chunks simpler).
     chunk_detail: HashMap<(i32, i32), crate::voxel::mesher::Detail>,
+    /// Chunk meshes built a block layer at a time within the frame budget.
+    mesh_scheduler: crate::mesh_schedule::MeshScheduler,
     entity_mesh: DynamicMesh,
     held_mesh: DynamicMesh,
     /// Host-owned mining progress and cooldowns, shared by local and remote interactions.
@@ -1906,6 +1908,7 @@ impl App {
             return_to_menu: false,
             chunk_meshes: HashMap::new(),
             chunk_detail: HashMap::new(),
+            mesh_scheduler: Default::default(),
             entity_mesh,
             held_mesh,
             interaction_states: HashMap::new(),
@@ -6169,48 +6172,28 @@ impl App {
                 chunk.dirty = true;
             }
         }
-        let mut rebuilt = 0usize;
-        let mut dirty_keys: Vec<(i32, i32)> = self
+        let in_range = |&(x, z): &(i32, i32)| (x - pcx).abs() <= RENDER_RADIUS && (z - pcz).abs() <= RENDER_RADIUS;
+        // Fresh edits next to the player show at once: full rebuild now.
+        let urgent: Vec<(i32, i32)> = self
             .world
             .chunks
             .iter()
-            .filter(|(&(x, z), c)| {
-                c.dirty && (x - pcx).abs() <= RENDER_RADIUS && (z - pcz).abs() <= RENDER_RADIUS
-            })
+            .filter(|(k, c)| c.urgent && c.dirty && in_range(k))
             .map(|(k, _)| *k)
             .collect();
-        dirty_keys.sort_unstable_by_key(|&(x, z)| ((x - pcx).pow(2) + (z - pcz).pow(2), x, z));
-        let mesh_start = Instant::now();
-        for key in dirty_keys {
-            if rebuilt > 0
-                && (rebuilt >= MESH_BUDGET_PER_FRAME || mesh_start.elapsed() >= CHUNK_MESH_BUDGET)
-            {
-                break;
-            }
-            let mesh_data = {
-                let chunk = self.world.chunks.get(&key).unwrap();
-                self.waterfalls
-                    .insert(key, crate::water::scan_chunk(&self.world, chunk));
-                self.campfires
-                    .insert(key, crate::campfire::positions(chunk));
-                let detail = detail_for(key);
-                self.chunk_detail.insert(key, detail);
-                crate::voxel::mesher::build_chunk_mesh_with(&self.world, chunk, detail)
-            };
-            match upload_mesh(&self.device, &mesh_data) {
-                Some(gpu_mesh) => {
-                    self.chunk_meshes.insert(key, gpu_mesh);
-                }
-                None => {
-                    self.chunk_meshes.remove(&key);
-                }
-            }
-            if let Some(chunk) = self.world.chunks.get_mut(&key) {
-                chunk.dirty = false;
-            }
-            rebuilt += 1;
+        for key in urgent {
+            self.mesh_scheduler.cancel(key);
+            let detail = detail_for(key);
+            self.world.chunks.get_mut(&key).unwrap().dirty = false;
+            let mesh = crate::voxel::mesher::build_chunk_mesh_with(&self.world, &self.world.chunks[&key], detail);
+            self.finish_chunk_mesh(key, detail, &mesh);
         }
-        let _ = rebuilt;
+        // Everything else (streaming, distant detail changes, lighting halos)
+        // is built one block layer at a time within the frame budget.
+        let finished = self.mesh_scheduler.step(&mut self.world, (pcx, pcz), in_range, detail_for, CHUNK_MESH_BUDGET);
+        for (key, detail, mesh) in finished {
+            self.finish_chunk_mesh(key, detail, &mesh);
+        }
 
         let unload: Vec<(i32, i32)> = self
             .world
@@ -6230,6 +6213,25 @@ impl App {
             self.chunk_detail.remove(&key);
             self.waterfalls.remove(&key);
             self.campfires.remove(&key);
+        }
+    }
+
+    fn finish_chunk_mesh(&mut self, key: (i32, i32), detail: crate::voxel::mesher::Detail, mesh: &MeshData) {
+        if let Some(chunk) = self.world.chunks.get(&key) {
+            self.waterfalls.insert(key, crate::water::scan_chunk(&self.world, chunk));
+            self.campfires.insert(key, crate::campfire::positions(chunk));
+        }
+        match upload_mesh(&self.device, mesh) {
+            Some(gpu_mesh) => {
+                self.chunk_meshes.insert(key, gpu_mesh);
+            }
+            None => {
+                self.chunk_meshes.remove(&key);
+            }
+        }
+        self.chunk_detail.insert(key, detail);
+        if let Some(chunk) = self.world.chunks.get_mut(&key) {
+            chunk.urgent = false;
         }
     }
 

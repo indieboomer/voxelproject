@@ -405,21 +405,66 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
 }
 
 pub fn build_chunk_mesh_with(world: &World, chunk: &Chunk, detail: Detail) -> MeshData {
+    build_chunk_mesh_range(world, chunk, detail, 0..chunk.stored_height())
+}
+
+/// Per-chunk tables a mesh build reads for every layer: neighbor roof heights
+/// (rain on side faces) and each column's rain height. Computed once per
+/// build, so time-sliced builds don't redo them for every slice.
+pub struct MeshPrep {
+    side_roof: [[f32; 18]; 18],
+    rain_height: [[i32; CHUNK_Z as usize]; CHUNK_X as usize],
+}
+
+impl MeshPrep {
+    pub fn new(world: &World, chunk: &Chunk) -> Self {
+        let (ox, oz) = chunk.world_origin();
+        let side_roof = std::array::from_fn(|x| {
+            std::array::from_fn(|z| {
+                let wx = ox + x as i32 - 1;
+                let wz = oz + z as i32 - 1;
+                world
+                    .chunks
+                    .get(&super::chunk::world_to_chunk(wx, wz))
+                    .map_or(super::chunk::CHUNK_Y as f32, |c| {
+                        c.roof_height(wx.rem_euclid(16), wz.rem_euclid(16)) as f32
+                    })
+            })
+        });
+        // A roof, leaves, or water above a face shields it from surface rain.
+        let rain_height = std::array::from_fn(|x| {
+            std::array::from_fn(|z| {
+                (0..chunk.stored_height())
+                    .rev()
+                    .find(|&y| {
+                        let block = chunk.get_local(x as i32, y, z as i32);
+                        block.is_solid() || block == BlockType::Water
+                    })
+                    .unwrap_or(-1)
+            })
+        });
+        Self { side_roof, rain_height }
+    }
+}
+
+/// The part of a chunk mesh for block layers `layers` only. Concatenating
+/// consecutive ranges gives the same geometry as one full build, which lets
+/// the game spread a chunk's meshing over several frames.
+pub fn build_chunk_mesh_range(world: &World, chunk: &Chunk, detail: Detail, layers: std::ops::Range<i32>) -> MeshData {
+    build_chunk_mesh_prepared(world, chunk, detail, layers, &MeshPrep::new(world, chunk))
+}
+
+pub fn build_chunk_mesh_prepared(
+    world: &World,
+    chunk: &Chunk,
+    detail: Detail,
+    layers: std::ops::Range<i32>,
+    prep: &MeshPrep,
+) -> MeshData {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     let (ox, oz) = chunk.world_origin();
-    let side_roof: [[f32; 18]; 18] = std::array::from_fn(|x| {
-        std::array::from_fn(|z| {
-            let wx = ox + x as i32 - 1;
-            let wz = oz + z as i32 - 1;
-            world
-                .chunks
-                .get(&super::chunk::world_to_chunk(wx, wz))
-                .map_or(super::chunk::CHUNK_Y as f32, |c| {
-                    c.roof_height(wx.rem_euclid(16), wz.rem_euclid(16)) as f32
-                })
-        })
-    });
+    let side_roof = &prep.side_roof;
     let sample = |x: i32, y: i32, z: i32| {
         if world.automation.devices.is_empty()
             && x >= ox
@@ -433,22 +478,10 @@ pub fn build_chunk_mesh_with(world: &World, chunk: &Chunk, detail: Detail) -> Me
         }
     };
     let shapes = shaping::ShapeCache::new(&sample);
-    // One short column scan per mesh build, never per weather change/frame.
-    // A roof, leaves, or water above a face shields it from surface rain.
-    let rain_height: [[i32; CHUNK_Z as usize]; CHUNK_X as usize] = std::array::from_fn(|x| {
-        std::array::from_fn(|z| {
-            (0..chunk.stored_height())
-                .rev()
-                .find(|&y| {
-                    let block = chunk.get_local(x as i32, y, z as i32);
-                    block.is_solid() || block == BlockType::Water
-                })
-                .unwrap_or(-1)
-        })
-    });
+    let rain_height = &prep.rain_height;
 
     for lx in 0..CHUNK_X {
-        for ly in 0..chunk.stored_height() {
+        for ly in layers.clone() {
             for lz in 0..CHUNK_Z {
                 let block = chunk.get_local(lx, ly, lz);
                 if block == BlockType::Air {
@@ -1634,6 +1667,38 @@ pub fn push_cuboid(
 mod tests {
     use super::*;
     #[test]
+    fn layer_slices_concatenate_to_the_full_mesh() {
+        let mut world = World::new(42);
+        for x in -1..=1 {
+            for z in -1..=1 {
+                world.ensure_chunk_loaded(x, z);
+            }
+        }
+        for shaping in [false, true] {
+            world.terrain_shaping = shaping;
+            let chunk = &world.chunks[&(0, 0)];
+            for detail in [Detail::Full, Detail::Far] {
+                let full = build_chunk_mesh_with(&world, chunk, detail);
+                let mut sliced = MeshData { vertices: Vec::new(), indices: Vec::new() };
+                let mut layer = 0;
+                while layer < chunk.stored_height() {
+                    let end = (layer + 12).min(chunk.stored_height());
+                    sliced.extend(build_chunk_mesh_range(&world, chunk, detail, layer..end));
+                    layer = end;
+                }
+                let triangles = |m: &MeshData| {
+                    let mut t: Vec<[[u32; 3]; 3]> = m.indices.chunks(3)
+                        .map(|c| [0, 1, 2].map(|k| m.vertices[c[k] as usize].position.map(f32::to_bits)))
+                        .collect();
+                    t.sort();
+                    t
+                };
+                assert_eq!(triangles(&sliced), triangles(&full), "shaping {shaping} {detail:?}");
+            }
+        }
+    }
+
+        #[test]
     fn plant_variation_is_seeded_rooted_and_stays_inside_the_cell_in_storms() {
         let mut smallest = 1.0f32;
         let mut largest = 0.0f32;
