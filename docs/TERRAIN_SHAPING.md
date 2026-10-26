@@ -19,7 +19,7 @@ The images are matched offscreen renders with the same camera, meshes and lighti
 `VOXEL_SHAPING_PREVIEW=off|on cargo test --release render_weather_previews -- --ignored`.
 Add `VOXEL_LANDSCAPE_PREVIEW=hills` to render generated terrain instead of the garden.
 
-## Rules (shaping version 1)
+## Rules (shaping version 2)
 
 Code: `src/voxel/shaping.rs`. A cell is shaped only when every one of these holds:
 
@@ -31,7 +31,7 @@ Code: `src/voxel/shaping.rs`. A cell is shaped only when every one of these hold
 - No water lies in its 3×3 neighborhood on its own layer or the one above. Shores
   stay cubic because water faces are culled against opaque neighbors.
 
-The top becomes a four-triangle fan over the full square floor. Each top corner
+The top becomes a 4×4 height grid (18 triangles) over the full square floor. Each top corner
 height depends only on its lattice point, using the four cells that meet there:
 
 | Four cells on the cell's layer | Four cells one layer down | Corner height |
@@ -55,11 +55,30 @@ How many corners are high (at 1) picks the shape:
 | 1 | convex corner | at least 0.5, to keep volume |
 | 0 | cap (isolated cell, ridge, pillar) | 1.0, with every rim raised to at least 0.7 |
 
-Rock fans get a deterministic interior apex offset of up to ±0.12 for broad
-facets. The offset is seeded by world coordinates and never moves a cell's
-boundary edges. Soil normals are blended 60% toward the cell's mean slope.
-Shaped tops get a ±3% (soil) or ±5% (rock) per-cell brightness variation as a
-subtle hint of the editable unit.
+The base surface is the fan from the corners to that apex, sampled on the grid.
+The grid's rim always stays linear between corners. Each cell then picks a
+**variant** from a hash of its world position, and the variant moves only the
+four interior grid points, so neighbors and seams are unaffected:
+
+| Variant | Interior points | Look | Materials |
+| --- | --- | --- | --- |
+| Smooth | unchanged (rock: ±0.12 facet jitter) | plain 45° slope | soil, rock |
+| Rounded | +0.14 | bulging shoulder | soil |
+| Hollow | −0.14 | scooped, eroded slope | soil |
+| Terraced | pulled 85% to their mean | flat ledge between two steep risers (non-smooth) | soil, rock |
+| Rocky | ±0.2 jitter | lumpy broken ground (non-smooth) | soil, rock |
+
+Heights stay within 0.05..1. Smooth, Rounded and Hollow soil blends facet
+normals 60% toward the cell's mean slope. Terraced blends 15%, and Rocky and
+rock keep crisp facets. Shaped tops also get a ±3% (soil) or ±5% (rock)
+per-cell brightness variation as a subtle hint of the editable unit.
+
+**Leaves** (shaped mode only, visual only) pick one of five looks per block.
+Each look combines a quarter-turn texture rotation, an optional mirror, and a
+restrained tint: neutral, shaded deep green, sun-warmed, cool blue-green, or
+fresh bright. Every leaf corner is displaced by up to ±0.12 per axis, keyed by
+its world lattice point. Faces that share a corner move together, so canopy
+outlines turn ragged without cracks. Picking and collision still use the cube.
 
 **Shared faces.** A side face is drawn only in the band between the neighbor's
 top-edge profile and the cell's own (`exposed_region`). Both profiles are
@@ -73,12 +92,12 @@ stays watertight. The band belongs to the higher cell.
   lies behind. A hit reached from inside an occupied cell's empty part places
   the new block above that cell, never into it.
 - **Hover** (`block_target.rs`): the outline follows the shape. It draws the
-  floor, corner posts, top rim and fan creases rather than a cube.
+  floor, corner posts and the whole top grid rather than a cube.
 - **Collision** (`player.rs`): shaped cells collide with the exact maximum of
   their surface under the player's footprint. The player climbs rises of up to
   0.6 without jumping and snaps down slopes instead of hopping, so a 45° ramp
   is walkable. Cubic terrain behaves exactly as before.
-- **Plants** on a shaped cell root at its fan apex.
+- **Plants** on a shaped cell root at the surface height of its center.
 - **Creatures** are drawn resting on the shaped surface under their footprint
   (`creature::settle_on_shaped_terrain`, `shaping::rest_height`). This is
   display only. Host simulation, AI and hit detection stay on the voxel grid,
@@ -114,11 +133,11 @@ Automated tests in `src/voxel/shaping.rs` and `src/player.rs`:
 | Mode | ms per chunk | Triangles | Shaped cells |
 | --- | --- | --- | --- |
 | Cubic | 1.61 | 80,548 | 0 |
-| Shaped | 3.05 | 80,843 | 1,934 |
+| Shaped | 3.62 | 107,919 | 1,934 |
 
-Meshing takes about 1.9× as long, mostly from neighbor shape lookups on buried
-cells. Triangle count is nearly unchanged. Edits still remesh within the
-existing per-frame mesh budget.
+Meshing takes about 2.2× as long, mostly from neighbor shape lookups on buried
+cells. Triangles rise by about 34% because each shaped top is 18 triangles
+instead of 2. Edits still remesh within the existing per-frame mesh budget.
 
 **Not yet done.** No manual in-game walking test has been run. The playtest the
 brief asks for, with a player who doesn't know the rules, also hasn't happened,
@@ -146,5 +165,5 @@ better, feel right underfoot, and clearly behave as one removable cell?) as open
 2. Settle NPCs and remote-player avatars the same way creatures are settled.
 3. Shape shores by teaching water meshing to emit faces against partial
    neighbors, removing the largest fallback class.
-4. Cache shapes per chunk during meshing to recover most of the 1.9× cost.
+4. Cache shapes per chunk during meshing to recover most of the 2.2× cost.
 5. Try wider transitions using several explicitly owned surface cells for gentler hills.

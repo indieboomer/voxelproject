@@ -16,14 +16,18 @@ use super::block::BlockType;
 use super::world::World;
 
 /// Bump when rules change so screenshots/tests can name the rule set.
-pub const SHAPING_VERSION: u32 = 1;
+pub const SHAPING_VERSION: u32 = 2;
 /// Lowered corner height at the top of a drop of more than one cell.
 pub const SHOULDER: f32 = 0.6;
 /// Rim height of an isolated or ridge cell (no fully supported corner).
 pub const CAP_RIM: f32 = 0.7;
-/// Maximum interior facet offset of a rock fan center.
-const ROCK_FACET: f32 = 0.12;
-const FACET_SALT: u32 = 0x5A9E_0001;
+/// Top surface samples per side: a 4x4 height grid, 18 triangles.
+pub const GRID: usize = 4;
+const VARIANT_SALT: u32 = 0x5A9E_0001;
+const JITTER_SALT: u32 = 0x5A9E_0100;
+/// Interior grid points; the rim stays linear between corners so every
+/// neighbor sees the same boundary regardless of either cell's variant.
+const INTERIOR: [(usize, usize); 4] = [(1, 1), (2, 1), (1, 2), (2, 2)];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Material {
@@ -43,6 +47,22 @@ pub enum ShapeKind {
     Cap,
 }
 
+/// Cosmetic surface treatment, chosen per cell from its world position. Only
+/// interior grid points move, so variants never affect neighbors or seams.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Variant {
+    /// The plain slope (rock: broad deterministic facets).
+    Smooth,
+    /// Bulging, rounded shoulder.
+    Rounded,
+    /// Scooped, eroded hollow.
+    Hollow,
+    /// Non-smooth: a flat ledge between two short steep risers.
+    Terraced,
+    /// Non-smooth: lumpy broken ground.
+    Rocky,
+}
+
 /// Top corner order, as (x, z) offsets from the cell's min corner.
 pub const CORNERS: [(i32, i32); 4] = [(0, 0), (1, 0), (1, 1), (0, 1)];
 
@@ -52,8 +72,9 @@ pub struct CellShape {
     pub kind: ShapeKind,
     /// Top heights above the cell floor at `CORNERS`, each in 0..=1.
     pub corners: [f32; 4],
-    /// Fan apex height at the cell's horizontal center.
-    pub center: f32,
+    pub variant: Variant,
+    /// Surface heights at `(i / 3, j / 3)` as `grid[i][j]`, each in 0..=1.
+    pub grid: [[f32; GRID]; GRID],
 }
 
 pub fn material(block: BlockType) -> Option<Material> {
@@ -132,15 +153,55 @@ pub fn shape_with(
         1.0
     } else {
         let average = corners.iter().sum::<f32>() / 4.0;
-        let base = if kind == ShapeKind::ConvexCorner { average.max(0.5) } else { average };
-        if material == Material::Rock {
-            let r = super::noise::block_rand(x, y, z, SHAPING_VERSION, FACET_SALT);
-            (base + (r * 2.0 - 1.0) * ROCK_FACET).clamp(0.2, 1.0)
-        } else {
-            base
-        }
+        if kind == ShapeKind::ConvexCorner { average.max(0.5) } else { average }
     };
-    Some(CellShape { material, kind, corners, center })
+    // Base surface: the fan from the corners to `center`, sampled on the grid.
+    let mut grid: [[f32; GRID]; GRID] = std::array::from_fn(|i| {
+        std::array::from_fn(|j| fan_height(corners, center, i as f32 / 3.0, j as f32 / 3.0))
+    });
+    let pick = super::noise::block_rand(x, y, z, SHAPING_VERSION, VARIANT_SALT);
+    let variant = match material {
+        Material::Soil => [Variant::Smooth, Variant::Rounded, Variant::Hollow, Variant::Terraced, Variant::Rocky]
+            [((pick * 5.0) as usize).min(4)],
+        Material::Rock => [Variant::Smooth, Variant::Terraced, Variant::Rocky][((pick * 3.0) as usize).min(2)],
+    };
+    let shelf = INTERIOR.iter().map(|&(i, j)| grid[i][j]).sum::<f32>() / 4.0;
+    for (n, &(i, j)) in INTERIOR.iter().enumerate() {
+        let jitter = super::noise::block_rand(x, y, z, SHAPING_VERSION, JITTER_SALT + n as u32) * 2.0 - 1.0;
+        let base = grid[i][j];
+        grid[i][j] = match variant {
+            Variant::Smooth if material == Material::Rock => base + jitter * 0.12,
+            Variant::Smooth => base,
+            Variant::Rounded => base + 0.14,
+            Variant::Hollow => base - 0.14,
+            Variant::Terraced => shelf + (base - shelf) * 0.15,
+            Variant::Rocky => base + jitter * 0.2,
+        }
+        .clamp(0.05, 1.0);
+    }
+    Some(CellShape { material, kind, corners, variant, grid })
+}
+
+/// The original four-triangle fan from `corners` to an apex at the cell
+/// center; linear along each rim edge.
+fn fan_height(corners: [f32; 4], center: f32, u: f32, v: f32) -> f32 {
+    let (du, dv) = (u - 0.5, v - 0.5);
+    let edge = if dv.abs() >= du.abs() {
+        if dv < 0.0 { 0 } else { 2 }
+    } else if du > 0.0 {
+        1
+    } else {
+        3
+    };
+    let point = |k: usize| {
+        let (cx, cz) = CORNERS[k % 4];
+        [cx as f32, corners[k % 4], cz as f32]
+    };
+    let (a, b, c) = ([0.5, center, 0.5], point(edge), point(edge + 1));
+    let det = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
+    let wa = ((b[2] - c[2]) * (u - c[0]) + (c[0] - b[0]) * (v - c[2])) / det;
+    let wb = ((c[2] - a[2]) * (u - c[0]) + (a[0] - c[0]) * (v - c[2])) / det;
+    wa * a[1] + wb * b[1] + (1.0 - wa - wb) * c[1]
 }
 
 /// `shape_with` against loaded world blocks; `None` while shaping is off.
@@ -225,6 +286,28 @@ pub fn exposed_region(below: [f32; 2], top: [f32; 2]) -> Vec<[f32; 2]> {
     points
 }
 
+/// Clips a `(t, y)` face polygon to the side of the linear profile `line`
+/// (heights at t = 0 and t = 1) above it or below it, keeping its winding.
+pub fn clip_band(polygon: &[[f32; 2]], line: [f32; 2], above: bool) -> Vec<[f32; 2]> {
+    let side = |p: [f32; 2]| {
+        let d = p[1] - (line[0] + (line[1] - line[0]) * p[0]);
+        if above { d } else { -d }
+    };
+    let mut out = Vec::with_capacity(polygon.len() + 2);
+    for (i, &p) in polygon.iter().enumerate() {
+        let q = polygon[(i + 1) % polygon.len()];
+        let (dp, dq) = (side(p), side(q));
+        if dp >= 0.0 {
+            out.push(p);
+        }
+        if (dp >= 0.0) != (dq >= 0.0) {
+            let s = dp / (dp - dq);
+            out.push([p[0] + (q[0] - p[0]) * s, p[1] + (q[1] - p[1]) * s]);
+        }
+    }
+    if out.len() < 3 { Vec::new() } else { out }
+}
+
 impl CellShape {
     /// Height at top corner `(cx, cz)` in 0..=1 coordinates.
     pub fn corner(&self, cx: i32, cz: i32) -> f32 {
@@ -232,61 +315,85 @@ impl CellShape {
         self.corners[index]
     }
 
-    /// The four top triangles in local cell coordinates, each `[center,
-    /// corner i, corner i + 1]`, wound like the mesher's +Y face.
-    pub fn top_triangles(&self) -> [[[f32; 3]; 3]; 4] {
-        let apex = [0.5, self.center, 0.5];
-        std::array::from_fn(|i| {
-            let point = |k: usize| {
-                let (cx, cz) = CORNERS[k % 4];
-                [cx as f32, self.corners[k % 4], cz as f32]
-            };
-            [apex, point(i), point(i + 1)]
-        })
+    /// Height at the cell's horizontal center, where plants root.
+    pub fn center(&self) -> f32 {
+        self.height(0.5, 0.5)
+    }
+
+    /// How much the mesher blends facet normals toward the cell's mean slope.
+    pub fn smoothing(&self) -> f32 {
+        match (self.material, self.variant) {
+            (Material::Rock, _) | (_, Variant::Rocky) => 0.0,
+            (_, Variant::Terraced) => 0.15,
+            _ => 0.6,
+        }
+    }
+
+    /// The 18 top triangles in local cell coordinates. Each grid quad is split
+    /// along its (i, j)-(i + 1, j + 1) diagonal, wound like the mesher's +Y face.
+    pub fn top_triangles(&self) -> Vec<[[f32; 3]; 3]> {
+        let point = |i: usize, j: usize| [i as f32 / 3.0, self.grid[i][j], j as f32 / 3.0];
+        let mut triangles = Vec::with_capacity(18);
+        for i in 0..GRID - 1 {
+            for j in 0..GRID - 1 {
+                let (a, b, c, d) = (point(i, j), point(i + 1, j), point(i + 1, j + 1), point(i, j + 1));
+                triangles.push([a, b, c]);
+                triangles.push([a, c, d]);
+            }
+        }
+        triangles
     }
 
     /// Surface height at local `(u, v)` (x, z) in 0..=1.
     pub fn height(&self, u: f32, v: f32) -> f32 {
-        let (u, v) = (u.clamp(0.0, 1.0), v.clamp(0.0, 1.0));
-        let (du, dv) = (u - 0.5, v - 0.5);
-        let triangle = if dv.abs() >= du.abs() {
-            if dv < 0.0 { 0 } else { 2 }
-        } else if du > 0.0 {
-            1
+        let (u, v) = (u.clamp(0.0, 1.0) * 3.0, v.clamp(0.0, 1.0) * 3.0);
+        let (i, j) = ((u as usize).min(2), (v as usize).min(2));
+        let (fu, fv) = (u - i as f32, v - j as f32);
+        let g = &self.grid;
+        if fu >= fv {
+            g[i][j] + fu * (g[i + 1][j] - g[i][j]) + fv * (g[i + 1][j + 1] - g[i + 1][j])
         } else {
-            3
-        };
-        let [a, b, c] = self.top_triangles()[triangle];
-        // Barycentric interpolation in the xz plane.
-        let det = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
-        let wa = ((b[2] - c[2]) * (u - c[0]) + (c[0] - b[0]) * (v - c[2])) / det;
-        let wb = ((c[2] - a[2]) * (u - c[0]) + (a[0] - c[0]) * (v - c[2])) / det;
-        wa * a[1] + wb * b[1] + (1.0 - wa - wb) * c[1]
+            g[i][j] + fv * (g[i][j + 1] - g[i][j]) + fu * (g[i + 1][j + 1] - g[i][j + 1])
+        }
     }
 
     /// Exact maximum of `height` over a local rectangle (clamped to the cell).
-    /// The surface is linear on triangles split by the two diagonals, so the
-    /// maximum lies on a rectangle corner, a diagonal crossing, or the apex.
+    /// The surface is linear on each grid triangle, so the maximum lies on a
+    /// rectangle corner, a grid vertex inside it, or where the rectangle's
+    /// edges cross grid lines or quad diagonals.
     pub fn max_height_in(&self, u0: f32, u1: f32, v0: f32, v1: f32) -> f32 {
         let (u0, u1) = (u0.clamp(0.0, 1.0), u1.clamp(0.0, 1.0));
         let (v0, v1) = (v0.clamp(0.0, 1.0), v1.clamp(0.0, 1.0));
-        let mut best = [(u0, v0), (u1, v0), (u0, v1), (u1, v1)]
-            .iter()
-            .map(|&(u, v)| self.height(u, v))
-            .fold(0.0f32, f32::max);
+        let mut best = 0.0f32;
         let mut consider = |u: f32, v: f32| {
             if (u0..=u1).contains(&u) && (v0..=v1).contains(&v) {
                 best = best.max(self.height(u, v));
             }
         };
-        consider(0.5, 0.5);
-        for u in [u0, u1] {
-            consider(u, u);
-            consider(u, 1.0 - u);
+        for (u, v) in [(u0, v0), (u1, v0), (u0, v1), (u1, v1)] {
+            consider(u, v);
         }
-        for v in [v0, v1] {
-            consider(v, v);
-            consider(1.0 - v, v);
+        for k in 0..GRID {
+            let line = k as f32 / 3.0;
+            for other in 0..GRID {
+                consider(line, other as f32 / 3.0);
+            }
+            for v in [v0, v1] {
+                consider(line, v);
+            }
+            for u in [u0, u1] {
+                consider(u, line);
+            }
+        }
+        // Quad diagonals lie on lines u - v = d.
+        for d in -2..=2 {
+            let d = d as f32 / 3.0;
+            for v in [v0, v1] {
+                consider(v + d, v);
+            }
+            for u in [u0, u1] {
+                consider(u, u - d);
+            }
         }
         best
     }
@@ -437,13 +544,15 @@ mod tests {
             (7, 9, [1.0, 1.0, 0.0, 0.0]),
         ] {
             let s = shape(x, z);
-            assert_eq!((s.kind, s.corners, s.center), (ShapeKind::Ramp, corners, 0.5), "{x},{z}");
-            // A 45-degree ramp: height rises linearly across the cell.
-            assert!((s.height(0.5, 0.5) - 0.5).abs() < 1e-6);
+            assert_eq!((s.kind, s.corners), (ShapeKind::Ramp, corners), "{x},{z}");
+            if s.variant == Variant::Smooth {
+                // A plain 45-degree ramp: height rises linearly across the cell.
+                assert!((s.height(0.5, 0.5) - 0.5).abs() < 1e-6);
+            }
         }
         let corner = shape(5, 5);
         assert_eq!((corner.kind, corner.corners), (ShapeKind::ConvexCorner, [0.0, 0.0, 1.0, 0.0]));
-        assert!(corner.center >= 0.5, "convex corners keep substantial volume");
+        assert!(corner.center() >= 0.3, "convex corners keep substantial volume");
         // Interior and lower ground stay plain cubes.
         assert_eq!(shape_at(&world, 7, 2, 7), None);
         assert_eq!(shape_at(&world, 2, 1, 7), None);
@@ -483,7 +592,8 @@ mod tests {
         // An isolated cell keeps a substantial cap; so does a one-cell ridge.
         let lone = terrain(|x, z| if (x, z) == (7, 7) || (x == 3 && (4..10).contains(&z)) { 3 } else { 2 });
         let cap = shape_at(&lone, 7, 2, 7).unwrap();
-        assert_eq!((cap.kind, cap.center), (ShapeKind::Cap, 1.0));
+        assert_eq!(cap.kind, ShapeKind::Cap);
+        assert!(cap.center() >= CAP_RIM);
         assert!(cap.corners.iter().all(|&h| h == CAP_RIM));
         assert_eq!(shape_at(&lone, 3, 2, 6).unwrap().kind, ShapeKind::Cap);
 
@@ -539,6 +649,10 @@ mod tests {
         for key in keys {
             let mesh = build_chunk_mesh(world, &world.chunks[&key]);
             for tri in mesh.indices.chunks(3) {
+                // Swaying decorations (grass tufts) are attachments, not terrain surface.
+                if tri.iter().any(|&i| mesh.vertices[i as usize].wind > 0.0) {
+                    continue;
+                }
                 out.push([tri[0], tri[1], tri[2]].map(|i| Vec3::from(mesh.vertices[i as usize].position)));
             }
         }
@@ -710,16 +824,103 @@ mod tests {
     fn standing_bodies_rest_on_shaped_surfaces_only() {
         let mut world = terrain(plateau);
         // Grid-standing on the -X rim ramp (top of cell layer 2 is y = 3).
+        let ramp = shape_at(&world, 5, 2, 7).unwrap();
+        let highest = |points: &[(f32, f32)]| {
+            points.iter().map(|&(u, v)| 2.0 + ramp.height(u, v)).fold(f32::MIN, f32::max)
+        };
         let on_ramp = rest_height(&world, Vec3::new(5.5, 3.0, 7.5), 0.2);
-        assert!((on_ramp - 2.7).abs() < 1e-5, "{on_ramp}");
+        let expected = highest(&[(0.5, 0.5), (0.3, 0.3), (0.7, 0.3), (0.3, 0.7), (0.7, 0.7)]);
+        assert!((on_ramp - expected).abs() < 1e-5 && on_ramp < 3.0, "{on_ramp}");
         // Stepped up while overlapping the ramp, center still over low ground.
         let overlapping = rest_height(&world, Vec3::new(4.9, 3.0, 7.5), 0.2);
-        assert!((overlapping - 2.1).abs() < 1e-5, "{overlapping}");
+        assert!((overlapping - highest(&[(0.1, 0.3), (0.1, 0.7)]).max(2.0)).abs() < 1e-5, "{overlapping}");
         assert_eq!(rest_height(&world, Vec3::new(7.5, 3.0, 7.5), 0.2), 3.0, "flat plateau");
         assert_eq!(rest_height(&world, Vec3::new(2.5, 2.0, 7.5), 0.2), 2.0, "flat ground");
         assert_eq!(rest_height(&world, Vec3::new(5.5, 3.4, 7.5), 0.2), 3.4, "airborne");
         world.terrain_shaping = false;
         assert_eq!(rest_height(&world, Vec3::new(5.5, 3.0, 7.5), 0.2), 3.0);
+    }
+
+    /// A broad gentle field of ramps, so every variant appears many times.
+    fn ramp_field() -> (World, Vec<CellShape>) {
+        let world = terrain(|x, z| 2 + (x >= 8) as i32 + (z >= 8) as i32 * 0);
+        let ramps = (0..16).filter_map(|z| shape_at(&world, 8, 2, z)).filter(|s| s.kind == ShapeKind::Ramp);
+        let mut shapes: Vec<_> = ramps.collect();
+        // More ramp rows: plateaus at several x positions across a second world.
+        let wide = terrain(|x, _| 1 + x / 3);
+        for x in 0..16 {
+            for z in 1..15 {
+                for y in 0..8 {
+                    shapes.extend(shape_at(&wide, x, y, z).filter(|s| s.kind == ShapeKind::Ramp));
+                }
+            }
+        }
+        (world, shapes)
+    }
+
+    #[test]
+    fn slope_variants_differ_inside_but_share_the_rim() {
+        let (_, ramps) = ramp_field();
+        let seen: std::collections::BTreeSet<_> = ramps.iter().map(|s| format!("{:?}", s.variant)).collect();
+        assert_eq!(seen.len(), 5, "{seen:?}");
+        for s in &ramps {
+            // The rim stays linear between corners whatever the variant.
+            for (i, &(x0, z0)) in CORNERS.iter().enumerate() {
+                let (x1, z1) = CORNERS[(i + 1) % 4];
+                for t in [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0] {
+                    let (u, v) = (x0 as f32 + (x1 - x0) as f32 * t, z0 as f32 + (z1 - z0) as f32 * t);
+                    let linear = s.corners[i] + (s.corners[(i + 1) % 4] - s.corners[i]) * t;
+                    assert!((s.height(u, v) - linear).abs() < 1e-5, "{:?} at {u},{v}", s.variant);
+                }
+            }
+            assert!(s.grid.iter().flatten().all(|h| (0.0..=1.0).contains(h)));
+            // Along-slope profile through the cell center row (ramp rising in +x).
+            if s.corners == [0.0, 1.0, 1.0, 0.0] {
+                let profile = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0].map(|u| s.height(u, 1.0 / 3.0));
+                let rises = [profile[1] - profile[0], profile[2] - profile[1], profile[3] - profile[2]];
+                match s.variant {
+                    Variant::Smooth => assert!(rises.iter().all(|r| (r - 1.0 / 3.0).abs() < 1e-5)),
+                    Variant::Rounded => assert!(rises[0] > rises[2], "bulges: steep low, gentle high"),
+                    Variant::Hollow => assert!(rises[0] < rises[2], "scooped: gentle low, steep high"),
+                    // Non-smooth: a near-flat ledge between two steep risers.
+                    Variant::Terraced => assert!(rises[1].abs() < 0.06 && rises[0] > 0.4 && rises[2] > 0.4, "{rises:?}"),
+                    Variant::Rocky => {}
+                }
+            }
+        }
+        // Deterministic: the same world gives the same variant everywhere.
+        let (_, again) = ramp_field();
+        assert_eq!(ramps, again);
+    }
+
+    #[test]
+    fn leaves_vary_per_block_and_shared_corners_move_together() {
+        let mut cells = vec![];
+        for x in 2..10 {
+            for z in 2..10 {
+                cells.push((x, 5, z, BlockType::OakLeaves));
+            }
+        }
+        let mut world = world_of(&[(0, 0)], cells);
+        let mesh = build_chunk_mesh(&world, &world.chunks[&(0, 0)]);
+        // Every vertex is its lattice corner's shared placement, so faces
+        // meeting at a corner never crack apart.
+        let sample = |x, y, z| world.get_block(x, y, z);
+        let mut tints = std::collections::BTreeSet::new();
+        let mut moved = 0;
+        for v in &mesh.vertices {
+            let lattice = v.position.map(|c| c.round() as i32);
+            let (expected, _) = crate::voxel::natural::leaf_corner(&sample, lattice);
+            assert!((0..3).all(|k| (v.position[k] - expected[k]).abs() < 1e-4), "{:?} vs {expected:?}", v.position);
+            moved += v.position.iter().any(|c| c.fract().abs() > 0.01) as usize;
+            tints.insert(format!("{:.3}", v.color[0] / v.color[1]));
+        }
+        assert!(moved > 0);
+        assert!(tints.len() >= 4, "{tints:?}");
+        // Cubic mode leaves stay on the grid.
+        world.terrain_shaping = false;
+        let mesh = build_chunk_mesh(&world, &world.chunks[&(0, 0)]);
+        assert!(mesh.vertices.iter().all(|v| v.position.iter().all(|c| c.fract() == 0.0)));
     }
 
     #[test]

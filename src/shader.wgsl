@@ -21,6 +21,26 @@ fn water_slope(p: vec2<f32>, t: f32) -> vec2<f32> {
         + vec2<f32>(0.021, -0.014) * cos(c))
         * (0.7 + 0.6 * water_noise(p * 0.071 + vec2<f32>(19.7, 5.3)));
 }
+// Natural-coast shore foam (docs/NATURAL_COAST.md): broken bands travel
+// shoreward at locally varying phases, plus a lacy swash line at contact.
+// `shore` is 1 at land contact and 0 three cells out (narrower at rock).
+fn shore_foam(p: vec2<f32>, shore: f32, t: f32) -> f32 {
+    if shore <= 0.02 { return 0.0; }
+    let drift = water_noise(p * 0.35 + vec2<f32>(t * 0.03, -t * 0.02));
+    let wave = fract(shore * 1.8 - t * 0.16 + drift * 0.9);
+    let band = smoothstep(0.70, 0.86, wave) * (1.0 - smoothstep(0.88, 0.98, wave));
+    let patches = smoothstep(0.30, 0.62, water_noise(p * 0.8 + vec2<f32>(11.0, t * 0.05)));
+    let swash = smoothstep(0.78, 0.98, shore) * (0.45 + 0.55 * water_noise(p * 2.1 + vec2<f32>(t * 0.25, 3.0)));
+    let lace = smoothstep(0.30, 0.55, water_noise(p * 5.5 + vec2<f32>(-t * 0.3, t * 0.2)));
+    return clamp((band * patches * smoothstep(0.2, 0.6, shore) + swash) * lace, 0.0, 1.0);
+}
+// Face-plane world coordinates for procedural material grain.
+fn face_plane(p: vec3<f32>, n: vec3<f32>) -> vec2<f32> {
+    let a = abs(n);
+    if a.y > 0.7 { return p.xz; }
+    if a.x > a.z { return vec2<f32>(p.z, p.y); }
+    return p.xy;
+}
 struct CameraUniform {
     view_proj: mat4x4<f32>,
     light_view_proj: mat4x4<f32>,
@@ -39,7 +59,8 @@ struct CameraUniform {
     // toward white in fs_main below during a storm's lightning strike.
     // y = cloud coverage, z = camera eye underwater, w = surface wetness.
     weather_fx: vec4<f32>,
-    // x = water Fresnel toggle (1 enabled, 0 disabled).
+    // x = water Fresnel toggle (1 enabled, 0 disabled), +2 in the natural
+    // (shaped terrain) look; y = depth of field, z/w = near/far.
     graphics: vec4<f32>,
     camp_lights: array<vec4<f32>,4>,
 };
@@ -291,9 +312,29 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     } else {
         tex = textureSample(atlas_texture, atlas_sampler, in.uv);
     }
-    if tex.a < 0.5 {
+    // Natural foliage tests a coarser mip's coverage: fewer, chunkier gaps.
+    let foliage = in.tex_layer > 0.3 && in.tex_layer < 0.45;
+    let coverage = select(tex.a, textureSampleLevel(atlas_texture, atlas_sampler, in.uv, 2.0).a, foliage);
+    // Natural crowns read as dense leaf masses with occasional gaps.
+    if coverage < select(0.5, 0.3, foliage) {
         discard;
     }
+    // Natural terrain: the vertex color carries a world-space palette; keep
+    // only a soft share of the atlas's pixel detail plus continuous grain.
+    var albedo = tex.rgb;
+    if in.tex_layer > 0.1 && in.tex_layer < 0.5 {
+        let average = textureSampleLevel(atlas_texture, atlas_sampler, in.uv, 6.0).rgb;
+        let luma = vec3<f32>(0.2126, 0.7152, 0.0722);
+        let detail = clamp(dot(tex.rgb, luma) / max(dot(average, luma), 0.02), 0.55, 1.45);
+        let q = face_plane(in.world_pos, in.normal);
+        let grain = 0.88 + 0.12 * water_noise(q * 2.9) + 0.08 * water_noise(q * 9.7 + vec2<f32>(7.3, 1.9));
+        albedo = vec3<f32>(mix(1.0, detail, 0.3) * grain);
+        if foliage {
+            // Foliage palette in the vertex color; more leaf texture detail.
+            albedo = vec3<f32>(mix(1.0, detail, 0.8) * grain);
+        }
+    }
+    let natural = camera.graphics.x > 1.5;
 
     let ndotl = max(dot(shading_normal, camera.sun_dir.xyz), 0.0);
     let ambient = mix(0.012, camera.light_params.x, in.skylight);
@@ -305,7 +346,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         shadow = shadow_factor(in.world_pos, ndotl);
     }
     let material_wet = select(wet, 0.0, is_water);
-    let base = tex.rgb * in.color * (1.0 - material_wet * (0.06+0.30*absorption));
+    let base = albedo * in.color * (1.0 - material_wet * (0.06+0.30*absorption));
     let view_dir = normalize(camera.camera_pos.xyz - in.world_pos);
     let roughness = select(mix(0.85 - reflectivity * 0.55, mix(0.16,0.55,absorption), material_wet), 0.15, is_water);
     let exponent = mix(12.0, 128.0, (1.0 - roughness) * (1.0 - roughness));
@@ -314,10 +355,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let hemisphere = shading_normal.y * 0.5 + 0.5;
     let golden_hour = (1.0 - smoothstep(0.0, 0.4, camera.sun_dir.w))
         * smoothstep(-0.2, 0.0, camera.sun_dir.w);
+    // The natural look: warmer sun, cooler sky fill.
     let fill_tint = mix(vec3<f32>(1.02, 0.96, 0.88), vec3<f32>(0.94, 0.98, 1.04), hemisphere)
-        * mix(vec3<f32>(1.0), vec3<f32>(1.12, 0.94, 0.76), golden_hour);
+        * mix(vec3<f32>(1.0), vec3<f32>(1.12, 0.94, 0.76), golden_hour)
+        * select(vec3<f32>(1.0), vec3<f32>(0.90, 0.97, 1.10), natural);
     let fill = fill_tint * ambient * mix(0.65, 1.15, hemisphere) * in.ao;
-    let sun_tint = mix(vec3<f32>(1.0, 0.98, 0.93), vec3<f32>(1.0, 0.62, 0.24), golden_hour);
+    let sun_tint = mix(vec3<f32>(1.0, 0.98, 0.93), vec3<f32>(1.0, 0.62, 0.24), golden_hour)
+        * select(vec3<f32>(1.0), vec3<f32>(1.04, 0.96, 0.84), natural);
     let direct = sun_tint * sun_intensity * ndotl * shadow * mix(0.8, 1.0, in.ao);
     var local_light=vec3<f32>(0.0);
     var local_specular=vec3<f32>(0.0);
@@ -362,7 +406,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // horizon while still becoming strongest at shallow viewing angles.
     // Keep a small base reflection when disabled; the setting only removes
     // the view-angle boost and leaves screen-space reflections intact.
-    let fresnel_base = select(0.06, 0.06 + 0.94 * grazing2 * grazing, camera.graphics.x > 0.5);
+    let fresnel_base = select(0.06, 0.06 + 0.94 * grazing2 * grazing, (camera.graphics.x % 2.0) > 0.5);
     // Break up large, repeated reflection patches with a subtle continuous
     // world-space modulation. It is deliberately low contrast so waves and
     // reflected silhouettes remain the visual focus.
@@ -421,12 +465,29 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var reflected = lit + sky_reflection + sun_tint * specular + glow + glimmer
         + vec3<f32>(0.65, 0.85, 0.92) * current_foam * (ambient + sun_intensity * ndotl * shadow);
 
+    var water_mask = select(1.0, 0.0, is_water && in.normal.y > 0.5);
     if is_water && in.normal.y > 0.5 {
         // Schlick water/air interface: 2% reflection at normal incidence.
-        let water_fresnel = 0.06 + 0.94 * fresnel;
-        let body = mix(lit, vec3<f32>(0.025, 0.15, 0.19) * (fill + direct), 0.55);
-        reflected = mix(body, environment, water_fresnel) + sun_tint * specular
+        var water_fresnel = 0.06 + 0.94 * fresnel;
+        var body = mix(lit, vec3<f32>(0.025, 0.15, 0.19) * (fill + direct), 0.55);
+        var foam = 0.0;
+        if in.wet.x > 9.5 {
+            // Natural shallows: turquoise over a visible seabed, deepening blue.
+            let depth = in.wet.x - 10.0;
+            let clarity = exp(-depth * 0.6);
+            let column = mix(vec3<f32>(0.010, 0.085, 0.20), vec3<f32>(0.035, 0.40, 0.42), exp(-depth * 0.3));
+            let seabed = in.color * vec3<f32>(0.55, 0.95, 0.90);
+            body = mix(column, seabed, clarity * 0.75) * (fill + direct);
+            water_fresnel *= 0.3;
+            foam = shore_foam(in.world_pos.xz, clamp(in.wet.y, 0.0, 1.0), camera.light_params.z);
+        }
+        // Natural water: a softer sun glint so the turquoise stays readable.
+        let glint = select(1.0, 0.45, in.wet.x > 9.5);
+        reflected = mix(body, environment, water_fresnel) + sun_tint * specular * glint
             + vec3<f32>(0.65, 0.85, 0.92) * current_foam * (ambient + sun_intensity * ndotl * shadow);
+        reflected = mix(reflected, vec3<f32>(0.93, 0.96, 0.97) * (fill + direct) * 1.1, foam * 0.9);
+        // Foam is not a mirror: keep it out of the screen-space reflection pass.
+        water_mask = select(water_mask, 1.0, foam > 0.35);
     }
     let dist = distance(in.world_pos, camera.camera_pos.xyz);
     let underwater = camera.weather_fx.z;
@@ -445,5 +506,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // other.
     let flashed = mix(grade(final_color), vec3<f32>(1.0), camera.weather_fx.x * in.skylight);
     // Internal water mask; the reflection resolve restores opaque alpha.
-    return vec4<f32>(flashed, select(1.0, 0.0, is_water && in.normal.y > 0.5 && underwater < 0.5));
+    return vec4<f32>(flashed, select(water_mask, 1.0, underwater >= 0.5));
 }

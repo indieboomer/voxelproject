@@ -136,9 +136,10 @@ fn resolve_scene(frag: vec4<f32>) -> vec4<f32> {
     let normal = normalize(vec3<f32>(slope.x, 1.0, slope.y));
     let direction = reflect(-view, normal);
     // Match the broad Fresnel response used by the main water material.
-    let fresnel_base = select(0.06, 0.06 + 0.94 * pow(1.0 - max(dot(normal, view), 0.0), 3.0), camera.graphics.x > 0.5);
+    let fresnel_base = select(0.06, 0.06 + 0.94 * pow(1.0 - max(dot(normal, view), 0.0), 3.0), (camera.graphics.x % 2.0) > 0.5);
     let fresnel_noise = 0.90 + 0.10 * water_noise(pos.xz * 0.13);
-    let fresnel = fresnel_base * fresnel_noise;
+    // The natural look keeps water color readable: weaker mirror reflections.
+    let fresnel = fresnel_base * fresnel_noise * select(1.0, 0.4, camera.graphics.x > 1.5);
     if direction.y <= 0.01 || fresnel < 0.025 { return vec4<f32>(original.rgb, 1.0); }
     let origin = pos + vec3<f32>(0.0, 0.08, 0.0);
     var previous = 0.0;

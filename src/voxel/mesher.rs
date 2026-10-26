@@ -4,6 +4,7 @@ use glam::Vec3;
 use super::atlas;
 use super::block::BlockType;
 use super::chunk::{Chunk, CHUNK_X, CHUNK_Z};
+use super::natural::{self, Palette};
 use super::shaping::{self, CellShape, Material};
 use super::world::World;
 
@@ -481,7 +482,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                     if world.terrain_shaping {
                         if let Some(below) = shaping::shape_with(&sample, wx, ly - 1, wz) {
                             for v in &mut vertices[first..] {
-                                v.position[1] += below.center - 1.0;
+                                v.position[1] += below.center() - 1.0;
                             }
                         }
                     }
@@ -506,7 +507,17 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                         reflectivity,
                     );
                 }
+                let natural = if world.terrain_shaping { natural::palette(block) } else { None };
+                if world.terrain_shaping && block == BlockType::Grass && !sample(wx, ly + 1, wz).is_solid()
+                    && sample(wx, ly + 1, wz) != BlockType::Water
+                {
+                    push_tufts(&mut vertices, &mut indices, shape.as_ref(), (wx, ly, wz));
+                }
 
+                let leaf = (world.terrain_shaping && def.cutout).then(|| LeafVariant::at(wx, ly, wz));
+                // Only growing (generated) foliage sways; leaves a player or
+                // rule placed are recorded edits and stay completely still.
+                let placed = def.cutout && world.edits.get(&(wx, ly, wz)) == Some(&block);
                 for (face_idx, normal) in FACE_NORMALS.iter().enumerate() {
                     if shape.is_some() && face_idx == 2 {
                         continue; // replaced by the shaped top fan
@@ -527,18 +538,17 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                     if world.terrain_shaping && normal[1] == 0 {
                         let top = shaping::face_edge_heights(shape.as_ref(), face_idx, [0; 3]);
                         if visible {
-                            if shape.is_some() {
+                            if shape.is_some() || natural.is_some() {
                                 band = Some(([0.0; 2], top));
                             }
                         } else if neighbor.is_opaque() {
                             if let Some(other) = shaping::shape_with(&sample, nx, ny, nz) {
                                 visible = true;
-                                let below = if block.is_opaque() {
-                                    shaping::face_edge_heights(Some(&other), face_idx, *normal)
-                                } else {
-                                    [0.0; 2]
-                                };
-                                band = Some((below, top));
+                                // Non-opaque blocks (leaves) draw their whole face.
+                                if block.is_opaque() {
+                                    let below = shaping::face_edge_heights(Some(&other), face_idx, *normal);
+                                    band = Some((below, top));
+                                }
                             }
                         }
                     }
@@ -578,7 +588,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                         } else {
                             -(flow[1].atan2(flow[0]) + std::f32::consts::PI + 1.0)
                         }
-                    } else if def.cutout {
+                    } else if def.cutout && !placed {
                         0.5
                     } else {
                         0.0
@@ -600,51 +610,71 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                     });
 
                     if let Some((below, top)) = band {
-                        let polygon = shaping::exposed_region(below, top);
-                        let [c0, c1, ..] = FACE_VERTS[face_idx];
-                        for &[t, y] in &polygon {
-                            let lerp = |a: f32, b: f32| a + (b - a) * t;
-                            let (ao_low, ao_high) =
-                                (lerp(corner_ao[0], corner_ao[1]), lerp(corner_ao[3], corner_ao[2]));
-                            // The texture's top row follows this cell's own top edge.
-                            let v = (lerp(top[0], top[1]) - y).clamp(0.0, 1.0);
-                            vertices.push(Vertex {
-                                position: [
-                                    wx as f32 + lerp(c0[0], c1[0]),
-                                    ly as f32 + y,
-                                    wz as f32 + lerp(c0[2], c1[2]),
-                                ],
-                                color,
-                                normal: [normal[0] as f32, normal[1] as f32, normal[2] as f32],
-                                uv: [
-                                    uv_rect[0] + t * (uv_rect[2] - uv_rect[0]),
-                                    uv_rect[1] + v * (uv_rect[3] - uv_rect[1]),
-                                ],
-                                ao: ao_low + (ao_high - ao_low) * y,
-                                reflectivity,
-                                emission,
-                                wind,
-                                tex_layer: 0.0,
-                                glimmer: block.glimmer(),
-                                skylight: 1.0,
-                                wet: [crate::wetness::absorption(block), -1.],
-                            });
-                        }
-                        for i in 1..polygon.len().saturating_sub(1) as u32 {
-                            indices.extend_from_slice(&[base_index, base_index + i, base_index + i + 1]);
+                        let side = Side {
+                            face: face_idx,
+                            origin: (wx, ly, wz),
+                            corner_ao,
+                            color,
+                            reflectivity,
+                            emission,
+                            wind,
+                            glimmer: block.glimmer(),
+                            absorption: crate::wetness::absorption(block),
+                        };
+                        match natural {
+                            // Earth side under a grass lip that follows the top edge.
+                            Some(Palette::Grass) => {
+                                let lip = top.map(|h| (h - natural::GRASS_LIP).max(0.0));
+                                let soil = atlas::uv_rect(atlas::tile_for(BlockType::Soil, face_idx));
+                                let grass = atlas::uv_rect(atlas::tile_for(BlockType::Grass, 2));
+                                let band = shaping::exposed_region(below, top);
+                                let earth = shaping::clip_band(&band, lip, false);
+                                let turf = shaping::clip_band(&band, lip, true);
+                                side.push_polygon(&mut vertices, &mut indices, &earth, top, soil, Some(Palette::Soil));
+                                side.push_polygon(&mut vertices, &mut indices, &turf, top, grass, Some(Palette::Grass));
+                            }
+                            Some(Palette::Rock) => {
+                                side.push(&mut vertices, &mut indices, below, top, uv_rect, natural, true)
+                            }
+                            _ => side.push(&mut vertices, &mut indices, below, top, uv_rect, natural, false),
                         }
                         continue;
                     }
 
                     for (corner_idx, corner) in FACE_VERTS[face_idx].iter().enumerate() {
                         let ao = corner_ao[corner_idx];
-                        let [uc, vc] = FACE_UV_CORNERS[corner_idx];
+                        let [mut uc, mut vc] = FACE_UV_CORNERS[corner_idx];
+                        let mut position = [
+                            wx as f32 + corner[0],
+                            ly as f32 + corner[1],
+                            wz as f32 + corner[2],
+                        ];
+                        let mut color = color;
+                        let mut tex_layer = 0.0;
+                        let mut wet = [crate::wetness::absorption(block), -1.];
+                        let lattice = [wx + corner[0] as i32, ly + corner[1] as i32, wz + corner[2] as i32];
+                        if let Some(leaf) = &leaf {
+                            [uc, vc] = leaf.uv([uc, vc]);
+                            let (corner, depth_shade) = natural::leaf_corner(&sample, lattice);
+                            position = corner;
+                            let albedo = natural::foliage(block, position);
+                            color = std::array::from_fn(|k| {
+                                color[k] * albedo[k] * depth_shade * (1.0 + (leaf.tint[k] - 1.0) * 0.25)
+                            });
+                            tex_layer = natural::NATURAL_FOLIAGE;
+                        } else if let Some(palette) = natural {
+                            let albedo = natural::tint(palette, position);
+                            color = std::array::from_fn(|k| color[k] * albedo[k]);
+                            tex_layer = natural::NATURAL_TEX;
+                        } else if world.terrain_shaping && block == BlockType::Water && face_idx == 2 {
+                            // Shallows: depth, shore proximity and seabed color
+                            // for the water shader's tint and foam.
+                            let (depth, shore, floor) = natural::water_corner(&sample, lattice[0], ly, lattice[2]);
+                            color = std::array::from_fn(|k| color[k] * floor[k]);
+                            wet = [natural::WATER_DATA + depth, shore];
+                        }
                         vertices.push(Vertex {
-                            position: [
-                                wx as f32 + corner[0],
-                                ly as f32 + corner[1],
-                                wz as f32 + corner[2],
-                            ],
+                            position,
                             color,
                             normal: [normal[0] as f32, normal[1] as f32, normal[2] as f32],
                             uv: [
@@ -655,10 +685,10 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                             reflectivity,
                             emission,
                             wind,
-                            tex_layer: 0.0,
+                            tex_layer,
                             glimmer: block.glimmer(),
                             skylight: 1.0,
-                            wet: [crate::wetness::absorption(block), -1.],
+                            wet,
                         });
                     }
                     indices.extend_from_slice(&[
@@ -689,10 +719,10 @@ fn slope_shade(n: [f32; 3]) -> f32 {
     0.85 + 0.15 * (side + (face_shade(2) - side) * n[1].max(0.0))
 }
 
-/// Emits a shaped cell's top as its four-triangle fan. Soil facets blend
-/// toward the cell's mean slope (restrained smoothing); rock keeps broad
-/// flat facets. A small per-cell brightness variation hints at the editable
-/// unit without drawing seams.
+/// Emits a shaped cell's top grid. Smooth soil variants blend facet normals
+/// toward the cell's mean slope (restrained smoothing); rock, terraced and
+/// rocky variants keep crisp facets. A small per-cell brightness variation
+/// hints at the editable unit without drawing seams.
 fn push_shaped_top(
     vertices: &mut Vec<Vertex>,
     indices: &mut Vec<u32>,
@@ -712,36 +742,45 @@ fn push_shaped_top(
             ao_occluder(sample(wx + c.0, ly + c.1, wz + c.2)),
         )
     });
-    let center_ao = corner_ao.iter().sum::<f32>() / 4.0;
+    // Corner order (0,0), (1,0), (1,1), (0,1), interpolated across the cell.
+    let ao_at = |u: f32, v: f32| {
+        let low = corner_ao[0] + (corner_ao[1] - corner_ao[0]) * u;
+        let high = corner_ao[3] + (corner_ao[2] - corner_ao[3]) * u;
+        low + (high - low) * v
+    };
     let triangles = shape.top_triangles();
-    let facets = triangles.map(|[a, b, c]| normalize3(cross3(sub3(c, a), sub3(b, a))));
+    let facets: Vec<[f32; 3]> =
+        triangles.iter().map(|&[a, b, c]| normalize3(cross3(sub3(c, a), sub3(b, a)))).collect();
     let mean = normalize3(facets.iter().fold([0.0; 3], |s, n| [s[0] + n[0], s[1] + n[1], s[2] + n[2]]));
-    let (smoothing, spread) = match shape.material {
-        Material::Soil => (0.6, 0.06),
-        Material::Rock => (0.0, 0.10),
+    let smoothing = shape.smoothing();
+    let spread = match shape.material {
+        Material::Soil => 0.06,
+        Material::Rock => 0.10,
     };
     let variation = 1.0
         + spread * (super::noise::block_rand(wx, ly, wz, shaping::SHAPING_VERSION, 0x7E11_0002) - 0.5);
-    for (i, triangle) in triangles.iter().enumerate() {
-        let f = facets[i];
+    let palette = natural::palette(block);
+    for (triangle, f) in triangles.iter().zip(&facets) {
         let normal = normalize3(std::array::from_fn(|k| f[k] + (mean[k] - f[k]) * smoothing));
         let shade = slope_shade(normal) * variation;
         let base_index = vertices.len() as u32;
-        for (k, p) in triangle.iter().enumerate() {
+        for p in triangle {
+            let position = [wx as f32 + p[0], ly as f32 + p[1], wz as f32 + p[2]];
+            let albedo = palette.map_or([1.0; 3], |palette| natural::tint(palette, position));
             vertices.push(Vertex {
-                position: [wx as f32 + p[0], ly as f32 + p[1], wz as f32 + p[2]],
-                color: [shade; 3],
+                position,
+                color: albedo.map(|a| a * shade),
                 normal,
                 // Same orientation as the cube's +Y face: u = x, v = 1 - z.
                 uv: [
                     uv_rect[0] + p[0] * (uv_rect[2] - uv_rect[0]),
                     uv_rect[1] + (1.0 - p[2]) * (uv_rect[3] - uv_rect[1]),
                 ],
-                ao: if k == 0 { center_ao } else { corner_ao[(i + k - 1) % 4] },
+                ao: ao_at(p[0], p[2]),
                 reflectivity,
                 emission: def.emission,
                 wind: 0.0,
-                tex_layer: 0.0,
+                tex_layer: if palette.is_some() { natural::NATURAL_TEX } else { 0.0 },
                 glimmer: block.glimmer(),
                 skylight: 1.0,
                 wet: [crate::wetness::absorption(block), -1.],
@@ -749,6 +788,209 @@ fn push_shaped_top(
         }
         indices.extend_from_slice(&[base_index, base_index + 1, base_index + 2]);
     }
+}
+
+/// Shared attributes of one vertical cube face, emitted as polygon bands.
+struct Side {
+    face: usize,
+    origin: (i32, i32, i32),
+    corner_ao: [f32; 4],
+    color: [f32; 3],
+    reflectivity: f32,
+    emission: f32,
+    wind: f32,
+    glimmer: f32,
+    absorption: f32,
+}
+
+impl Side {
+    /// Emits the band between profiles `below` and `top` (see
+    /// `shaping::exposed_region`). With a palette, colors follow the natural
+    /// world-space tint; `facet` breaks a full rock face into angular facets
+    /// whose interior points sink up to 0.16 into the owner cell.
+    #[allow(clippy::too_many_arguments)]
+    fn push(
+        &self,
+        vertices: &mut Vec<Vertex>,
+        indices: &mut Vec<u32>,
+        below: [f32; 2],
+        top: [f32; 2],
+        uv_rect: [f32; 4],
+        palette: Option<Palette>,
+        facet: bool,
+    ) {
+        let (wx, ly, wz) = self.origin;
+        let [c0, c1, ..] = FACE_VERTS[self.face];
+        let n = FACE_NORMALS[self.face].map(|c| c as f32);
+        let point = |t: f32, y: f32| {
+            [wx as f32 + c0[0] + (c1[0] - c0[0]) * t, ly as f32 + y, wz as f32 + c0[2] + (c1[2] - c0[2]) * t]
+        };
+        let full = below == [0.0; 2] && top == [1.0; 2];
+        let push = |vertices: &mut Vec<Vertex>, t: f32, y: f32, position: [f32; 3], normal: [f32; 3]| {
+            let lerp = |a: f32, b: f32| a + (b - a) * t;
+            let (ao_low, ao_high) = (lerp(self.corner_ao[0], self.corner_ao[1]), lerp(self.corner_ao[3], self.corner_ao[2]));
+            // The texture's top row follows this cell's own top edge.
+            let v = (lerp(top[0], top[1]) - y).clamp(0.0, 1.0);
+            let albedo = palette.map_or([1.0; 3], |palette| natural::tint(palette, position));
+            vertices.push(Vertex {
+                position,
+                color: std::array::from_fn(|k| self.color[k] * albedo[k]),
+                normal,
+                uv: [uv_rect[0] + t * (uv_rect[2] - uv_rect[0]), uv_rect[1] + v * (uv_rect[3] - uv_rect[1])],
+                ao: ao_low + (ao_high - ao_low) * y,
+                reflectivity: self.reflectivity,
+                emission: self.emission,
+                wind: self.wind,
+                tex_layer: if palette.is_some() { natural::NATURAL_TEX } else { 0.0 },
+                glimmer: self.glimmer,
+                skylight: 1.0,
+                wet: [self.absorption, -1.],
+            });
+        };
+        if facet && full {
+            // Angular stone: four flat triangles around an off-center apex,
+            // each lit with its own tilted normal. Positions stay on the cube
+            // face, so neighbors, picking and collision are unaffected.
+            let r = |salt: u32| super::noise::block_rand(wx * 7 + self.face as i32, ly, wz, shaping::SHAPING_VERSION, 0xFAC7 + salt);
+            let apex = [0.3 + 0.4 * r(0), 0.3 + 0.4 * r(1)];
+            let rim = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+            let tangent = sub3(point(1.0, 0.0), point(0.0, 0.0));
+            for i in 0..4 {
+                let (q, w) = (rim[i], rim[(i + 1) % 4]);
+                // Tilt toward this triangle's rim: mostly raised bosses, some hollows.
+                let out = [(q[0] + w[0]) * 0.5 - apex[0], (q[1] + w[1]) * 0.5 - apex[1]];
+                let tilt = -0.25 + 0.75 * r(2 + i as u32);
+                let normal = normalize3(std::array::from_fn(|k| {
+                    n[k] + (tangent[k] * out[0] + [0.0, 1.0, 0.0][k] * out[1]) * tilt * 1.4
+                }));
+                let first = vertices.len() as u32;
+                let first_vertex = vertices.len();
+                for [t, y] in [apex, q, w] {
+                    push(vertices, t, y, point(t, y), normal);
+                }
+                // Slightly darker rims read as joints between stone blocks.
+                for v in &mut vertices[first_vertex + 1..] {
+                    v.color = v.color.map(|c| c * 0.86);
+                }
+                indices.extend_from_slice(&[first, first + 1, first + 2]);
+            }
+            return;
+        }
+        self.push_polygon(vertices, indices, &shaping::exposed_region(below, top), top, uv_rect, palette);
+    }
+
+    /// Emits one flat `(t, y)` polygon of this face as a triangle fan.
+    fn push_polygon(
+        &self,
+        vertices: &mut Vec<Vertex>,
+        indices: &mut Vec<u32>,
+        polygon: &[[f32; 2]],
+        top: [f32; 2],
+        uv_rect: [f32; 4],
+        palette: Option<Palette>,
+    ) {
+        let (wx, ly, wz) = self.origin;
+        let [c0, c1, ..] = FACE_VERTS[self.face];
+        let normal = FACE_NORMALS[self.face].map(|c| c as f32);
+        let base_index = vertices.len() as u32;
+        for &[t, y] in polygon {
+            let lerp = |a: f32, b: f32| a + (b - a) * t;
+            let position = [wx as f32 + lerp(c0[0], c1[0]), ly as f32 + y, wz as f32 + lerp(c0[2], c1[2])];
+            let (ao_low, ao_high) = (lerp(self.corner_ao[0], self.corner_ao[1]), lerp(self.corner_ao[3], self.corner_ao[2]));
+            // The texture's top row follows this cell's own top edge.
+            let v = (lerp(top[0], top[1]) - y).clamp(0.0, 1.0);
+            let albedo = palette.map_or([1.0; 3], |palette| natural::tint(palette, position));
+            vertices.push(Vertex {
+                position,
+                color: std::array::from_fn(|k| self.color[k] * albedo[k]),
+                normal,
+                uv: [uv_rect[0] + t * (uv_rect[2] - uv_rect[0]), uv_rect[1] + v * (uv_rect[3] - uv_rect[1])],
+                ao: ao_low + (ao_high - ao_low) * y,
+                reflectivity: self.reflectivity,
+                emission: self.emission,
+                wind: self.wind,
+                tex_layer: if palette.is_some() { natural::NATURAL_TEX } else { 0.0 },
+                glimmer: self.glimmer,
+                skylight: 1.0,
+                wet: [self.absorption, -1.],
+            });
+        }
+        for i in 1..polygon.len().saturating_sub(1) as u32 {
+            indices.extend_from_slice(&[base_index, base_index + i, base_index + i + 1]);
+        }
+    }
+}
+
+/// Grass tufts in world-space patches on an exposed grass top. Derived from
+/// the cell itself, so digging or covering it removes them with the remesh.
+fn push_tufts(vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>, shape: Option<&CellShape>, (wx, ly, wz): (i32, i32, i32)) {
+    let patch = super::noise::fbm(wx as f32 * 0.17, wz as f32 * 0.17, 0x7F75_0001, 2, 2.0, 0.5);
+    if patch < 0.5 {
+        return;
+    }
+    let uv = atlas::uv_rect(atlas::tile_for(BlockType::ShortGrass, 2));
+    let count = 1 + ((patch - 0.5) * 8.0) as u32;
+    for i in 0..count.min(3) {
+        let r = |salt: u32| super::noise::block_rand(wx, ly, wz, 0x7F75_0002, salt * 7 + i);
+        let (u, v, size) = (0.2 + 0.6 * r(1), 0.2 + 0.6 * r(2), 0.35 + 0.25 * r(3));
+        let ground = shape.map_or(1.0, |s| s.height(u, v));
+        let first = vertices.len();
+        push_cross(vertices, indices, wx, ly + 1, wz, uv, 0.0, size);
+        for vertex in &mut vertices[first..] {
+            vertex.position[0] += u - 0.5;
+            vertex.position[1] += ground - 1.0;
+            vertex.position[2] += v - 0.5;
+            vertex.color = natural::tint(Palette::Grass, vertex.position).map(|c| c * 1.6);
+        }
+    }
+}
+
+/// Shaped-mode leaf look, picked per block from its world position: texture
+/// orientation and a restrained tint, so canopies stop repeating one tile.
+pub(crate) struct LeafVariant {
+    turns: u8,
+    mirror: bool,
+    pub tint: [f32; 3],
+}
+
+const LEAF_VARIANTS: [(u8, bool, [f32; 3]); 5] = [
+    (0, false, [1.0, 1.0, 1.0]),
+    (1, false, [0.9, 0.95, 0.88]),   // shaded, deeper green
+    (2, true, [1.07, 1.04, 0.9]),    // sun-warmed, yellowish
+    (3, false, [0.94, 1.02, 1.02]),  // cool, blue-green
+    (1, true, [1.04, 1.07, 0.98]),   // fresh, bright
+];
+
+/// Maximum per-axis displacement of a leaf lattice corner.
+pub(crate) const LEAF_JITTER: f32 = 0.12;
+
+impl LeafVariant {
+    pub(crate) fn at(x: i32, y: i32, z: i32) -> Self {
+        let pick = super::noise::block_rand(x, y, z, shaping::SHAPING_VERSION, 0x1EAF_0001);
+        let (turns, mirror, tint) = LEAF_VARIANTS[((pick * 5.0) as usize).min(4)];
+        Self { turns, mirror, tint }
+    }
+
+    /// Rotates by quarter turns, then optionally mirrors, a 0..1 tile UV.
+    fn uv(&self, [mut u, mut v]: [f32; 2]) -> [f32; 2] {
+        for _ in 0..self.turns {
+            [u, v] = [1.0 - v, u];
+        }
+        if self.mirror {
+            u = 1.0 - u;
+        }
+        [u, v]
+    }
+}
+
+/// Displacement of a leaf corner, keyed by its world lattice point so every
+/// leaf face sharing that corner moves together: a ragged canopy outline
+/// without cracks.
+pub(crate) fn leaf_offset([x, y, z]: [i32; 3]) -> [f32; 3] {
+    std::array::from_fn(|axis| {
+        (super::noise::block_rand(x, y, z, shaping::SHAPING_VERSION, 0x1EAF_0010 + axis as u32) * 2.0 - 1.0)
+            * LEAF_JITTER
+    })
 }
 
 /// Straight beams occupy exactly 1 x 0.5 x 0.5, rotated along their neighbors.

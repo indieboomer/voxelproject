@@ -2112,6 +2112,10 @@ impl App {
                     self.build_shaping_test_garden();
                     return;
                 }
+                if code == KeyCode::F9 && !key_event.repeat && self.cursor_grabbed {
+                    self.build_coast_scene();
+                    return;
+                }
                 if code == KeyCode::KeyM
                     && !key_event.repeat
                     && !self.console_open
@@ -4233,6 +4237,26 @@ impl App {
         ));
     }
 
+    /// Host-only natural-coast reference scene (F9), docs/NATURAL_COAST.md:
+    /// built ahead of the player with its water surface at their feet.
+    fn build_coast_scene(&mut self) {
+        if !matches!(self.net, NetRole::Host(_)) {
+            self.notify_important("Only the host can build the coast scene.".into());
+            return;
+        }
+        let feet = self.player.position;
+        let origin = (feet.x.floor() as i32 - 32, feet.y.floor() as i32, feet.z.floor() as i32 + 4);
+        for (x, y, z, block) in crate::voxel::coast::coast_scene(origin) {
+            if self.world.get_block(x, y, z) != block {
+                self.apply_block_edit(x, y, z, block);
+            }
+        }
+        self.notify_important(format!(
+            "Coast scene built at {}, {}, {} (F7 toggles shaping)",
+            origin.0, origin.1, origin.2
+        ));
+    }
+
     fn apply_block_edit(&mut self, x: i32, y: i32, z: i32, block: BlockType) {
         match &mut self.net {
             NetRole::Host(host) => {
@@ -6244,7 +6268,8 @@ impl App {
                 self.surface_weather.wetness,
             ],
             graphics: [
-                if self.ui.settings.values.graphics.water_fresnel { 1.0 } else { 0.0 },
+                if self.ui.settings.values.graphics.water_fresnel { 1.0 } else { 0.0 }
+                    + if self.world.terrain_shaping { 2.0 } else { 0.0 },
                 if self.ui.settings.values.graphics.depth_of_field { 1.0 } else { 0.0 },
                 self.camera.znear,
                 self.camera.zfar,

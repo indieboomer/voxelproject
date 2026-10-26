@@ -590,14 +590,21 @@ mod tests {
     #[test]
     fn shaped_ramps_are_walkable_up_and_down_without_jumping() {
         let world = ramp_world(true);
-        let mut player = Player::new(Vec3::new(5.5, 2.0, 7.5));
-        player.on_ground = true;
-        walk(&world, &mut player, KeyCode::KeyW, 1.0);
-        assert!(player.position.x > 9.0, "climbed onto the plateau: {}", player.position);
-        assert!((player.position.y - 3.0).abs() < 0.01, "standing on its top: {}", player.position);
-        let airborne = walk(&world, &mut player, KeyCode::KeyS, 1.0);
-        assert!(player.position.x < 7.0 && (player.position.y - 2.0).abs() < 0.01, "{}", player.position);
-        assert!(airborne <= 2, "followed the ramp down instead of hopping ({airborne} frames airborne)");
+        // Each row of the x = 8 ramp line gets its own surface variant.
+        let mut variants = std::collections::BTreeSet::new();
+        for z in 1..15 {
+            let shape = crate::voxel::shaping::shape_at(&world, 8, 2, z).unwrap();
+            variants.insert(format!("{:?}", shape.variant));
+            let mut player = Player::new(Vec3::new(5.5, 2.0, z as f32 + 0.5));
+            player.on_ground = true;
+            walk(&world, &mut player, KeyCode::KeyW, 1.0);
+            assert!(player.position.x > 9.0, "climbed {:?} onto the plateau: {}", shape.variant, player.position);
+            assert!((player.position.y - 3.0).abs() < 0.01, "standing on its top: {}", player.position);
+            let airborne = walk(&world, &mut player, KeyCode::KeyS, 1.0);
+            assert!(player.position.x < 7.0 && (player.position.y - 2.0).abs() < 0.01, "{}", player.position);
+            assert!(airborne <= 3, "followed {:?} down instead of hopping ({airborne} frames airborne)", shape.variant);
+        }
+        assert!(variants.len() >= 4, "{variants:?}");
 
         // The same voxels without shaping are a one-block wall.
         let cubic = ramp_world(false);
@@ -610,8 +617,10 @@ mod tests {
     fn shaped_collision_follows_the_ramp_surface() {
         let world = ramp_world(true);
         // Feet over the ramp's low half are clear above the surface only.
-        assert!(!Player::collides(&world, Vec3::new(8.2 - HALF_WIDTH + 0.0, 2.55, 7.5)));
-        assert!(Player::collides(&world, Vec3::new(8.5, 2.3, 7.5)));
+        let ramp = crate::voxel::shaping::shape_at(&world, 8, 2, 7).unwrap();
+        let low = 2.0 + ramp.max_height_in(0.0, 0.2, 7.5 - 7.0 - HALF_WIDTH, 7.5 - 7.0 + HALF_WIDTH);
+        assert!(!Player::collides(&world, Vec3::new(8.2 - HALF_WIDTH, low + 0.01, 7.5)));
+        assert!(Player::collides(&world, Vec3::new(8.2 - HALF_WIDTH, low - 0.05, 7.5)));
         let cubic = ramp_world(false);
         assert!(Player::collides(&cubic, Vec3::new(8.2 - HALF_WIDTH, 2.55, 7.5)));
     }

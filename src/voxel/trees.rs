@@ -114,6 +114,15 @@ fn cluster(blocks: &mut BTreeMap<Pos, BlockType>, p: Pos, radius: i32, leaves: B
     }
 }
 
+/// One generated tree as offsets from its trunk base, with limbs converted to
+/// branch blocks like current world generation. Used by authored test scenes.
+pub(crate) fn tree_blocks(seed: u32, wx: i32, wz: i32, species: usize) -> Vec<(Pos, BlockType)> {
+    geometry(seed, wx, wz, species % CONFIGS.len())
+        .into_iter()
+        .map(|((x, y, z), b)| ((x, y, z), if x != 0 || z != 0 { b.branch() } else { b }))
+        .collect()
+}
+
 fn geometry(seed: u32, wx: i32, wz: i32, species: usize) -> BTreeMap<Pos, BlockType> {
     let (wood, leaves, c) = CONFIGS[species];
     let roll = |n, salt, lo, hi| block_rand_range(wx, n, wz, seed, salt, lo, hi);

@@ -557,6 +557,23 @@ fn render_weather_previews() {
     });
     // VOXEL_SHAPING_PREVIEW=on|off: matched terrain-shaping screenshots. Alone
     // it renders the test garden; with VOXEL_LANDSCAPE_PREVIEW, real terrain.
+    // VOXEL_COAST_PREVIEW=on|off: the natural-coast reference scene with
+    // shaping (and its natural materials, water and foliage) on or off.
+    let coast_preview = std::env::var("VOXEL_COAST_PREVIEW").ok();
+    if let Some(mode) = &coast_preview {
+        for x in -32..48 {
+            for z in -32..48 {
+                for y in 7..14 {
+                    world.set_block(x, y, z, BlockType::Water);
+                }
+            }
+        }
+        for (x, y, z, block) in crate::voxel::coast::coast_scene((-32, 14, -24)) {
+            world.set_block(x, y, z, block);
+        }
+        world.terrain_shaping = mode == "on";
+        target = Vec3::new(4.0, 15.0, 2.0);
+    }
     let shaping_preview = std::env::var("VOXEL_SHAPING_PREVIEW").ok();
     let shaping_garden = shaping_preview.is_some() && landscape_preview.is_none();
     if let Some(mode) = &shaping_preview {
@@ -641,6 +658,13 @@ fn render_weather_previews() {
         Vec3::new(-3.,8.,-4.)
     } else if shaping_garden {
         Vec3::new(3.0, 15.0, 19.0)
+    } else if coast_preview.is_some() {
+        // VOXEL_COAST_CAMERA=close: gameplay distance over the bay and cliffs.
+        if std::env::var_os("VOXEL_COAST_CAMERA").is_some() {
+            Vec3::new(-6.0, 25.0, -15.0)
+        } else {
+            Vec3::new(-14.0, 31.0, -30.0)
+        }
     } else if dof_preview {
         Vec3::new(0.5, 8.5, 5.0)
     } else if reflection_preview {
@@ -778,7 +802,7 @@ fn render_weather_previews() {
                 1.0,
             ],
             weather_fx: [0.0, clouds, 0.0, wet],
-            graphics: [1.0, if dof_enabled { 1.0 } else { 0.0 }, 0.1, 200.0],
+            graphics: [1.0 + if world.terrain_shaping { 2.0 } else { 0.0 }, if dof_enabled { 1.0 } else { 0.0 }, 0.1, 200.0],
         };
         queue.write_buffer(&camera, 0, bytemuck::bytes_of(&camera_uniform));
         let mut times = Vec::new();
@@ -973,6 +997,10 @@ fn render_weather_previews() {
         image::save_buffer(
             if let Some(mode) = &ray_preview { format!("target/rays-{mode}-{}.png", if rays_enabled { "on" } else { "off" }) }
             else if dof_preview { format!("target/dof-{}.png", if dof_enabled { "on" } else { "off" }) }
+            else if let Some(mode) = &coast_preview {
+                let close = if std::env::var_os("VOXEL_COAST_CAMERA").is_some() { "-close" } else { "" };
+                format!("target/coast-{mode}{close}-{name}.png")
+            }
             else if let Some(mode) = &shaping_preview {
                 format!("target/shaping-{}-{mode}-{name}.png", landscape_preview.as_deref().unwrap_or("garden"))
             }
