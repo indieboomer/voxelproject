@@ -384,6 +384,27 @@ impl Effects {
             launch: None,
         });
     }
+    /// Drops `contents` near `pos` with exact counts. When the drop list is
+    /// full the items merge into the newest drop instead of being lost.
+    pub fn drop_items(&mut self, world: &World, pos: Vec3, contents: Vec<(BlockType, u32)>) {
+        if contents.is_empty() {
+            return;
+        }
+        if self.drops.len() >= 48 {
+            if let Some(last) = self.drops.iter_mut().rev().find(|d| !d.machine && d.cargo.is_empty()) {
+                for (block, count) in contents {
+                    match last.contents.iter_mut().find(|(b, _)| *b == block) {
+                        Some((_, n)) => *n += count,
+                        None => last.contents.push((block, count)),
+                    }
+                }
+                return;
+            }
+        }
+        let pos = landing_position(world, pos, pos.x * 1.3 + pos.z).unwrap_or(pos.to_array());
+        self.drops.push(Drop { pos, contents, age: 0.0, cargo: Default::default(), machine: false, launch: None });
+    }
+
     pub fn restore_machine(drops: Vec<Drop>) -> Self {
         Self {
             drops,

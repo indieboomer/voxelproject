@@ -38,6 +38,10 @@ pub enum NotifyKind {
 /// acknowledges them. Safe to apply more than once (idempotent).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ReliableMsg {
+    /// A tree part detached on the host: draw it from this until it ends.
+    FallingSpawn { body: crate::falling::BodyInfo, pos: [f32; 3], rot: [f32; 4] },
+    /// The body settled or converted; its block edits/drop arrive separately.
+    FallingEnd(u32),
     Hotbar(crate::equipment::Hotbar),
     ItemAction(crate::equipment::Intent),
     /// Transfer one physical saved-spell card. The host resolves both
@@ -258,6 +262,8 @@ pub enum UnreliableMsg {
         /// two anim fields mean.
         creatures: Vec<([f32; 3], u8, f32, u8, f32)>,
         creature_vitals: Vec<([f32; 3], u8, f32)>,
+        /// `(id, position, rotation)` of every falling tree body.
+        falling: Vec<(u32, [f32; 3], [f32; 4])>,
     },
 }
 
@@ -598,6 +604,7 @@ mod tests {
                 AnimClip::Walk.to_u8(),
                 1.2,
             )],
+            falling: vec![(7, [1.0, 2.0, 3.0], [0.0, 0.0, 0.0, 1.0])],
         });
         let bytes = encode(&packet);
         let decoded = decode(&bytes).expect("a just-encoded packet must decode");
@@ -612,7 +619,9 @@ mod tests {
                 players,
                 creatures,
                 creature_vitals,
+                falling,
             }) => {
+                assert_eq!(falling, vec![(7, [1.0, 2.0, 3.0], [0.0, 0.0, 0.0, 1.0])]);
                 assert!(allow_guest_prompting);
                 assert_eq!(world_revision, 4);
                 assert!(creature_targets.is_empty());

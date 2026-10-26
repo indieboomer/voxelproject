@@ -767,6 +767,13 @@ pub struct App {
     machine_feedback: crate::machine_feedback::Feedback,
     inventory_ready: bool,
     loot: crate::loot::Effects,
+    /// Host: falling tree bodies. Client: mirrored spawn info and poses.
+    falling: crate::falling::Falling,
+    falling_mirror: crate::falling::Mirror,
+    /// Local-space meshes of falling bodies, by id.
+    falling_meshes: HashMap<u32, MeshData>,
+    /// Set while the falling system itself edits blocks (no support checks).
+    falling_edits: bool,
     spell_fx: crate::spell_fx::Effects,
     spell_network: crate::spell_network::State,
     generation_enchantment: bool,
@@ -1917,6 +1924,10 @@ impl App {
             automation_transfer: Default::default(),
             machine_feedback: Default::default(),
             inventory_ready: false,
+            falling: Default::default(),
+            falling_mirror: Default::default(),
+            falling_meshes: HashMap::new(),
+            falling_edits: false,
             loot: crate::loot::Effects::restore_machine(
                 crafting_save.loot.unwrap_or(crafting_save.machine_loot),
             ),
@@ -2928,6 +2939,7 @@ impl App {
 
         if self.input.save_requested {
             if matches!(self.net, NetRole::Host(_)) {
+                self.resolve_falling();
                 let result = save_world(
                     &self.world,
                     &self.player,
@@ -2966,6 +2978,7 @@ impl App {
                 );
             }
         }
+        self.update_falling(dt);
         let shaping = self.ui.settings.values.graphics.terrain_shaping;
         let bevels = self.ui.settings.values.graphics.bevel_blocks;
         if self.world.bevel_blocks != bevels {
@@ -3233,6 +3246,16 @@ impl App {
                     Some(valid),
                     &self.world.automation,
                 ));
+            }
+        }
+        // Falling tree bodies: cached local meshes posed every frame.
+        let poses: Vec<(u32, Vec3, glam::Quat)> = match &self.net {
+            NetRole::Host(_) => self.falling.bodies.iter().map(|b| (b.id, b.pos, b.rot)).collect(),
+            NetRole::Joined(_) => self.falling_mirror.bodies.iter().map(|(id, (_, p, r))| (*id, *p, *r)).collect(),
+        };
+        for (id, pos, rot) in poses {
+            if let Some(local) = self.falling_meshes.get(&id) {
+                mesh.extend(crate::falling::posed(local, pos, rot));
             }
         }
         mesh.extend(self.loot.mesh(|pos| {
@@ -4266,7 +4289,88 @@ impl App {
         ));
     }
 
+    /// Host: detaches unsupported tree parts, steps falling bodies and applies
+    /// finished ones as block edits or exact item drops (docs/FALLING_TREES.md).
+    fn update_falling(&mut self, dt: f32) {
+        if !matches!(self.net, NetRole::Host(_)) {
+            return;
+        }
+        if !self.ui.settings.values.gameplay.falling_trees {
+            self.falling.take_detached(&self.world); // forget checks while off
+            return;
+        }
+        for (cells, push) in self.falling.take_detached(&self.world) {
+            self.falling_edits = true;
+            for &((x, y, z), _) in &cells {
+                self.apply_block_edit(x, y, z, BlockType::Air);
+            }
+            self.falling_edits = false;
+            let body = self.falling.spawn(&cells, push).clone();
+            self.falling_meshes.insert(body.id, crate::falling::body_mesh(&body.info(), self.world.terrain_shaping));
+            if let NetRole::Host(host) = &mut self.net {
+                let msg = ReliableMsg::FallingSpawn { body: body.info(), pos: body.pos.to_array(), rot: body.rot.to_array() };
+                for peer in host.clients.keys().copied().collect::<Vec<_>>() {
+                    host.reliable.send(&host.socket, peer, msg.clone());
+                }
+            }
+        }
+        if self.falling.bodies.is_empty() {
+            return;
+        }
+        let players: Vec<Vec3> = self.host_player_positions().iter().map(|p| p.pos).collect();
+        let finished = self.falling.step(&self.world, dt, &players);
+        self.apply_falling_outcomes(finished);
+    }
+
+    /// Settles or converts every falling body now (before any save).
+    fn resolve_falling(&mut self) {
+        let players: Vec<Vec3> = self.host_player_positions().iter().map(|p| p.pos).collect();
+        let finished = self.falling.resolve_all(&self.world, &players);
+        self.apply_falling_outcomes(finished);
+    }
+
+    fn apply_falling_outcomes(&mut self, finished: Vec<(u32, crate::falling::Outcome)>) {
+        for (id, outcome) in finished {
+            self.falling_meshes.remove(&id);
+            if let NetRole::Host(host) = &mut self.net {
+                for peer in host.clients.keys().copied().collect::<Vec<_>>() {
+                    host.reliable.send(&host.socket, peer, ReliableMsg::FallingEnd(id));
+                }
+            }
+            self.falling_edits = true;
+            match outcome {
+                crate::falling::Outcome::Placed { cells, crushed, at } => {
+                    for ((x, y, z), block) in cells {
+                        self.apply_block_edit(x, y, z, block);
+                    }
+                    self.loot.drop_items(&self.world, at, crushed);
+                }
+                crate::falling::Outcome::Dropped(at, contents) => {
+                    self.loot.drop_items(&self.world, at, contents);
+                }
+            }
+            self.falling_edits = false;
+        }
+    }
+
     fn apply_block_edit(&mut self, x: i32, y: i32, z: i32, block: BlockType) {
+        // Removing living tree wood may leave part of the tree unsupported.
+        let old = self.world.get_block(x, y, z);
+        let cut = !self.falling_edits
+            && old != block
+            && old.is_wood()
+            && crate::voxel::organic::is_living(&self.world, old, (x, y, z));
+        if cut && matches!(self.net, NetRole::Host(_)) {
+            let at = Vec3::new(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5);
+            let cutter = self
+                .host_player_positions()
+                .iter()
+                .map(|p| p.pos)
+                .min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)))
+                .unwrap_or(at);
+            let away = Vec3::new(at.x - cutter.x, 0.0, at.z - cutter.z).normalize_or_zero();
+            self.falling.note_cut((x, y, z), away);
+        }
         match &mut self.net {
             NetRole::Host(host) => {
                 self.world.set_block(x, y, z, block);
@@ -5169,6 +5273,7 @@ impl App {
                     .into_iter()
                     .map(|c| (c.2, c.1, c.3))
                     .collect(),
+                falling: self.falling.bodies.iter().map(|b| (b.id, b.pos.to_array(), b.rot.to_array())).collect(),
             };
             let bytes = encode(&Packet::Unreliable(snapshot));
             for addr in host.clients.keys() {
@@ -5286,6 +5391,13 @@ impl App {
                         }
                         for &key in &self.destroyed_hives {
                             host.reliable.send(&host.socket,from,ReliableMsg::HiveDestroyed { key });
+                        }
+                        for body in &self.falling.bodies {
+                            host.reliable.send(&host.socket, from, ReliableMsg::FallingSpawn {
+                                body: body.info(),
+                                pos: body.pos.to_array(),
+                                rot: body.rot.to_array(),
+                            });
                         }
                         let key = from.account_key(&nickname);
                         // Migrate legacy nickname accounts without letting Direct users claim Steam balances.
@@ -5525,6 +5637,15 @@ impl App {
                         ));
                     }
                     ReliableMsg::HiveDestroyed { key } => { self.destroyed_hives.insert(key); }
+                    ReliableMsg::FallingSpawn { body, pos, rot } => {
+                        let mesh = crate::falling::body_mesh(&body, self.world.terrain_shaping);
+                        self.falling_meshes.insert(body.id, mesh);
+                        self.falling_mirror.bodies.insert(body.id, (body, Vec3::from_array(pos), glam::Quat::from_array(rot)));
+                    }
+                    ReliableMsg::FallingEnd(id) => {
+                        self.falling_mirror.bodies.remove(&id);
+                        self.falling_meshes.remove(&id);
+                    }
                     ReliableMsg::FoodResult(message) => {
                         self.crafting_ui.feedback = message;
                     }
@@ -5731,7 +5852,14 @@ impl App {
                 players,
                 creatures,
                 creature_vitals,
+                falling,
             }) => {
+                for (id, pos, rot) in falling {
+                    if let Some(entry) = self.falling_mirror.bodies.get_mut(&id) {
+                        entry.1 = Vec3::from_array(pos);
+                        entry.2 = glam::Quat::from_array(rot);
+                    }
+                }
                 self.spell_network.world_revision = world_revision;
                 self.spell_network.creature_targets = creature_targets;
                 self.time_of_day = time_of_day;
@@ -6584,7 +6712,7 @@ impl App {
         Ok(())
     }
 
-    pub fn save(&self) {
+    pub fn save(&mut self) {
         let goodbye = encode(&Packet::Reliable {
             id: u64::MAX,
             msg: ReliableMsg::Goodbye,
@@ -6600,6 +6728,7 @@ impl App {
             }
         }
         if matches!(self.net, NetRole::Host(_)) {
+            self.resolve_falling();
             if let Err(error) = save_world(
                 &self.world,
                 &self.player,

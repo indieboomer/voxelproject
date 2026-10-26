@@ -24,6 +24,7 @@ work. [Archived plans and reports](archive/README.md) retain historical material
 | [Natural coast look (experimental)](NATURAL_COAST.md) | Palettes, grass lips, faceted rock, shallows and foam, foliage, test scene (F9) |
 | [Stylized look options](STYLIZED_LOOK.md) | Ink outlines, toon lighting and bevelled blocks |
 | [Organic trees (experimental)](TREES.md) | Round tapered trunks, angled limbs, capped cuts, living vs placed wood |
+| [Falling trees](FALLING_TREES.md) | Support detection, falling bodies, grid settlement, exact fallbacks, save and network |
 | [UI and settings](UI_SETTINGS.md) | Themes, preferences and targeting feedback |
 | [Player animations and chat](PLAYER_ANIMATIONS.md) | Gestures, held items, bubbles and emoticons |
 | [Adventure](ADVENTURE_GUIDE.md) / [Storage and underground](STORAGE_AND_UNDERGROUND.md) | Camp progression, exploration, chests and saves |

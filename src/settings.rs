@@ -74,12 +74,15 @@ impl std::fmt::Debug for AiApi {
 pub struct Gameplay {
     pub show_block_target: bool,
     pub mana_free: bool,
+    /// Cut trees topple and settle as resources (host decides).
+    pub falling_trees: bool,
 }
 impl Default for Gameplay {
     fn default() -> Self {
         Self {
             show_block_target: true,
             mana_free: false,
+            falling_trees: true,
         }
     }
 }
@@ -304,6 +307,8 @@ impl SettingsPanel {
                 ui.separator();
                 ui.heading("Gameplay");
                 ui.checkbox(&mut self.values.gameplay.mana_free, "Mana-free actions (testing)");
+                ui.checkbox(&mut self.values.gameplay.falling_trees, "Falling trees");
+                ui.small("Cutting through a trunk or limb drops the unsupported part, which settles as logs and leaves. Applies when you host.");
                 ui.small("Applies to everyone when you host. Joined games use the host's setting. Materials are still required.");
                 ui.checkbox(&mut self.values.gameplay.show_block_target, "Show block targeting outlines");
                 ui.small("Gold: compatible tool. Green: build. Red: cannot harvest with the active item.");

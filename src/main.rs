@@ -21,6 +21,7 @@ mod enchantment;
 mod equipment;
 mod equipment_ui;
 mod fantasy_name;
+mod falling;
 mod food;
 mod gear_catalog;
 mod god_rays;
