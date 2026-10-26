@@ -31,10 +31,22 @@ pub struct Graphics {
     pub god_rays: bool,
     /// Experimental neighborhood-driven terrain shapes (ramps, caps, rock facets).
     pub terrain_shaping: bool,
+    /// Stylized look options; each is independent and off by default.
+    pub ink_outlines: bool,
+    pub toon_lighting: bool,
+    pub bevel_blocks: bool,
 }
 impl Default for Graphics {
     fn default() -> Self {
-        Self { water_fresnel: true, depth_of_field: true, god_rays: true, terrain_shaping: false }
+        Self {
+            water_fresnel: true,
+            depth_of_field: true,
+            god_rays: true,
+            terrain_shaping: false,
+            ink_outlines: false,
+            toon_lighting: false,
+            bevel_blocks: false,
+        }
     }
 }
 
@@ -109,6 +121,15 @@ impl Default for Multiplayer {
             allow_guest_prompting: false,
         }
     }
+}
+
+/// Shader feature bits packed into `CameraUniform::graphics.x`: 1 water
+/// Fresnel, 2 natural (shaped terrain) look, 4 toon lighting, 8 ink outlines.
+pub fn graphics_flags(graphics: &Graphics, natural: bool) -> f32 {
+    (graphics.water_fresnel as u32
+        | (natural as u32) << 1
+        | (graphics.toon_lighting as u32) << 2
+        | (graphics.ink_outlines as u32) << 3) as f32
 }
 
 impl Settings {
@@ -274,6 +295,12 @@ impl SettingsPanel {
                 ui.small("Soft sunlight through clouds and canopy gaps when looking toward the sun.");
                 ui.checkbox(&mut self.values.graphics.terrain_shaping, "Shaped terrain (experimental, F7)");
                 ui.small("Ramps and rock facets from neighboring blocks. Each piece is still one block to dig or place.");
+                ui.checkbox(&mut self.values.graphics.ink_outlines, "Ink outlines");
+                ui.small("Thin illustrated lines along silhouettes and folds; they fade with distance.");
+                ui.checkbox(&mut self.values.graphics.toon_lighting, "Toon lighting");
+                ui.small("Sunlight in soft bands with cooler shadow sides.");
+                ui.checkbox(&mut self.values.graphics.bevel_blocks, "Bevelled blocks");
+                ui.small("Chamfered edges on cube blocks catch the light. Visual only; aiming and collision are unchanged.");
                 ui.separator();
                 ui.heading("Gameplay");
                 ui.checkbox(&mut self.values.gameplay.mana_free, "Mana-free actions (testing)");

@@ -136,10 +136,10 @@ fn resolve_scene(frag: vec4<f32>) -> vec4<f32> {
     let normal = normalize(vec3<f32>(slope.x, 1.0, slope.y));
     let direction = reflect(-view, normal);
     // Match the broad Fresnel response used by the main water material.
-    let fresnel_base = select(0.06, 0.06 + 0.94 * pow(1.0 - max(dot(normal, view), 0.0), 3.0), (camera.graphics.x % 2.0) > 0.5);
+    let fresnel_base = select(0.06, 0.06 + 0.94 * pow(1.0 - max(dot(normal, view), 0.0), 3.0), (u32(camera.graphics.x + 0.5) & 1u) != 0u);
     let fresnel_noise = 0.90 + 0.10 * water_noise(pos.xz * 0.13);
     // The natural look keeps water color readable: weaker mirror reflections.
-    let fresnel = fresnel_base * fresnel_noise * select(1.0, 0.4, camera.graphics.x > 1.5);
+    let fresnel = fresnel_base * fresnel_noise * select(1.0, 0.4, (u32(camera.graphics.x + 0.5) & 2u) != 0u);
     if direction.y <= 0.01 || fresnel < 0.025 { return vec4<f32>(original.rgb, 1.0); }
     let origin = pos + vec3<f32>(0.0, 0.08, 0.0);
     var previous = 0.0;
@@ -175,12 +175,51 @@ fn resolve_scene(frag: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(original.rgb, 1.0);
 }
 
+// Inverse eye depth (0 for sky): linear in screen space across any plane.
+fn inverse_depth(p: vec2<i32>) -> f32 {
+    let size = vec2<i32>(textureDimensions(depth));
+    let z = textureLoad(depth, clamp(p, vec2<i32>(0), size - 1), 0);
+    if z >= 1.0 { return 0.0; }
+    return 1.0 / eye_depth(z);
+}
+
+// Ink outlines (graphics flag 8): silhouettes where a neighbor is much
+// farther away, folds where inverse depth bends (it is linear on planes, so
+// coplanar block seams draw nothing). Lines thin out with distance.
+fn edge_at(p: vec2<i32>) -> f32 {
+    let c = inverse_depth(p);
+    if c <= 0.0 { return 0.0; }
+    let l = inverse_depth(p + vec2<i32>(-1, 0));
+    let r = inverse_depth(p + vec2<i32>(1, 0));
+    let u = inverse_depth(p + vec2<i32>(0, -1));
+    let d = inverse_depth(p + vec2<i32>(0, 1));
+    // Only the nearer side of a depth jump draws.
+    let gap = max(max(c - l, c - r), max(c - u, c - d)) / c;
+    let silhouette = smoothstep(0.025, 0.07, gap);
+    let bend = (abs(l + r - 2.0 * c) + abs(u + d - 2.0 * c)) / c;
+    let fold = smoothstep(0.0007, 0.0025, bend) * (1.0 - silhouette);
+    let fade = 1.0 - smoothstep(35.0, 100.0, 1.0 / c);
+    return clamp(silhouette + fold * 0.8, 0.0, 1.0) * fade;
+}
+
+fn ink(frag: vec4<f32>, color: vec3<f32>) -> vec3<f32> {
+    if (u32(camera.graphics.x + 0.5) & 8u) == 0u || camera.weather_fx.z > 0.5 { return color; }
+    let p = vec2<i32>(frag.xy);
+    let alpha = textureLoad(scene, p, 0).a;
+    if alpha > 0.9 && alpha < 0.98 { return color; } // foliage: no ink on leaf holes
+    // Two pixels wide: this pixel's edge or its right/lower neighbor's.
+    let edge = max(edge_at(p), max(edge_at(p + vec2<i32>(1, 0)), edge_at(p + vec2<i32>(0, 1))) * 0.8);
+    return mix(color, color * vec3<f32>(0.26, 0.23, 0.22), edge * 0.85);
+}
+
 @fragment fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
-    return resolve_scene(frag);
+    let color = resolve_scene(frag);
+    return vec4<f32>(ink(frag, color.rgb), color.a);
 }
 
 @fragment fn fs_rays(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
-    let color = resolve_scene(frag);
+    let resolved = resolve_scene(frag);
+    let color = vec4<f32>(ink(frag, resolved.rgb), resolved.a);
     let z = textureLoad(depth,vec2<i32>(frag.xy),0);
     let uv = frag.xy / vec2<f32>(textureDimensions(scene));
     // Keep nearby walls/held geometry from receiving an artificial glowing veil.

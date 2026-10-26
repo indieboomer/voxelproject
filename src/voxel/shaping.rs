@@ -693,6 +693,10 @@ mod tests {
     /// Parity along many axis lines must match the logical solid: catches
     /// holes, missing partial sides and duplicated coplanar faces at once.
     fn assert_watertight(world: &World, size: Vec3) {
+        assert_watertight_except(world, size, |_| false);
+    }
+
+    fn assert_watertight_except(world: &World, size: Vec3, skip: impl Fn(Vec3) -> bool) {
         let tris = triangles(world);
         let mut checked = 0;
         for axis in 0..3 {
@@ -708,6 +712,10 @@ mod tests {
                         p[axis] = c;
                         p[i] = a;
                         p[j] = b;
+                        if skip(p) {
+                            c += 0.4173;
+                            continue;
+                        }
                         let parity = hits.iter().filter(|&&h| h > c).count() % 2 == 1;
                         assert_eq!(parity, inside(world, p), "axis {axis} at {p}");
                         checked += 1;
@@ -728,6 +736,47 @@ mod tests {
         assert_watertight(&world, size);
         world.terrain_shaping = false;
         assert_watertight(&world, size);
+    }
+
+    #[test]
+    fn bevelled_blocks_stay_watertight_and_inside_their_cells() {
+        let mut world = garden_world();
+        world.terrain_shaping = false;
+        world.bevel_blocks = true;
+        // Points inside a chamfer (near two cell faces at once) are cut away
+        // on purpose; everything else must still match the logical solid.
+        let near = |c: f32| c.fract() < 0.09 || c.fract() > 0.91;
+        assert_watertight_except(&world, Vec3::new(32.0, 13.0, 16.0), |p| {
+            [p.x, p.y, p.z].iter().filter(|&&c| near(c)).count() >= 2
+        });
+        // A lone cube: 6 inset faces, 12 strips, 8 corner triangles.
+        let mut lone = world_of(&[(0, 0)], [(5, 5, 5, BlockType::Stone)]);
+        lone.terrain_shaping = false;
+        lone.bevel_blocks = true;
+        let mesh = build_chunk_mesh(&lone, &lone.chunks[&(0, 0)]);
+        assert_eq!(mesh.vertices.len(), 6 * 4 + 12 * 4 + 8 * 3);
+        assert!(mesh.vertices.iter().all(|v| v.position.iter().all(|&c| (5.0..=6.0).contains(&c))));
+        lone.bevel_blocks = false;
+        assert_eq!(build_chunk_mesh(&lone, &lone.chunks[&(0, 0)]).vertices.len(), 24);
+        // On a floor, each vertical bevel ends in an upward cap on the floor
+        // plane, closing the notch where the chamfer meets unbevelled ground.
+        let mut cells = vec![(5, 1, 5, BlockType::Stone)];
+        for x in 3..8 {
+            for z in 3..8 {
+                cells.push((x, 0, z, BlockType::Stone));
+            }
+        }
+        let mut seated = world_of(&[(0, 0)], cells);
+        seated.terrain_shaping = false;
+        seated.bevel_blocks = true;
+        let mesh = build_chunk_mesh(&seated, &seated.chunks[&(0, 0)]);
+        let caps = mesh.indices.chunks(3).filter(|t| {
+            let v = t.iter().map(|&i| mesh.vertices[i as usize]).collect::<Vec<_>>();
+            let centroid = |k: usize| v.iter().map(|v| v.position[k]).sum::<f32>() / 3.0;
+            v.iter().all(|v| v.normal == [0.0, 1.0, 0.0] && v.position[1] == 1.0)
+                && centroid(0) > 5.0 && centroid(0) < 6.0 && centroid(2) > 5.0 && centroid(2) < 6.0
+        });
+        assert_eq!(caps.count(), 4, "one cap under each vertical bevel");
     }
 
     #[test]
@@ -951,8 +1000,9 @@ mod tests {
                 world.ensure_chunk_loaded(cx, cz);
             }
         }
-        for shaping in [false, true] {
+        for (shaping, bevels) in [(false, false), (false, true), (true, false)] {
             world.terrain_shaping = shaping;
+            world.bevel_blocks = bevels;
             let mut keys: Vec<_> = world.chunks.keys().copied().filter(|(x, z)| x.abs() <= 2 && z.abs() <= 2).collect();
             keys.sort();
             let (mut tris, mut shaped) = (0, 0);
@@ -974,7 +1024,7 @@ mod tests {
                     }
                 }
             }
-            println!("shaping={shaping}: {per_chunk:.2} ms/chunk, {tris} triangles, {shaped} shaped cells over {} chunks", keys.len());
+            println!("shaping={shaping} bevels={bevels}: {per_chunk:.2} ms/chunk, {tris} triangles, {shaped} shaped cells over {} chunks", keys.len());
         }
     }
 }

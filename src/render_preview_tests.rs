@@ -574,6 +574,15 @@ fn render_weather_previews() {
         world.terrain_shaping = mode == "on";
         target = Vec3::new(4.0, 15.0, 2.0);
     }
+    // VOXEL_STYLE=toon,ink,bevel: any of the stylized graphics options.
+    let style = std::env::var("VOXEL_STYLE").unwrap_or_default();
+    let style_graphics = crate::settings::Graphics {
+        toon_lighting: style.contains("toon"),
+        ink_outlines: style.contains("ink"),
+        bevel_blocks: style.contains("bevel"),
+        ..Default::default()
+    };
+    world.bevel_blocks = style_graphics.bevel_blocks;
     let shaping_preview = std::env::var("VOXEL_SHAPING_PREVIEW").ok();
     let shaping_garden = shaping_preview.is_some() && landscape_preview.is_none();
     if let Some(mode) = &shaping_preview {
@@ -802,7 +811,7 @@ fn render_weather_previews() {
                 1.0,
             ],
             weather_fx: [0.0, clouds, 0.0, wet],
-            graphics: [1.0 + if world.terrain_shaping { 2.0 } else { 0.0 }, if dof_enabled { 1.0 } else { 0.0 }, 0.1, 200.0],
+            graphics: [crate::settings::graphics_flags(&style_graphics, world.terrain_shaping), if dof_enabled { 1.0 } else { 0.0 }, 0.1, 200.0],
         };
         queue.write_buffer(&camera, 0, bytemuck::bytes_of(&camera_uniform));
         let mut times = Vec::new();
@@ -999,7 +1008,8 @@ fn render_weather_previews() {
             else if dof_preview { format!("target/dof-{}.png", if dof_enabled { "on" } else { "off" }) }
             else if let Some(mode) = &coast_preview {
                 let close = if std::env::var_os("VOXEL_COAST_CAMERA").is_some() { "-close" } else { "" };
-                format!("target/coast-{mode}{close}-{name}.png")
+                let style = if style.is_empty() { String::new() } else { format!("-{}", style.replace(',', "+")) };
+                format!("target/coast-{mode}{close}{style}-{name}.png")
             }
             else if let Some(mode) = &shaping_preview {
                 format!("target/shaping-{}-{mode}-{name}.png", landscape_preview.as_deref().unwrap_or("garden"))

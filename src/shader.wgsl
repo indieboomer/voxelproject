@@ -121,6 +121,8 @@ struct VertexOutput {
     @location(9) flow: vec2<f32>,
     @location(10) skylight: f32,
     @location(11) wet: vec2<f32>,
+    // Wind sway weight (> 0 only for growing foliage and plant cards).
+    @location(12) sway: f32,
 };
 
 @vertex
@@ -151,6 +153,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.ao = abs(in.ao);
     out.skylight = in.skylight;
     out.wet = in.wet;
+    out.sway = in.wind;
     out.reflectivity = in.reflectivity;
     out.emission = in.emission;
     out.tex_layer = in.tex_layer;
@@ -334,7 +337,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             albedo = vec3<f32>(mix(1.0, detail, 0.8) * grain);
         }
     }
-    let natural = camera.graphics.x > 1.5;
+    // Feature bits (settings::graphics_flags): 1 Fresnel, 2 natural, 4 toon.
+    let flags = u32(camera.graphics.x + 0.5);
+    let natural = (flags & 2u) != 0u;
+    let toon = (flags & 4u) != 0u && !is_water;
 
     let ndotl = max(dot(shading_normal, camera.sun_dir.xyz), 0.0);
     let ambient = mix(0.012, camera.light_params.x, in.skylight);
@@ -359,10 +365,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let fill_tint = mix(vec3<f32>(1.02, 0.96, 0.88), vec3<f32>(0.94, 0.98, 1.04), hemisphere)
         * mix(vec3<f32>(1.0), vec3<f32>(1.12, 0.94, 0.76), golden_hour)
         * select(vec3<f32>(1.0), vec3<f32>(0.90, 0.97, 1.10), natural);
-    let fill = fill_tint * ambient * mix(0.65, 1.15, hemisphere) * in.ao;
+    // Toon: cooler, flatter fill so lit and shadowed sides read as two tones.
+    let fill = fill_tint * ambient * select(mix(0.65, 1.15, hemisphere), 0.9, toon) * in.ao
+        * select(vec3<f32>(1.0), vec3<f32>(0.86, 0.94, 1.12), toon);
     let sun_tint = mix(vec3<f32>(1.0, 0.98, 0.93), vec3<f32>(1.0, 0.62, 0.24), golden_hour)
         * select(vec3<f32>(1.0), vec3<f32>(1.04, 0.96, 0.84), natural);
-    let direct = sun_tint * sun_intensity * ndotl * shadow * mix(0.8, 1.0, in.ao);
+    // Toon: sunlight in soft-edged bands (shadow, half-lit, full) instead of a ramp.
+    let sunlit = ndotl * shadow;
+    let banded = smoothstep(0.03, 0.09, sunlit) * 0.55 + smoothstep(0.38, 0.46, sunlit) * 0.45;
+    let direct = sun_tint * sun_intensity * select(sunlit, banded, toon) * mix(0.8, 1.0, in.ao);
     var local_light=vec3<f32>(0.0);
     var local_specular=vec3<f32>(0.0);
     let night=1.0-smoothstep(-0.1,0.25,camera.sun_dir.w);
@@ -406,7 +417,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // horizon while still becoming strongest at shallow viewing angles.
     // Keep a small base reflection when disabled; the setting only removes
     // the view-angle boost and leaves screen-space reflections intact.
-    let fresnel_base = select(0.06, 0.06 + 0.94 * grazing2 * grazing, (camera.graphics.x % 2.0) > 0.5);
+    let fresnel_base = select(0.06, 0.06 + 0.94 * grazing2 * grazing, (flags & 1u) != 0u);
     // Break up large, repeated reflection patches with a subtle continuous
     // world-space modulation. It is deliberately low contrast so waves and
     // reflected silhouettes remain the visual focus.
@@ -506,5 +517,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // other.
     let flashed = mix(grade(final_color), vec3<f32>(1.0), camera.weather_fx.x * in.skylight);
     // Internal water mask; the reflection resolve restores opaque alpha.
-    return vec4<f32>(flashed, select(water_mask, 1.0, underwater >= 0.5));
+    // 0.96 marks swaying foliage and tufts so ink outlines skip their cutout
+    // holes; it stays above the reflection pass's 0.95 opaque threshold.
+    let foliage_mask = select(water_mask, 0.96, (in.sway > 0.0 || foliage || (in.tex_layer > 0.01 && in.tex_layer < 0.1)) && water_mask > 0.5);
+    return vec4<f32>(flashed, select(foliage_mask, 1.0, underwater >= 0.5));
 }

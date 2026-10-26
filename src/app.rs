@@ -2967,6 +2967,13 @@ impl App {
             }
         }
         let shaping = self.ui.settings.values.graphics.terrain_shaping;
+        let bevels = self.ui.settings.values.graphics.bevel_blocks;
+        if self.world.bevel_blocks != bevels {
+            self.world.bevel_blocks = bevels;
+            for chunk in self.world.chunks.values_mut() {
+                chunk.dirty = true;
+            }
+        }
         if self.world.terrain_shaping != shaping {
             // Shapes are derived at mesh time; collision/picking follow at once.
             self.world.terrain_shaping = shaping;
@@ -6268,8 +6275,7 @@ impl App {
                 self.surface_weather.wetness,
             ],
             graphics: [
-                if self.ui.settings.values.graphics.water_fresnel { 1.0 } else { 0.0 }
-                    + if self.world.terrain_shaping { 2.0 } else { 0.0 },
+                crate::settings::graphics_flags(&self.ui.settings.values.graphics, self.world.terrain_shaping),
                 if self.ui.settings.values.graphics.depth_of_field { 1.0 } else { 0.0 },
                 self.camera.znear,
                 self.camera.zfar,

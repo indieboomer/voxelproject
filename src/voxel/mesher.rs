@@ -508,6 +508,7 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                     );
                 }
                 let natural = if world.terrain_shaping { natural::palette(block) } else { None };
+                let bevel = world.bevel_blocks && bevel_eligible(world, block);
                 if world.terrain_shaping && block == BlockType::Grass && !sample(wx, ly + 1, wz).is_solid()
                     && sample(wx, ly + 1, wz) != BlockType::Water
                 {
@@ -641,6 +642,22 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                         continue;
                     }
 
+                    if bevel && leaf.is_none() {
+                        let bevel = Bevel { world, sample: &sample, cell: [wx, ly, wz] };
+                        bevel.push_face(&mut vertices, &mut indices, face_idx, uv_rect, corner_ao, Side {
+                            face: face_idx,
+                            origin: (wx, ly, wz),
+                            corner_ao,
+                            color,
+                            reflectivity,
+                            emission,
+                            wind,
+                            glimmer: block.glimmer(),
+                            absorption: crate::wetness::absorption(block),
+                        });
+                        continue;
+                    }
+
                     for (corner_idx, corner) in FACE_VERTS[face_idx].iter().enumerate() {
                         let ao = corner_ao[corner_idx];
                         let [mut uc, mut vc] = FACE_UV_CORNERS[corner_idx];
@@ -650,7 +667,8 @@ pub fn build_chunk_mesh(world: &World, chunk: &Chunk) -> MeshData {
                             wz as f32 + corner[2],
                         ];
                         let mut color = color;
-                        let mut tex_layer = 0.0;
+                        // Cutout foliage is tagged so ink outlines skip its holes.
+                        let mut tex_layer = if def.cutout { LEAF_MARK } else { 0.0 };
                         let mut wet = [crate::wetness::absorption(block), -1.];
                         let lattice = [wx + corner[0] as i32, ly + corner[1] as i32, wz + corner[2] as i32];
                         if let Some(leaf) = &leaf {
@@ -787,6 +805,195 @@ fn push_shaped_top(
             });
         }
         indices.extend_from_slice(&[base_index, base_index + 1, base_index + 2]);
+    }
+}
+
+/// `Vertex::tex_layer` tag on cutout leaves (samples the atlas like 0.0).
+pub(crate) const LEAF_MARK: f32 = 0.05;
+
+/// Chamfer width of `World::bevel_blocks` edges, in cells.
+pub(crate) const BEVEL: f32 = 0.07;
+
+/// Plain opaque cubes take bevels; shaped-mode terrain keeps its own forms.
+fn bevel_eligible(world: &World, block: BlockType) -> bool {
+    block.is_opaque() && !(world.terrain_shaping && shaping::material(block).is_some())
+}
+
+/// Bevelled cube faces. A convex edge (both faces exposed, diagonal cell
+/// open) is chamfered: each face is inset along it, a strip joins the two
+/// insets, corner triangles close three-way corners, and a cap closes the
+/// notch where a bevel meets a neighbor that does not continue it. All
+/// geometry stays inside the owner cell; picking and collision are unchanged.
+struct Bevel<'a, F: Fn(i32, i32, i32) -> BlockType> {
+    world: &'a World,
+    sample: &'a F,
+    cell: [i32; 3],
+}
+
+fn face_of(normal: [i32; 3]) -> usize {
+    FACE_NORMALS.iter().position(|n| *n == normal).expect("axis normal")
+}
+
+impl<F: Fn(i32, i32, i32) -> BlockType> Bevel<'_, F> {
+    fn at(&self, c: [i32; 3], d: [i32; 3]) -> BlockType {
+        (self.sample)(c[0] + d[0], c[1] + d[1], c[2] + d[2])
+    }
+
+    fn convex_at(&self, c: [i32; 3], a: [i32; 3], b: [i32; 3]) -> bool {
+        bevel_eligible(self.world, self.at(c, [0; 3]))
+            && !self.at(c, a).is_opaque()
+            && !self.at(c, b).is_opaque()
+            && !self.at(c, [a[0] + b[0], a[1] + b[1], a[2] + b[2]]).is_opaque()
+    }
+
+    fn convex(&self, a: [i32; 3], b: [i32; 3]) -> bool {
+        self.convex_at(self.cell, a, b)
+    }
+
+    /// Outward axis directions at local cube corner `v`, other than `normal`.
+    fn sides(v: [f32; 3], normal: [i32; 3]) -> Vec<[i32; 3]> {
+        (0..3)
+            .filter(|&a| normal[a] == 0)
+            .map(|a| {
+                let mut d = [0; 3];
+                d[a] = if v[a] > 0.5 { 1 } else { -1 };
+                d
+            })
+            .collect()
+    }
+
+    /// Corner `v` of the face with `normal`, pulled in along its convex edges.
+    fn inset(&self, normal: [i32; 3], v: [f32; 3]) -> [f32; 3] {
+        let mut p = v;
+        for d in Self::sides(v, normal) {
+            if self.convex(normal, d) {
+                for a in 0..3 {
+                    p[a] -= d[a] as f32 * BEVEL;
+                }
+            }
+        }
+        std::array::from_fn(|a| self.cell[a] as f32 + p[a])
+    }
+
+    fn corner_ao(&self, face: usize, v: [f32; 3]) -> f32 {
+        let index = FACE_VERTS[face].iter().position(|c| *c == v).expect("face corner");
+        let (s1, s2, c) = AO_OFFSETS[face][index];
+        let occluder = |o: (i32, i32, i32)| ao_occluder(self.at(self.cell, [o.0, o.1, o.2]));
+        ao_brightness(occluder(s1), occluder(s2), occluder(c))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_face(
+        &self,
+        vertices: &mut Vec<Vertex>,
+        indices: &mut Vec<u32>,
+        face: usize,
+        uv_rect: [f32; 4],
+        corner_ao: [f32; 4],
+        side: Side,
+    ) {
+        let n = FACE_NORMALS[face];
+        let corners = FACE_VERTS[face];
+        let uv = |k: usize| {
+            let [u, v] = FACE_UV_CORNERS[k];
+            [uv_rect[0] + u * (uv_rect[2] - uv_rect[0]), uv_rect[1] + v * (uv_rect[3] - uv_rect[1])]
+        };
+        let vertex = |position: [f32; 3], normal: [f32; 3], shade: f32, uv: [f32; 2], ao: f32| Vertex {
+            position,
+            color: side.color.map(|c| c * shade),
+            normal,
+            uv,
+            ao,
+            reflectivity: side.reflectivity,
+            emission: side.emission,
+            wind: side.wind,
+            tex_layer: 0.0,
+            glimmer: side.glimmer,
+            skylight: 1.0,
+            wet: [side.absorption, -1.],
+        };
+        // Emits a convex polygon facing `outward` (mesher winding is inward).
+        let mut emit = |mut polygon: Vec<Vertex>, outward: [i32; 3]| {
+            let [a, b, c] = [polygon[0].position, polygon[1].position, polygon[2].position];
+            let cross = cross3(sub3(b, a), sub3(c, a));
+            if cross[0] * outward[0] as f32 + cross[1] * outward[1] as f32 + cross[2] * outward[2] as f32 > 0.0 {
+                polygon.reverse();
+            }
+            let base = vertices.len() as u32;
+            let count = polygon.len() as u32;
+            vertices.extend(polygon);
+            for i in 1..count - 1 {
+                indices.extend_from_slice(&[base, base + i, base + i + 1]);
+            }
+        };
+        let normal_of = |d: [i32; 3]| normalize3(d.map(|c| c as f32));
+        let add = |a: [i32; 3], b: [i32; 3]| [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+        let flat = normal_of(n);
+        // The inset face itself.
+        emit(
+            (0..4).map(|k| vertex(self.inset(n, corners[k]), flat, 1.0, uv(k), corner_ao[k])).collect(),
+            n,
+        );
+        for k in 0..4 {
+            let (v0, v1) = (corners[k], corners[(k + 1) % 4]);
+            // This edge's outward direction: the axis along which both ends agree.
+            let mut d = [0; 3];
+            for a in 0..3 {
+                if n[a] == 0 && (v0[a] - v1[a]).abs() < 0.5 {
+                    d[a] = if v0[a] > 0.5 { 1 } else { -1 };
+                }
+            }
+            let other = face_of(d);
+            if !self.convex(n, d) || other < face {
+                continue;
+            }
+            // Chamfer strip, lit a touch brighter so edges catch the light.
+            let strip_normal = normal_of(add(n, d));
+            let shade = 1.06;
+            emit(
+                vec![
+                    vertex(self.inset(n, v0), strip_normal, shade, uv(k), corner_ao[k]),
+                    vertex(self.inset(n, v1), strip_normal, shade, uv((k + 1) % 4), corner_ao[(k + 1) % 4]),
+                    vertex(self.inset(d, v1), strip_normal, shade, uv((k + 1) % 4), self.corner_ao(other, v1)),
+                    vertex(self.inset(d, v0), strip_normal, shade, uv(k), self.corner_ao(other, v0)),
+                ],
+                add(n, d),
+            );
+            // Close the strip end against a neighbor whose edge is not bevelled.
+            for (v, kk) in [(v0, k), (v1, (k + 1) % 4)] {
+                let along = Self::sides(v, n).into_iter().find(|e| *e != d).expect("edge axis");
+                let next = add(self.cell, along);
+                if self.at(self.cell, along).is_opaque() && !self.convex_at(next, n, d) {
+                    let corner = std::array::from_fn(|a| self.cell[a] as f32 + v[a]);
+                    let back = along.map(|c| -c);
+                    emit(
+                        vec![
+                            vertex(corner, normal_of(back), 0.9, uv(kk), corner_ao[kk]),
+                            vertex(self.inset(n, v), normal_of(back), 0.9, uv(kk), corner_ao[kk]),
+                            vertex(self.inset(d, v), normal_of(back), 0.9, uv(kk), corner_ao[kk]),
+                        ],
+                        back,
+                    );
+                }
+            }
+        }
+        // Three-way corners, emitted by the lowest-indexed face.
+        for (k, &v) in corners.iter().enumerate() {
+            let [d1, d2] = <[[i32; 3]; 2]>::try_from(Self::sides(v, n)).expect("two sides");
+            if self.convex(n, d1) && self.convex(n, d2) && self.convex(d1, d2)
+                && face < face_of(d1) && face < face_of(d2)
+            {
+                let corner_normal = normal_of(add(add(n, d1), d2));
+                emit(
+                    vec![
+                        vertex(self.inset(n, v), corner_normal, 1.08, uv(k), corner_ao[k]),
+                        vertex(self.inset(d1, v), corner_normal, 1.08, uv(k), self.corner_ao(face_of(d1), v)),
+                        vertex(self.inset(d2, v), corner_normal, 1.08, uv(k), self.corner_ao(face_of(d2), v)),
+                    ],
+                    add(add(n, d1), d2),
+                );
+            }
+        }
     }
 }
 

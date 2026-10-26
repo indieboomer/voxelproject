@@ -149,6 +149,8 @@ pub struct World {
     /// neighborhoods (see `shaping.rs`). Never saved; rendering, picking and
     /// local player collision all read this same flag.
     pub terrain_shaping: bool,
+    /// Local presentation: chamfer convex edges of plain cube blocks.
+    pub bevel_blocks: bool,
 }
 
 impl World {
@@ -166,6 +168,7 @@ impl World {
             edits: HashMap::new(),
             redstone_positions: Vec::new(),
             terrain_shaping: false,
+            bevel_blocks: false,
         }
     }
 
